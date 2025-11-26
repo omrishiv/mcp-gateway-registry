@@ -1804,7 +1804,7 @@ async def oauth2_callback(
             host = request.headers.get("x-forwarded-host") or request.headers.get("host", "")
 
             # Extract base domain for cross-subdomain cookies
-            # e.g., "auth-server.agentsv2.arcadeai.site" -> ".arcadeai.site"
+            # e.g., "auth-server.subdomain.domain.tld" -> ".domain.tld"
             if host and "." in host:
                 # Remove port if present
                 host = host.split(":")[0]
