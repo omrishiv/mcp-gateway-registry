@@ -7,3 +7,4 @@ rules:
   - apiGroups: [""] # "" indicates the core API group
     resources: ["secrets"]
     verbs: ["get", "watch", "list", "create"]
+
