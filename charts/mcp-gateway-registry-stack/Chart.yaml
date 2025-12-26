@@ -7,7 +7,7 @@ appVersion: "1.0.0"
 dependencies:
   - name: keycloak
     version: 25.2.0
-    repository: https://charts.bitnami.com/bitnami
+    repository: oci://registry-1.docker.io/bitnamicharts
   - name: auth-server
     version: 0.1.0
     repository: "file://../auth-server"
