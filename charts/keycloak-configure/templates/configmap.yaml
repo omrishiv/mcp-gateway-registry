@@ -393,7 +393,7 @@ data:
             "credentials": [
                 {
                     "type": "password",
-                    "value": "'${INITIAL_ADMIN_PASSWORD:-changeme}'",
+                    "value": "'${INITIAL_ADMIN_PASSWORD}'",
                     "temporary": false
                 }
             ]
@@ -415,7 +415,7 @@ data:
             "credentials": [
                 {
                     "type": "password",
-                    "value": "'${INITIAL_USER_PASSWORD:-testpass}'",
+                    "value": "'${INITIAL_USER_PASSWORD}'",
                     "temporary": false
                 }
             ]
@@ -625,6 +625,12 @@ data:
         fi
     }
 
+    # Function to generate random password
+    generate_password() {
+        # Generate a 16-character random password with alphanumeric characters
+        openssl rand -base64 12 | tr -d "=+/" | cut -c1-16
+    }
+
     # Main execution
     main() {
         # Get script directory and find .env file
@@ -645,6 +651,21 @@ data:
             echo "Script directory: $SCRIPT_DIR"
             echo "Project root: $PROJECT_ROOT"
         fi
+
+        # Generate random passwords if not provided
+        if [ -z "$INITIAL_ADMIN_PASSWORD" ]; then
+            INITIAL_ADMIN_PASSWORD=$(generate_password)
+            echo -e "${YELLOW}Generated random admin password${NC}"
+        fi
+
+        if [ -z "$INITIAL_USER_PASSWORD" ]; then
+            INITIAL_USER_PASSWORD=$(generate_password)
+            echo -e "${YELLOW}Generated random user password${NC}"
+        fi
+
+        # Store passwords in variables for later use
+        export INITIAL_ADMIN_PASSWORD
+        export INITIAL_USER_PASSWORD
 
         # Override KEYCLOAK_URL with KEYCLOAK_ADMIN_URL for API calls
         KEYCLOAK_URL="${KEYCLOAK_ADMIN_URL:-http://localhost:8080}"
@@ -687,6 +708,9 @@ data:
             exit 1
         fi
 
+        # Save generated passwords to a Kubernetes secret
+        ./kubectl create secret generic registry-login-credentials --from-literal=REGISTRY_ADMIN_NAME=admin --from-literal=REGISTRY_ADMIN_PASSWORD=$INITIAL_ADMIN_PASSWORD --from-literal=REGISTRY_USER_NAME=testuser --from-literal=REGISTRY_USER_PASSWORD=$INITIAL_USER_PASSWORD
+
         echo ""
         echo -e "${GREEN}Keycloak initialization complete!${NC}"
         echo ""
@@ -695,10 +719,12 @@ data:
         echo "Realm: ${REALM}"
         echo ""
         echo "Default users created:"
-        echo "  - admin/changeme (admin access)"
-        echo "  - testuser/testpass (user access)"
+        echo "  - admin/${INITIAL_ADMIN_PASSWORD} (admin access)"
+        echo "  - testuser/${INITIAL_USER_PASSWORD} (user access)"
         echo ""
-        echo -e "${YELLOW}Remember to change the default passwords!${NC}"
+        echo -e "${YELLOW}IMPORTANT: Save these passwords! They are randomly generated.${NC}"
+        echo -e "${YELLOW}Passwords have been saved to the Kubernetes secret: registry-login-credentials${NC}"
+        echo -e "${YELLOW}Consider changing them after first login for security.${NC}"
     }
 
     # Run main function
