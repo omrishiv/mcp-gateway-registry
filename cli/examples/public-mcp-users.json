@@ -1,0 +1,67 @@
+{
+  "scope_name": "public-mcp-users",
+  "description": "Users with access to public MCP servers (context7, cloudflare-docs) and flight-booking agent",
+  "server_access": [
+    {
+      "server": "context7",
+      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call", "resources/list", "resources/templates/list"],
+      "tools": ["*"]
+    },
+    {
+      "server": "/context7",
+      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call", "resources/list", "resources/templates/list"],
+      "tools": ["*"]
+    },
+    {
+      "server": "/context7/",
+      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call", "resources/list", "resources/templates/list"],
+      "tools": ["*"]
+    },
+    {
+      "server": "cloudflare-docs",
+      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call", "resources/list", "resources/templates/list"],
+      "tools": ["*"]
+    },
+    {
+      "server": "/cloudflare-docs",
+      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call", "resources/list", "resources/templates/list"],
+      "tools": ["*"]
+    },
+    {
+      "server": "/cloudflare-docs/",
+      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call", "resources/list", "resources/templates/list"],
+      "tools": ["*"]
+    },
+    {
+      "server": "api",
+      "methods": ["initialize", "GET", "POST", "servers", "agents", "search", "rating", "tools", "tokens"],
+      "tools": []
+    },
+    {
+      "server": "v0.1",
+      "methods": ["agents", "GET", "POST"],
+      "tools": []
+    },
+    {
+      "agents": {
+        "actions": [
+          {
+            "action": "list_agents",
+            "resources": ["/flight-booking"]
+          },
+          {
+            "action": "get_agent",
+            "resources": ["/flight-booking"]
+          }
+        ]
+      }
+    }
+  ],
+  "group_mappings": ["public-mcp-users", "5f605d68-06bc-4208-b992-bb378eee12c5"],
+  "ui_permissions": {
+    "list_service": ["all"],
+    "list_agents": ["/flight-booking"],
+    "get_agent": ["/flight-booking"]
+  },
+  "create_in_idp": true
+}

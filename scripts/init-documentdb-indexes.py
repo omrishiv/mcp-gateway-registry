@@ -33,6 +33,7 @@ import asyncio
 import json
 import logging
 import os
+from pathlib import Path
 from typing import Optional
 
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -354,6 +355,64 @@ async def _create_scopes_indexes(
             logger.error(f"Failed to create index '{index_name}' on {collection_name}: {e}")
 
 
+async def _load_default_scopes(
+    db,
+    namespace: str,
+    entra_group_id: Optional[str] = None,
+) -> None:
+    """Load default admin scope from JSON file into scopes collection.
+
+    Args:
+        db: Database connection
+        namespace: Collection namespace
+        entra_group_id: Optional Entra ID Group Object ID to add to group_mappings.
+                        Required when using Microsoft Entra ID as the auth provider.
+    """
+    collection_name = f"{COLLECTION_SCOPES}_{namespace}"
+    collection = db[collection_name]
+
+    # Find the registry-admins.json file in the same directory as this script
+    script_dir = Path(__file__).parent
+    admin_scope_file = script_dir / "registry-admins.json"
+
+    if not admin_scope_file.exists():
+        logger.warning(f"Default admin scope file not found: {admin_scope_file}")
+        return
+
+    try:
+        with open(admin_scope_file, "r") as f:
+            admin_scope = json.load(f)
+
+        logger.info(f"Loading default admin scope from {admin_scope_file}")
+
+        # Add Entra ID Group Object ID if provided
+        if entra_group_id:
+            if entra_group_id not in admin_scope.get("group_mappings", []):
+                admin_scope["group_mappings"].append(entra_group_id)
+                logger.info(f"Added Entra ID Group Object ID: {entra_group_id}")
+
+        # Upsert the admin scope document
+        result = await collection.update_one(
+            {"_id": admin_scope["_id"]},
+            {"$set": admin_scope},
+            upsert=True
+        )
+
+        if result.upserted_id:
+            logger.info(f"Inserted admin scope: {admin_scope['_id']}")
+        elif result.modified_count > 0:
+            logger.info(f"Updated admin scope: {admin_scope['_id']}")
+        else:
+            logger.info(f"Admin scope already up-to-date: {admin_scope['_id']}")
+
+        logger.info(
+            f"Admin scope group_mappings: {admin_scope.get('group_mappings', [])}"
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to load default admin scope: {e}", exc_info=True)
+
+
 async def _create_security_scans_indexes(
     collection,
     collection_name: str,
@@ -456,8 +515,16 @@ async def _initialize_collections(
     db,
     namespace: str,
     recreate: bool,
+    entra_group_id: Optional[str] = None,
 ) -> None:
-    """Initialize all collections and indexes."""
+    """Initialize all collections and indexes.
+
+    Args:
+        db: Database connection
+        namespace: Collection namespace
+        recreate: Whether to recreate existing indexes
+        entra_group_id: Optional Entra ID Group Object ID for admin scope
+    """
     collection_configs = [
         (COLLECTION_SERVERS, _create_servers_indexes),
         (COLLECTION_AGENTS, _create_agents_indexes),
@@ -493,6 +560,10 @@ async def _initialize_collections(
             logger.error(f"Failed to create indexes for {collection_name}: {e}", exc_info=True)
             # Don't raise - continue with other collections
             continue
+
+    # Load default admin scope after scopes collection is initialized
+    logger.info("Loading default admin scope...")
+    await _load_default_scopes(db, namespace, entra_group_id)
 
 
 async def main():
@@ -583,6 +654,15 @@ Example usage:
         action="store_false",
         help="Do not recreate existing indexes",
     )
+    parser.add_argument(
+        "--entra-group-id",
+        default=os.getenv("ENTRA_ADMIN_GROUP_ID"),
+        help=(
+            "Entra ID Group Object ID for the admin group. Required when using "
+            "Microsoft Entra ID as the auth provider. Get this from: Azure Portal -> "
+            "Groups -> [group name] -> Object Id (default: from ENTRA_ADMIN_GROUP_ID env var)"
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -594,6 +674,7 @@ Example usage:
     logger.info(f"Recreate indexes: {args.recreate}")
     logger.info(f"Use IAM: {args.use_iam}")
     logger.info(f"Use TLS: {args.use_tls}")
+    logger.info(f"Entra Group ID: {args.entra_group_id or '<not set>'}")
 
     try:
         connection_string = await _get_documentdb_connection_string(
@@ -617,7 +698,12 @@ Example usage:
             f"Connected to DocumentDB/MongoDB {server_info.get('version', 'unknown')}"
         )
 
-        await _initialize_collections(db, args.namespace, args.recreate)
+        await _initialize_collections(
+            db,
+            args.namespace,
+            args.recreate,
+            args.entra_group_id,
+        )
 
         logger.info(
             f"DocumentDB initialization complete for namespace '{args.namespace}'"

@@ -3,7 +3,7 @@
   "info": {
     "title": "MCP Gateway Registry",
     "description": "A registry and management system for Model Context Protocol (MCP) servers",
-    "version": "v1.0.8"
+    "version": "1.0.11"
   },
   "paths": {
     "/api/auth/login": {
@@ -1233,7 +1233,7 @@
           "Server Management"
         ],
         "summary": "Internal Create Group",
-        "description": "Internal endpoint to create a new group in both Keycloak and scopes.yml (requires HTTP Basic Authentication with admin credentials).",
+        "description": "Internal endpoint to create a new group in both IdP and scopes.yml (requires HTTP Basic Authentication with admin credentials).",
         "operationId": "internal_create_group_api_internal_create_group_post",
         "requestBody": {
           "content": {
@@ -1278,7 +1278,7 @@
           "Server Management"
         ],
         "summary": "Internal Delete Group",
-        "description": "Internal endpoint to delete a group from both Keycloak and scopes.yml (requires HTTP Basic Authentication with admin credentials).",
+        "description": "Internal endpoint to delete a group from both Keycloak and scopes (requires HTTP Basic Authentication with admin credentials).",
         "operationId": "internal_delete_group_api_internal_delete_group_post",
         "requestBody": {
           "content": {
@@ -1323,7 +1323,7 @@
           "Server Management"
         ],
         "summary": "Internal List Groups",
-        "description": "Internal endpoint to list groups from Keycloak and/or scopes.yml (requires HTTP Basic Authentication with admin credentials).",
+        "description": "Internal endpoint to list groups from Keycloak and/or scopes (requires HTTP Basic Authentication with admin credentials).",
         "operationId": "internal_list_groups_api_internal_list_groups_get",
         "parameters": [
           {
@@ -1746,7 +1746,7 @@
           "Server Management"
         ],
         "summary": "Create Group Api",
-        "description": "Create a new scope group via JWT authentication (External API).\n\nThis endpoint provides the same functionality as POST /api/internal/create-group\nbut uses modern JWT Bearer token authentication.\n\n**Authentication:** JWT Bearer token (via nginx X-User header)\n**Authorization:** Requires valid JWT token from auth system\n\n**Request body (form data):**\n- `group_name` (required): Name of the new group\n- `description` (optional): Group description\n- `create_in_keycloak` (optional): Whether to create in Keycloak (default: true)\n\n**Response:**\nReturns confirmation of group creation.\n\n**Example:**\n```bash\ncurl -X POST https://registry.example.com/api/servers/groups/create \\\n  -H \"Authorization: Bearer $JWT_TOKEN\" \\\n  -F \"group_name=new-team\" \\\n  -F \"description=Team for new project\" \\\n  -F \"create_in_keycloak=true\"\n```",
+        "description": "Create a new scope group via JWT authentication (External API).\n\nThis endpoint provides the same functionality as POST /api/internal/create-group\nbut uses modern JWT Bearer token authentication.\n\n**Authentication:** JWT Bearer token (via nginx X-User header)\n**Authorization:** Requires valid JWT token from auth system\n\n**Request body (form data):**\n- `group_name` (required): Name of the new group\n- `description` (optional): Group description\n- `create_in_idp` (optional): Whether to create in IdP (default: true)\n\n**Response:**\nReturns confirmation of group creation.\n\n**Example:**\n```bash\ncurl -X POST https://registry.example.com/api/servers/groups/create \\\n  -H \"Authorization: Bearer $JWT_TOKEN\" \\\n  -F \"group_name=new-team\" \\\n  -F \"description=Team for new project\" \\\n  -F \"create_in_idp=true\"\n```",
         "operationId": "create_group_api_api_servers_groups_create_post",
         "requestBody": {
           "content": {
@@ -1887,6 +1887,87 @@
         ]
       }
     },
+    "/api/servers/groups/{group_name}": {
+      "get": {
+        "tags": [
+          "Server Management"
+        ],
+        "summary": "Get Group Api",
+        "description": "Get full details of a specific group via JWT Bearer Token authentication (External API).\n\nThis endpoint retrieves complete information about a group including server_access,\ngroup_mappings, and ui_permissions from the scopes storage backend.\n\n**Authentication:** JWT Bearer token (via nginx X-User header)\n**Authorization:** Requires valid JWT token from auth system\n\n**Response:**\nReturns complete group definition including:\n- scope_name: Name of the scope/group\n- scope_type: Type of scope (e.g., \"server_scope\")\n- description: Description of the group\n- server_access: List of server access definitions\n- group_mappings: List of group mappings\n- ui_permissions: UI permissions configuration\n- created_at: Creation timestamp\n- updated_at: Last update timestamp\n\n**Example:**\n```bash\ncurl -X GET https://registry.example.com/api/servers/groups/currenttime-users \\\n  -H \"Authorization: Bearer $JWT_TOKEN\"\n```",
+        "operationId": "get_group_api_api_servers_groups__group_name__get",
+        "parameters": [
+          {
+            "name": "group_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Group Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/servers/groups/import": {
+      "post": {
+        "tags": [
+          "Server Management"
+        ],
+        "summary": "Import Group Definition",
+        "description": "Import a complete group definition via JSON (External API).\n\nThis endpoint accepts a complete group definition including all three document types\n(server_scope, group_mapping, ui_scope) and creates/updates them in the storage backend.\n\n**Authentication:** JWT Bearer token (via nginx X-User header)\n**Authorization:** Requires valid JWT token from auth system\n\n**Request Body:**\n```json\n{\n  \"scope_name\": \"group-name\",\n  \"scope_type\": \"server_scope\",\n  \"description\": \"Group description\",\n  \"server_access\": [\n    {\n      \"server\": \"currenttime\",\n      \"methods\": [\"initialize\", \"tools/list\", \"tools/call\"],\n      \"tools\": [\"current_time_by_timezone\"]\n    }\n  ],\n  \"group_mappings\": [\"group-name\", \"other-group\"],\n  \"ui_permissions\": {\n    \"list_service\": [\"currenttime\", \"mcpgw\"],\n    \"list_agents\": [\"/code-reviewer\"],\n    \"health_check_service\": [\"currenttime\"]\n  },\n  \"create_in_idp\": true\n}\n```\n\n**Required Fields:**\n- `scope_name`: Name of the scope/group\n\n**Optional Fields:**\n- `scope_type`: Type of scope (default: \"server_scope\")\n- `description`: Description of the group\n- `server_access`: List of server access definitions\n- `group_mappings`: List of group names this group maps to\n- `ui_permissions`: Dictionary of UI permissions\n- `create_in_idp`: Whether to create the group in IdP (default: true)\n\n**Example:**\n```bash\ncurl -X POST https://registry.example.com/api/servers/groups/import \\\n  -H \"Authorization: Bearer $JWT_TOKEN\" \\\n  -H \"Content-Type: application/json\" \\\n  -d @group-definition.json\n```",
+        "operationId": "import_group_definition_api_servers_groups_import_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/servers/{path}/rate": {
       "post": {
         "tags": [
@@ -1911,7 +1992,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/registry__api__agent_routes__RatingRequest"
+                "$ref": "#/components/schemas/RatingRequest"
               }
             }
           }
@@ -2327,7 +2408,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/registry__api__agent_routes__RatingRequest"
+                "$ref": "#/components/schemas/RatingRequest"
               }
             }
           }
@@ -2669,7 +2750,7 @@
           "Agent Management"
         ],
         "summary": "Discover Agents Semantic",
-        "description": "Discover agents using natural language semantic search.\n\nUses FAISS vector search to find agents matching the query intent.\n\nArgs:\n    query: Natural language query describing needed capabilities\n    max_results: Maximum number of results\n    user_context: Authenticated user context\n\nReturns:\n    List of matching agents with relevance scores\n\nRaises:\n    HTTPException: 400 if query is empty",
+        "description": "Discover agents using natural language semantic search.\n\nUses search repository (FAISS or DocumentDB) to find agents matching the query intent.\n\nArgs:\n    query: Natural language query describing needed capabilities\n    max_results: Maximum number of results\n    user_context: Authenticated user context\n    search_repo: Search repository dependency\n\nReturns:\n    List of matching agents with relevance scores\n\nRaises:\n    HTTPException: 400 if query is empty",
         "operationId": "discover_agents_semantic_api_agents_discover_semantic_post",
         "parameters": [
           {
@@ -2819,7 +2900,7 @@
           "Management API"
         ],
         "summary": "Management List Users",
-        "description": "List Keycloak users for administrators.",
+        "description": "List users from the configured identity provider (admin only).",
         "operationId": "management_list_users_api_management_iam_users_get",
         "parameters": [
           {
@@ -2884,7 +2965,7 @@
           "Management API"
         ],
         "summary": "Management Create M2M User",
-        "description": "Create a service account client and return its credentials.",
+        "description": "Create a service account client and return its credentials (admin only).",
         "operationId": "management_create_m2m_user_api_management_iam_users_m2m_post",
         "requestBody": {
           "content": {
@@ -2929,7 +3010,7 @@
           "Management API"
         ],
         "summary": "Management Create Human User",
-        "description": "Create a Keycloak human user and assign groups.",
+        "description": "Create a human user and assign groups (admin only).",
         "operationId": "management_create_human_user_api_management_iam_users_human_post",
         "requestBody": {
           "content": {
@@ -2974,7 +3055,7 @@
           "Management API"
         ],
         "summary": "Management Delete User",
-        "description": "Delete a Keycloak user by username.",
+        "description": "Delete a user by username (admin only).",
         "operationId": "management_delete_user_api_management_iam_users__username__delete",
         "parameters": [
           {
@@ -3021,9 +3102,9 @@
         "tags": [
           "Management API"
         ],
-        "summary": "Management List Keycloak Groups",
-        "description": "List Keycloak IAM groups (admin only).",
-        "operationId": "management_list_keycloak_groups_api_management_iam_groups_get",
+        "summary": "Management List Groups",
+        "description": "List IAM groups from the configured identity provider (admin only).",
+        "operationId": "management_list_groups_api_management_iam_groups_get",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -3057,7 +3138,7 @@
           "Management API"
         ],
         "summary": "Management Create Group",
-        "description": "Create a new Keycloak group (admin only).",
+        "description": "Create a new group in the identity provider and MongoDB (admin only).\n\nThis creates the group in both:\n1. The configured identity provider (Keycloak or Entra ID)\n2. MongoDB scopes collection for authorization",
         "operationId": "management_create_group_api_management_iam_groups_post",
         "requestBody": {
           "content": {
@@ -3075,7 +3156,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/KeycloakGroupSummary"
+                  "$ref": "#/components/schemas/GroupSummary"
                 }
               }
             }
@@ -3104,7 +3185,7 @@
           "Management API"
         ],
         "summary": "Management Delete Group",
-        "description": "Delete a Keycloak group by name (admin only).",
+        "description": "Delete a group from the identity provider and MongoDB (admin only).\n\nThis deletes the group from both:\n1. The configured identity provider (Keycloak or Entra ID)\n2. MongoDB scopes collection",
         "operationId": "management_delete_group_api_management_iam_groups__group_name__delete",
         "parameters": [
           {
@@ -3171,6 +3252,578 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SemanticSearchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/federation/config": {
+      "get": {
+        "tags": [
+          "federation",
+          "federation"
+        ],
+        "summary": "Get federation configuration",
+        "description": "Get federation configuration by ID.\n\nArgs:\n    config_id: Configuration ID (default: \"default\")\n    user_context: Authenticated user context\n    repo: Federation config repository\n\nReturns:\n    Federation configuration\n\nRaises:\n    404: Configuration not found",
+        "operationId": "get_federation_config_api_federation_config_get",
+        "parameters": [
+          {
+            "name": "config_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "default",
+              "title": "Config Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Federation Config Api Federation Config Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "federation",
+          "federation"
+        ],
+        "summary": "Create or update federation configuration",
+        "description": "Create or update federation configuration.\n\nArgs:\n    config: Federation configuration to save\n    config_id: Configuration ID (default: \"default\")\n    user_context: Authenticated user context\n    repo: Federation config repository\n\nReturns:\n    Saved configuration\n\nExample:\n    ```json\n    {\n      \"anthropic\": {\n        \"enabled\": true,\n        \"endpoint\": \"https://registry.modelcontextprotocol.io\",\n        \"sync_on_startup\": false,\n        \"servers\": [\n          {\"name\": \"io.github.jgador/websharp\"},\n          {\"name\": \"modelcontextprotocol/filesystem\"}\n        ]\n      },\n      \"asor\": {\n        \"enabled\": false,\n        \"endpoint\": \"\",\n        \"auth_env_var\": \"ASOR_ACCESS_TOKEN\",\n        \"sync_on_startup\": false,\n        \"agents\": []\n      }\n    }\n    ```",
+        "operationId": "save_federation_config_api_federation_config_post",
+        "parameters": [
+          {
+            "name": "config_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "default",
+              "title": "Config Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FederationConfig"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Save Federation Config Api Federation Config Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/federation/config/{config_id}": {
+      "put": {
+        "tags": [
+          "federation",
+          "federation"
+        ],
+        "summary": "Update specific federation configuration",
+        "description": "Update a specific federation configuration.\n\nArgs:\n    config_id: Configuration ID to update\n    config: Updated federation configuration\n    user_context: Authenticated user context\n    repo: Federation config repository\n\nReturns:\n    Updated configuration",
+        "operationId": "update_federation_config_api_federation_config__config_id__put",
+        "parameters": [
+          {
+            "name": "config_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Config Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FederationConfig"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Update Federation Config Api Federation Config  Config Id  Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "federation",
+          "federation"
+        ],
+        "summary": "Delete federation configuration",
+        "description": "Delete a federation configuration.\n\nArgs:\n    config_id: Configuration ID to delete\n    user_context: Authenticated user context\n    repo: Federation config repository\n\nReturns:\n    Deletion confirmation\n\nRaises:\n    404: Configuration not found",
+        "operationId": "delete_federation_config_api_federation_config__config_id__delete",
+        "parameters": [
+          {
+            "name": "config_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Config Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Delete Federation Config Api Federation Config  Config Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/federation/configs": {
+      "get": {
+        "tags": [
+          "federation",
+          "federation"
+        ],
+        "summary": "List all federation configurations",
+        "description": "List all federation configurations.\n\nArgs:\n    user_context: Authenticated user context\n    repo: Federation config repository\n\nReturns:\n    List of configuration summaries with id, created_at, updated_at",
+        "operationId": "list_federation_configs_api_federation_configs_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response List Federation Configs Api Federation Configs Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/federation/config/{config_id}/anthropic/servers": {
+      "post": {
+        "tags": [
+          "federation",
+          "federation"
+        ],
+        "summary": "Add Anthropic server to config",
+        "description": "Add a server to Anthropic federation configuration.\n\nArgs:\n    config_id: Configuration ID\n    server_name: Server name to add (e.g., \"io.github.jgador/websharp\")\n    user_context: Authenticated user context\n    repo: Federation config repository\n\nReturns:\n    Updated configuration",
+        "operationId": "add_anthropic_server_api_federation_config__config_id__anthropic_servers_post",
+        "parameters": [
+          {
+            "name": "config_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Config Id"
+            }
+          },
+          {
+            "name": "server_name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Server Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Add Anthropic Server Api Federation Config  Config Id  Anthropic Servers Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/federation/config/{config_id}/anthropic/servers/{server_name}": {
+      "delete": {
+        "tags": [
+          "federation",
+          "federation"
+        ],
+        "summary": "Remove Anthropic server from config",
+        "description": "Remove a server from Anthropic federation configuration.\n\nArgs:\n    config_id: Configuration ID\n    server_name: Server name to remove\n    user_context: Authenticated user context\n    repo: Federation config repository\n\nReturns:\n    Updated configuration",
+        "operationId": "remove_anthropic_server_api_federation_config__config_id__anthropic_servers__server_name__delete",
+        "parameters": [
+          {
+            "name": "config_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Config Id"
+            }
+          },
+          {
+            "name": "server_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Server Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Remove Anthropic Server Api Federation Config  Config Id  Anthropic Servers  Server Name  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/federation/config/{config_id}/asor/agents": {
+      "post": {
+        "tags": [
+          "federation",
+          "federation"
+        ],
+        "summary": "Add ASOR agent to config",
+        "description": "Add an agent to ASOR federation configuration.\n\nArgs:\n    config_id: Configuration ID\n    agent_id: Agent ID to add (e.g., \"aws_assistant\")\n    user_context: Authenticated user context\n    repo: Federation config repository\n\nReturns:\n    Updated configuration",
+        "operationId": "add_asor_agent_api_federation_config__config_id__asor_agents_post",
+        "parameters": [
+          {
+            "name": "config_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Config Id"
+            }
+          },
+          {
+            "name": "agent_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Add Asor Agent Api Federation Config  Config Id  Asor Agents Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/federation/config/{config_id}/asor/agents/{agent_id}": {
+      "delete": {
+        "tags": [
+          "federation",
+          "federation"
+        ],
+        "summary": "Remove ASOR agent from config",
+        "description": "Remove an agent from ASOR federation configuration.\n\nArgs:\n    config_id: Configuration ID\n    agent_id: Agent ID to remove\n    user_context: Authenticated user context\n    repo: Federation config repository\n\nReturns:\n    Updated configuration",
+        "operationId": "remove_asor_agent_api_federation_config__config_id__asor_agents__agent_id__delete",
+        "parameters": [
+          {
+            "name": "config_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Config Id"
+            }
+          },
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Remove Asor Agent Api Federation Config  Config Id  Asor Agents  Agent Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/federation/sync": {
+      "post": {
+        "tags": [
+          "federation",
+          "federation"
+        ],
+        "summary": "Trigger manual federation sync",
+        "description": "Manually trigger federation sync to import servers/agents from configured sources.\n\nArgs:\n    config_id: Configuration ID to use for sync (default: \"default\")\n    source: Optional source filter (\"anthropic\" or \"asor\"). If None, syncs all enabled sources.\n    user_context: Authenticated user context\n    repo: Federation config repository\n\nReturns:\n    Sync results with counts of synced items\n\nExample:\n    Sync all enabled federations:\n    ```bash\n    POST /api/federation/sync\n    ```\n\n    Sync only Anthropic:\n    ```bash\n    POST /api/federation/sync?source=anthropic\n    ```",
+        "operationId": "sync_federation_api_federation_sync_post",
+        "parameters": [
+          {
+            "name": "config_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "default",
+              "title": "Config Id"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Sync Federation Api Federation Sync Post"
                 }
               }
             }
@@ -3854,6 +4507,103 @@
         ],
         "title": "AgentSearchResult"
       },
+      "AnthropicFederationConfig": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": false
+          },
+          "endpoint": {
+            "type": "string",
+            "title": "Endpoint",
+            "default": "https://registry.modelcontextprotocol.io"
+          },
+          "sync_on_startup": {
+            "type": "boolean",
+            "title": "Sync On Startup",
+            "default": false
+          },
+          "servers": {
+            "items": {
+              "$ref": "#/components/schemas/AnthropicServerConfig"
+            },
+            "type": "array",
+            "title": "Servers"
+          }
+        },
+        "type": "object",
+        "title": "AnthropicFederationConfig",
+        "description": "Anthropic federation configuration."
+      },
+      "AnthropicServerConfig": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "AnthropicServerConfig",
+        "description": "Anthropic server configuration."
+      },
+      "AsorAgentConfig": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "title": "AsorAgentConfig",
+        "description": "ASOR agent configuration."
+      },
+      "AsorFederationConfig": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": false
+          },
+          "endpoint": {
+            "type": "string",
+            "title": "Endpoint",
+            "default": ""
+          },
+          "auth_env_var": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Env Var"
+          },
+          "sync_on_startup": {
+            "type": "boolean",
+            "title": "Sync On Startup",
+            "default": false
+          },
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/AsorAgentConfig"
+            },
+            "type": "array",
+            "title": "Agents"
+          }
+        },
+        "type": "object",
+        "title": "AsorFederationConfig",
+        "description": "ASOR federation configuration."
+      },
       "Body_add_server_to_groups_api_api_servers_groups_add_post": {
         "properties": {
           "server_name": {
@@ -3883,9 +4633,9 @@
             "title": "Description",
             "default": ""
           },
-          "create_in_keycloak": {
+          "create_in_idp": {
             "type": "boolean",
-            "title": "Create In Keycloak",
+            "title": "Create In Idp",
             "default": true
           }
         },
@@ -4032,9 +4782,9 @@
             "title": "Description",
             "default": ""
           },
-          "create_in_keycloak": {
+          "create_in_idp": {
             "type": "boolean",
-            "title": "Create In Keycloak",
+            "title": "Create In Idp",
             "default": true
           }
         },
@@ -4489,6 +5239,19 @@
         "title": "ErrorResponse",
         "description": "Standard error response."
       },
+      "FederationConfig": {
+        "properties": {
+          "anthropic": {
+            "$ref": "#/components/schemas/AnthropicFederationConfig"
+          },
+          "asor": {
+            "$ref": "#/components/schemas/AsorFederationConfig"
+          }
+        },
+        "type": "object",
+        "title": "FederationConfig",
+        "description": "Root federation configuration."
+      },
       "GroupCreateRequest": {
         "properties": {
           "name": {
@@ -4538,7 +5301,7 @@
         "properties": {
           "groups": {
             "items": {
-              "$ref": "#/components/schemas/KeycloakGroupSummary"
+              "$ref": "#/components/schemas/GroupSummary"
             },
             "type": "array",
             "title": "Groups"
@@ -4553,7 +5316,43 @@
           "total"
         ],
         "title": "GroupListResponse",
-        "description": "Response for listing Keycloak groups."
+        "description": "Response for listing groups."
+      },
+      "GroupSummary": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "attributes": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attributes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "path"
+        ],
+        "title": "GroupSummary",
+        "description": "Group information."
       },
       "HTTPValidationError": {
         "properties": {
@@ -4621,106 +5420,6 @@
         ],
         "title": "HumanUserRequest",
         "description": "Payload for creating a Keycloak human user."
-      },
-      "KeycloakGroupSummary": {
-        "properties": {
-          "id": {
-            "type": "string",
-            "title": "Id"
-          },
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "path": {
-            "type": "string",
-            "title": "Path"
-          },
-          "attributes": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Attributes"
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "name",
-          "path"
-        ],
-        "title": "KeycloakGroupSummary",
-        "description": "Keycloak group information."
-      },
-      "KeycloakUserSummary": {
-        "properties": {
-          "id": {
-            "type": "string",
-            "title": "Id"
-          },
-          "username": {
-            "type": "string",
-            "title": "Username"
-          },
-          "email": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Email"
-          },
-          "firstName": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Firstname"
-          },
-          "lastName": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Lastname"
-          },
-          "enabled": {
-            "type": "boolean",
-            "title": "Enabled",
-            "default": true
-          },
-          "groups": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Groups"
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "username"
-        ],
-        "title": "KeycloakUserSummary",
-        "description": "Subset of Keycloak user information exposed through the API."
       },
       "M2MAccountRequest": {
         "properties": {
@@ -4797,7 +5496,8 @@
         "required": [
           "tool_name"
         ],
-        "title": "MatchingToolResult"
+        "title": "MatchingToolResult",
+        "description": "Tool matching result - basic info for display.\n\nNote: inputSchema is NOT included here to avoid duplication.\nFull tool details including inputSchema are in the tools[] array."
       },
       "Package": {
         "properties": {
@@ -4887,6 +5587,19 @@
         "type": "object",
         "title": "PaginationMetadata",
         "description": "Pagination information for server lists."
+      },
+      "RatingRequest": {
+        "properties": {
+          "rating": {
+            "type": "integer",
+            "title": "Rating"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rating"
+        ],
+        "title": "RatingRequest"
       },
       "Repository": {
         "properties": {
@@ -5268,6 +5981,19 @@
             ],
             "title": "Description"
           },
+          "inputSchema": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inputschema",
+            "description": "JSON Schema for tool input"
+          },
           "relevance_score": {
             "type": "number",
             "maximum": 1.0,
@@ -5318,7 +6044,7 @@
         "properties": {
           "users": {
             "items": {
-              "$ref": "#/components/schemas/KeycloakUserSummary"
+              "$ref": "#/components/schemas/UserSummary"
             },
             "type": "array",
             "title": "Users"
@@ -5334,6 +6060,70 @@
         ],
         "title": "UserListResponse",
         "description": "Wrapper for list users endpoint."
+      },
+      "UserSummary": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "username": {
+            "type": "string",
+            "title": "Username"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "firstName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Firstname"
+          },
+          "lastName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lastname"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": true
+          },
+          "groups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Groups"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "username"
+        ],
+        "title": "UserSummary",
+        "description": "Subset of user information exposed through the API."
       },
       "ValidationError": {
         "properties": {
@@ -5367,19 +6157,6 @@
           "type"
         ],
         "title": "ValidationError"
-      },
-      "registry__api__agent_routes__RatingRequest": {
-        "properties": {
-          "rating": {
-            "type": "integer",
-            "title": "Rating"
-          }
-        },
-        "type": "object",
-        "required": [
-          "rating"
-        ],
-        "title": "RatingRequest"
       }
     },
     "securitySchemes": {

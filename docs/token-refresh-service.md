@@ -32,7 +32,7 @@ graph TB
 ```
 
 The service integrates with:
-- **External OAuth services** (Atlassian, SRE Gateway, etc.)
+- **External OAuth services** (GitHub, Google, SRE Gateway, etc.)
 - **Local MCP servers** (Current Time, Real Server Fake Tools, etc.)
 - **MCP clients** (VS Code extensions, Claude Code, etc.)
 
@@ -166,7 +166,7 @@ The service automatically generates two MCP configuration files:
 
 The service automatically includes:
 
-1. **OAuth Services** - Services requiring external authentication (e.g., Atlassian, SRE Gateway)
+1. **OAuth Services** - Services requiring external authentication (e.g., GitHub, SRE Gateway)
 2. **No-Auth Services** - Local services with `auth_type: "none"` (e.g., Current Time, Real Server Fake Tools)
 
 ## Integration Examples
@@ -223,8 +223,8 @@ sequenceDiagram
 2024-09-06 15:30:00,123 - Token refresh check starting...
 2024-09-06 15:30:00,124 - Found 2 egress token files to check
 2024-09-06 15:30:00,125 - bedrock-agentcore-sre-gateway-egress.json: expires in 2 hours, no refresh needed
-2024-09-06 15:30:00,126 - atlassian-atlassian-egress.json: expires in 45 minutes, refreshing...
-2024-09-06 15:30:01,234 - Successfully refreshed token for atlassian-atlassian-
+2024-09-06 15:30:00,126 - github-github-egress.json: expires in 45 minutes, refreshing...
+2024-09-06 15:30:01,234 - Successfully refreshed token for github-github-
 2024-09-06 15:30:01,235 - Scanning for no-auth services...
 2024-09-06 15:30:01,236 - Found 3 no-auth services: mcpgw, currenttime, realserverfaketools
 2024-09-06 15:30:01,237 - Generating MCP configurations...

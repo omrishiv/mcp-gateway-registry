@@ -1,5 +1,5 @@
 {
-  "scope_name": "currenttime-users4",
+  "scope_name": "currenttime-users",
   "description": "Users with access to currenttime server",
   "server_access": [
     {
@@ -28,10 +28,10 @@
       "tools": []
     }
   ],
-  "group_mappings": ["currenttime-users4"],
+  "group_mappings": ["currenttime-users"],
   "ui_permissions": {
     "list_service": ["all"],
     "health_check_service": ["all"]
   },
-  "create_in_keycloak": true
+  "create_in_idp": true
 }

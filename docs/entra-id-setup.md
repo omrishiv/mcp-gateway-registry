@@ -10,6 +10,8 @@ This guide provides step-by-step instructions for setting up Microsoft Entra ID 
 4. [Group Configuration](#group-configuration)
 5. [Testing the Setup](#testing-the-setup)
 6. [Troubleshooting](#troubleshooting)
+7. [Using the IAM API to Manage Groups, Users, and M2M Accounts](#using-the-iam-api-to-manage-groups-users-and-m2m-accounts)
+8. [Generating JWT Tokens for M2M Accounts](#generating-jwt-tokens-for-m2m-accounts)
 
 ---
 
@@ -627,6 +629,310 @@ GET https://graph.microsoft.com/v1.0/me
    - Enable MFA for all users (configured in Azure AD)
    - Use conditional access policies
    - Enforce MFA for admin accounts
+
+---
+
+## Using the IAM API to Manage Groups, Users, and M2M Accounts
+
+The MCP Gateway Registry provides an IAM API for managing groups, human users, and M2M (machine-to-machine) service accounts programmatically. This section covers how to use the `registry_management.py` CLI to perform these operations.
+
+### Prerequisites
+
+Before using the IAM API commands, you need:
+
+1. **An admin access token**: Either a self-signed token from the UI sidebar or a Keycloak/Entra ID token for an admin user
+2. **Registry URL**: The URL of your MCP Gateway Registry deployment
+3. **Admin group membership**: Your user must be in the `registry-admins` group
+
+Save your token to a file for CLI usage:
+```bash
+# Save token from UI sidebar to a file
+echo "eyJhbGci..." > api/.token
+```
+
+### Creating a Group (Scope)
+
+Groups define access permissions for users and M2M accounts. Create a group definition JSON file:
+
+**Example: `cli/examples/public-mcp-users.json`**
+```json
+{
+  "scope_name": "public-mcp-users",
+  "description": "Users with access to public MCP servers",
+  "server_access": [
+    {
+      "server": "context7",
+      "methods": ["initialize", "tools/list", "tools/call"],
+      "tools": ["*"]
+    },
+    {
+      "server": "api",
+      "methods": ["initialize", "GET", "POST", "servers", "agents"],
+      "tools": []
+    },
+    {
+      "agents": {
+        "actions": [
+          {"action": "list_agents", "resources": ["/flight-booking"]},
+          {"action": "get_agent", "resources": ["/flight-booking"]}
+        ]
+      }
+    }
+  ],
+  "group_mappings": ["public-mcp-users"],
+  "ui_permissions": {
+    "list_service": ["all"],
+    "list_agents": ["/flight-booking"],
+    "get_agent": ["/flight-booking"]
+  },
+  "create_in_idp": true
+}
+```
+
+**Import the group:**
+```bash
+uv run python api/registry_management.py \
+  --token-file api/.token \
+  --registry-url https://your-registry-url.example.com \
+  import-group --file cli/examples/public-mcp-users.json
+```
+
+**Key fields in group definition:**
+
+| Field | Description |
+|-------|-------------|
+| `scope_name` | Unique identifier for the scope/group |
+| `description` | Human-readable description |
+| `server_access` | Array of server access rules |
+| `group_mappings` | List of IdP group names/IDs that map to this scope |
+| `ui_permissions` | Permissions for the web UI |
+| `create_in_idp` | If `true`, creates corresponding group in Entra ID |
+
+### Creating a Human User
+
+Human users can log in via the web UI using Entra ID authentication.
+
+```bash
+uv run python api/registry_management.py \
+  --token-file api/.token \
+  --registry-url https://your-registry-url.example.com \
+  user-create-human \
+  --username jsmith \
+  --email jsmith@example.com \
+  --first-name John \
+  --last-name Smith \
+  --groups public-mcp-users \
+  --password "SecurePassword123!"
+```
+
+**Parameters:**
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `--username` | Yes | Username for the account |
+| `--email` | Yes | Email address |
+| `--first-name` | Yes | User's first name |
+| `--last-name` | Yes | User's last name |
+| `--groups` | Yes | Comma-separated list of groups |
+| `--password` | No | Initial password (auto-generated if not provided) |
+
+### Creating an M2M Service Account
+
+M2M (machine-to-machine) accounts are used for programmatic API access, AI coding assistants, and agent identities.
+
+```bash
+uv run python api/registry_management.py \
+  --token-file api/.token \
+  --registry-url https://your-registry-url.example.com \
+  user-create-m2m \
+  --name my-ai-agent \
+  --groups public-mcp-users \
+  --description "AI coding assistant service account"
+```
+
+**Output:**
+```
+Client ID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+Client Secret: xxxxx~xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+Groups: public-mcp-users
+Service Principal ID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+
+IMPORTANT: Save the client secret securely - it cannot be retrieved later.
+```
+
+**Parameters:**
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `--name` | Yes | Service account name/client ID |
+| `--groups` | Yes | Comma-separated list of groups |
+| `--description` | No | Account description |
+
+### Where to Find Parameter Values
+
+| Parameter | Location |
+|-----------|----------|
+| **Tenant ID** | Azure Portal -> Microsoft Entra ID -> Overview -> Tenant ID |
+| **App Client ID** | Azure Portal -> App registrations -> [Your App] -> Application (client) ID |
+| **App Client Secret** | Azure Portal -> App registrations -> [Your App] -> Certificates & secrets |
+| **Group Object ID** | Azure Portal -> Microsoft Entra ID -> Groups -> [Group Name] -> Object Id |
+| **M2M Client ID/Secret** | Output from `user-create-m2m` command |
+
+---
+
+## Generating JWT Tokens for M2M Accounts
+
+M2M accounts use OAuth2 client credentials flow to obtain JWT tokens. These tokens can be used for:
+
+- Agent identities in A2A (Agent-to-Agent) communication
+- AI coding assistants (Cursor, VS Code, etc.)
+- Programmatic API access
+- Automated scripts and CI/CD pipelines
+
+### Method 1: Direct Token Request (curl)
+
+Request a token directly from Microsoft Entra ID:
+
+```bash
+curl -X POST "https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "client_id={M2M_CLIENT_ID}" \
+  -d "client_secret={M2M_CLIENT_SECRET}" \
+  -d "scope=api://{APP_CLIENT_ID}/.default" \
+  -d "grant_type=client_credentials"
+```
+
+**Example with placeholder values:**
+```bash
+curl -X POST "https://login.microsoftonline.com/your-tenant-id/oauth2/v2.0/token" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "client_id=your-m2m-client-id" \
+  -d "client_secret=your-m2m-client-secret" \
+  -d "scope=api://your-app-client-id/.default" \
+  -d "grant_type=client_credentials"
+```
+
+**Response:**
+```json
+{
+  "token_type": "Bearer",
+  "expires_in": 3599,
+  "access_token": "eyJ0eXAiOiJKV1QiLCJhbGciOi..."
+}
+```
+
+### Method 2: Using the Credentials Provider Script
+
+The `generate_creds.sh` script automates token generation for multiple identities.
+
+**Step 1: Configure identities file**
+
+Create or edit `.oauth-tokens/entra-identities.json`:
+```json
+[
+  {
+    "identity_name": "my-ai-agent",
+    "tenant_id": "your-tenant-id",
+    "client_id": "your-m2m-client-id",
+    "client_secret": "your-m2m-client-secret",
+    "scope": "api://your-app-client-id/.default"
+  }
+]
+```
+
+**Identities File Structure:**
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `identity_name` | Yes | Unique name for this identity (used for output file naming) |
+| `tenant_id` | Yes | Azure AD Tenant ID (from Azure Portal -> Microsoft Entra ID -> Overview) |
+| `client_id` | Yes | M2M service account Client ID (from `user-create-m2m` output) |
+| `client_secret` | Yes | M2M service account Client Secret (from `user-create-m2m` output) |
+| `scope` | Yes | OAuth2 scope in format `api://{APP_CLIENT_ID}/.default` |
+
+**Multiple Identities Example:**
+```json
+[
+  {
+    "identity_name": "cursor-assistant",
+    "tenant_id": "your-tenant-id",
+    "client_id": "cursor-m2m-client-id",
+    "client_secret": "cursor-m2m-client-secret",
+    "scope": "api://your-app-client-id/.default"
+  },
+  {
+    "identity_name": "ci-pipeline",
+    "tenant_id": "your-tenant-id",
+    "client_id": "cicd-m2m-client-id",
+    "client_secret": "cicd-m2m-client-secret",
+    "scope": "api://your-app-client-id/.default"
+  }
+]
+```
+
+**Step 2: Set auth provider**
+
+Ensure `AUTH_PROVIDER=entra` is set in your `.env` file.
+
+**Step 3: Run the script**
+
+```bash
+./credentials-provider/generate_creds.sh
+```
+
+Or with a custom identities file:
+```bash
+uv run credentials-provider/entra/generate_tokens.py \
+  --identities-file /path/to/my-identities.json \
+  --output-dir .oauth-tokens \
+  --verbose
+```
+
+**Output:**
+- Tokens are saved to `.oauth-tokens/{identity_name}.json`
+- Each file contains the access token, expiration time, and metadata
+
+### Token Scope Format
+
+The scope for Entra ID M2M tokens follows this format:
+```
+api://{APP_CLIENT_ID}/.default
+```
+
+Where:
+- `{APP_CLIENT_ID}` is the Application (client) ID of your MCP Gateway app registration
+- `.default` requests all scopes that admin consent has been granted for
+
+### Using Tokens in AI Coding Assistants
+
+Once you have a JWT token, you can use it in AI coding assistants like Cursor or VS Code extensions:
+
+1. **Configure the MCP server connection** with the registry URL
+2. **Set the Bearer token** in the authorization header
+3. **The token** grants access based on the M2M account's group membership
+
+Example configuration for an AI assistant:
+```json
+{
+  "mcp_registry_url": "https://your-registry-url.example.com",
+  "auth_token": "eyJ0eXAiOiJKV1QiLCJhbGciOi..."
+}
+```
+
+### User-Generated Tokens from the UI
+
+Users can also generate personal JWT tokens from the MCP Gateway Registry web UI:
+
+1. Log in to the registry at `https://your-registry-url.example.com`
+2. Navigate to the sidebar
+3. Click on "Generate Token" or similar option
+4. Copy the generated token
+
+These self-signed tokens:
+- Are signed with HS256 using the server's secret key
+- Include the user's groups and scopes
+- Can be used for programmatic API access
+- Work with the same endpoints as M2M tokens
 
 ---
 

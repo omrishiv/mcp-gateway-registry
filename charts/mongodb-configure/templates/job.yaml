@@ -38,6 +38,9 @@ spec:
             - mountPath: /app/script.py
               name: script
               subPath: script.py
+            - mountPath: /app/config/scopes.yml
+              name: script
+              subPath: scopes.yml
       restartPolicy: Never
       volumes:
         - name: script

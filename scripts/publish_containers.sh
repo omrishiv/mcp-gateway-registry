@@ -39,10 +39,10 @@ PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm64}"
 declare -a COMPONENTS=(
     "registry:.:./docker/Dockerfile.registry"
     "auth-server:.:./docker/Dockerfile.auth"
-    "currenttime-server:servers/currenttime:./docker/Dockerfile.mcp-server"
-    "realserverfaketools-server:servers/realserverfaketools:./docker/Dockerfile.mcp-server"
-    "fininfo-server:servers/fininfo:./docker/Dockerfile.mcp-server"
-    "mcpgw-server:servers/mcpgw:./docker/Dockerfile.mcp-server"
+    "currenttime-server:.:./docker/Dockerfile.mcp-server-light"
+    "realserverfaketools-server:.:./docker/Dockerfile.mcp-server-light"
+    "fininfo-server:.:./docker/Dockerfile.mcp-server-light"
+    "mcpgw-server:.:./docker/Dockerfile.mcp-server"
     "metrics-service:metrics-service:./metrics-service/Dockerfile"
 )
 
@@ -219,13 +219,13 @@ build_and_push_component() {
     # Build the image first
     print_color "$GREEN" "✅ Building image..."
 
-    # Add SERVER_PATH build arg for MCP servers
+    # Add SERVER_DIR build arg for MCP servers (when building from repo root)
     local build_args=""
     if [[ "$dockerfile" == *"Dockerfile.mcp-server"* ]]; then
         # Use the mapped server path if available, otherwise fallback to the component name
         local server_path="${SERVER_PATH_MAP[$name]:-servers/$name}"
-        build_args="--build-arg SERVER_PATH=$server_path"
-        print_color "$YELLOW" "   Adding build arg: SERVER_PATH=$server_path"
+        build_args="--build-arg SERVER_DIR=$server_path"
+        print_color "$YELLOW" "   Adding build arg: SERVER_DIR=$server_path"
     fi
 
     docker build \

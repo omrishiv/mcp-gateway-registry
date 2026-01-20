@@ -247,31 +247,29 @@ const fetchAdminTokens = async () => {
                     )}
                   </div>
 
-                  {/* Admin JWT Token Button */}
-                  {user.is_admin && (
-                    <div className="mb-2">
-                      <button
-                        onClick={fetchAdminTokens}
-                        disabled={loading}
-                        className="w-full flex items-center justify-center space-x-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300 hover:bg-purple-200 dark:hover:bg-purple-800 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {loading ? (
-                          <>
-                            <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-purple-700 dark:border-purple-300"></div>
-                            <span>Loading...</span>
-                          </>
-                        ) : (
-                          <>
-                            <KeyIcon className="h-3 w-3" />
-                            <span>Get JWT Token</span>
-                          </>
-                        )}
-                      </button>
-                      {error && (
-                        <p className="mt-1 text-xs text-red-600 dark:text-red-400">{error}</p>
+                  {/* JWT Token Button - Available to all users */}
+                  <div className="mb-2">
+                    <button
+                      onClick={fetchAdminTokens}
+                      disabled={loading}
+                      className="w-full flex items-center justify-center space-x-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300 hover:bg-purple-200 dark:hover:bg-purple-800 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {loading ? (
+                        <>
+                          <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-purple-700 dark:border-purple-300"></div>
+                          <span>Loading...</span>
+                        </>
+                      ) : (
+                        <>
+                          <KeyIcon className="h-3 w-3" />
+                          <span>Get JWT Token</span>
+                        </>
                       )}
-                    </div>
-                  )}
+                    </button>
+                    {error && (
+                      <p className="mt-1 text-xs text-red-600 dark:text-red-400">{error}</p>
+                    )}
+                  </div>
 
                   {/* Scopes toggle */}
                   {!user.is_admin && user.scopes && user.scopes.length > 0 && (
@@ -480,7 +478,7 @@ const fetchAdminTokens = async () => {
                     as="h3"
                     className="text-lg font-medium leading-6 text-gray-900 dark:text-white mb-4"
                   >
-                    Keycloak Admin Tokens
+                    JWT Access Token
                   </Dialog.Title>
 
                   {tokenData && (

@@ -141,6 +141,10 @@ mcp-servers-unrestricted/read:
   - resources/templates/list
   - GET
   tools: '*'
+- server: api
+  methods:
+  - tokens
+  - GET
 
 # Unrestricted execute access: Full CRUD operations on all servers (POST, PUT, DELETE in addition to read)
 mcp-servers-unrestricted/execute:
@@ -158,6 +162,11 @@ mcp-servers-unrestricted/execute:
   - PUT
   - DELETE
   tools: '*'
+- server: api
+  methods:
+  - tokens
+  - GET
+  - POST
 
 # LOB1 Group Scope: Read-only access to API; currenttime and mcpgw servers; code-reviewer and test-automation agents
 registry-users-lob1:

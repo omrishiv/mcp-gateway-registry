@@ -510,3 +510,43 @@ async def trigger_auth_server_reload() -> bool:
         True if successful, False otherwise
     """
     return await _trigger_auth_server_reload()
+
+
+async def add_group_mapping_to_scope(
+    scope_name: str,
+    group_id: str,
+) -> bool:
+    """
+    Add a group mapping (IdP group ID) to an existing scope's group_mappings.
+
+    This is used when creating a group in an IdP (like Entra ID) that returns
+    group IDs (GUIDs) in tokens. We need to map both the group name and ID
+    so that token validation works correctly.
+
+    Args:
+        scope_name: Name of the scope to update
+        group_id: IdP group ID to add to group_mappings
+
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        scope_repo = get_scope_repository()
+
+        # Use the existing add_group_mapping method which adds
+        # an entry to the scope's group_mappings array
+        success = await scope_repo.add_group_mapping(scope_name, group_id)
+
+        if success:
+            logger.info(
+                f"Added group ID {group_id} to scope {scope_name} group_mappings"
+            )
+        else:
+            logger.error(
+                f"Failed to add group ID {group_id} to scope {scope_name} group_mappings"
+            )
+        return success
+
+    except Exception as e:
+        logger.error(f"Error adding group mapping to scope {scope_name}: {e}")
+        return False

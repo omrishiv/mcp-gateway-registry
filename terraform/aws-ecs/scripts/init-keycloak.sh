@@ -3,11 +3,11 @@
 # This script sets up the initial realm, clients, groups, and users
 #
 # Usage:
-#   KEYCLOAK_ADMIN_URL=https://kc.mycorp.click \
+#   KEYCLOAK_ADMIN_URL=https://your-keycloak-url \
 #   KEYCLOAK_ADMIN=admin \
-#   KEYCLOAK_ADMIN_PASSWORD=Keycloak@123456! \
-#   AUTH_SERVER_EXTERNAL_URL=http://mcp-gateway-alb-xxx.us-west-2.elb.amazonaws.com:8888 \
-#   REGISTRY_URL=http://mcp-gateway-alb-xxx.us-west-2.elb.amazonaws.com \
+#   KEYCLOAK_ADMIN_PASSWORD=your-admin-password \
+#   AUTH_SERVER_EXTERNAL_URL=https://your-auth-server-url \
+#   REGISTRY_URL=https://your-registry-url \
 #   ./init-keycloak.sh
 #
 # Or set these in a .env file in the project root
@@ -136,30 +136,40 @@ create_clients() {
     echo "Creating OAuth2 clients..."
 
     # Create web client
-    # Ensure we're using HTTPS URLs for redirect URIs
-    local registry_url="${REGISTRY_URL:-http://localhost:7860}"
-    local auth_server_url="${AUTH_SERVER_EXTERNAL_URL:-http://localhost:8888}"
-    local auth_callback_url="${auth_server_url}/oauth2/callback/keycloak"
+    # Build redirect URIs based on deployment mode
+    # - Custom domain mode: use REGISTRY_URL
+    # - CloudFront mode: use CLOUDFRONT_REGISTRY_URL
+    # - Both modes: include both URLs
+    
+    local redirect_uris='"http://localhost:7860/*", "http://localhost:8888/*"'
+    local web_origins='"http://localhost:7860", "+"'
+    
+    # Add custom domain URLs if available
+    if [ -n "$REGISTRY_URL" ] && [ "$REGISTRY_URL" != "http://localhost:7860" ]; then
+        redirect_uris="${redirect_uris}, \"${REGISTRY_URL}/oauth2/callback/keycloak\", \"${REGISTRY_URL}/*\""
+        web_origins="${web_origins}, \"${REGISTRY_URL}\""
+        echo "  - Adding custom domain redirect URIs: ${REGISTRY_URL}"
+    fi
+    
+    # Add CloudFront URLs if available
+    if [ -n "$CLOUDFRONT_REGISTRY_URL" ]; then
+        redirect_uris="${redirect_uris}, \"${CLOUDFRONT_REGISTRY_URL}/oauth2/callback/keycloak\", \"${CLOUDFRONT_REGISTRY_URL}/*\""
+        web_origins="${web_origins}, \"${CLOUDFRONT_REGISTRY_URL}\""
+        echo "  - Adding CloudFront redirect URIs: ${CLOUDFRONT_REGISTRY_URL}"
+    fi
+    
+    # If neither is set, use localhost as fallback
+    if [ -z "$REGISTRY_URL" ] && [ -z "$CLOUDFRONT_REGISTRY_URL" ]; then
+        echo "  - Using localhost fallback for redirect URIs"
+    fi
 
     local web_client_json='{
         "clientId": "mcp-gateway-web",
         "name": "MCP Gateway Web Client",
         "enabled": true,
         "clientAuthenticatorType": "client-secret",
-        "redirectUris": [
-            "'${auth_callback_url}'",
-            "'${auth_server_url}'/*",
-            "'${registry_url}'/*",
-            "http://localhost:7860/*",
-            "http://localhost:8888/*"
-        ],
-        "webOrigins": [
-            "'${auth_server_url}'",
-            "'${registry_url}'",
-            "http://localhost:7860",
-            "http://localhost:8888",
-            "+"
-        ],
+        "redirectUris": ['"${redirect_uris}"'],
+        "webOrigins": ['"${web_origins}"'],
         "protocol": "openid-connect",
         "standardFlowEnabled": true,
         "implicitFlowEnabled": false,
@@ -527,6 +537,37 @@ create_service_account_clients() {
     echo -e "${GREEN}Service account clients created successfully!${NC}"
 }
 
+# Function to update user password (for existing users)
+update_user_password() {
+    local token=$1
+    local username=$2
+    local password=$3
+    
+    # Get user ID
+    local user_id=$(curl -s -H "Authorization: Bearer ${token}" \
+        "${KEYCLOAK_URL}/admin/realms/${REALM}/users?username=${username}" 2>/dev/null | \
+        jq -r 'if type == "array" then (.[0].id // empty) else empty end' 2>/dev/null)
+    
+    if [ -z "$user_id" ] || [ "$user_id" = "null" ]; then
+        return 1
+    fi
+    
+    # Reset password
+    local password_json='{
+        "type": "password",
+        "value": "'"${password}"'",
+        "temporary": false
+    }'
+    
+    local response=$(curl -s -o /dev/null -w "%{http_code}" \
+        -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/users/${user_id}/reset-password" \
+        -H "Authorization: Bearer ${token}" \
+        -H "Content-Type: application/json" \
+        -d "$password_json")
+    
+    [ "$response" = "204" ]
+}
+
 # Function to create test users
 create_users() {
     # Refresh token to ensure it's valid
@@ -558,10 +599,24 @@ create_users() {
         ]
     }'
     
-    curl -s -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/users" \
+    local admin_response=$(curl -s -o /dev/null -w "%{http_code}" \
+        -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/users" \
         -H "Authorization: Bearer ${token}" \
         -H "Content-Type: application/json" \
-        -d "$admin_user_json" > /dev/null
+        -d "$admin_user_json")
+    
+    if [ "$admin_response" = "201" ]; then
+        echo "  - Created admin user with password from Secrets Manager"
+    elif [ "$admin_response" = "409" ]; then
+        echo "  - Admin user already exists, updating password..."
+        if update_user_password "$token" "$admin_username" "$INITIAL_ADMIN_PASSWORD"; then
+            echo "  - Admin password updated successfully"
+        else
+            echo -e "${YELLOW}  - Warning: Could not update admin password${NC}"
+        fi
+    else
+        echo -e "${RED}  - Failed to create admin user (HTTP $admin_response)${NC}"
+    fi
     
     # Create test user
     local test_user_json='{
@@ -687,6 +742,11 @@ create_users() {
     local lob1_username="lob1-user"
     local lob2_username="lob2-user"
     
+    # Get registry-admins group ID for admin user
+    local registry_admins_group_id=$(curl -s -H "Authorization: Bearer ${token}" \
+        "${KEYCLOAK_URL}/admin/realms/${REALM}/groups" 2>/dev/null | \
+        jq -r 'if type == "array" then (.[] | select(.name=="registry-admins") | .id) else empty end' 2>/dev/null)
+    
     # Assign admin user to admin group and unrestricted servers group
     if [ ! -z "$admin_user_id" ] && [ ! -z "$admin_group_id" ]; then
         curl -s -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/users/$admin_user_id/groups/$admin_group_id" \
@@ -699,6 +759,13 @@ create_users() {
         curl -s -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/users/$admin_user_id/groups/$unrestricted_group_id" \
             -H "Authorization: Bearer ${token}" > /dev/null
         echo "  - $admin_username assigned to mcp-servers-unrestricted group"
+    fi
+    
+    # Assign admin to registry-admins group for full UI permissions
+    if [ ! -z "$admin_user_id" ] && [ ! -z "$registry_admins_group_id" ]; then
+        curl -s -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/users/$admin_user_id/groups/$registry_admins_group_id" \
+            -H "Authorization: Bearer ${token}" > /dev/null
+        echo "  - $admin_username assigned to registry-admins group"
     fi
     
     # Assign test user to all groups except admin
@@ -781,14 +848,14 @@ setup_client_secrets() {
         if aws secretsmanager update-secret \
             --secret-id mcp-gateway-keycloak-client-secret \
             --secret-string "{\"client_id\": \"mcp-gateway-web\", \"client_secret\": \"${web_secret}\"}" \
-            --region "${AWS_REGION:-us-west-2}" &>/dev/null; then
+            --region "${AWS_REGION}" &>/dev/null; then
             echo -e "${GREEN}Web client secret saved to AWS Secrets Manager!${NC}"
         else
             echo -e "${YELLOW}Warning: Could not save web client secret to Secrets Manager${NC}"
             echo "You can manually update it with:"
             echo "  aws secretsmanager update-secret --secret-id mcp-gateway-keycloak-client-secret \\"
             echo "    --secret-string '{\"client_id\": \"mcp-gateway-web\", \"client_secret\": \"${web_secret}\"}' \\"
-            echo "    --region \${AWS_REGION:-us-west-2}"
+            echo "    --region \${AWS_REGION}"
         fi
     fi
 
@@ -798,14 +865,14 @@ setup_client_secrets() {
         if aws secretsmanager update-secret \
             --secret-id mcp-gateway-keycloak-m2m-client-secret \
             --secret-string "{\"client_id\": \"mcp-gateway-m2m\", \"client_secret\": \"${m2m_secret}\"}" \
-            --region "${AWS_REGION:-us-west-2}" &>/dev/null; then
+            --region "${AWS_REGION}" &>/dev/null; then
             echo -e "${GREEN}M2M client secret saved to AWS Secrets Manager!${NC}"
         else
             echo -e "${YELLOW}Warning: Could not save M2M client secret to Secrets Manager${NC}"
             echo "You can manually update it with:"
             echo "  aws secretsmanager update-secret --secret-id mcp-gateway-keycloak-m2m-client-secret \\"
             echo "    --secret-string '{\"client_id\": \"mcp-gateway-m2m\", \"client_secret\": \"${m2m_secret}\"}' \\"
-            echo "    --region \${AWS_REGION:-us-west-2}"
+            echo "    --region \${AWS_REGION}"
         fi
     fi
 
@@ -935,7 +1002,7 @@ load_from_terraform_outputs() {
             fi
         fi
 
-        # Load REGISTRY_URL if not set
+        # Load REGISTRY_URL if not set (custom domain mode)
         if [ -z "$REGISTRY_URL" ]; then
             local registry_url=$(jq -r '.registry_url.value // empty' "$terraform_outputs" 2>/dev/null)
             if [ -n "$registry_url" ] && [ "$registry_url" != "null" ]; then
@@ -944,8 +1011,26 @@ load_from_terraform_outputs() {
             fi
         fi
 
+        # Load CLOUDFRONT_REGISTRY_URL if not set (CloudFront mode)
+        if [ -z "$CLOUDFRONT_REGISTRY_URL" ]; then
+            local cloudfront_url=$(jq -r '.cloudfront_mcp_gateway_url.value // empty' "$terraform_outputs" 2>/dev/null)
+            if [ -n "$cloudfront_url" ] && [ "$cloudfront_url" != "null" ]; then
+                CLOUDFRONT_REGISTRY_URL="$cloudfront_url"
+                echo "  - Loaded CLOUDFRONT_REGISTRY_URL: $CLOUDFRONT_REGISTRY_URL"
+            fi
+        fi
+
+        # Load deployment mode to understand which URLs are active
+        if [ -z "$DEPLOYMENT_MODE" ]; then
+            local deployment_mode=$(jq -r '.deployment_mode.value // empty' "$terraform_outputs" 2>/dev/null)
+            if [ -n "$deployment_mode" ] && [ "$deployment_mode" != "null" ]; then
+                DEPLOYMENT_MODE="$deployment_mode"
+                echo "  - Loaded DEPLOYMENT_MODE: $DEPLOYMENT_MODE"
+            fi
+        fi
+
         # Check if we successfully loaded values
-        if [ -n "$AUTH_SERVER_EXTERNAL_URL" ] || [ -n "$REGISTRY_URL" ] || [ -n "$KEYCLOAK_ADMIN_URL" ]; then
+        if [ -n "$AUTH_SERVER_EXTERNAL_URL" ] || [ -n "$REGISTRY_URL" ] || [ -n "$KEYCLOAK_ADMIN_URL" ] || [ -n "$CLOUDFRONT_REGISTRY_URL" ]; then
             return 0
         fi
     else
@@ -962,6 +1047,17 @@ main() {
     SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
     PROJECT_ROOT="$( cd "$SCRIPT_DIR/../.." && pwd )"
     ENV_FILE="$PROJECT_ROOT/.env"
+
+    # Check for AWS_REGION - required for SSM and Secrets Manager operations
+    if [ -z "$AWS_REGION" ]; then
+        echo -e "${RED}Error: AWS_REGION environment variable is required${NC}"
+        echo "Please set AWS_REGION before running this script:"
+        echo "  export AWS_REGION=us-east-1"
+        echo "  # or"
+        echo "  AWS_REGION=us-east-1 $0"
+        exit 1
+    fi
+    echo "Using AWS Region: $AWS_REGION"
 
     # Load environment variables from .env file if it exists
     if [ -f "$ENV_FILE" ]; then
@@ -981,7 +1077,13 @@ main() {
     fi
 
     # Override KEYCLOAK_URL with KEYCLOAK_ADMIN_URL for API calls
-    KEYCLOAK_URL="${KEYCLOAK_ADMIN_URL:-https://kc.mycorp.click}"
+    KEYCLOAK_URL="${KEYCLOAK_ADMIN_URL:-}"
+    if [ -z "$KEYCLOAK_URL" ]; then
+        echo -e "${RED}Error: KEYCLOAK_ADMIN_URL is required${NC}"
+        echo "Please set KEYCLOAK_ADMIN_URL in your .env file or environment,"
+        echo "or ensure terraform-outputs.json contains keycloak_url."
+        exit 1
+    fi
     KEYCLOAK_ADMIN="${KEYCLOAK_ADMIN:-admin}"
     echo "Using Keycloak API URL: $KEYCLOAK_URL"
 
@@ -997,7 +1099,7 @@ main() {
     if [ -z "$KEYCLOAK_ADMIN_PASSWORD" ]; then
         echo "Attempting to load KEYCLOAK_ADMIN_PASSWORD from SSM Parameter Store..."
         if command -v aws &> /dev/null; then
-            SSM_PASSWORD=$(aws ssm get-parameter --name "/keycloak/admin_password" --with-decryption --query 'Parameter.Value' --output text --region "${AWS_REGION:-us-west-2}" 2>/dev/null)
+            SSM_PASSWORD=$(aws ssm get-parameter --name "/keycloak/admin_password" --with-decryption --query 'Parameter.Value' --output text --region "${AWS_REGION}" 2>/dev/null)
             if [ -n "$SSM_PASSWORD" ] && [ "$SSM_PASSWORD" != "null" ]; then
                 KEYCLOAK_ADMIN_PASSWORD="$SSM_PASSWORD"
                 echo -e "${GREEN}Loaded KEYCLOAK_ADMIN_PASSWORD from SSM Parameter Store${NC}"

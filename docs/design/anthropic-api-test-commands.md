@@ -73,10 +73,10 @@ curl -X GET "http://localhost/v0.1/servers" \
   "servers": [
     {
       "server": {
-        "name": "io.mcpgateway/atlassian",
+        "name": "io.mcpgateway/fininfo",
         "description": "...",
         "version": "1.0.0",
-        "title": "Atlassian Server",
+        "title": "Financial Info Server",
         "packages": [...],
         "_meta": {...}
       },
@@ -134,11 +134,11 @@ curl -X GET "http://localhost/v0.1/servers?limit=1000" \
 
 ### Test 5: List Server Versions
 
-**Description**: Get all versions for the Atlassian server
+**Description**: Get all versions for the Financial Info server
 
 ```bash
 # Note: Server name must be URL-encoded
-curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Fatlassian/versions" \
+curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Ffininfo/versions" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" | jq
 ```
@@ -149,7 +149,7 @@ curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Fatlassian/versions" \
   "servers": [
     {
       "server": {
-        "name": "io.mcpgateway/atlassian",
+        "name": "io.mcpgateway/fininfo",
         "description": "...",
         "version": "1.0.0",
         ...
@@ -176,10 +176,10 @@ curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Fcurrenttime/versions"
 
 ### Test 7: Get Specific Version (latest)
 
-**Description**: Get detailed information for the latest version of Atlassian server
+**Description**: Get detailed information for the latest version of Financial Info server
 
 ```bash
-curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Fatlassian/versions/latest" \
+curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Ffininfo/versions/latest" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" | jq
 ```
@@ -188,31 +188,31 @@ curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Fatlassian/versions/la
 ```json
 {
   "server": {
-    "name": "io.mcpgateway/atlassian",
+    "name": "io.mcpgateway/fininfo",
     "description": "...",
     "version": "1.0.0",
-    "title": "Atlassian Server",
+    "title": "Financial Info Server",
     "repository": null,
     "websiteUrl": null,
     "packages": [
       {
         "registryType": "mcpb",
-        "identifier": "io.mcpgateway/atlassian",
+        "identifier": "io.mcpgateway/fininfo",
         "version": "1.0.0",
         "transport": {
           "type": "streamable-http",
-          "url": "http://atlassian:8005"
+          "url": "http://fininfo:8001"
         },
         "runtimeHint": "docker"
       }
     ],
     "_meta": {
       "io.mcpgateway/internal": {
-        "path": "/atlassian",
+        "path": "/fininfo",
         "is_enabled": true,
         "health_status": "healthy",
         "num_tools": 5,
-        "tags": ["atlassian", "jira", "confluence"],
+        "tags": ["fininfo", "jira", "confluence"],
         "license": "MIT"
       }
     }
@@ -231,7 +231,7 @@ curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Fatlassian/versions/la
 **Description**: Get detailed information using explicit version number
 
 ```bash
-curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Fatlassian/versions/1.0.0" \
+curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Ffininfo/versions/1.0.0" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" | jq
 ```
@@ -243,7 +243,7 @@ curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Fatlassian/versions/1.
 **Description**: Try to access a non-existent version
 
 ```bash
-curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Fatlassian/versions/2.0.0" \
+curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Ffininfo/versions/2.0.0" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" | jq
 ```
@@ -428,7 +428,7 @@ echo "All concurrent requests completed"
 **Description**: Get nicely formatted output for a specific server
 
 ```bash
-curl -s -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Fatlassian/versions/latest" \
+curl -s -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Ffininfo/versions/latest" \
   -H "Authorization: Bearer $TOKEN" | jq '{
     name: .server.name,
     title: .server.title,
@@ -499,7 +499,7 @@ echo "Full access sees: $(curl -s "http://localhost/v0.1/servers" -H "Authorizat
 
 **Expected Results**:
 - **Restricted bot** (`mcp-servers-restricted` group): ~3 servers (currenttime, auth_server, mcpgw)
-- **Full access** (`ingress.json` token): ~7+ servers (all servers including atlassian, fininfo, sre-gateway)
+- **Full access** (`ingress.json` token): ~7+ servers (all servers including fininfo, fininfo, sre-gateway)
 
 This demonstrates that the v0.1 API correctly enforces permission-based filtering based on Keycloak groups and MCP scopes!
 

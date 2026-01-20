@@ -9,7 +9,7 @@ This guide provides a comprehensive, step-by-step walkthrough for setting up the
 4. [Cloning and Configuring the Project](#4-cloning-and-configuring-the-project)
 5. [Setting Up Keycloak Identity Provider](#5-setting-up-keycloak-identity-provider)
 6. [Starting the MCP Gateway Services](#6-starting-the-mcp-gateway-services)
-7. [Storage Backend Setup (Optional)](#7-storage-backend-setup-optional)
+7. [Storage Backend Setup](#7-storage-backend-setup-optional)
    - [MongoDB CE Setup (Recommended)](#mongodb-ce-setup-recommended-for-local-development)
 8. [Verification and Testing](#8-verification-and-testing)
 9. [Configuring AI Agents and Coding Assistants](#9-configuring-ai-agents-and-coding-assistants)
@@ -321,6 +321,15 @@ If these passwords don't match:
 
 ### Start Keycloak and PostgreSQL
 
+First, ensure Docker is installed by following the [Installing Prerequisites](#3-installing-prerequisites) section.
+
+**Fresh Install Recommended**: If you've previously run the stack with different credentials, you should remove the old database volume to avoid password mismatch errors:
+```bash
+# Remove any existing keycloak database volume (skip if this is a fresh install)
+docker compose down keycloak keycloak-db
+docker volume rm mcp-gateway-registry_keycloak_db_data 2>/dev/null || true
+```
+
 ```bash
 # Start only the database and Keycloak services first
 docker compose up -d keycloak-db keycloak
@@ -344,6 +353,9 @@ curl http://localhost:8080/realms/master
 
 ### Disable SSL Requirement for Master Realm
 ```bash
+# Note: KEYCLOAK_ADMIN defaults to "admin" - ensure KEYCLOAK_ADMIN_PASSWORD is set
+export KEYCLOAK_ADMIN="${KEYCLOAK_ADMIN:-admin}"
+
 ADMIN_TOKEN=$(curl -s -X POST "http://localhost:8080/realms/master/protocol/openid-connect/token" \
     -H "Content-Type: application/x-www-form-urlencoded" \
     -d "username=${KEYCLOAK_ADMIN}" \
@@ -380,7 +392,9 @@ chmod +x keycloak/setup/init-keycloak.sh
 # IMPORTANT: The script will tell you to run get-all-client-credentials.sh
 # to retrieve and save the credentials. This is the next required step!
 
-#Step 2: Disable SSL for Application Realm
+# Step 2: Disable SSL for Application Realm
+# Note: KEYCLOAK_ADMIN defaults to "admin" - ensure KEYCLOAK_ADMIN_PASSWORD is set
+export KEYCLOAK_ADMIN="${KEYCLOAK_ADMIN:-admin}"
 
 ADMIN_TOKEN=$(curl -s -X POST "http://localhost:8080/realms/master/protocol/openid-connect/token" \
     -H "Content-Type: application/x-www-form-urlencoded" \
@@ -536,6 +550,8 @@ You should see the Keycloak login page. You can log in with:
 
 ### Build and Start All Services
 
+**Important**: After starting services, you MUST complete [Section 7: Storage Backend Setup](#7-storage-backend-setup-optional) before using JWT token generation from the UI. The MongoDB initialization loads required scopes that enable JWT token creation.
+
 ```bash
 # Return to project directory
 cd ~/workspace/mcp-gateway-registry
@@ -649,9 +665,11 @@ docker exec mcp-mongodb mongosh --eval "use mcp_registry; show collections"
 # - mcp_security_scans_default
 # - mcp_federation_config_default
 
-# 6. Restart registry to use MongoDB backend
-docker compose restart registry
+# 6. Restart auth-server and registry to load scopes and use MongoDB backend
+docker compose restart auth-server registry
 ```
+
+**Important**: The auth-server must be restarted after mongodb-init to load the JWT token scopes from MongoDB. Without this step, JWT token generation from the UI will fail with "no scopes configured" error.
 
 **MongoDB CE Features:**
 - Replica set configuration for production-like testing
@@ -669,8 +687,15 @@ For detailed MongoDB CE architecture and configuration options, see [Storage Arc
 ### Test the Registry Web Interface
 
 1. Open your web browser and navigate to:
-   ```
-   http://localhost:7860
+   ```bash
+   # On macOS:
+   open http://localhost:7860
+
+   # On Linux (install xdg-utils if the xdg-open command is not available):
+   # sudo apt install xdg-utils
+   xdg-open http://localhost:7860
+
+   # Or simply open http://localhost:7860 in your browser
    ```
 
 2. You should see the MCP Gateway Registry login page
@@ -752,6 +777,79 @@ uv run python agents/agent.py --agent-name agent-test-agent-m2m --mcp-registry-u
 
 ---
 
+### Accessing the Web UI
+
+Before configuring AI agents, you'll want to access the MCP Gateway web interface to verify everything is working and test the Keycloak login flow.
+
+<details>
+<summary><strong>Remote Access Options (click to expand)</strong></summary>
+
+The method to access the web UI depends on where you're running the MCP Gateway:
+
+#### Option A: Local Machine (Linux/macOS)
+
+If you're running on your local machine, simply open a browser and navigate to:
+- **Registry UI**: http://localhost:7860
+- **Keycloak Admin**: http://localhost:8080
+
+No additional setup required - you're already on localhost.
+
+#### Option B: AWS EC2 with Port Forwarding
+
+If you're running on EC2 and want to access from your local machine via SSH port forwarding:
+
+```bash
+# From your local machine, create SSH tunnels
+ssh -i your-key.pem -L 7860:localhost:7860 -L 8080:localhost:8080 -L 8888:localhost:8888 -L 80:localhost:80 ubuntu@your-ec2-ip
+
+# Then access in your local browser:
+# - Registry UI: http://localhost:7860
+# - Keycloak Admin: http://localhost:8080
+```
+
+#### Option C: AWS EC2 with Remote Desktop (GUI Access)
+
+If you prefer a full desktop environment on your EC2 instance:
+
+```bash
+# Update system
+sudo apt update && sudo apt upgrade -y
+
+# Install XFCE desktop environment (lightweight)
+sudo apt install -y xfce4 xfce4-goodies
+
+# Install XRDP server
+sudo apt install -y xrdp
+
+# Configure XRDP to use XFCE
+echo "xfce4-session" > ~/.xsession
+
+# Start and enable XRDP service
+sudo systemctl enable xrdp
+sudo systemctl start xrdp
+
+# Set password for ubuntu user
+sudo passwd ubuntu
+
+# Install Firefox browser for testing
+sudo apt install -y firefox
+```
+
+**AWS Security Group**: Add inbound rule for port 3389 (RDP) from your IP.
+
+**Connect from Windows**: Use Remote Desktop Connection (mstsc.exe) with:
+- Computer: `your-ec2-public-ip:3389`
+- Username: `ubuntu`
+- Password: The password you set above
+
+**Connect from macOS**: Use Microsoft Remote Desktop app from the App Store.
+
+Once connected via remote desktop, open Firefox and navigate to http://localhost:7860 to access the Registry UI.
+
+</details>
+
+---
+
 ## 9. Configuring AI Agents and Coding Assistants
 
 ### Configure OAuth Credentials
@@ -801,7 +899,6 @@ tail -f token_refresher.log
 2025-09-17 03:09:43,391,p455210,{token_refresher.py:370},INFO,Successfully refreshed OAuth token: agent-test-agent-m2m-token.json
 2025-09-17 03:09:43,391,p455210,{token_refresher.py:898},INFO,Token successfully updated at: /home/ubuntu/repos/mcp-gateway-registry/.oauth-tokens/agent-test-agent-m2m-token.json
 2025-09-17 03:09:43,631,p455210,{token_refresher.py:341},INFO,Refreshing OAuth token for provider: keycloak
-2025-09-17 03:09:43,778,p455210,{token_refresher.py:341},INFO,Refreshing OAuth token for provider: atlassian
 2025-09-17 03:09:43,778,p455210,{token_refresher.py:903},INFO,Refresh cycle complete: 8/8 tokens refreshed successfully
 2025-09-17 03:09:43,778,p455210,{token_refresher.py:907},INFO,Regenerating MCP configuration files after token refresh...
 2025-09-17 03:09:43,781,p455210,{token_refresher.py:490},INFO,MCP configuration files regenerated successfully
@@ -818,7 +915,7 @@ ls -la .oauth-tokens/
 
 **Key Files Generated:**
 - **Agent Tokens**: `agent-*-m2m-token.json` and `agent-*-m2m.env` files for each Keycloak agent
-- **External Service Tokens**: `*-egress.json` files for external providers (Atlassian, etc.)
+- **External Service Tokens**: `*-egress.json` files for external providers (GitHub, etc.)
 - **AI Coding Assistant Configurations**:
   - `mcp.json` - Configuration for Claude Code/Roocode format
   - `vscode_mcp.json` - Configuration for VS Code format
@@ -832,20 +929,6 @@ ls -la .oauth-tokens/
       "type": "streamable-http",
       "url": "https://mcpgateway.ddns.net/mcpgw/mcp",
       "headers": {
-        "X-Authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
-        "X-Client-Id": "agent-ai-coding-assistant-m2m",
-        "X-Keycloak-Realm": "mcp-gateway",
-        "X-Keycloak-URL": "http://localhost:8080"
-      },
-      "disabled": false,
-      "alwaysAllow": []
-    },
-    "atlassian": {
-      "type": "streamable-http",
-      "url": "https://mcpgateway.ddns.net/atlassian/mcp",
-      "headers": {
-        "Authorization": "Bearer eyJraWQiOiJhdXRoLmF0bGFzc2lhbi5jb20tQUNDRVNTLTk0ZTczYTkw...",
-        "X-Atlassian-Cloud-Id": "923a213e-e930-4359-be44-f4b164d3f269",
         "X-Authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
         "X-Client-Id": "agent-ai-coding-assistant-m2m",
         "X-Keycloak-Realm": "mcp-gateway",
@@ -1215,7 +1298,7 @@ curl -f https://mcpgateway.mycorp.com/realms/mcp-gateway
 
 - **Fine-grained Access Control**: Configure `scopes.yml` for detailed permissions
 - **Custom MCP Servers**: Add your own MCP server implementations
-- **OAuth Integration**: Connect with external services (GitHub, Atlassian, etc.)
+- **OAuth Integration**: Connect with external services (GitHub, Google, etc.)
 - **Monitoring Dashboard**: Set up Grafana for metrics visualization
 
 ### Documentation Resources

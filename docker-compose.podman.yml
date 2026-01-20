@@ -17,9 +17,14 @@ services:
       - AUTH_SERVER_EXTERNAL_URL=${AUTH_SERVER_EXTERNAL_URL}
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
       - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
+      - GITHUB_ENABLED=${GITHUB_ENABLED:-false}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_ENABLED=${GOOGLE_ENABLED:-false}
       - COGNITO_CLIENT_ID=${COGNITO_CLIENT_ID}
       - COGNITO_CLIENT_SECRET=${COGNITO_CLIENT_SECRET}
       - COGNITO_USER_POOL_ID=${COGNITO_USER_POOL_ID}
+      - COGNITO_ENABLED=${COGNITO_ENABLED:-false}
       - AWS_REGION=${AWS_REGION:-us-east-1}
       - HEALTH_CHECK_INTERVAL_SECONDS=${HEALTH_CHECK_INTERVAL_SECONDS:-30}
       - SRE_GATEWAY_AUTH_TOKEN=${SRE_GATEWAY_AUTH_TOKEN}
@@ -39,6 +44,11 @@ services:
       - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD}
       - KEYCLOAK_M2M_CLIENT_ID=${KEYCLOAK_M2M_CLIENT_ID}
       - KEYCLOAK_M2M_CLIENT_SECRET=${KEYCLOAK_M2M_CLIENT_SECRET}
+      # Entra ID configuration
+      - ENTRA_TENANT_ID=${ENTRA_TENANT_ID}
+      - ENTRA_CLIENT_ID=${ENTRA_CLIENT_ID}
+      - ENTRA_CLIENT_SECRET=${ENTRA_CLIENT_SECRET}
+      - ENTRA_ENABLED=${ENTRA_ENABLED:-false}
       # External Registry Configuration
       - EXTERNAL_REGISTRY_TAGS=${EXTERNAL_REGISTRY_TAGS:-anthropic-registry,workday-asor}
       - ASOR_ACCESS_TOKEN=${ASOR_ACCESS_TOKEN}
@@ -51,6 +61,20 @@ services:
       - SECURITY_SCAN_TIMEOUT=${SECURITY_SCAN_TIMEOUT:-60}
       - SECURITY_ADD_PENDING_TAG=${SECURITY_ADD_PENDING_TAG:-true}
       - MCP_SCANNER_LLM_API_KEY=${MCP_SCANNER_LLM_API_KEY}
+      # Storage Backend Configuration
+      - STORAGE_BACKEND=${STORAGE_BACKEND:-file}
+      # DocumentDB/MongoDB Configuration (when STORAGE_BACKEND=documentdb)
+      - DOCUMENTDB_HOST=${DOCUMENTDB_HOST:-mongodb}
+      - DOCUMENTDB_PORT=${DOCUMENTDB_PORT:-27017}
+      - DOCUMENTDB_USERNAME=${DOCUMENTDB_USERNAME}
+      - DOCUMENTDB_PASSWORD=${DOCUMENTDB_PASSWORD}
+      - DOCUMENTDB_DATABASE=${DOCUMENTDB_DATABASE:-mcp_registry}
+      - DOCUMENTDB_NAMESPACE=${DOCUMENTDB_NAMESPACE:-default}
+      - DOCUMENTDB_USE_TLS=${DOCUMENTDB_USE_TLS:-false}
+      - DOCUMENTDB_TLS_CA_FILE=${DOCUMENTDB_TLS_CA_FILE:-}
+      - DOCUMENTDB_USE_IAM=${DOCUMENTDB_USE_IAM:-false}
+      - DOCUMENTDB_REPLICA_SET=${DOCUMENTDB_REPLICA_SET:-rs0}
+      - DOCUMENTDB_READ_PREFERENCE=${DOCUMENTDB_READ_PREFERENCE:-secondaryPreferred}
       # Embeddings Configuration
       - EMBEDDINGS_PROVIDER=${EMBEDDINGS_PROVIDER:-sentence-transformers}
       - EMBEDDINGS_MODEL_NAME=${EMBEDDINGS_MODEL_NAME:-all-MiniLM-L6-v2}
@@ -123,19 +147,22 @@ services:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
       - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
+      - GITHUB_ENABLED=${GITHUB_ENABLED:-false}
       - COGNITO_CLIENT_ID=${COGNITO_CLIENT_ID}
       - COGNITO_CLIENT_SECRET=${COGNITO_CLIENT_SECRET}
       - COGNITO_USER_POOL_ID=${COGNITO_USER_POOL_ID}
       - COGNITO_DOMAIN=${COGNITO_DOMAIN:-auto}
+      - COGNITO_ENABLED=${COGNITO_ENABLED:-false}
       - AWS_REGION=${AWS_REGION:-us-east-1}
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_ENABLED=${GOOGLE_ENABLED:-false}
       # Metrics configuration
       - METRICS_SERVICE_URL=http://metrics-service:8890
       - METRICS_API_KEY=${METRICS_API_KEY_AUTH_SERVER}
       # Keycloak configuration
       - AUTH_PROVIDER=${AUTH_PROVIDER:-cognito}  # 'cognito' or 'keycloak'
-      - KEYCLOAK_ENABLED=${KEYCLOAK_ENABLED:-false}
+      - KEYCLOAK_ENABLED=${KEYCLOAK_ENABLED:-true}  # Enable Keycloak by default
       - KEYCLOAK_URL=${KEYCLOAK_URL:-http://keycloak:8080}
       # Podman note: host port 8080 is used by the registry UI (8080->80),
       # so Keycloak is exposed on 18080->8080 by default in this Podman compose.
@@ -150,11 +177,28 @@ services:
       - ENTRA_CLIENT_ID=${ENTRA_CLIENT_ID}
       - ENTRA_CLIENT_SECRET=${ENTRA_CLIENT_SECRET}
       - ENTRA_ENABLED=${ENTRA_ENABLED:-false}
+      # Storage Backend Configuration
+      - STORAGE_BACKEND=${STORAGE_BACKEND:-file}
+      # DocumentDB/MongoDB Configuration (when STORAGE_BACKEND=documentdb or mongodb-ce)
+      - DOCUMENTDB_HOST=${DOCUMENTDB_HOST:-mongodb}
+      - DOCUMENTDB_PORT=${DOCUMENTDB_PORT:-27017}
+      - DOCUMENTDB_USERNAME=${DOCUMENTDB_USERNAME}
+      - DOCUMENTDB_PASSWORD=${DOCUMENTDB_PASSWORD}
+      - DOCUMENTDB_DATABASE=${DOCUMENTDB_DATABASE:-mcp_registry}
+      - DOCUMENTDB_NAMESPACE=${DOCUMENTDB_NAMESPACE:-default}
+      - DOCUMENTDB_USE_TLS=${DOCUMENTDB_USE_TLS:-false}
+      - DOCUMENTDB_TLS_CA_FILE=${DOCUMENTDB_TLS_CA_FILE}
+      - DOCUMENTDB_USE_IAM=${DOCUMENTDB_USE_IAM:-false}
+      - DOCUMENTDB_REPLICA_SET=${DOCUMENTDB_REPLICA_SET:-rs0}
+      - DOCUMENTDB_READ_PREFERENCE=${DOCUMENTDB_READ_PREFERENCE:-secondaryPreferred}
     ports:
       - "8888:8888"
     volumes:
       - ${HOME}/mcp-gateway/logs:/app/logs
-      - ${HOME}/mcp-gateway/auth_server/scopes.yml:/app/scopes.yml
+      # - ${HOME}/mcp-gateway/auth_server/scopes.yml:/app/scopes.yml
+    depends_on:
+      metrics-service:
+        condition: service_healthy
     restart: unless-stopped
 
   # Current Time MCP Server
@@ -216,20 +260,6 @@ services:
       - "8002:8002"
     restart: unless-stopped
 
-
-  # Atlassian MCP Server
-  atlassian-server:
-    image: ghcr.io/sooperset/mcp-atlassian:latest
-    environment:
-      - ATLASSIAN_OAUTH_ENABLE=true
-      - MCP_VERY_VERBOSE=true
-      - MCP_LOGGING_STDOUT=true
-    ports:
-      - "8005:8005"
-    volumes:
-      - $HOME/.mcp-atlassian:/home/app/.mcp-atlassian
-    command: --transport streamable-http --port 8005
-    restart: unless-stopped
 
   # SQLite container for metrics database
   metrics-db:
@@ -346,9 +376,55 @@ services:
       retries: 3
       start_period: 60s
 
+  # MongoDB Community Edition 8.2 (alternative to DocumentDB for local development)
+  # Vector search is implemented in application code (see search_repository.py)
+  # Running without authentication for local development simplicity
+  mongodb:
+    image: mongo:8.2
+    container_name: mcp-mongodb
+    command: mongod --replSet rs0 --bind_ip 127.0.0.1,mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb-data:/data/db
+      - mongodb-config:/data/configdb
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 60s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  # MongoDB initialization (creates replica set, indexes, and loads admin scope)
+  mongodb-init:
+    image: python:3.11-slim
+    container_name: mcp-mongodb-init
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    environment:
+      - DOCUMENTDB_HOST=mongodb
+      - DOCUMENTDB_PORT=27017
+      - DOCUMENTDB_DATABASE=${DOCUMENTDB_DATABASE:-mcp_registry}
+      - DOCUMENTDB_USERNAME=${DOCUMENTDB_USERNAME:-admin}
+      - DOCUMENTDB_PASSWORD=${DOCUMENTDB_PASSWORD:-admin}
+      - DOCUMENTDB_NAMESPACE=${DOCUMENTDB_NAMESPACE:-default}
+    volumes:
+      - ./scripts/init-mongodb-ce.py:/app/scripts/init-mongodb-ce.py:ro
+      - ./scripts/registry-admins.json:/app/scripts/registry-admins.json:ro
+    command: >
+      sh -c "
+      pip install --quiet motor pymongo &&
+      python /app/scripts/init-mongodb-ce.py
+      "
+    restart: "no"
+
 volumes:
   ssl_data:
   keycloak_db_data:
   metrics-db-data:
   prometheus-data:
   grafana-data:
+  mongodb-data:
+  mongodb-config:

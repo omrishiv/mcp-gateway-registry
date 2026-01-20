@@ -38,7 +38,7 @@ uv run python api/registry_management.py \
 
 **What this does:**
 - Creates scope configuration in DocumentDB
-- If `"create_in_keycloak": true` is in the JSON, it also creates the Keycloak group
+- If `"create_in_idp": true` is in the JSON, it also creates the IdP group (Keycloak/Entra)
 - Defines server access rules, UI permissions, and group mappings
 
 **Example JSON structure** (cli/examples/currenttime-users.json):
@@ -58,13 +58,13 @@ uv run python api/registry_management.py \
     "list_service": ["currenttime"],
     "health_check_service": ["currenttime"]
   },
-  "create_in_keycloak": true
+  "create_in_idp": true
 }
 ```
 
-### Step 2: Create Keycloak IAM Group (if not auto-created)
+### Step 2: Create IAM Group (if not auto-created)
 
-If the group wasn't auto-created in Step 1 (no `"create_in_keycloak": true`), create it manually:
+If the group wasn't auto-created in Step 1 (no `"create_in_idp": true`), create it manually:
 
 ```bash
 uv run python api/registry_management.py \
@@ -261,7 +261,7 @@ uv run python api/registry_management.py \
 ### Create Everything from Scratch
 
 ```bash
-# 1. Import group scope configuration (creates Keycloak group if create_in_keycloak=true)
+# 1. Import group scope configuration (creates IdP group if create_in_idp=true)
 uv run python api/registry_management.py \
   --registry-url $REGISTRY_URL \
   --aws-region $AWS_REGION \

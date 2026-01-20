@@ -23,9 +23,14 @@ services:
       - AUTH_SERVER_EXTERNAL_URL=${AUTH_SERVER_EXTERNAL_URL}
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
       - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
+      - GITHUB_ENABLED=${GITHUB_ENABLED:-false}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_ENABLED=${GOOGLE_ENABLED:-false}
       - COGNITO_CLIENT_ID=${COGNITO_CLIENT_ID}
       - COGNITO_CLIENT_SECRET=${COGNITO_CLIENT_SECRET}
       - COGNITO_USER_POOL_ID=${COGNITO_USER_POOL_ID}
+      - COGNITO_ENABLED=${COGNITO_ENABLED:-false}
       - AWS_REGION=${AWS_REGION:-us-east-1}
       - HEALTH_CHECK_INTERVAL_SECONDS=${HEALTH_CHECK_INTERVAL_SECONDS:-30}
       - SRE_GATEWAY_AUTH_TOKEN=${SRE_GATEWAY_AUTH_TOKEN}
@@ -45,6 +50,11 @@ services:
       - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD}
       - KEYCLOAK_M2M_CLIENT_ID=${KEYCLOAK_M2M_CLIENT_ID}
       - KEYCLOAK_M2M_CLIENT_SECRET=${KEYCLOAK_M2M_CLIENT_SECRET}
+      # Entra ID configuration
+      - ENTRA_TENANT_ID=${ENTRA_TENANT_ID}
+      - ENTRA_CLIENT_ID=${ENTRA_CLIENT_ID}
+      - ENTRA_CLIENT_SECRET=${ENTRA_CLIENT_SECRET}
+      - ENTRA_ENABLED=${ENTRA_ENABLED:-false}
       # External Registry Configuration
       - EXTERNAL_REGISTRY_TAGS=${EXTERNAL_REGISTRY_TAGS:-anthropic-registry,workday-asor}
       - ASOR_ACCESS_TOKEN=${ASOR_ACCESS_TOKEN}
@@ -136,13 +146,16 @@ services:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
       - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
+      - GITHUB_ENABLED=${GITHUB_ENABLED:-false}
       - COGNITO_CLIENT_ID=${COGNITO_CLIENT_ID}
       - COGNITO_CLIENT_SECRET=${COGNITO_CLIENT_SECRET}
       - COGNITO_USER_POOL_ID=${COGNITO_USER_POOL_ID}
       - COGNITO_DOMAIN=${COGNITO_DOMAIN:-auto}
+      - COGNITO_ENABLED=${COGNITO_ENABLED:-false}
       - AWS_REGION=${AWS_REGION:-us-east-1}
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_ENABLED=${GOOGLE_ENABLED:-false}
       # Metrics configuration
       - METRICS_SERVICE_URL=http://metrics-service:8890
       - METRICS_API_KEY=${METRICS_API_KEY_AUTH_SERVER}
@@ -232,20 +245,6 @@ services:
       - PORT=8002
     ports:
       - "8002:8002"
-    restart: unless-stopped
-
-  # Atlassian MCP Server - using mirrored pre-built image
-  atlassian-server:
-    image: ${DOCKERHUB_ORG:-mcpgateway}/atlassian:${ATLASSIAN_VERSION:-latest}
-    environment:
-      - ATLASSIAN_OAUTH_ENABLE=true
-      - MCP_VERY_VERBOSE=true
-      - MCP_LOGGING_STDOUT=true
-    ports:
-      - "8005:8005"
-    volumes:
-      - $HOME/.mcp-atlassian:/home/app/.mcp-atlassian
-    command: --transport streamable-http --port 8005
     restart: unless-stopped
 
   # SQLite container for metrics database - using mirrored pre-built image
@@ -358,27 +357,56 @@ services:
       retries: 3
       start_period: 60s
 
+  # MongoDB keyfile initialization (generates keyfile for replica set authentication)
+  # This runs once before MongoDB starts to create the keyfile with correct permissions
+  mongodb-keyfile-init:
+    image: alpine:latest
+    container_name: mcp-mongodb-keyfile-init
+    volumes:
+      - mongodb-keyfile:/keyfile
+    command: >
+      sh -c "
+      if [ ! -f /keyfile/replica.key ]; then
+        echo 'Generating MongoDB keyfile...';
+        apk add --no-cache openssl;
+        openssl rand -base64 756 > /keyfile/replica.key;
+        chmod 400 /keyfile/replica.key;
+        chown 999:999 /keyfile/replica.key;
+        echo 'Keyfile generated successfully';
+      else
+        echo 'Keyfile already exists, skipping generation';
+      fi
+      "
+    restart: "no"
+
   # MongoDB Community Edition 8.2 (alternative to DocumentDB for local development)
   # Vector search is implemented in application code (see search_repository.py)
-  # Running without authentication for local development simplicity
+  # Running with authentication enabled for security
   mongodb:
-    image: ${DOCKERHUB_ORG:-mcpgateway}/mongo:${MONGODB_VERSION:-8.2}
+    image: ${DOCKERHUB_ORG:-mcpgateway}/mongo:${MONGODB_VERSION:-latest}
     container_name: mcp-mongodb
-    command: mongod --replSet rs0 --bind_ip 127.0.0.1,mongodb
+    command: mongod --replSet rs0 --bind_ip 127.0.0.1,mongodb --auth --keyFile /keyfile/replica.key
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${DOCUMENTDB_USERNAME:-admin}
+      - MONGO_INITDB_ROOT_PASSWORD=${DOCUMENTDB_PASSWORD:-admin}
     ports:
       - "27017:27017"
     volumes:
       - mongodb-data:/data/db
       - mongodb-config:/data/configdb
+      - mongodb-keyfile:/keyfile:ro
+    depends_on:
+      mongodb-keyfile-init:
+        condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      test: ["CMD", "mongosh", "-u", "${DOCUMENTDB_USERNAME:-admin}", "-p", "${DOCUMENTDB_PASSWORD:-admin}", "--authenticationDatabase", "admin", "--eval", "db.adminCommand('ping')"]
       interval: 60s
       timeout: 5s
       retries: 5
-      start_period: 20s
+      start_period: 30s
     restart: unless-stopped
 
-  # MongoDB initialization (creates replica set, indexes, and loads scopes)
+  # MongoDB initialization (creates replica set, indexes, and loads admin scope)
   mongodb-init:
     image: python:3.11-slim
     container_name: mcp-mongodb-init
@@ -389,15 +417,19 @@ services:
       - DOCUMENTDB_HOST=mongodb
       - DOCUMENTDB_PORT=27017
       - DOCUMENTDB_DATABASE=${DOCUMENTDB_DATABASE:-mcp_registry}
+      - DOCUMENTDB_USERNAME=${DOCUMENTDB_USERNAME:-admin}
+      - DOCUMENTDB_PASSWORD=${DOCUMENTDB_PASSWORD:-admin}
       - DOCUMENTDB_NAMESPACE=${DOCUMENTDB_NAMESPACE:-default}
-      - SCOPES_FILE=/app/config/scopes.yml
     volumes:
-      - ./scripts/init-mongodb-ce.py:/app/init-mongodb-ce.py:ro
-      - ./auth_server/scopes.yml:/app/config/scopes.yml:ro
+      - ./scripts/init-mongodb-ce.py:/app/scripts/init-mongodb-ce.py:ro
+      - ./scripts/registry-admins.json:/app/scripts/registry-admins.json:ro
+      - ./scripts/mcp-registry-admin.json:/app/scripts/mcp-registry-admin.json:ro
+      - ./scripts/mcp-servers-unrestricted-read.json:/app/scripts/mcp-servers-unrestricted-read.json:ro
+      - ./scripts/mcp-servers-unrestricted-execute.json:/app/scripts/mcp-servers-unrestricted-execute.json:ro
     command: >
       sh -c "
-      pip install --quiet motor pymongo pyyaml &&
-      python /app/init-mongodb-ce.py
+      pip install --quiet motor pymongo &&
+      python /app/scripts/init-mongodb-ce.py
       "
     restart: "no"
 
@@ -409,3 +441,4 @@ volumes:
   grafana-data:
   mongodb-data:
   mongodb-config:
+  mongodb-keyfile:

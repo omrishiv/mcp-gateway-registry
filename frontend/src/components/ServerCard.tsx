@@ -38,6 +38,8 @@ interface ServerCardProps {
   onToggle: (path: string, enabled: boolean) => void;
   onEdit?: (server: Server) => void;
   canModify?: boolean;
+  canHealthCheck?: boolean;
+  canToggle?: boolean;
   onRefreshSuccess?: () => void;
   onShowToast?: (message: string, type: 'success' | 'error') => void;
   onServerUpdate?: (path: string, updates: Partial<Server>) => void;
@@ -90,7 +92,7 @@ const formatTimeSince = (timestamp: string | null | undefined): string | null =>
   }
 };
 
-const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, onEdit, canModify, onRefreshSuccess, onShowToast, onServerUpdate, authToken }) => {
+const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, onEdit, canModify, canHealthCheck = true, canToggle = true, onRefreshSuccess, onShowToast, onServerUpdate, authToken }) => {
   const [tools, setTools] = useState<Tool[]>([]);
   const [loadingTools, setLoadingTools] = useState(false);
   const [showTools, setShowTools] = useState(false);
@@ -459,36 +461,40 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                 ) : null;
               })()}
 
-              {/* Refresh Button */}
-              <button
-                onClick={handleRefreshHealth}
-                disabled={loadingRefresh}
-                className="p-2.5 text-gray-500 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-all duration-200 disabled:opacity-50"
-                title="Refresh health status"
-                aria-label={`Refresh health status for ${server.name}`}
-              >
-                <ArrowPathIcon className={`h-4 w-4 ${loadingRefresh ? 'animate-spin' : ''}`} />
-              </button>
+              {/* Refresh Button - only show if user has health_check_service permission */}
+              {canHealthCheck && (
+                <button
+                  onClick={handleRefreshHealth}
+                  disabled={loadingRefresh}
+                  className="p-2.5 text-gray-500 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-all duration-200 disabled:opacity-50"
+                  title="Refresh health status"
+                  aria-label={`Refresh health status for ${server.name}`}
+                >
+                  <ArrowPathIcon className={`h-4 w-4 ${loadingRefresh ? 'animate-spin' : ''}`} />
+                </button>
+              )}
 
-              {/* Toggle Switch */}
-              <label className="relative inline-flex items-center cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={server.enabled}
-                  onChange={(e) => onToggle(server.path, e.target.checked)}
-                  className="sr-only peer"
-                  aria-label={`Enable ${server.name}`}
-                />
-                <div className={`relative w-12 h-6 rounded-full transition-colors duration-200 ease-in-out ${
-                  server.enabled 
-                    ? 'bg-blue-600' 
-                    : 'bg-gray-300 dark:bg-gray-600'
-                }`}>
-                  <div className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform duration-200 ease-in-out ${
-                    server.enabled ? 'translate-x-6' : 'translate-x-0'
-                  }`} />
-                </div>
-              </label>
+              {/* Toggle Switch - only show if user has toggle_service permission */}
+              {canToggle && (
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={server.enabled}
+                    onChange={(e) => onToggle(server.path, e.target.checked)}
+                    className="sr-only peer"
+                    aria-label={`Enable ${server.name}`}
+                  />
+                  <div className={`relative w-12 h-6 rounded-full transition-colors duration-200 ease-in-out ${
+                    server.enabled
+                      ? 'bg-blue-600'
+                      : 'bg-gray-300 dark:bg-gray-600'
+                  }`}>
+                    <div className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform duration-200 ease-in-out ${
+                      server.enabled ? 'translate-x-6' : 'translate-x-0'
+                    }`} />
+                  </div>
+                </label>
+              )}
             </div>
           </div>
         </div>

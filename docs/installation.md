@@ -11,7 +11,7 @@ Complete installation instructions for the MCP Gateway & Registry on various pla
 - **Amazon Cognito or Keycloak**: Identity provider for authentication (see [Cognito Setup Guide](cognito.md) or [Keycloak Integration](keycloak-integration.md))
 - **SSL Certificate**: Optional for HTTPS deployment in production
 
-## Quick Start (5 Minutes)
+## Quick Start
 
 ### Docker Installation (Default)
 
@@ -19,24 +19,87 @@ Complete installation instructions for the MCP Gateway & Registry on various pla
 # 1. Clone and setup
 git clone https://github.com/agentic-community/mcp-gateway-registry.git
 cd mcp-gateway-registry
-
-# 2. Configure environment
 cp .env.example .env
-# Edit .env with your credentials
 
-# 3. Generate authentication credentials
-./credentials-provider/generate_creds.sh
+# 2. Setup Python virtual environment
+uv sync
+source .venv/bin/activate
 
-# 4. Install prerequisites
-curl -LsSf https://astral.sh/uv/install.sh | sh
-sudo apt-get update && sudo apt-get install -y docker.io docker-compose
+# 3. Download embeddings model
+uv pip install -U huggingface_hub
+hf download sentence-transformers/all-MiniLM-L6-v2 --local-dir ${HOME}/mcp-gateway/models/all-MiniLM-L6-v2
 
-# 5. Deploy
+# 4. Configure environment - edit .env with your passwords
+nano .env
+# Set: KEYCLOAK_ADMIN_PASSWORD, INITIAL_ADMIN_PASSWORD (must match), KEYCLOAK_DB_PASSWORD
+# Set: SESSION_COOKIE_SECURE=false (for HTTP localhost)
+
+# Generate SECRET_KEY
+SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(64))")
+sed -i "s/^#*\s*SECRET_KEY=.*/SECRET_KEY=$SECRET_KEY/" .env
+
+# 5. Deploy with pre-built images
+export DOCKERHUB_ORG=mcpgateway
+source .env
+export KEYCLOAK_ADMIN="${KEYCLOAK_ADMIN:-admin}"
+./build_and_run.sh --prebuilt
+# Press Ctrl+C when logs are streaming - containers continue running
+
+# 6. Initialize MongoDB
+docker compose up mongodb-init
+docker compose restart auth-server
+
+# 7. Initialize Keycloak (wait for Keycloak to start first)
+# Disable SSL for master realm
+ADMIN_TOKEN=$(curl -s -X POST "http://localhost:8080/realms/master/protocol/openid-connect/token" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "username=${KEYCLOAK_ADMIN}" \
+    -d "password=${KEYCLOAK_ADMIN_PASSWORD}" \
+    -d "grant_type=password" \
+    -d "client_id=admin-cli" | jq -r '.access_token') && \
+curl -X PUT "http://localhost:8080/admin/realms/master" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"sslRequired": "none"}'
+
+# Initialize realm and clients
+chmod +x keycloak/setup/init-keycloak.sh
+./keycloak/setup/init-keycloak.sh
+
+# Disable SSL for application realm
+ADMIN_TOKEN=$(curl -s -X POST "http://localhost:8080/realms/master/protocol/openid-connect/token" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "username=${KEYCLOAK_ADMIN}" \
+    -d "password=${KEYCLOAK_ADMIN_PASSWORD}" \
+    -d "grant_type=password" \
+    -d "client_id=admin-cli" | jq -r '.access_token') && \
+curl -X PUT "http://localhost:8080/admin/realms/mcp-gateway" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"sslRequired": "none"}'
+
+# Get client credentials
+chmod +x keycloak/setup/get-all-client-credentials.sh
+./keycloak/setup/get-all-client-credentials.sh
+
+# Update .env with client secrets from .oauth-tokens/keycloak-client-secrets.txt
+cat .oauth-tokens/keycloak-client-secrets.txt
+nano .env  # Update KEYCLOAK_CLIENT_SECRET and KEYCLOAK_M2M_CLIENT_SECRET
+
+# Recreate containers with new credentials
 ./build_and_run.sh --prebuilt
 
-# 6. Access registry
-open http://localhost:7860
+# 8. Setup users and service accounts
+chmod +x ./cli/bootstrap_user_and_m2m_setup.sh
+./cli/bootstrap_user_and_m2m_setup.sh
+
+# 9. Access registry
+open http://localhost:7860  # macOS
+# xdg-open http://localhost:7860  # Linux
+# Login: admin / <KEYCLOAK_ADMIN_PASSWORD>
 ```
+
+For the complete step-by-step guide with detailed explanations, see the [Quick Start Guide](quickstart.md).
 
 ### Podman Installation (Rootless Alternative)
 
@@ -46,27 +109,94 @@ open http://localhost:7860
 # 1. Clone and setup
 git clone https://github.com/agentic-community/mcp-gateway-registry.git
 cd mcp-gateway-registry
+cp .env.example .env
 
 # 2. Install Podman (macOS)
 brew install podman-desktop
 # OR download from: https://podman-desktop.io/
 
 # 3. Initialize Podman machine (macOS)
-podman machine init
+podman machine init --cpus 4 --memory 8192 --disk-size 50
 podman machine start
 
-# 4. Configure environment
-cp .env.example .env
-# Edit .env with your credentials
+# 4. Setup Python virtual environment
+uv sync
+source .venv/bin/activate
 
-# 5. Deploy with Podman
+# 5. Download embeddings model
+uv pip install -U huggingface_hub
+hf download sentence-transformers/all-MiniLM-L6-v2 --local-dir ${HOME}/mcp-gateway/models/all-MiniLM-L6-v2
+
+# 6. Configure environment - edit .env with your passwords
+nano .env
+# Set: KEYCLOAK_ADMIN_PASSWORD, INITIAL_ADMIN_PASSWORD (must match), KEYCLOAK_DB_PASSWORD
+# Set: SESSION_COOKIE_SECURE=false (for HTTP localhost)
+# For Podman: Set KEYCLOAK_URL=http://localhost:18080
+
+# Generate SECRET_KEY
+SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(64))")
+sed -i "s/^#*\s*SECRET_KEY=.*/SECRET_KEY=$SECRET_KEY/" .env
+
+# 7. Deploy with Podman
+export DOCKERHUB_ORG=mcpgateway
+source .env
+export KEYCLOAK_ADMIN="${KEYCLOAK_ADMIN:-admin}"
+./build_and_run.sh --prebuilt --podman
+# Apple Silicon: Use ./build_and_run.sh --podman (without --prebuilt)
+# Press Ctrl+C when logs are streaming - containers continue running
+
+# 8. Initialize MongoDB
+podman compose up mongodb-init
+podman compose restart auth-server
+
+# 9. Initialize Keycloak (wait for Keycloak to start first)
+# Note: Podman uses port 18080 for Keycloak
+ADMIN_TOKEN=$(curl -s -X POST "http://localhost:18080/realms/master/protocol/openid-connect/token" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "username=${KEYCLOAK_ADMIN}" \
+    -d "password=${KEYCLOAK_ADMIN_PASSWORD}" \
+    -d "grant_type=password" \
+    -d "client_id=admin-cli" | jq -r '.access_token') && \
+curl -X PUT "http://localhost:18080/admin/realms/master" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"sslRequired": "none"}'
+
+# Initialize realm and clients
+chmod +x keycloak/setup/init-keycloak.sh
+KEYCLOAK_URL=http://localhost:18080 ./keycloak/setup/init-keycloak.sh
+
+# Disable SSL for application realm
+ADMIN_TOKEN=$(curl -s -X POST "http://localhost:18080/realms/master/protocol/openid-connect/token" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "username=${KEYCLOAK_ADMIN}" \
+    -d "password=${KEYCLOAK_ADMIN_PASSWORD}" \
+    -d "grant_type=password" \
+    -d "client_id=admin-cli" | jq -r '.access_token') && \
+curl -X PUT "http://localhost:18080/admin/realms/mcp-gateway" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"sslRequired": "none"}'
+
+# Get client credentials
+chmod +x keycloak/setup/get-all-client-credentials.sh
+KEYCLOAK_URL=http://localhost:18080 ./keycloak/setup/get-all-client-credentials.sh
+
+# Update .env with client secrets
+cat .oauth-tokens/keycloak-client-secrets.txt
+nano .env  # Update KEYCLOAK_CLIENT_SECRET and KEYCLOAK_M2M_CLIENT_SECRET
+
+# Recreate containers with new credentials
 ./build_and_run.sh --prebuilt --podman
 
-# Apple Silicon: Use without --prebuilt
-# ./build_and_run.sh --podman
+# 10. Setup users and service accounts
+chmod +x ./cli/bootstrap_user_and_m2m_setup.sh
+KEYCLOAK_URL=http://localhost:18080 ./cli/bootstrap_user_and_m2m_setup.sh
 
-# 6. Access registry (note the different port for Podman)
-open http://localhost:8080
+# 11. Access registry (note the different port for Podman)
+open http://localhost:8080  # macOS
+# xdg-open http://localhost:8080  # Linux
+# Login: admin / <KEYCLOAK_ADMIN_PASSWORD>
 ```
 
 > **Note for Apple Silicon:** Don't use `--prebuilt` with Podman on ARM64. Use `./build_and_run.sh --podman` instead. See [Podman on Apple Silicon Guide](podman-apple-silicon.md).
@@ -74,6 +204,7 @@ open http://localhost:8080
 **Podman Port Mapping:**
 - Main interface: `http://localhost:8080` (HTTP) or `https://localhost:8443` (HTTPS)
 - Registry API: `http://localhost:7860` (unchanged)
+- Keycloak: `http://localhost:18080` (instead of 8080)
 - All other internal services: unchanged ports
 
 ## Installation on Amazon EC2
@@ -207,6 +338,7 @@ cd mcp-gateway-registry
 # Configure environment
 cp .env.example .env
 nano .env  # Configure required values
+# Important: Set KEYCLOAK_URL=http://localhost:18080 for Podman
 
 # Deploy with Podman (explicit)
 ./build_and_run.sh --prebuilt --podman
@@ -217,6 +349,13 @@ nano .env  # Configure required values
 # Or let the script auto-detect (will use Podman if Docker not available)
 ./build_and_run.sh --prebuilt
 ```
+
+After initial deployment, you must complete the MongoDB and Keycloak initialization steps. See the [Podman Installation Quick Start](#podman-installation-rootless-alternative) above for the complete sequence including:
+- MongoDB initialization (`podman compose up mongodb-init`)
+- Keycloak realm setup (using port 18080)
+- Client credential retrieval and .env update
+- Container recreation to apply credentials
+- User and service account setup
 
 > **Apple Silicon Warning:** Don't use `--prebuilt` with Podman on Apple Silicon Macs. Use `./build_and_run.sh --podman` instead. See [Podman on Apple Silicon Guide](podman-apple-silicon.md).
 

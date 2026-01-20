@@ -22,6 +22,9 @@ Usage:
 
     # Query with filter
     python manage-documentdb.py query --collection mcp_servers_default --filter '{"enabled": true}'
+
+    # Drop a collection (with confirmation)
+    python manage-documentdb.py drop --collection mcp_scopes_default --confirm
 """
 
 import argparse
@@ -470,6 +473,64 @@ async def query_documents(
         return 1
 
 
+async def drop_collection(
+    host: str,
+    port: int,
+    database: str,
+    collection_name: str,
+    confirm: bool,
+    username: Optional[str],
+    password: Optional[str],
+    use_iam: bool,
+    use_tls: bool,
+    tls_ca_file: Optional[str],
+) -> int:
+    """Drop a collection from the database."""
+    if not confirm:
+        logger.error(
+            "Drop operation requires --confirm flag. "
+            "This will permanently delete all documents in the collection."
+        )
+        return 1
+
+    try:
+        client = await _get_client(
+            host, port, database, username, password, use_iam, use_tls, tls_ca_file
+        )
+
+        db = client[database]
+
+        # Check if collection exists
+        collection_names = await db.list_collection_names()
+        if collection_name not in collection_names:
+            logger.error(f"Collection '{collection_name}' does not exist")
+            client.close()
+            return 1
+
+        # Get document count before dropping
+        collection = db[collection_name]
+        doc_count = await collection.count_documents({})
+
+        print("\n" + "=" * 100)
+        print(f"Dropping collection: {collection_name}")
+        print(f"Documents to be deleted: {doc_count}")
+        print("=" * 100)
+
+        # Drop the collection
+        await db.drop_collection(collection_name)
+
+        logger.info(f"Successfully dropped collection '{collection_name}'")
+        print(f"\nCollection '{collection_name}' has been dropped.")
+        print("=" * 100)
+
+        client.close()
+        return 0
+
+    except Exception as e:
+        logger.error(f"Failed to drop collection: {e}", exc_info=True)
+        return 1
+
+
 def _get_schema(
     doc: Dict[str, Any],
     prefix: str = ""
@@ -547,6 +608,15 @@ Examples:
     query_parser.add_argument("--collection", required=True, help="Collection name")
     query_parser.add_argument("--filter", required=True, help="MongoDB filter as JSON")
     query_parser.add_argument("--limit", type=int, default=10, help="Number of documents to return")
+
+    # Drop command
+    drop_parser = subparsers.add_parser("drop", help="Drop a collection")
+    drop_parser.add_argument("--collection", required=True, help="Collection name to drop")
+    drop_parser.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Confirm the drop operation (required)",
+    )
 
     # Common arguments
     parser.add_argument(
@@ -672,6 +742,19 @@ Examples:
                 args.collection,
                 args.filter,
                 args.limit,
+                args.username,
+                args.password,
+                args.use_iam,
+                args.use_tls,
+                args.tls_ca_file,
+            )
+        elif args.command == "drop":
+            exit_code = await drop_collection(
+                args.host,
+                args.port,
+                args.database,
+                args.collection,
+                args.confirm,
                 args.username,
                 args.password,
                 args.use_iam,

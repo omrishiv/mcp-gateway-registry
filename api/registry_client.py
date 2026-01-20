@@ -672,8 +672,8 @@ class HumanUserRequest(BaseModel):
     password: Optional[str] = Field(None, description="Initial password")
 
 
-class KeycloakUserSummary(BaseModel):
-    """Keycloak user summary model."""
+class UserSummary(BaseModel):
+    """User summary model."""
 
     id: str = Field(..., description="User ID")
     username: str = Field(..., description="Username")
@@ -687,7 +687,7 @@ class KeycloakUserSummary(BaseModel):
 class UserListResponse(BaseModel):
     """Response model for list users endpoint."""
 
-    users: List[KeycloakUserSummary] = Field(default_factory=list, description="List of users")
+    users: List[UserSummary] = Field(default_factory=list, description="List of users")
     total: int = Field(..., description="Total number of users")
 
 
@@ -701,9 +701,11 @@ class UserDeleteResponse(BaseModel):
 class M2MAccountResponse(BaseModel):
     """Response model for M2M account creation."""
 
-    client_id: str = Field(..., description="Client ID")
+    client_id: str = Field(..., description="Client ID (app ID in Entra)")
     client_secret: str = Field(..., description="Client secret")
     groups: List[str] = Field(default_factory=list, description="Assigned groups")
+    client_uuid: Optional[str] = Field(None, description="Client UUID (Entra app object ID)")
+    service_principal_id: Optional[str] = Field(None, description="Service principal ID (Entra)")
 
 
 class GroupCreateRequest(BaseModel):
@@ -713,8 +715,8 @@ class GroupCreateRequest(BaseModel):
     description: Optional[str] = Field(None, description="Group description")
 
 
-class KeycloakGroupSummary(BaseModel):
-    """Keycloak group summary model."""
+class GroupSummary(BaseModel):
+    """Group summary model."""
 
     id: str = Field(..., description="Group ID")
     name: str = Field(..., description="Group name")
@@ -1050,7 +1052,7 @@ class RegistryClient:
         self,
         group_name: str,
         description: Optional[str] = None,
-        create_in_keycloak: bool = False
+        create_in_idp: bool = False
     ) -> Dict[str, Any]:
         """
         Create a new user group.
@@ -1058,7 +1060,7 @@ class RegistryClient:
         Args:
             group_name: Name of group
             description: Group description
-            create_in_keycloak: Whether to create in Keycloak
+            create_in_idp: Whether to create in IdP (Keycloak/Entra)
 
         Returns:
             Response data
@@ -1071,8 +1073,8 @@ class RegistryClient:
         data = {"group_name": group_name}
         if description:
             data["description"] = description
-        if create_in_keycloak:
-            data["create_in_keycloak"] = True
+        if create_in_idp:
+            data["create_in_idp"] = True
 
         response = self._make_request(
             method="POST",
@@ -1086,7 +1088,7 @@ class RegistryClient:
     def delete_group(
         self,
         group_name: str,
-        delete_from_keycloak: bool = False,
+        delete_from_idp: bool = False,
         force: bool = False
     ) -> Dict[str, Any]:
         """
@@ -1094,7 +1096,7 @@ class RegistryClient:
 
         Args:
             group_name: Name of group
-            delete_from_keycloak: Whether to delete from Keycloak
+            delete_from_idp: Whether to delete from IdP (Keycloak/Entra)
             force: Force deletion of system groups
 
         Returns:
@@ -1106,8 +1108,8 @@ class RegistryClient:
         logger.info(f"Deleting group: {group_name}")
 
         data = {"group_name": group_name}
-        if delete_from_keycloak:
-            data["delete_from_keycloak"] = True
+        if delete_from_idp:
+            data["delete_from_idp"] = True
         if force:
             data["force"] = True
 
@@ -1136,7 +1138,7 @@ class RegistryClient:
                 - server_access (optional): List of server access definitions
                 - group_mappings (optional): List of group mappings
                 - ui_permissions (optional): Dictionary of UI permissions
-                - create_in_keycloak (optional): Whether to create in Keycloak (default: true)
+                - create_in_idp (optional): Whether to create in IdP (default: true)
 
         Returns:
             Response data
@@ -1997,7 +1999,7 @@ class RegistryClient:
         last_name: str,
         groups: List[str],
         password: Optional[str] = None
-    ) -> KeycloakUserSummary:
+    ) -> UserSummary:
         """
         Create a human user account in Keycloak.
 
@@ -2010,7 +2012,7 @@ class RegistryClient:
             password: Optional initial password
 
         Returns:
-            KeycloakUserSummary with created user details
+            UserSummary with created user details
 
         Raises:
             requests.HTTPError: If not authorized (403), already exists (400), or request fails
@@ -2033,7 +2035,7 @@ class RegistryClient:
             data=data
         )
 
-        result = KeycloakUserSummary(**response.json())
+        result = UserSummary(**response.json())
         logger.info(f"User created successfully: {username}")
         return result
 
@@ -2095,7 +2097,7 @@ class RegistryClient:
         self,
         name: str,
         description: Optional[str] = None
-    ) -> KeycloakGroupSummary:
+    ) -> GroupSummary:
         """
         Create a new Keycloak group (admin only).
 
@@ -2104,7 +2106,7 @@ class RegistryClient:
             description: Optional group description
 
         Returns:
-            KeycloakGroupSummary with created group details
+            GroupSummary with created group details
 
         Raises:
             requests.HTTPError: If not authorized (403), already exists (400), or request fails
@@ -2123,7 +2125,7 @@ class RegistryClient:
             data=data
         )
 
-        result = KeycloakGroupSummary(**response.json())
+        result = GroupSummary(**response.json())
         logger.info(f"Group created successfully: {name}")
         return result
 

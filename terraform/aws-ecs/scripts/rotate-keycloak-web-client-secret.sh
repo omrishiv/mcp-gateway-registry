@@ -64,7 +64,13 @@ if [ -z "$KEYCLOAK_ADMIN_PASSWORD" ] && [ -f "$TERRAFORM_DIR/terraform.tfvars" ]
 fi
 
 # Use KEYCLOAK_ADMIN_URL as the base URL
-KEYCLOAK_URL="${KEYCLOAK_ADMIN_URL:-https://kc.mycorp.click}"
+KEYCLOAK_URL="${KEYCLOAK_ADMIN_URL:-}"
+if [ -z "$KEYCLOAK_URL" ]; then
+    print_error "KEYCLOAK_ADMIN_URL is required"
+    echo "Please set KEYCLOAK_ADMIN_URL in your .env file or environment,"
+    echo "or ensure terraform-outputs.json contains keycloak_url."
+    exit 1
+fi
 REALM="mcp-gateway"
 CLIENT_ID="mcp-gateway-web"
 AWS_REGION="${AWS_REGION:-us-west-2}"
@@ -183,5 +189,5 @@ echo "  ✓ AWS Secrets Manager updated"
 echo ""
 echo "Next Steps:"
 echo "  1. Restart registry ECS tasks to pick up new secret from Secrets Manager"
-echo "  2. Verify login functionality at: https://registry.mycorp.click"
+echo "  2. Verify login functionality at your registry URL"
 echo ""

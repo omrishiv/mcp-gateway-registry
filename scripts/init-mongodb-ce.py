@@ -5,18 +5,19 @@ Initialize MongoDB CE for local development.
 This script:
 1. Initializes replica set (rs0)
 2. Creates collections and indexes
-3. Loads scopes from scopes.yml
+3. Loads default admin scope from registry-admins.json
 
 Usage:
     python init-mongodb-ce.py
 """
 
 import asyncio
+import json
 import logging
 import os
 import sys
 import time
-import yaml
+from pathlib import Path
 from typing import Optional
 
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -48,7 +49,6 @@ def _get_config_from_env() -> dict:
         "port": int(os.getenv("DOCUMENTDB_PORT", "27017")),
         "database": os.getenv("DOCUMENTDB_DATABASE", "mcp_registry"),
         "namespace": os.getenv("DOCUMENTDB_NAMESPACE", "default"),
-        "scopes_file": os.getenv("SCOPES_FILE", "/app/config/scopes.yml"),
         "username": os.getenv("DOCUMENTDB_USERNAME", ""),
         "password": os.getenv("DOCUMENTDB_PASSWORD", ""),
         "replicaset": os.getenv("DOCUMENTDB_REPLICA_SET", "rs0"),
@@ -152,98 +152,71 @@ async def _create_standard_indexes(
         logger.info(f"Created indexes for {full_name}")
 
 
-async def _load_scopes_from_yaml(
+async def _load_default_scopes(
     db,
     namespace: str,
-    scopes_file: str,
 ) -> None:
-    """Load scopes from YAML file into MongoDB.
+    """Load default scopes from JSON files into scopes collection.
 
-    Uses same logic as load-scopes.py to parse scopes.yml structure:
-    - group_mappings: Keycloak group to scope name mappings
-    - UI-Scopes: UI permissions for each scope
-    - Individual scope entries: Server access lists for each scope
+    This loads all scope JSON files from the scripts directory:
+    - registry-admins.json: Bootstrap admin scope with full permissions
+    - mcp-registry-admin.json: MCP registry admin scope (Keycloak group)
+    - mcp-servers-unrestricted-read.json: Read-only access to all servers
+    - mcp-servers-unrestricted-execute.json: Full CRUD access to all servers
     """
-    logger.info(f"Loading scopes from {scopes_file}")
-
-    # Check if file exists
-    if not os.path.exists(scopes_file):
-        logger.warning(f"Scopes file not found: {scopes_file}")
-        logger.warning("Scopes will not be loaded. You can load them later using load-scopes.py")
-        return
-
-    # Read YAML file
-    with open(scopes_file, "r") as f:
-        scopes_data = yaml.safe_load(f)
-
-    if not scopes_data:
-        logger.warning(f"No scopes data found in {scopes_file}")
-        return
-
     collection_name = f"{COLLECTION_SCOPES}_{namespace}"
     collection = db[collection_name]
 
-    # Extract group mappings and UI scopes
-    group_mappings = scopes_data.get("group_mappings", {})
-    ui_scopes = scopes_data.get("UI-Scopes", {})
+    # Find scope files in the same directory as this script
+    script_dir = Path(__file__).parent
 
-    # Process each scope group
-    scope_groups = []
-    for key, value in scopes_data.items():
-        # Skip the top-level keys
-        if key in ["group_mappings", "UI-Scopes"]:
+    # List of scope files to load (order matters - base scopes first)
+    scope_files = [
+        "registry-admins.json",
+        "mcp-registry-admin.json",
+        "mcp-servers-unrestricted-read.json",
+        "mcp-servers-unrestricted-execute.json",
+    ]
+
+    loaded_count = 0
+    for scope_filename in scope_files:
+        scope_file = script_dir / scope_filename
+
+        if not scope_file.exists():
+            logger.warning(f"Scope file not found: {scope_file}")
             continue
 
-        # This is a scope group
-        scope_name = key
-        server_access = value if isinstance(value, list) else []
+        try:
+            with open(scope_file, "r") as f:
+                scope_data = json.load(f)
 
-        # Build the scope document
-        scope_doc = {
-            "_id": scope_name,
-            "group_mappings": [],
-            "server_access": server_access,
-            "ui_permissions": {},
-        }
+            logger.info(f"Loading scope from {scope_filename}")
 
-        # Add group mappings for this scope
-        for keycloak_group, scope_names in group_mappings.items():
-            if scope_name in scope_names:
-                scope_doc["group_mappings"].append(keycloak_group)
+            # Upsert the scope document
+            result = await collection.update_one(
+                {"_id": scope_data["_id"]},
+                {"$set": scope_data},
+                upsert=True
+            )
 
-        # Add UI permissions for this scope
-        if scope_name in ui_scopes:
-            scope_doc["ui_permissions"] = ui_scopes[scope_name]
+            if result.upserted_id:
+                logger.info(f"Inserted scope: {scope_data['_id']}")
+                loaded_count += 1
+            elif result.modified_count > 0:
+                logger.info(f"Updated scope: {scope_data['_id']}")
+                loaded_count += 1
+            else:
+                logger.info(f"Scope already up-to-date: {scope_data['_id']}")
 
-        scope_groups.append(scope_doc)
-
-    # Insert scopes into MongoDB
-    if scope_groups:
-        logger.info(f"Inserting {len(scope_groups)} scope groups into {collection_name}")
-
-        # Clear existing scopes first
-        await collection.delete_many({})
-
-        for scope_doc in scope_groups:
-            try:
-                # Use update_one with upsert to avoid duplicate key errors
-                result = await collection.update_one(
-                    {"_id": scope_doc["_id"]},
-                    {"$set": scope_doc},
-                    upsert=True
+            if "group_mappings" in scope_data:
+                logger.info(
+                    f"  group_mappings: {scope_data.get('group_mappings', [])}"
                 )
 
-                if result.upserted_id:
-                    logger.info(f"Inserted scope: {scope_doc['_id']}")
-                elif result.modified_count > 0:
-                    logger.info(f"Updated scope: {scope_doc['_id']}")
+        except Exception as e:
+            logger.error(f"Failed to load scope from {scope_filename}: {e}", exc_info=True)
 
-            except Exception as e:
-                logger.error(f"Failed to insert scope {scope_doc['_id']}: {e}")
-
-        logger.info(f"Successfully loaded {len(scope_groups)} scopes")
-    else:
-        logger.warning("No scope groups found to insert")
+    logger.info(f"Loaded {loaded_count} scopes into {collection_name}")
 
 
 async def _initialize_mongodb_ce() -> None:
@@ -256,7 +229,6 @@ async def _initialize_mongodb_ce() -> None:
     logger.info(f"Host: {config['host']}:{config['port']}")
     logger.info(f"Database: {config['database']}")
     logger.info(f"Namespace: {config['namespace']}")
-    logger.info(f"Scopes file: {config['scopes_file']}")
     logger.info("")
 
     # Wait for MongoDB to be ready
@@ -309,8 +281,8 @@ async def _initialize_mongodb_ce() -> None:
             collection = db[full_name]
             await _create_standard_indexes(collection, coll_name, namespace)
 
-        # Load scopes
-        await _load_scopes_from_yaml(db, namespace, config["scopes_file"])
+        # Load default admin scope
+        await _load_default_scopes(db, namespace)
 
         logger.info("")
         logger.info("=" * 60)

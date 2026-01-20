@@ -31,7 +31,7 @@ services:
       start_period: 20s
     restart: unless-stopped
 
-  # MongoDB initialization (creates replica set, indexes, and loads scopes)
+  # MongoDB initialization (creates replica set, indexes, and loads admin scope)
   mongodb-init:
     image: python:3.11-slim
     container_name: mcp-mongodb-init
@@ -42,15 +42,19 @@ services:
       - DOCUMENTDB_HOST=mongodb
       - DOCUMENTDB_PORT=27017
       - DOCUMENTDB_DATABASE=${DOCUMENTDB_DATABASE:-mcp_registry}
+      - DOCUMENTDB_USERNAME=${DOCUMENTDB_USERNAME:-admin}
+      - DOCUMENTDB_PASSWORD=${DOCUMENTDB_PASSWORD:-admin}
       - DOCUMENTDB_NAMESPACE=${DOCUMENTDB_NAMESPACE:-default}
-      - SCOPES_FILE=/app/config/scopes.yml
     volumes:
-      - ./scripts/init-mongodb-ce.py:/app/init-mongodb-ce.py:ro
-      - ./auth_server/scopes.yml:/app/config/scopes.yml:ro
+      - ./scripts/init-mongodb-ce.py:/app/scripts/init-mongodb-ce.py:ro
+      - ./scripts/registry-admins.json:/app/scripts/registry-admins.json:ro
+      - ./scripts/mcp-registry-admin.json:/app/scripts/mcp-registry-admin.json:ro
+      - ./scripts/mcp-servers-unrestricted-read.json:/app/scripts/mcp-servers-unrestricted-read.json:ro
+      - ./scripts/mcp-servers-unrestricted-execute.json:/app/scripts/mcp-servers-unrestricted-execute.json:ro
     command: >
       sh -c "
-      pip install --quiet motor pymongo pyyaml &&
-      python /app/init-mongodb-ce.py
+      pip install --quiet motor pymongo &&
+      python /app/scripts/init-mongodb-ce.py
       "
     restart: "no"
 
@@ -96,6 +100,11 @@ services:
       - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD}
       - KEYCLOAK_M2M_CLIENT_ID=${KEYCLOAK_M2M_CLIENT_ID}
       - KEYCLOAK_M2M_CLIENT_SECRET=${KEYCLOAK_M2M_CLIENT_SECRET}
+      # Entra ID configuration
+      - ENTRA_TENANT_ID=${ENTRA_TENANT_ID}
+      - ENTRA_CLIENT_ID=${ENTRA_CLIENT_ID}
+      - ENTRA_CLIENT_SECRET=${ENTRA_CLIENT_SECRET}
+      - ENTRA_ENABLED=${ENTRA_ENABLED:-false}
       # External Registry Configuration
       - EXTERNAL_REGISTRY_TAGS=${EXTERNAL_REGISTRY_TAGS:-anthropic-registry,workday-asor}
       - ASOR_ACCESS_TOKEN=${ASOR_ACCESS_TOKEN}
@@ -248,8 +257,10 @@ services:
   # Current Time MCP Server
   currenttime-server:
     build:
-      context: servers/currenttime
-      dockerfile: ../../docker/Dockerfile.mcp-server
+      context: .
+      dockerfile: docker/Dockerfile.mcp-server-light
+      args:
+        SERVER_DIR: servers/currenttime
     environment:
       - PORT=8000
       - MCP_TRANSPORT=streamable-http
@@ -260,8 +271,10 @@ services:
   # Financial Info MCP Server
   fininfo-server:
     build:
-      context: servers/fininfo
-      dockerfile: ../../docker/Dockerfile.mcp-server
+      context: .
+      dockerfile: docker/Dockerfile.mcp-server-light
+      args:
+        SERVER_DIR: servers/fininfo
     environment:
       - PORT=8001
       - SECRET_KEY=${SECRET_KEY}
@@ -296,8 +309,10 @@ services:
   # Real Server Fake Tools MCP Server
   realserverfaketools-server:
     build:
-      context: servers/realserverfaketools
-      dockerfile: ../../docker/Dockerfile.mcp-server
+      context: .
+      dockerfile: docker/Dockerfile.mcp-server-light
+      args:
+        SERVER_DIR: servers/realserverfaketools
     environment:
       - PORT=8002
     ports:

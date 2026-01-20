@@ -32,15 +32,15 @@ cat .oauth-tokens/vscode-mcp.json >> ~/.vscode/settings.json
 {
   "mcp": {
     "servers": {
-      "atlassian": {
-        "url": "https://your-gateway.com/atlassian/sse",
+      "mcpgw": {
+        "url": "https://your-gateway.com/mcpgw/mcp",
         "headers": {
           "Authorization": "Bearer eyJ...",
           "X-User-Pool-Id": "us-east-1_vm1115QSU",
           "X-Client-Id": "5v2rav1v93...",
           "X-Region": "us-east-1"
         },
-        "transport": "sse"
+        "transport": "streamable-http"
       }
     }
   }

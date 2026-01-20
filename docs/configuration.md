@@ -165,7 +165,6 @@ SESSION_COOKIE_DOMAIN=  # Empty string or unset
 | `AUTH_SERVER_URL` | Internal auth server URL | `http://auth-server:8888` | - |
 | `AUTH_SERVER_EXTERNAL_URL` | External auth server URL | `https://mcpgateway.ddns.net` | - |
 | `SECRET_KEY` | Application secret key | Auto-generated if not provided | Auto-generated |
-| `ATLASSIAN_AUTH_TOKEN` | Atlassian OAuth token | Auto-populated from credentials | - |
 | `SRE_GATEWAY_AUTH_TOKEN` | SRE Gateway auth token | Auto-populated from credentials | - |
 | `ANTHROPIC_API_KEY` | Anthropic API key for Claude models | `sk-ant-api03-...` | For AI functionality |
 
@@ -434,13 +433,12 @@ Support for multiple OAuth provider configurations using numbered suffixes (`_1`
 | `EGRESS_OAUTH_CLIENT_SECRET_N` | OAuth client secret for provider N | `ATOAubT-N-lAzpT05RDFq9dxcVr...` | For each provider |
 | `EGRESS_OAUTH_REDIRECT_URI_N` | OAuth redirect URI for provider N | `http://localhost:8080/callback` | For each provider |
 | `EGRESS_OAUTH_SCOPE_N` | OAuth scopes for provider N | Uses provider defaults if not set | Optional |
-| `EGRESS_PROVIDER_NAME_N` | Provider name (atlassian, google, etc.) | `atlassian` | For each provider |
-| `EGRESS_MCP_SERVER_NAME_N` | MCP server name for provider N | `atlassian` | For each provider |
+| `EGRESS_PROVIDER_NAME_N` | Provider name (google, github, etc.) | `google` | For each provider |
+| `EGRESS_MCP_SERVER_NAME_N` | MCP server name for provider N | `google` | For each provider |
 
 ### Supported Providers
 
-- **Atlassian**: Confluence, Jira integration
-- **Google**: Gmail, Drive, Calendar services  
+- **Google**: Gmail, Drive, Calendar services
 - **GitHub**: Repository and issue management
 - **Microsoft**: Office 365, Teams integration
 - **Bedrock AgentCore**: AWS AgentCore services
@@ -560,9 +558,9 @@ When using Keycloak as the authentication provider, the following configuration 
 
 | Field | Description | Example |
 |-------|-------------|---------|
-| `auth_url` | OAuth authorization URL | `https://api.atlassian.com/ex/oauth/authorize` |
-| `token_url` | OAuth token exchange URL | `https://api.atlassian.com/ex/oauth/token` |
-| `scopes` | Default OAuth scopes | `["read:confluence-content.all", "write:confluence-content"]` |
+| `auth_url` | OAuth authorization URL | `https://accounts.google.com/o/oauth2/v2/auth` |
+| `token_url` | OAuth token exchange URL | `https://oauth2.googleapis.com/token` |
+| `scopes` | Default OAuth scopes | `["https://www.googleapis.com/auth/drive.readonly"]` |
 | `client_credentials_supported` | Whether provider supports client credentials flow | `false` |
 
 ---

@@ -9,6 +9,7 @@ Production-grade infrastructure for the MCP Gateway Registry using AWS ECS Farga
 ## Table of Contents
 
 - [Architecture](#architecture)
+- [Deployment Modes](#deployment-modes)
 - [Quick Start](#quick-start)
 - [Post-Deployment](#post-deployment)
 - [Operations and Maintenance](#operations-and-maintenance)
@@ -64,6 +65,40 @@ The infrastructure runs on an ECS cluster with Fargate launch type, eliminating 
 **CloudWatch Alarms** continuously monitor key infrastructure and application metrics including CPU and memory utilization across all ECS tasks, database connection counts and pool exhaustion, and HTTP error rates from the load balancers. When alarm thresholds are breached, notifications are sent through Amazon SNS to configured endpoints such as email, SMS, or other automated incident response systems.
 
 **AWS Secrets Manager** provides secure storage and lifecycle management for sensitive credentials including Keycloak admin passwords, database connection strings, and API keys. ECS tasks retrieve these secrets at runtime as environment variables, eliminating the need to hardcode credentials in container images or configuration files. Secrets Manager supports automatic rotation of credentials on a scheduled basis to enhance security posture.
+
+---
+
+## Deployment Modes
+
+MCP Gateway supports three deployment modes. Choose based on your requirements:
+
+| Mode | Best For | Custom Domain Required? | Configuration (in `terraform.tfvars`) |
+|------|----------|------------------------|---------------------------------------|
+| **CloudFront Only** | Workshops, demos, evaluations, quick setup | No | `enable_cloudfront=true`, `enable_route53_dns=false` |
+| **Custom Domain** | Production with brand consistency | Yes (Route53) | `enable_cloudfront=false`, `enable_route53_dns=true` |
+| **CloudFront + Custom Domain** | Production with CDN benefits | Yes (Route53) | `enable_cloudfront=true`, `enable_route53_dns=true` |
+
+### Recommended Deployment Path
+
+**Mode 1: CloudFront Only (Easiest - No Custom Domain Required):**
+- No custom domain or Route53 hosted zone required
+- Get HTTPS URLs immediately (`https://d1234abcd.cloudfront.net`)
+- Perfect for workshops, demos, evaluations, or any deployment where custom DNS isn't available
+- Simply set `enable_cloudfront = true` and `enable_route53_dns = false`
+
+**Mode 2: Custom Domain Only:**
+- Custom branded URLs without CloudFront
+- Direct ALB access with ACM certificates
+- Simpler architecture if CDN isn't needed
+- Set `enable_cloudfront = false` and `enable_route53_dns = true`
+
+**Mode 3: CloudFront + Custom Domain (Production Recommended):**
+- Custom branded URLs (`https://registry.us-east-1.yourdomain.com`)
+- CloudFront CDN for global edge caching and DDoS protection
+- Requires a Route53 hosted zone for your domain
+- Set `enable_cloudfront = true` and `enable_route53_dns = true`
+
+For detailed configuration and troubleshooting, see [Deployment Modes Guide](../../docs/deployment-modes.md).
 
 ---
 
@@ -215,18 +250,28 @@ cd terraform/aws-ecs
 cp terraform.tfvars.example terraform.tfvars
 ```
 
-**Edit the following mandatory parameters in `terraform.tfvars`:**
+**Edit the following parameters in `terraform.tfvars`:**
+
+**Common Parameters (Required for ALL modes):**
 
 | Parameter | Description |
 |-----------|-------------|
 | `aws_region` | AWS region (must match where you pushed ECR images) |
-| `base_domain` | Your Route53 domain (e.g., `YOUR.DOMAIN`) |
 | `ingress_cidr_blocks` | IP addresses allowed to access the ALB |
 | `keycloak_admin_password` | Keycloak admin password (min 12 chars) |
 | `keycloak_database_password` | Database password (min 12 chars) |
-| `session_cookie_secure` | HTTPS-only cookie flag (true for production, false for HTTP) |
-| `session_cookie_domain` | Cookie domain for cross-subdomain auth (empty for single domain) |
+| `session_cookie_secure` | Set to `true` for HTTPS (all modes except development) |
 | 7 ECR image URIs | Container image URIs with your account ID and region |
+
+**Mode-Specific Parameters:**
+
+| Mode | Required Parameters |
+|------|---------------------|
+| **Mode 1: CloudFront Only** | `enable_cloudfront = true`<br>`enable_route53_dns = false`<br>`session_cookie_domain = ""` |
+| **Mode 2: Custom Domain** | `enable_cloudfront = false`<br>`enable_route53_dns = true`<br>`base_domain = "your.domain"`<br>`session_cookie_domain = ".your.domain"` |
+| **Mode 3: CloudFront + Custom Domain** | `enable_cloudfront = true`<br>`enable_route53_dns = true`<br>`base_domain = "your.domain"`<br>`session_cookie_domain = ".your.domain"` |
+
+**Note:** For Mode 1 (CloudFront Only), `base_domain` is not required since URLs use `*.cloudfront.net`.
 
 **Helper commands to get your configuration values:**
 
@@ -267,14 +312,15 @@ If you are running this from an EC2 instance, you may also want to run `curl -s 
 
 **Warning:** Setting `ingress_cidr_blocks` to `["0.0.0.0/0"]` opens access to anyone on the internet. While authentication (username/password) is still required, this is not recommended for production environments.
 
-**Example minimal terraform.tfvars:**
+**Example terraform.tfvars for Mode 1 (CloudFront Only - Easiest):**
 
 ```hcl
 # AWS Region (must match where you pushed ECR images)
 aws_region = "us-east-1"
 
-# Your Route53 domain
-base_domain = "YOUR.DOMAIN"
+# Deployment Mode: CloudFront Only (no custom domain required)
+enable_cloudfront  = true
+enable_route53_dns = false
 
 # IP addresses allowed to access the ALB
 ingress_cidr_blocks = [
@@ -286,10 +332,9 @@ ingress_cidr_blocks = [
 keycloak_admin_password    = "YourSecurePassword123!"
 keycloak_database_password = "YourDBPassword456!"
 
-# Session cookie configuration (IMPORTANT for login to work)
-session_cookie_secure = true        # Set to true for HTTPS production deployments
-session_cookie_domain = ""          # Leave empty for single-domain (recommended)
-                                    # Set to ".your.domain" for cross-subdomain auth
+# Session cookie configuration
+session_cookie_secure = true   # Always true for HTTPS
+session_cookie_domain = ""     # Empty for CloudFront mode
 
 # ECR image URIs (after running sed commands above)
 registry_image_uri               = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mcp-gateway-registry:latest"
@@ -299,6 +344,24 @@ mcpgw_image_uri                  = "123456789012.dkr.ecr.us-east-1.amazonaws.com
 realserverfaketools_image_uri    = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mcp-gateway-realserverfaketools:latest"
 flight_booking_agent_image_uri   = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mcp-gateway-flight-booking-agent:latest"
 travel_assistant_agent_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mcp-gateway-travel-assistant-agent:latest"
+```
+
+**Example terraform.tfvars for Mode 2 or 3 (Custom Domain):**
+
+```hcl
+# For Mode 2 (Custom Domain Only):
+enable_cloudfront  = false
+enable_route53_dns = true
+
+# For Mode 3 (CloudFront + Custom Domain):
+# enable_cloudfront  = true
+# enable_route53_dns = true
+
+# Required for custom domain modes
+base_domain           = "your.domain"
+session_cookie_domain = ".your.domain"
+
+# ... plus all common parameters from Mode 1 example above
 ```
 
 ### Step 4: Deploy Infrastructure (~20 min)
@@ -587,6 +650,23 @@ The DocumentDB cluster is automatically provisioned by Terraform. To initialize 
 aws logs tail /ecs/mcp-gateway-v2-registry --since 5m --region us-east-1 | grep "Loaded from repository"
 ```
 
+**For Entra ID Deployments:**
+
+When using Microsoft Entra ID as the authentication provider (`entra_enabled = true` in terraform.tfvars), you must specify the Entra ID Group Object ID for admin bootstrapping:
+
+```bash
+# Run with Entra ID Group Object ID for admin scopes
+./terraform/aws-ecs/scripts/run-documentdb-init.sh --entra-group-id "your-entra-group-object-id"
+
+# Example with actual Group Object ID:
+./terraform/aws-ecs/scripts/run-documentdb-init.sh --entra-group-id "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+```
+
+To find your Entra ID Group Object ID:
+1. Go to Azure Portal > Microsoft Entra ID > Groups
+2. Select your admin group (e.g., "mcp-gateway-admins")
+3. Copy the "Object ID" from the Overview page
+
 **Loading Scopes into DocumentDB:**
 
 ```bash
@@ -618,6 +698,121 @@ uv run python scripts/load-scopes.py --scopes-file cli/examples/currenttime-user
 - Both auth-server and registry connect to the same DocumentDB cluster
 
 See [terraform/aws-ecs/scripts/README-DOCUMENTDB-CLI.md](terraform/aws-ecs/scripts/README-DOCUMENTDB-CLI.md) for detailed DocumentDB CLI documentation.
+
+## User and Group Management
+
+After deployment, the system is bootstrapped with **minimal configuration**:
+- **`registry-admins`** group - Administrative group with full registry access
+- **Admin user** - Initial administrator account
+- **Admin scopes** - `registry-admins` scope mapped to the admin group
+
+**All additional groups, users, and M2M service accounts must be created manually.**
+
+### Bootstrap Differences by Provider
+
+| Provider | Bootstrap Process |
+|----------|-------------------|
+| **Keycloak** | Automatic - `init-keycloak.sh` creates realm, clients, admin user, and `registry-admins` group |
+| **Entra ID** | Manual - `registry-admins` group must be created in Azure Portal, Group Object ID passed to `run-documentdb-init.sh --entra-group-id` |
+
+### Creating Groups
+
+Groups control access to MCP servers. Create a group definition JSON file:
+
+```json
+{
+  "scope_name": "public-mcp-users",
+  "description": "Users with access to public MCP servers",
+  "servers": [
+    {"server_name": "currenttime", "tools": ["*"], "access_level": "execute"}
+  ],
+  "create_in_idp": true
+}
+```
+
+Import the group:
+
+```bash
+uv run python api/registry_management.py \
+  --token-file api/.token \
+  --registry-url https://registry.us-east-1.example.com \
+  import-group --file my-group.json
+```
+
+### Creating Human Users
+
+Human users can log in via the web UI:
+
+```bash
+uv run python api/registry_management.py \
+  --token-file api/.token \
+  --registry-url https://registry.us-east-1.example.com \
+  user-create-human \
+  --username jsmith \
+  --email jsmith@example.com \
+  --first-name John \
+  --last-name Smith \
+  --groups public-mcp-users \
+  --password "SecurePassword123!"
+```
+
+### Creating M2M Service Accounts
+
+M2M accounts are used for AI agents and automated systems:
+
+```bash
+uv run python api/registry_management.py \
+  --token-file api/.token \
+  --registry-url https://registry.us-east-1.example.com \
+  user-create-m2m \
+  --name my-ai-agent \
+  --groups public-mcp-users \
+  --description "AI coding assistant"
+```
+
+**Save the client secret immediately - it cannot be retrieved later.**
+
+### Generating JWT Tokens
+
+**For Human Users:**
+1. Log in to the registry web UI
+2. Click the **"Get JWT Token"** button in the top-left sidebar
+3. Copy and use the generated token
+
+**For M2M Accounts:**
+
+Create an agent config file (`.oauth-tokens/agent-my-ai-agent.json`):
+
+```json
+{
+  "client_id": "my-ai-agent",
+  "client_secret": "your-client-secret",
+  "keycloak_url": "https://kc.us-east-1.example.com",
+  "keycloak_realm": "mcp-gateway",
+  "auth_provider": "keycloak"
+}
+```
+
+Generate the token:
+
+```bash
+# For Keycloak
+./credentials-provider/generate_creds.sh -a keycloak -k https://kc.us-east-1.example.com
+
+# For Entra ID
+./credentials-provider/generate_creds.sh -a entra -i .oauth-tokens/entra-identities.json
+```
+
+Use the generated token:
+
+```bash
+uv run python api/registry_management.py \
+  --token-file .oauth-tokens/agent-my-ai-agent-token.json \
+  --registry-url https://registry.us-east-1.example.com \
+  list
+```
+
+For detailed user management documentation, see [docs/auth-mgmt.md](../../docs/auth-mgmt.md).
 
 ## Operations and Maintenance
 
@@ -804,6 +999,7 @@ For running Terraform and the deployment scripts, your IAM user or role needs th
         "ecr:*",
         "application-autoscaling:*",
         "cloudwatch:*",
+        "cloudfront:*",
         "sns:*",
         "ssm:*",
         "kms:*",
@@ -814,6 +1010,8 @@ For running Terraform and the deployment scripts, your IAM user or role needs th
 ```
 
 **Note:** For production, consider restricting these permissions to specific resource ARNs.
+
+**Note:** The `cloudfront:*` permission is required for CloudFront deployment modes (Mode 1: CloudFront Only, Mode 3: CloudFront + Custom Domain). If you are only using Mode 2 (Custom Domain Only), you can omit this permission.
 
 **ECS Task Role Security:**
 - ECS task roles follow principle of least privilege

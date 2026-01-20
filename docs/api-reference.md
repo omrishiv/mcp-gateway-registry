@@ -714,7 +714,7 @@ This section implements the official [Anthropic MCP Registry API specification](
 **Form Parameters:**
 - `group_name`
 - `description` (optional)
-- `create_in_keycloak` (optional)
+- `create_in_idp` (optional)
 
 **Response:** `200 OK`
 
@@ -726,7 +726,7 @@ This section implements the official [Anthropic MCP Registry API specification](
 
 **Form Parameters:**
 - `group_name`
-- `delete_from_keycloak` (optional)
+- `delete_from_idp` (optional)
 - `force` (optional)
 
 **Response:** `200 OK`

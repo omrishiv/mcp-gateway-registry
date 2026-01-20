@@ -104,3 +104,24 @@ resource "aws_secretsmanager_secret_version" "embeddings_api_key" {
     ignore_changes = [secret_string]
   }
 }
+
+
+# Microsoft Entra ID client secret (for OAuth and IAM operations)
+resource "aws_secretsmanager_secret" "entra_client_secret" {
+  count = var.entra_enabled ? 1 : 0
+
+  name_prefix = "${local.name_prefix}-entra-client-secret-"
+  description = "Microsoft Entra ID client secret for OAuth authentication and IAM operations"
+  tags        = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "entra_client_secret" {
+  count = var.entra_enabled ? 1 : 0
+
+  secret_id     = aws_secretsmanager_secret.entra_client_secret[0].id
+  secret_string = var.entra_client_secret
+
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
+}

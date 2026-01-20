@@ -6,6 +6,8 @@ from fastapi.responses import JSONResponse
 
 from ..core.config import settings
 from ..services.server_service import server_service
+from ..health.service import health_service
+from ..constants import HealthStatus
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +82,9 @@ def _format_server_discovery(server_info: dict, request: Request) -> dict:
     # Get first 5 tools as preview
     tools_preview = _get_tools_preview(server_info, max_tools=5)
 
+    # Get actual health status from health service
+    health_status = _get_normalized_health_status(server_path)
+
     return {
         "name": server_name,
         "description": description,
@@ -87,7 +92,7 @@ def _format_server_discovery(server_info: dict, request: Request) -> dict:
         "transport": transport_type,
         "authentication": auth_info,
         "capabilities": ["tools", "resources"],
-        "health_status": "healthy",  # TODO: Get actual health status
+        "health_status": health_status,
         "tools_preview": tools_preview
     }
 
@@ -168,3 +173,39 @@ def _get_tools_preview(server_info: dict, max_tools: int = 5) -> list:
             })
 
     return preview_tools
+
+
+def _get_normalized_health_status(server_path: str) -> str:
+    """
+    Get normalized health status for a server from health service.
+
+    Normalizes detailed status strings (e.g., "unhealthy: timeout") to simple
+    values ("unhealthy") for cleaner client consumption in discovery responses.
+
+    Args:
+        server_path: The server path to get health status for
+
+    Returns:
+        Normalized health status string: "healthy", "unhealthy", "disabled", or "unknown"
+    """
+    # Get raw status from health service
+    raw_status = health_service.server_health_status.get(
+        server_path,
+        HealthStatus.UNKNOWN
+    )
+
+    # Normalize status to clean values for client consumption
+    if isinstance(raw_status, str):
+        status_lower = raw_status.lower()
+        if "unhealthy" in status_lower or "error" in status_lower:
+            return "unhealthy"
+        elif "healthy" in status_lower:
+            return "healthy"
+        elif "disabled" in status_lower:
+            return "disabled"
+        elif "checking" in status_lower:
+            return "unknown"
+        else:
+            return raw_status
+
+    return str(raw_status) if raw_status else "unknown"

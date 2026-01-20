@@ -207,6 +207,7 @@ _validate_terraform_outputs() {
 
     log_info "Validating required resources..."
 
+    # Core required outputs (always needed)
     local required_outputs=(
         "vpc_id"
         "ecs_cluster_name"
@@ -214,9 +215,12 @@ _validate_terraform_outputs() {
         "mcp_gateway_url"
         "mcp_gateway_auth_url"
         "keycloak_url"
-        "registry_url"
         "mcp_gateway_efs_id"
     )
+    
+    # Note: registry_url is only set in custom domain mode
+    # cloudfront_mcp_gateway_url is only set in CloudFront mode
+    # At least one of these should be available for a valid deployment
 
     local missing_outputs=()
     local validation_passed=true
@@ -240,13 +244,32 @@ _validate_terraform_outputs() {
 
         # Export values for later use
         export KEYCLOAK_ADMIN_URL=$(jq -r '.keycloak_url.value' "$OUTPUTS_FILE")
-        export REGISTRY_URL=$(jq -r '.registry_url.value' "$OUTPUTS_FILE")
         export AUTH_SERVER_EXTERNAL_URL=$(jq -r '.mcp_gateway_auth_url.value' "$OUTPUTS_FILE")
         export ECS_CLUSTER_NAME=$(jq -r '.ecs_cluster_name.value' "$OUTPUTS_FILE")
+        
+        # REGISTRY_URL: prefer custom domain, fallback to CloudFront URL
+        local registry_url=$(jq -r '.registry_url.value // empty' "$OUTPUTS_FILE")
+        local cloudfront_url=$(jq -r '.cloudfront_mcp_gateway_url.value // empty' "$OUTPUTS_FILE")
+        
+        if [[ -n "$registry_url" && "$registry_url" != "null" ]]; then
+            export REGISTRY_URL="$registry_url"
+        elif [[ -n "$cloudfront_url" && "$cloudfront_url" != "null" ]]; then
+            export REGISTRY_URL="$cloudfront_url"
+            log_info "Using CloudFront URL as REGISTRY_URL (custom domain not configured)"
+        else
+            export REGISTRY_URL=$(jq -r '.mcp_gateway_url.value' "$OUTPUTS_FILE")
+            log_warning "Using ALB URL as REGISTRY_URL (no HTTPS configured)"
+        fi
+        
+        # Also export CloudFront URL if available (for init-keycloak.sh)
+        if [[ -n "$cloudfront_url" && "$cloudfront_url" != "null" ]]; then
+            export CLOUDFRONT_REGISTRY_URL="$cloudfront_url"
+        fi
 
         log_info "Exported configuration:"
         log_info "  KEYCLOAK_ADMIN_URL: $KEYCLOAK_ADMIN_URL"
         log_info "  REGISTRY_URL: $REGISTRY_URL"
+        log_info "  CLOUDFRONT_REGISTRY_URL: ${CLOUDFRONT_REGISTRY_URL:-<not set>}"
         log_info "  AUTH_SERVER_EXTERNAL_URL: $AUTH_SERVER_EXTERNAL_URL"
         log_info "  ECS_CLUSTER_NAME: $ECS_CLUSTER_NAME"
 
@@ -431,11 +454,36 @@ _initialize_keycloak() {
         return 0
     fi
 
-    # Check required environment variables
+    # Try to load INITIAL_ADMIN_PASSWORD from Secrets Manager if not set
     if [[ -z "${INITIAL_ADMIN_PASSWORD:-}" ]]; then
-        log_error "INITIAL_ADMIN_PASSWORD environment variable is required."
-        log_error "This is the password for the 'admin' user in the mcp-gateway realm."
-        log_error "Please set it before running this script:"
+        log_info "INITIAL_ADMIN_PASSWORD not set, attempting to load from Secrets Manager..."
+        
+        # Find the admin password secret by name pattern (mcp-gateway-v2-admin-password-*)
+        local secret_name
+        secret_name=$(aws secretsmanager list-secrets \
+            --region "$AWS_REGION" \
+            --filter Key=name,Values=mcp-gateway-v2-admin-password \
+            --query 'SecretList[0].Name' \
+            --output text 2>/dev/null)
+        
+        if [[ -n "$secret_name" && "$secret_name" != "None" ]]; then
+            INITIAL_ADMIN_PASSWORD=$(aws secretsmanager get-secret-value \
+                --secret-id "$secret_name" \
+                --region "$AWS_REGION" \
+                --query 'SecretString' \
+                --output text 2>/dev/null)
+            
+            if [[ -n "$INITIAL_ADMIN_PASSWORD" ]]; then
+                export INITIAL_ADMIN_PASSWORD
+                log_success "Loaded INITIAL_ADMIN_PASSWORD from Secrets Manager ($secret_name)"
+            fi
+        fi
+    fi
+
+    # Final check - if still not set, error out
+    if [[ -z "${INITIAL_ADMIN_PASSWORD:-}" ]]; then
+        log_error "INITIAL_ADMIN_PASSWORD could not be loaded from Secrets Manager."
+        log_error "Either set it manually or ensure the secret exists:"
         log_error "  export INITIAL_ADMIN_PASSWORD='YourSecurePassword123'"
         STEPS_FAILED=$((STEPS_FAILED + 1))
         return 1
@@ -463,7 +511,7 @@ _initialize_keycloak() {
 
 
 _initialize_scopes() {
-    log_step "6" "Initializing MCP Scopes on EFS"
+    log_step "6" "Initializing MCP Scopes"
     STEPS_TOTAL=$((STEPS_TOTAL + 1))
 
     if [[ "$SKIP_SCOPES" == "true" ]]; then
@@ -472,21 +520,51 @@ _initialize_scopes() {
         return 0
     fi
 
-    if [[ "$DRY_RUN" == "true" ]]; then
-        log_info "[DRY RUN] Would run: $SCRIPT_DIR/run-scopes-init-task.sh --skip-build"
-        STEPS_SKIPPED=$((STEPS_SKIPPED + 1))
-        return 0
-    fi
+    # Detect storage backend from terraform outputs
+    local documentdb_endpoint
+    documentdb_endpoint=$(jq -r '.documentdb_cluster_endpoint.value // empty' "$OUTPUTS_FILE" 2>/dev/null)
 
-    log_info "Running scopes initialization task..."
+    if [[ -n "$documentdb_endpoint" && "$documentdb_endpoint" != "null" ]]; then
+        # DocumentDB mode
+        log_info "Detected DocumentDB storage backend"
+        log_info "DocumentDB endpoint: $documentdb_endpoint"
 
-    if "$SCRIPT_DIR/run-scopes-init-task.sh" --skip-build; then
-        log_success "MCP scopes initialized on EFS!"
-        STEPS_PASSED=$((STEPS_PASSED + 1))
+        if [[ "$DRY_RUN" == "true" ]]; then
+            log_info "[DRY RUN] Would run: $SCRIPT_DIR/run-documentdb-init.sh"
+            STEPS_SKIPPED=$((STEPS_SKIPPED + 1))
+            return 0
+        fi
+
+        log_info "Running DocumentDB initialization (indexes + scopes)..."
+
+        if "$SCRIPT_DIR/run-documentdb-init.sh"; then
+            log_success "DocumentDB initialized with indexes and scopes!"
+            STEPS_PASSED=$((STEPS_PASSED + 1))
+        else
+            log_error "DocumentDB initialization failed."
+            STEPS_FAILED=$((STEPS_FAILED + 1))
+            return 1
+        fi
     else
-        log_error "Scopes initialization failed."
-        STEPS_FAILED=$((STEPS_FAILED + 1))
-        return 1
+        # EFS mode (default)
+        log_info "Using EFS storage backend"
+
+        if [[ "$DRY_RUN" == "true" ]]; then
+            log_info "[DRY RUN] Would run: $SCRIPT_DIR/run-scopes-init-task.sh --skip-build"
+            STEPS_SKIPPED=$((STEPS_SKIPPED + 1))
+            return 0
+        fi
+
+        log_info "Running scopes initialization task on EFS..."
+
+        if "$SCRIPT_DIR/run-scopes-init-task.sh" --skip-build; then
+            log_success "MCP scopes initialized on EFS!"
+            STEPS_PASSED=$((STEPS_PASSED + 1))
+        else
+            log_error "Scopes initialization failed."
+            STEPS_FAILED=$((STEPS_FAILED + 1))
+            return 1
+        fi
     fi
 }
 

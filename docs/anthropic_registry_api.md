@@ -66,8 +66,8 @@ Lists all MCP servers that the authenticated user has access to.
 {
   "servers": [
     {
-      "name": "io.mcpgateway/atlassian",
-      "description": "Atlassian Jira and Confluence integration",
+      "name": "io.mcpgateway/fininfo",
+      "description": "Financial information and market data",
       "version": "1.0.0",
       "vendor": "MCP Gateway"
     }
@@ -83,7 +83,7 @@ Lists all MCP servers that the authenticated user has access to.
 Lists all available versions for a specific server.
 
 **Parameters:**
-- `server_name`: URL-encoded server name (e.g., `io.mcpgateway%2Fatlassian`)
+- `server_name`: URL-encoded server name (e.g., `io.mcpgateway%2Ffininfo`)
 
 **Response:**
 ```json
@@ -111,11 +111,11 @@ Gets detailed information about a specific server version.
 **Response:**
 ```json
 {
-  "name": "io.mcpgateway/atlassian",
+  "name": "io.mcpgateway/fininfo",
   "version": "1.0.0",
-  "description": "Atlassian Jira and Confluence integration",
+  "description": "Financial information and market data",
   "vendor": "MCP Gateway",
-  "sourceUrl": "https://github.com/mcpgateway/atlassian-mcp",
+  "sourceUrl": "https://github.com/mcpgateway/mcp-gateway-registry",
   "configuration": {
     "mcpVersion": "2024-11-05",
     "capabilities": {
@@ -140,17 +140,17 @@ curl -X GET "http://localhost/v0.1/servers?limit=10" \
   -H "Content-Type: application/json"
 
 # Get versions for a specific server
-curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Fatlassian/versions" \
+curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Ffininfo/versions" \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json"
 
 # Get details for a specific server version
-curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Fatlassian/versions/latest" \
+curl -X GET "http://localhost/v0.1/servers/io.mcpgateway%2Ffininfo/versions/latest" \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json"
 ```
 
-**Note**: Server names with slashes must be URL-encoded (e.g., `io.mcpgateway/atlassian` becomes `io.mcpgateway%2Fatlassian`).
+**Note**: Server names with slashes must be URL-encoded (e.g., `io.mcpgateway/fininfo` becomes `io.mcpgateway%2Ffininfo`).
 
 ## Using the Test Script
 
@@ -172,7 +172,7 @@ uv run python cli/test_anthropic_api.py \
 uv run python cli/test_anthropic_api.py \
   --token-file /path/to/your/token-file.json \
   --test get-server \
-  --server-name io.mcpgateway/atlassian
+  --server-name io.mcpgateway/fininfo
 ```
 
 ### Additional Options

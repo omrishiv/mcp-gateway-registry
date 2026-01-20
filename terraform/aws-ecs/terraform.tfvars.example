@@ -45,7 +45,7 @@ base_domain          = "mycorp.click"
 # root_domain = "example.com"
 
 # ============================================================================
-# KEYCLOAK CREDENTIALS (REQUIRED)
+# KEYCLOAK CREDENTIALS (used when entra_enabled = false)
 # ============================================================================
 
 # Keycloak admin credentials
@@ -210,3 +210,31 @@ session_cookie_domain = ""
 # Default: 1 (recommended for most deployments)
 # Increase only when scaling beyond single shard capacity
 # documentdb_shard_count = 1
+
+# ============================================================================
+# AUTHENTICATION PROVIDER CONFIGURATION
+# ============================================================================
+
+# Microsoft Entra ID Configuration (Alternative to Keycloak)
+# Set entra_enabled = true to use Microsoft Entra ID instead of Keycloak
+# When enabled, AUTH_PROVIDER is automatically set to "entra"
+
+# Enable Microsoft Entra ID authentication (default: false, uses Keycloak)
+# entra_enabled = true
+
+# Entra ID Tenant ID (Directory ID from Azure Portal)
+# entra_tenant_id = "your-tenant-id-guid"
+
+# Entra ID Application (client) ID
+# entra_client_id = "your-client-id-guid"
+
+# Entra ID Client Secret
+# entra_client_secret = "your-client-secret"
+
+# Entra ID Login Base URL (optional - defaults to Azure Public Cloud)
+# Change only if using a sovereign cloud:
+#   - Azure Public Cloud (default): https://login.microsoftonline.com
+#   - Azure Government: https://login.microsoftonline.us
+#   - Azure China: https://login.chinacloudapi.cn
+#   - Azure Germany: https://login.microsoftonline.de
+# entra_login_base_url = "https://login.microsoftonline.com"

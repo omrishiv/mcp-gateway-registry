@@ -107,7 +107,7 @@ module "ecs_service_auth" {
         },
         {
           name  = "AUTH_PROVIDER"
-          value = var.keycloak_domain != "" ? "keycloak" : "default"
+          value = var.entra_enabled ? "entra" : (var.keycloak_domain != "" ? "keycloak" : "default")
         },
         {
           name  = "KEYCLOAK_URL"
@@ -128,6 +128,18 @@ module "ecs_service_auth" {
         {
           name  = "KEYCLOAK_M2M_CLIENT_ID"
           value = "mcp-gateway-m2m"
+        },
+        {
+          name  = "ENTRA_ENABLED"
+          value = tostring(var.entra_enabled)
+        },
+        {
+          name  = "ENTRA_TENANT_ID"
+          value = var.entra_tenant_id
+        },
+        {
+          name  = "ENTRA_CLIENT_ID"
+          value = var.entra_client_id
         },
         {
           name  = "SCOPES_CONFIG_PATH"
@@ -175,28 +187,36 @@ module "ecs_service_auth" {
         }
       ]
 
-      secrets = [
-        {
-          name      = "SECRET_KEY"
-          valueFrom = aws_secretsmanager_secret.secret_key.arn
-        },
-        {
-          name      = "KEYCLOAK_CLIENT_SECRET"
-          valueFrom = "${aws_secretsmanager_secret.keycloak_client_secret.arn}:client_secret::"
-        },
-        {
-          name      = "KEYCLOAK_M2M_CLIENT_SECRET"
-          valueFrom = "${aws_secretsmanager_secret.keycloak_m2m_client_secret.arn}:client_secret::"
-        },
-        {
-          name      = "DOCUMENTDB_USERNAME"
-          valueFrom = "${var.documentdb_credentials_secret_arn}:username::"
-        },
-        {
-          name      = "DOCUMENTDB_PASSWORD"
-          valueFrom = "${var.documentdb_credentials_secret_arn}:password::"
-        }
-      ]
+      secrets = concat(
+        [
+          {
+            name      = "SECRET_KEY"
+            valueFrom = aws_secretsmanager_secret.secret_key.arn
+          },
+          {
+            name      = "KEYCLOAK_CLIENT_SECRET"
+            valueFrom = "${aws_secretsmanager_secret.keycloak_client_secret.arn}:client_secret::"
+          },
+          {
+            name      = "KEYCLOAK_M2M_CLIENT_SECRET"
+            valueFrom = "${aws_secretsmanager_secret.keycloak_m2m_client_secret.arn}:client_secret::"
+          },
+          {
+            name      = "DOCUMENTDB_USERNAME"
+            valueFrom = "${var.documentdb_credentials_secret_arn}:username::"
+          },
+          {
+            name      = "DOCUMENTDB_PASSWORD"
+            valueFrom = "${var.documentdb_credentials_secret_arn}:password::"
+          }
+        ],
+        var.entra_enabled ? [
+          {
+            name      = "ENTRA_CLIENT_SECRET"
+            valueFrom = aws_secretsmanager_secret.entra_client_secret[0].arn
+          }
+        ] : []
+      )
 
       mountPoints = [
         {
@@ -371,7 +391,7 @@ module "ecs_service_registry" {
       environment = [
         {
           name  = "GATEWAY_ADDITIONAL_SERVER_NAMES"
-          value = var.domain_name != "" ? var.domain_name : ""
+          value = join(" ", compact([var.domain_name, var.additional_server_names]))
         },
         {
           name  = "EC2_PUBLIC_DNS"
@@ -403,7 +423,19 @@ module "ecs_service_registry" {
         },
         {
           name  = "AUTH_PROVIDER"
-          value = var.keycloak_domain != "" ? "keycloak" : "default"
+          value = var.entra_enabled ? "entra" : (var.keycloak_domain != "" ? "keycloak" : "default")
+        },
+        {
+          name  = "ENTRA_ENABLED"
+          value = tostring(var.entra_enabled)
+        },
+        {
+          name  = "ENTRA_TENANT_ID"
+          value = var.entra_tenant_id
+        },
+        {
+          name  = "ENTRA_CLIENT_ID"
+          value = var.entra_client_id
         },
         {
           name  = "AWS_REGION"
@@ -499,40 +531,50 @@ module "ecs_service_registry" {
         }
       ]
 
-      secrets = [
-        {
-          name      = "SECRET_KEY"
-          valueFrom = aws_secretsmanager_secret.secret_key.arn
-        },
-        {
-          name      = "ADMIN_PASSWORD"
-          valueFrom = aws_secretsmanager_secret.admin_password.arn
-        },
-        {
-          name      = "KEYCLOAK_CLIENT_SECRET"
-          valueFrom = "${aws_secretsmanager_secret.keycloak_client_secret.arn}:client_secret::"
-        },
-        {
-          name      = "KEYCLOAK_M2M_CLIENT_SECRET"
-          valueFrom = "${aws_secretsmanager_secret.keycloak_m2m_client_secret.arn}:client_secret::"
-        },
-        {
-          name      = "KEYCLOAK_ADMIN_PASSWORD"
-          valueFrom = aws_secretsmanager_secret.keycloak_admin_password.arn
-        },
-        {
-          name      = "EMBEDDINGS_API_KEY"
-          valueFrom = aws_secretsmanager_secret.embeddings_api_key.arn
-        },
-        {
-          name      = "DOCUMENTDB_USERNAME"
-          valueFrom = "${var.documentdb_credentials_secret_arn}:username::"
-        },
-        {
-          name      = "DOCUMENTDB_PASSWORD"
-          valueFrom = "${var.documentdb_credentials_secret_arn}:password::"
-        }
-      ]
+      secrets = concat(
+        [
+          {
+            name      = "SECRET_KEY"
+            valueFrom = aws_secretsmanager_secret.secret_key.arn
+          },
+          {
+            name      = "ADMIN_PASSWORD"
+            valueFrom = aws_secretsmanager_secret.admin_password.arn
+          },
+          {
+            name      = "KEYCLOAK_CLIENT_SECRET"
+            valueFrom = "${aws_secretsmanager_secret.keycloak_client_secret.arn}:client_secret::"
+          },
+          {
+            name      = "KEYCLOAK_M2M_CLIENT_SECRET"
+            valueFrom = "${aws_secretsmanager_secret.keycloak_m2m_client_secret.arn}:client_secret::"
+          },
+          {
+            name      = "KEYCLOAK_ADMIN_PASSWORD"
+            valueFrom = aws_secretsmanager_secret.keycloak_admin_password.arn
+          },
+          {
+            name      = "EMBEDDINGS_API_KEY"
+            valueFrom = aws_secretsmanager_secret.embeddings_api_key.arn
+          }
+        ],
+        var.storage_backend == "documentdb" ? [
+          {
+            name      = "DOCUMENTDB_USERNAME"
+            valueFrom = "${var.documentdb_credentials_secret_arn}:username::"
+          },
+          {
+            name      = "DOCUMENTDB_PASSWORD"
+            valueFrom = "${var.documentdb_credentials_secret_arn}:password::"
+          }
+        ] : [],
+        var.entra_enabled ? [
+          {
+            name      = "ENTRA_CLIENT_SECRET"
+            valueFrom = aws_secretsmanager_secret.entra_client_secret[0].arn
+          }
+        ] : []
+      )
 
       mountPoints = [
         {

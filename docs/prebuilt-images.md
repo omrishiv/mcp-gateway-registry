@@ -20,7 +20,6 @@ The following external images are pulled from their original sources:
 
 | Service | Image | Source | Description | Port |
 |---------|-------|--------|-------------|------|
-| Atlassian Server | `ghcr.io/sooperset/mcp-atlassian:latest` | GitHub Container Registry | Atlassian (Jira/Confluence) integration MCP server | 8005 |
 | Alpine Linux | `alpine:latest` | Docker Hub Official | Lightweight Linux for metrics database initialization | N/A |
 | Prometheus | `prom/prometheus:latest` | Docker Hub Official | Metrics collection and time-series database | 9090 |
 | Grafana | `grafana/grafana:latest` | Docker Hub Official | Metrics visualization and dashboards | 3000 |
@@ -43,7 +42,6 @@ docker pull mcpgateway/mcpgw-server:latest
 docker pull mcpgateway/realserverfaketools-server:latest
 
 # External images
-docker pull ghcr.io/sooperset/mcp-atlassian:latest
 docker pull alpine:latest
 docker pull prom/prometheus:latest
 docker pull grafana/grafana:latest

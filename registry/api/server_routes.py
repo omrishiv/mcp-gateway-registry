@@ -2146,9 +2146,9 @@ async def internal_create_group(
     request: Request,
     group_name: Annotated[str, Form()],
     description: Annotated[str, Form()] = "",
-    create_in_keycloak: Annotated[bool, Form()] = True,
+    create_in_idp: Annotated[bool, Form()] = True,
 ):
-    """Internal endpoint to create a new group in both Keycloak and scopes.yml (requires HTTP Basic Authentication with admin credentials)."""
+    """Internal endpoint to create a new group in both IdP and scopes.yml (requires HTTP Basic Authentication with admin credentials)."""
     import base64
     import os
 
@@ -2198,7 +2198,7 @@ async def internal_create_group(
     )
 
     # Call the shared implementation
-    return await _create_group_impl(group_name, description, create_in_keycloak)
+    return await _create_group_impl(group_name, description, create_in_idp)
 
 
 @router.post("/internal/delete-group")
@@ -2436,12 +2436,32 @@ async def generate_user_token(
                 status_code=400, detail="requested_scopes must be a list of strings"
             )
 
+        # Get full session data to include stored OAuth tokens
+        from ..auth.dependencies import get_user_session_data
+        try:
+            session_cookie = request.cookies.get(settings.session_cookie_name)
+            logger.info(f"Session cookie present: {bool(session_cookie)}")
+            session_data = get_user_session_data(session_cookie)
+            logger.info(
+                f"Session data extracted: auth_method={session_data.get('auth_method')}, "
+                f"provider={session_data.get('provider')}, "
+                f"has_access_token={bool(session_data.get('access_token'))}, "
+                f"has_refresh_token={bool(session_data.get('refresh_token'))}"
+            )
+        except Exception as e:
+            logger.warning(f"Could not get session data for tokens: {e}")
+            session_data = {}
+
         # Prepare request to auth server
+        # Include user identity info for self-signed JWT generation
         auth_request = {
             "user_context": {
                 "username": user_context["username"],
+                "email": user_context.get("email", session_data.get("email", "")),
                 "scopes": user_context["scopes"],
                 "groups": user_context["groups"],
+                "provider": user_context.get("provider", session_data.get("provider")),
+                "auth_method": user_context.get("auth_method", session_data.get("auth_method")),
             },
             "requested_scopes": requested_scopes,
             "expires_in_hours": expires_in_hours,
@@ -3169,7 +3189,7 @@ async def remove_server_from_groups_api(
 async def _create_group_impl(
     group_name: str,
     description: str = "",
-    create_in_keycloak: bool = True,
+    create_in_idp: bool = True,
 ) -> JSONResponse:
     """
     Internal implementation for group creation.
@@ -3178,7 +3198,7 @@ async def _create_group_impl(
     and can be called from both Basic Auth and JWT endpoints.
     """
     from ..services.scope_service import create_group
-    from ..utils.keycloak_manager import create_keycloak_group, group_exists_in_keycloak
+    from ..utils.iam_manager import get_iam_manager
 
     # Validate group name
     if not group_name or not group_name.strip():
@@ -3187,22 +3207,28 @@ async def _create_group_impl(
         )
 
     try:
-        # Create in Keycloak first if requested
-        keycloak_created = False
-        if create_in_keycloak:
+        # Create in IdP first if requested
+        idp_created = False
+        if create_in_idp:
             try:
-                # Check if group already exists in Keycloak
-                if await group_exists_in_keycloak(group_name):
-                    logger.warning(f"Group '{group_name}' already exists in Keycloak")
+                iam_manager = get_iam_manager()
+                # Check if group already exists in IdP
+                existing_groups = await iam_manager.list_groups()
+                group_exists = any(
+                    g.get("name", "").lower() == group_name.lower()
+                    for g in existing_groups
+                )
+                if group_exists:
+                    logger.warning(f"Group '{group_name}' already exists in IdP")
                 else:
-                    await create_keycloak_group(group_name, description)
-                    keycloak_created = True
-                    logger.info(f"Group '{group_name}' created in Keycloak")
+                    await iam_manager.create_group(group_name, description)
+                    idp_created = True
+                    logger.info(f"Group '{group_name}' created in IdP")
             except Exception as e:
-                logger.error(f"Failed to create group in Keycloak: {e}")
+                logger.error(f"Failed to create group in IdP: {e}")
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Failed to create group in Keycloak: {str(e)}",
+                    detail=f"Failed to create group in IdP: {str(e)}",
                 )
 
         # Create in scopes (file or OpenSearch based on STORAGE_BACKEND)
@@ -3214,14 +3240,14 @@ async def _create_group_impl(
                 content={
                     "message": "Group successfully created",
                     "group_name": group_name,
-                    "created_in_keycloak": keycloak_created,
+                    "created_in_idp": idp_created,
                     "created_in_scopes": True,
                 },
             )
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Failed to create group in scopes.yml (may already exist)",
+                detail="Failed to create group in scopes (may already exist)",
             )
 
     except HTTPException:
@@ -3239,7 +3265,7 @@ async def create_group_api(
     request: Request,
     group_name: Annotated[str, Form()],
     description: Annotated[str, Form()] = "",
-    create_in_keycloak: Annotated[bool, Form()] = True,
+    create_in_idp: Annotated[bool, Form()] = True,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
 ):
     """
@@ -3254,7 +3280,7 @@ async def create_group_api(
     **Request body (form data):**
     - `group_name` (required): Name of the new group
     - `description` (optional): Group description
-    - `create_in_keycloak` (optional): Whether to create in Keycloak (default: true)
+    - `create_in_idp` (optional): Whether to create in IdP (default: true)
 
     **Response:**
     Returns confirmation of group creation.
@@ -3265,7 +3291,7 @@ async def create_group_api(
       -H "Authorization: Bearer $JWT_TOKEN" \\
       -F "group_name=new-team" \\
       -F "description=Team for new project" \\
-      -F "create_in_keycloak=true"
+      -F "create_in_idp=true"
     ```
     """
     logger.info(
@@ -3273,7 +3299,7 @@ async def create_group_api(
     )
 
     # Call the shared implementation
-    return await _create_group_impl(group_name, description, create_in_keycloak)
+    return await _create_group_impl(group_name, description, create_in_idp)
 
 
 async def _delete_group_impl(
@@ -3532,7 +3558,7 @@ async def import_group_definition(
         "list_agents": ["/code-reviewer"],
         "health_check_service": ["currenttime"]
       },
-      "create_in_keycloak": true
+      "create_in_idp": true
     }
     ```
 
@@ -3545,7 +3571,7 @@ async def import_group_definition(
     - `server_access`: List of server access definitions
     - `group_mappings`: List of group names this group maps to
     - `ui_permissions`: Dictionary of UI permissions
-    - `create_in_keycloak`: Whether to create the group in Keycloak (default: true)
+    - `create_in_idp`: Whether to create the group in IdP (default: true)
 
     **Example:**
     ```bash
@@ -3556,7 +3582,7 @@ async def import_group_definition(
     ```
     """
     from ..services.scope_service import import_group
-    from ..utils.keycloak_manager import create_keycloak_group
+    from ..utils.iam_manager import get_iam_manager
 
     try:
         # Parse request body
@@ -3576,7 +3602,8 @@ async def import_group_definition(
         server_access = body.get("server_access")
         group_mappings = body.get("group_mappings")
         ui_permissions = body.get("ui_permissions")
-        create_in_keycloak = body.get("create_in_keycloak", True)
+        # Support both create_in_idp (new) and create_in_keycloak (legacy)
+        create_in_idp = body.get("create_in_idp", body.get("create_in_keycloak", True))
 
         logger.info(
             f"API import group request from user '{user_context.get('username') if user_context else 'unknown'}' "
@@ -3599,19 +3626,45 @@ async def import_group_definition(
                 detail=f"Failed to import group {scope_name}",
             )
 
-        # Create in Keycloak if requested
-        keycloak_created = False
-        if create_in_keycloak:
+        # Create in IdP if requested
+        idp_created = False
+        idp_group_id = None
+        if create_in_idp:
             try:
-                keycloak_created = await create_keycloak_group(scope_name)
-                if keycloak_created:
-                    logger.info(f"Created group {scope_name} in Keycloak")
+                iam_manager = get_iam_manager()
+                result = await iam_manager.create_group(scope_name, description)
+                if result:
+                    idp_created = True
+                    idp_group_id = result.get("id")
+                    logger.info(f"Created group {scope_name} in IdP with ID: {idp_group_id}")
+
+                    # For Entra ID only: add group ID (GUID) to group_mappings
+                    # Entra returns GUIDs in tokens, while Keycloak returns group names
+                    # This ensures token group claims match scope group_mappings
+                    auth_provider = os.environ.get("AUTH_PROVIDER", "keycloak").lower()
+                    if auth_provider == "entra" and idp_group_id:
+                        from ..services.scope_service import (
+                            add_group_mapping_to_scope,
+                        )
+
+                        mapping_success = await add_group_mapping_to_scope(
+                            scope_name, idp_group_id
+                        )
+                        if mapping_success:
+                            logger.info(
+                                f"Added Entra group ID {idp_group_id} to scope "
+                                f"{scope_name} group_mappings"
+                            )
+                        else:
+                            logger.warning(
+                                f"Failed to add Entra group ID to scope {scope_name}"
+                            )
                 else:
                     logger.warning(
-                        f"Failed to create group {scope_name} in Keycloak (may already exist)"
+                        f"Failed to create group {scope_name} in IdP (may already exist)"
                     )
             except Exception as e:
-                logger.error(f"Error creating Keycloak group {scope_name}: {e}")
+                logger.error(f"Error creating IdP group {scope_name}: {e}")
 
         # Trigger auth server reload
         from ..services.scope_service import trigger_auth_server_reload
@@ -3623,7 +3676,7 @@ async def import_group_definition(
             content={
                 "message": f"Group {scope_name} imported successfully",
                 "group_name": scope_name,
-                "keycloak_created": keycloak_created,
+                "idp_created": idp_created,
                 "auth_server_reloaded": reload_success,
             },
         )

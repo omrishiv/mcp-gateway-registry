@@ -127,7 +127,6 @@ time                 server               success  method   duration_ms       us
 -------------------  -------------------  -------  -------  ----------------  ---------  ----------
 2025-10-02 04:43:22  mcpgw                0        unknown  14.0132130181883             500
 2025-10-02 04:43:22  currenttime          0        unknown  13.9779029996134             500
-2025-10-02 04:43:22  atlassian            0        unknown  10.4731550090946             500
 2025-10-02 04:43:22  realserverfaketools  0        unknown  12.8724499954842             500
 2025-10-02 04:43:22  sre-gateway          0        unknown  8.54846101719886             500
 ```
@@ -182,7 +181,7 @@ time                 tool_name   server_name          success  dur_ms  method   
 -------------------  ----------  -------------------  -------  ------  ----------  -----------
 2025-10-02 04:43:22  initialize  mcpgw                0        14.01   initialize  claude-code
 2025-10-02 04:43:22  initialize  currenttime          0        13.98   initialize  claude-code
-2025-10-02 04:43:22  initialize  atlassian            0        10.47   initialize  claude-code
+2025-10-02 04:43:22  initialize  fininfo              0        10.47   initialize  claude-code
 2025-10-02 04:42:59  initialize  currenttime          0        7.61    initialize  Roo Code
 2025-10-02 04:42:59  initialize  mcpgw                0        10.24   initialize  Roo Code
 ```
@@ -234,8 +233,8 @@ LIMIT 20;
 ```
 tool_name                  server_name          duration_ms  time                 success
 -------------------------  -------------------  -----------  -------------------  -------
-initialize                 atlassian            637.67       2025-10-02 03:32:51  0
-initialize                 atlassian            73.62        2025-10-02 03:08:40  0
+initialize                 mcpgw                637.67       2025-10-02 03:32:51  0
+initialize                 fininfo              73.62        2025-10-02 03:08:40  0
 initialize                 sre-gateway          45.2         2025-10-02 03:15:49  0
 initialize                 sre-gateway          39.86        2025-10-02 03:42:27  0
 initialize                 realserverfaketools  36.31        2025-10-02 03:42:27  0

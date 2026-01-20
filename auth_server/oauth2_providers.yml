@@ -44,7 +44,9 @@ providers:
     token_url: "https://login.microsoftonline.com/${ENTRA_TENANT_ID}/oauth2/v2.0/token"
     user_info_url: "https://graph.microsoft.com/oidc/userinfo"
     logout_url: "https://login.microsoftonline.com/${ENTRA_TENANT_ID}/oauth2/v2.0/logout"
-    # Request basic OIDC scopes - email and groups require optional claims configuration in Azure Portal
+    # Request only OIDC scopes for user authentication
+    # The resulting access token is for Microsoft Graph API
+    # For programmatic API access, users get JWT tokens through the /tokens/generate endpoint
     scopes: ["openid", "email", "profile"]
     response_type: "code"
     grant_type: "authorization_code"

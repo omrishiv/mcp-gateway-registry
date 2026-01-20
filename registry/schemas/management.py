@@ -35,8 +35,8 @@ class UserDeleteResponse(BaseModel):
     deleted: bool = True
 
 
-class KeycloakUserSummary(BaseModel):
-    """Subset of Keycloak user information exposed through the API."""
+class UserSummary(BaseModel):
+    """Subset of user information exposed through the API."""
 
     id: str
     username: str
@@ -50,7 +50,7 @@ class KeycloakUserSummary(BaseModel):
 class UserListResponse(BaseModel):
     """Wrapper for list users endpoint."""
 
-    users: List[KeycloakUserSummary] = Field(default_factory=list)
+    users: List[UserSummary] = Field(default_factory=list)
     total: int
 
 
@@ -61,8 +61,8 @@ class GroupCreateRequest(BaseModel):
     description: Optional[str] = None
 
 
-class KeycloakGroupSummary(BaseModel):
-    """Keycloak group information."""
+class GroupSummary(BaseModel):
+    """Group information."""
 
     id: str
     name: str
@@ -71,9 +71,9 @@ class KeycloakGroupSummary(BaseModel):
 
 
 class GroupListResponse(BaseModel):
-    """Response for listing Keycloak groups."""
+    """Response for listing groups."""
 
-    groups: List[KeycloakGroupSummary] = Field(default_factory=list)
+    groups: List[GroupSummary] = Field(default_factory=list)
     total: int
 
 

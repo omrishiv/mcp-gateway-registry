@@ -197,6 +197,18 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
   // Note: Agents data now comes from useServerStats hook
   // JWT token generation moved to after agents definition
 
+  // Helper function to check if user has a specific UI permission for a service
+  const hasUiPermission = useCallback((permission: string, servicePath: string): boolean => {
+    const permissions = user?.ui_permissions?.[permission];
+    if (!permissions) return false;
+
+    // Extract service name from path (remove leading slash)
+    const serviceName = servicePath.replace(/^\//, '');
+
+    // Check if user has 'all' permission or specific service permission
+    return permissions.includes('all') || permissions.includes(serviceName);
+  }, [user?.ui_permissions]);
+
   // External registry tags - can be configured via environment or constants
   // Default tags that identify servers from external registries
   const EXTERNAL_REGISTRY_TAGS = ['anthropic-registry', 'workday-asor', 'asor', 'federated'];
@@ -762,6 +774,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
                     onToggle={handleToggleServer}
                     onEdit={handleEditServer}
                     canModify={user?.can_modify_servers || false}
+                    canHealthCheck={hasUiPermission('health_check_service', server.path)}
+                    canToggle={hasUiPermission('toggle_service', server.path)}
                     onRefreshSuccess={refreshData}
                     onShowToast={showToast}
                     onServerUpdate={handleServerUpdate}
@@ -814,6 +828,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
                     onToggle={handleToggleAgent}
                     onEdit={handleEditAgent}
                     canModify={user?.can_modify_servers || false}
+                    canHealthCheck={hasUiPermission('health_check_agent', agent.path)}
+                    canToggle={hasUiPermission('toggle_agent', agent.path)}
                     onRefreshSuccess={refreshData}
                     onShowToast={showToast}
                     onAgentUpdate={handleAgentUpdate}
@@ -895,6 +911,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
                         onToggle={handleToggleAgent}
                         onEdit={handleEditAgent}
                         canModify={user?.can_modify_servers || false}
+                        canHealthCheck={hasUiPermission('health_check_agent', agent.path)}
+                        canToggle={hasUiPermission('toggle_agent', agent.path)}
                         onRefreshSuccess={refreshData}
                         onShowToast={showToast}
                         onAgentUpdate={handleAgentUpdate}

@@ -47,6 +47,8 @@ interface AgentCardProps {
   onToggle: (path: string, enabled: boolean) => void;
   onEdit?: (agent: Agent) => void;
   canModify?: boolean;
+  canHealthCheck?: boolean;  // Whether user can run health check on this agent
+  canToggle?: boolean;       // Whether user can enable/disable this agent
   onRefreshSuccess?: () => void;
   onShowToast?: (message: string, type: 'success' | 'error') => void;
   onAgentUpdate?: (path: string, updates: Partial<Agent>) => void;
@@ -116,6 +118,8 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
   onToggle,
   onEdit,
   canModify,
+  canHealthCheck = true,
+  canToggle = true,
   onRefreshSuccess,
   onShowToast,
   onAgentUpdate,
@@ -501,37 +505,41 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                 ) : null;
               })()}
 
-              {/* Refresh Button */}
-              <button
-                onClick={handleRefreshHealth}
-                disabled={loadingRefresh}
-                className="p-2.5 text-gray-500 hover:text-cyan-600 dark:hover:text-cyan-400 hover:bg-cyan-50 dark:hover:bg-cyan-900/20 rounded-lg transition-all duration-200 disabled:opacity-50"
-                title="Refresh agent health status"
-              >
-                <ArrowPathIcon className={`h-4 w-4 ${loadingRefresh ? 'animate-spin' : ''}`} />
-              </button>
+              {/* Refresh Button - only show if user has health_check_agent permission */}
+              {canHealthCheck && (
+                <button
+                  onClick={handleRefreshHealth}
+                  disabled={loadingRefresh}
+                  className="p-2.5 text-gray-500 hover:text-cyan-600 dark:hover:text-cyan-400 hover:bg-cyan-50 dark:hover:bg-cyan-900/20 rounded-lg transition-all duration-200 disabled:opacity-50"
+                  title="Refresh agent health status"
+                >
+                  <ArrowPathIcon className={`h-4 w-4 ${loadingRefresh ? 'animate-spin' : ''}`} />
+                </button>
+              )}
 
-              {/* Toggle Switch */}
-              <label className="relative inline-flex items-center cursor-pointer" onClick={(e) => e.stopPropagation()}>
-                <input
-                  type="checkbox"
-                  checked={agent.enabled}
-                  onChange={(e) => {
-                    e.stopPropagation();
-                    onToggle(agent.path, e.target.checked);
-                  }}
-                  className="sr-only peer"
-                />
-                <div className={`relative w-12 h-6 rounded-full transition-colors duration-200 ease-in-out ${
-                  agent.enabled
-                    ? 'bg-cyan-600'
-                    : 'bg-gray-300 dark:bg-gray-600'
-                }`}>
-                  <div className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform duration-200 ease-in-out ${
-                    agent.enabled ? 'translate-x-6' : 'translate-x-0'
-                  }`} />
-                </div>
-              </label>
+              {/* Toggle Switch - only show if user has toggle_agent permission */}
+              {canToggle && (
+                <label className="relative inline-flex items-center cursor-pointer" onClick={(e) => e.stopPropagation()}>
+                  <input
+                    type="checkbox"
+                    checked={agent.enabled}
+                    onChange={(e) => {
+                      e.stopPropagation();
+                      onToggle(agent.path, e.target.checked);
+                    }}
+                    className="sr-only peer"
+                  />
+                  <div className={`relative w-12 h-6 rounded-full transition-colors duration-200 ease-in-out ${
+                    agent.enabled
+                      ? 'bg-cyan-600'
+                      : 'bg-gray-300 dark:bg-gray-600'
+                  }`}>
+                    <div className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform duration-200 ease-in-out ${
+                      agent.enabled ? 'translate-x-6' : 'translate-x-0'
+                    }`} />
+                  </div>
+                </label>
+              )}
             </div>
           </div>
         </div>

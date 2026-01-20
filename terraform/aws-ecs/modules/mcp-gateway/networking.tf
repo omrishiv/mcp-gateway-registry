@@ -8,6 +8,54 @@ resource "aws_service_discovery_private_dns_namespace" "mcp" {
   tags        = local.common_tags
 }
 
+# CloudFront managed prefix list (for allowing CloudFront or other CDN IPs)
+# Default prefix list is AWS CloudFront origin-facing IPs (com.amazonaws.global.cloudfront.origin-facing)
+data "aws_ec2_managed_prefix_list" "cloudfront" {
+  count = var.cloudfront_prefix_list_name != "" ? 1 : 0
+  name  = var.cloudfront_prefix_list_name
+}
+
+# Separate security group for CloudFront prefix list ingress
+# This avoids hitting the 60 rules per security group limit since the CloudFront
+# prefix list has ~55 reserved entries that count against the quota
+# checkov:skip=CKV2_AWS_5:Security group is attached to ALB via security_groups parameter (line 72)
+resource "aws_security_group" "alb_cloudfront" {
+  count       = var.cloudfront_prefix_list_name != "" ? 1 : 0
+  name        = "${local.name_prefix}-alb-cloudfront"
+  description = "Security group for CloudFront access to MCP Gateway ALB"
+  vpc_id      = var.vpc_id
+
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "${local.name_prefix}-alb-cloudfront"
+    }
+  )
+}
+
+resource "aws_security_group_rule" "alb_cloudfront_ingress_http" {
+  count             = var.cloudfront_prefix_list_name != "" ? 1 : 0
+  description       = "Ingress from CloudFront prefix list to ALB (HTTP)"
+  type              = "ingress"
+  from_port         = 80
+  to_port           = 80
+  protocol          = "tcp"
+  prefix_list_ids   = [data.aws_ec2_managed_prefix_list.cloudfront[0].id]
+  security_group_id = aws_security_group.alb_cloudfront[0].id
+}
+
+# checkov:skip=CKV_AWS_382:ALB security group requires unrestricted egress to reach ECS tasks and health checks
+resource "aws_security_group_rule" "alb_cloudfront_egress" {
+  count             = var.cloudfront_prefix_list_name != "" ? 1 : 0
+  description       = "Egress to all"
+  type              = "egress"
+  from_port         = 0
+  to_port           = 0
+  protocol          = "-1"
+  cidr_blocks       = ["0.0.0.0/0"]
+  security_group_id = aws_security_group.alb_cloudfront[0].id
+}
+
 # Main Application Load Balancer (for registry, auth, gradio)
 module "alb" {
   source  = "terraform-aws-modules/alb/aws"
@@ -21,8 +69,13 @@ module "alb" {
   vpc_id  = var.vpc_id
   subnets = var.alb_scheme == "internal" ? var.private_subnet_ids : var.public_subnet_ids
 
+  # Attach additional security groups (CloudFront SG when enabled)
+  # This keeps CloudFront prefix list rules in a separate SG to avoid the 60 rules/SG limit
+  security_groups = var.cloudfront_prefix_list_name != "" ? [aws_security_group.alb_cloudfront[0].id] : []
+
   # Security Groups
   # Create dynamic ingress rules for each CIDR block and port combination
+  # Note: CloudFront prefix list is in a separate SG (alb_cloudfront) to avoid rules limit
   security_group_ingress_rules = merge([
     for idx, cidr in var.ingress_cidr_blocks : {
       "http_${idx}" = {
@@ -69,8 +122,9 @@ module "alb" {
       }
       auth = {
         port            = 8888
-        protocol        = var.certificate_arn != "" ? "HTTPS" : "HTTP"
-        certificate_arn = var.certificate_arn != "" ? var.certificate_arn : null
+        protocol        = var.enable_https ? "HTTPS" : "HTTP"
+        certificate_arn = var.enable_https ? var.certificate_arn : null
+        ssl_policy      = var.enable_https ? "ELBSecurityPolicy-TLS13-1-2-2021-06" : null
         forward = {
           target_group_key = "auth"
         }
@@ -83,11 +137,12 @@ module "alb" {
         }
       }
     },
-    var.certificate_arn != "" ? {
+    var.enable_https ? {
       https = {
         port            = 443
         protocol        = "HTTPS"
         certificate_arn = var.certificate_arn
+        ssl_policy      = "ELBSecurityPolicy-TLS13-1-2-2021-06"
         forward = {
           target_group_key = "registry"
         }

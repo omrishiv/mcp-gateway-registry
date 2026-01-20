@@ -94,9 +94,11 @@ def _check_token_expiration(
 def _load_token_from_file(file_path: str) -> Optional[str]:
     """Load access token from a file
 
-    Supports two formats:
+    Supports multiple formats:
     1. Plain JWT token (single line)
     2. JSON object with 'access_token' field (from agent token generation)
+    3. JSON object with 'tokens.access_token' field (from UI "Get JWT Token")
+    4. JSON object with 'token_data.access_token' field (alternative UI format)
     """
     try:
         with open(file_path, 'r') as f:
@@ -107,8 +109,18 @@ def _load_token_from_file(file_path: str) -> Optional[str]:
             # Try to parse as JSON first (for agent token files)
             try:
                 token_data = json.loads(content)
-                if isinstance(token_data, dict) and 'access_token' in token_data:
-                    return token_data['access_token']
+                if isinstance(token_data, dict):
+                    # Format 1: {"access_token": "..."}
+                    if 'access_token' in token_data:
+                        return token_data['access_token']
+                    # Format 2: {"tokens": {"access_token": "..."}} (from UI)
+                    if 'tokens' in token_data and isinstance(token_data['tokens'], dict):
+                        if 'access_token' in token_data['tokens']:
+                            return token_data['tokens']['access_token']
+                    # Format 3: {"token_data": {"access_token": "..."}}
+                    if 'token_data' in token_data and isinstance(token_data['token_data'], dict):
+                        if 'access_token' in token_data['token_data']:
+                            return token_data['token_data']['access_token']
             except json.JSONDecodeError:
                 # Not JSON, treat as plain token string
                 pass

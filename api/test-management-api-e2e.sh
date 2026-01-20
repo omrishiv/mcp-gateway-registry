@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Exit on error
-set -e
+# Continue on error - we want to run all tests and report results at the end
+# set -e  # Disabled to allow test suite to continue after failures
 
 # Color codes for output
 RED='\033[0;31m'
@@ -20,7 +20,7 @@ usage() {
     echo "Optional arguments:"
     echo "  --registry-url <url>     Registry URL (default: http://localhost)"
     echo "  --aws-region <region>    AWS region (e.g., us-east-1)"
-    echo "  --keycloak-url <url>     Keycloak base URL (e.g., https://kc.us-east-1.aroraai.people.aws.dev)"
+    echo "  --keycloak-url <url>     Keycloak base URL (e.g., https://kc.your-domain.example.com)"
     echo "  --quiet                  Suppress verbose output (verbose is enabled by default)"
     echo ""
     echo "Examples:"
@@ -28,7 +28,7 @@ usage() {
     echo "  $0 --token-file .oauth-tokens/ingress.json"
     echo ""
     echo "  # Remote testing with all parameters"
-    echo "  $0 --token-file api/.token --registry-url https://registry.us-east-1.aroraai.people.aws.dev --aws-region us-east-1 --keycloak-url https://kc.us-east-1.aroraai.people.aws.dev"
+    echo "  $0 --token-file api/.token --registry-url https://registry.your-domain.example.com --aws-region us-east-1 --keycloak-url https://kc.your-domain.example.com"
     exit 1
 }
 
@@ -369,7 +369,7 @@ if [ $CREATE_STATUS -eq 0 ]; then
 
     if [ "$GROUP_AVAILABLE" = false ]; then
         echo -e "${RED}Group did not become available after 100 seconds${NC}"
-        exit 1
+        echo -e "${YELLOW}Continuing with remaining tests...${NC}"
     fi
 else
     echo -e "${RED}Group creation failed${NC}"

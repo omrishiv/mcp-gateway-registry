@@ -180,6 +180,10 @@ const RegisterPage: React.FC = () => {
       newErrors.name = 'Server name is required';
     }
 
+    if (!serverForm.description.trim()) {
+      newErrors.description = 'Description is required';
+    }
+
     if (!serverForm.path.trim()) {
       newErrors.path = 'Path is required';
     } else if (!serverForm.path.startsWith('/')) {
@@ -439,14 +443,16 @@ const RegisterPage: React.FC = () => {
         </div>
 
         <div className="md:col-span-2">
-          <label className={labelClass}>Description</label>
+          <label className={labelClass}>Description *</label>
           <textarea
-            className={inputClass}
+            required
+            className={`${inputClass} ${errors.description ? 'border-red-500' : ''}`}
             rows={3}
             value={serverForm.description}
             onChange={(e) => setServerForm(prev => ({ ...prev, description: e.target.value }))}
             placeholder="Brief description of the server and its capabilities"
           />
+            {errors.description && <p className={errorClass}>{errors.description}</p>}
         </div>
 
         {/* Optional Fields */}

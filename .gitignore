@@ -209,6 +209,7 @@ cookies.txt
 .oauth-tokens/
 .agentcore-params
 .cognito_access_token
+.token
 api/.token
 api/.mcp-session
 

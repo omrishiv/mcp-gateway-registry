@@ -130,7 +130,7 @@ GET /v0.1/servers/{serverName:path}/versions
 **Purpose**: List all available versions for a specific server.
 
 **URL Parameters**:
-- `serverName`: URL-encoded name (e.g., `io.mcpgateway%2Fatlassian`)
+- `serverName`: URL-encoded name (e.g., `io.mcpgateway%2Ffininfo`)
 
 **Response**: `ServerList` (currently single version per server)
 
@@ -138,7 +138,7 @@ GET /v0.1/servers/{serverName:path}/versions
 
 **Example**:
 ```bash
-curl "http://localhost/v0.1/servers/io.mcpgateway%2Fatlassian/versions" \
+curl "http://localhost/v0.1/servers/io.mcpgateway%2Ffininfo/versions" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -151,14 +151,14 @@ GET /v0.1/servers/{serverName:path}/versions/{version}
 **Purpose**: Get detailed information for a specific server version.
 
 **URL Parameters**:
-- `serverName`: URL-encoded name (e.g., `io.mcpgateway%2Fatlassian`)
+- `serverName`: URL-encoded name (e.g., `io.mcpgateway%2Ffininfo`)
 - `version`: Version string (use `latest` for current version)
 
 **Response**: `ServerResponse` with full server details
 
 **Example**:
 ```bash
-curl "http://localhost/v0.1/servers/io.mcpgateway%2Fatlassian/versions/latest" \
+curl "http://localhost/v0.1/servers/io.mcpgateway%2Ffininfo/versions/latest" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -301,7 +301,7 @@ if server_name not in accessible_servers:
 
 **Why**:
 - `accessible_services` = UI-level services ("auth_server", "mcpgw")
-- `accessible_servers` = MCP server names ("atlassian", "currenttime")
+- `accessible_servers` = MCP server names ("fininfo", "currenttime")
 - M2M tokens have MCP scopes but no UI scopes
 
 ### User Context Structure
@@ -319,7 +319,7 @@ if server_name not in accessible_servers:
     "auth_method": "keycloak",
     "provider": "keycloak",
     "accessible_servers": [
-        "atlassian", "currenttime", "fininfo",
+        "currenttime", "fininfo",
         "mcpgw", "realserverfaketools", "sre-gateway"
     ],
     "accessible_services": [],  # Empty for M2M tokens
@@ -334,8 +334,8 @@ if server_name not in accessible_servers:
 
 ### Namespace Convention
 
-**Internal Format**: `/atlassian`, `/currenttime/`
-**Anthropic Format**: `io.mcpgateway/atlassian`, `io.mcpgateway/currenttime`
+**Internal Format**: `/fininfo`, `/currenttime/`
+**Anthropic Format**: `io.mcpgateway/fininfo`, `io.mcpgateway/currenttime`
 
 **Implementation** (`transform_service.py`):
 
@@ -385,29 +385,29 @@ def transform_to_server_detail(server_info: Dict[str, Any]) -> ServerDetail:
 ```json
 {
   "server": {
-    "name": "io.mcpgateway/atlassian",
-    "description": "Atlassian",
+    "name": "io.mcpgateway/fininfo",
+    "description": "Financial Information",
     "version": "1.0.0",
-    "title": "Atlassian",
+    "title": "Financial Info",
     "packages": [
       {
         "registryType": "mcpb",
-        "identifier": "io.mcpgateway/atlassian",
+        "identifier": "io.mcpgateway/fininfo",
         "version": "1.0.0",
         "transport": {
           "type": "streamable-http",
-          "url": "http://atlassian-server:8005/mcp/"
+          "url": "http://fininfo-server:8001/mcp/"
         },
         "runtimeHint": "docker"
       }
     ],
     "_meta": {
       "io.mcpgateway/internal": {
-        "path": "/atlassian",
+        "path": "/fininfo",
         "is_enabled": true,
         "health_status": "healthy",
-        "num_tools": 42,
-        "tags": ["Atlassian", "Jira", "Confluence"],
+        "num_tools": 5,
+        "tags": ["Finance", "Stocks", "Market"],
         "license": "MIT"
       }
     }
@@ -488,18 +488,18 @@ Page 3: GET /v0.1/servers?cursor=F&limit=3
 **Solution**: Use `:path` converter in route definition.
 
 ```python
-# WRONG - Returns 404 for io.mcpgateway/atlassian
+# WRONG - Returns 404 for io.mcpgateway/fininfo
 @router.get("/servers/{serverName}/versions")
 
 # CORRECT - Captures full path including /
 @router.get("/servers/{serverName:path}/versions")
 ```
 
-**Why**: FastAPI URL-decodes before routing. `io.mcpgateway%2Fatlassian` becomes `io.mcpgateway/atlassian`, which looks like extra path segments without `:path`.
+**Why**: FastAPI URL-decodes before routing. `io.mcpgateway%2Ffininfo` becomes `io.mcpgateway/fininfo`, which looks like extra path segments without `:path`.
 
 ### 2. Trailing Slash Handling
 
-**Problem**: Some servers have trailing slashes (`/currenttime/`), some don't (`/atlassian`).
+**Problem**: Some servers have trailing slashes (`/currenttime/`), some don't (`/fininfo`).
 
 **Solution**: Try both forms when looking up servers.
 
@@ -559,11 +559,11 @@ curl "http://localhost/v0.1/servers?limit=5" \
   -H "Authorization: Bearer $TOKEN" | jq
 
 # 2. List versions for a server (note %2F = /)
-curl "http://localhost/v0.1/servers/io.mcpgateway%2Fatlassian/versions" \
+curl "http://localhost/v0.1/servers/io.mcpgateway%2Ffininfo/versions" \
   -H "Authorization: Bearer $TOKEN" | jq
 
 # 3. Get specific version details
-curl "http://localhost/v0.1/servers/io.mcpgateway%2Fatlassian/versions/latest" \
+curl "http://localhost/v0.1/servers/io.mcpgateway%2Ffininfo/versions/latest" \
   -H "Authorization: Bearer $TOKEN" | jq
 
 # 4. Test pagination
@@ -584,7 +584,7 @@ See [docs/design/anthropic-api-test-commands.md](anthropic-api-test-commands.md)
 
 ### Issue: 404 on versions endpoint
 
-**Symptom**: `GET /v0.1/servers/io.mcpgateway%2Fatlassian/versions` returns 404
+**Symptom**: `GET /v0.1/servers/io.mcpgateway%2Ffininfo/versions` returns 404
 
 **Cause**: Missing `:path` in route parameter
 
