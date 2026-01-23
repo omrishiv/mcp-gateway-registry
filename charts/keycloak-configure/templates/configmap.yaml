@@ -7,10 +7,8 @@ data:
   script.sh: |
     #!/bin/bash
     apt update
-    apt install -y curl jq
+    apt install -y curl jq kubectl
 
-    curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-    chmod +x ./kubectl
     # Initialize Keycloak with MCP Gateway configuration
     # This script sets up the initial realm, clients, groups, and users
 
@@ -548,7 +546,7 @@ data:
         echo "This will save all credentials to .oauth-tokens/"
         echo "=============================================="
 
-        ./kubectl create secret generic keycloak-client-secret --from-literal=KEYCLOAK_CLIENT_ID=mcp-gateway-web --from-literal=KEYCLOAK_CLIENT_SECRET=$web_secret --from-literal=KEYCLOAK_M2M_CLIENT_ID=mcp-gateway-m2m --from-literal=KEYCLOAK_M2M_CLIENT_SECRET=$m2m_secret
+        kubectl create secret generic keycloak-client-secret --from-literal=KEYCLOAK_CLIENT_ID=mcp-gateway-web --from-literal=KEYCLOAK_CLIENT_SECRET=$web_secret --from-literal=KEYCLOAK_M2M_CLIENT_ID=mcp-gateway-m2m --from-literal=KEYCLOAK_M2M_CLIENT_SECRET=$m2m_secret
     }
 
     # Function to setup groups mapper for OAuth2 clients
@@ -709,7 +707,7 @@ data:
         fi
 
         # Save generated passwords to a Kubernetes secret
-        ./kubectl create secret generic registry-login-credentials --from-literal=REGISTRY_ADMIN_NAME=admin --from-literal=REGISTRY_ADMIN_PASSWORD=$INITIAL_ADMIN_PASSWORD --from-literal=REGISTRY_USER_NAME=testuser --from-literal=REGISTRY_USER_PASSWORD=$INITIAL_USER_PASSWORD
+        kubectl create secret generic registry-login-credentials --from-literal=REGISTRY_ADMIN_NAME=admin --from-literal=REGISTRY_ADMIN_PASSWORD=$INITIAL_ADMIN_PASSWORD --from-literal=REGISTRY_USER_NAME=testuser --from-literal=REGISTRY_USER_PASSWORD=$INITIAL_USER_PASSWORD
 
         echo ""
         echo -e "${GREEN}Keycloak initialization complete!${NC}"
