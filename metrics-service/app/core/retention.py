@@ -149,7 +149,7 @@ class RetentionPolicy:
         table_name: str,
         retention_days: int,
         is_active: bool = True,
-        cleanup_query: Optional[str] = None,
+        cleanup_query: str | None = None,
         timestamp_column: str = "created_at",
     ):
         # Security: Validate table_name and timestamp_column against allowlists
@@ -159,30 +159,38 @@ class RetentionPolicy:
         self.is_active = is_active
         self.cleanup_query = cleanup_query
 
-    def get_cleanup_query(self) -> str:
-        """Get the cleanup query for this policy.
+    def get_cleanup_query(self) -> tuple[str, tuple]:
+        """Get the cleanup query and parameters for this policy.
 
         Security note: table_name and timestamp_column are validated
         against allowlists during __init__, preventing SQL injection.
+        The cutoff date is passed as a parameterized value.
+
+        Returns:
+            Tuple of (query_string, parameters)
         """
         if self.cleanup_query:
-            return self.cleanup_query
+            return self.cleanup_query, ()
 
-        # Safe: retention_days is an int, table_name and timestamp_column are validated
-        cutoff_date = f"datetime('now', '-{int(self.retention_days)} days')"
-        return f"DELETE FROM {self.table_name} WHERE {self.timestamp_column} < {cutoff_date}"
+        cutoff = (datetime.now() - timedelta(days=self.retention_days)).isoformat()
+        # nosec B608 - table_name and timestamp_column validated against allowlists in __init__
+        query = f"DELETE FROM {self.table_name} WHERE {self.timestamp_column} < ?"  # nosec B608
+        return query, (cutoff,)
 
-    def get_count_query(self) -> str:
-        """Get query to count records that would be deleted.
+    def get_count_query(self) -> tuple[str, tuple]:
+        """Get query and parameters to count records that would be deleted.
 
         Security note: table_name and timestamp_column are validated
         against allowlists during __init__, preventing SQL injection.
+        The cutoff date is passed as a parameterized value.
+
+        Returns:
+            Tuple of (query_string, parameters)
         """
-        # Safe: retention_days is an int, table_name and timestamp_column are validated
-        cutoff_date = f"datetime('now', '-{int(self.retention_days)} days')"
-        return (
-            f"SELECT COUNT(*) FROM {self.table_name} WHERE {self.timestamp_column} < {cutoff_date}"
-        )
+        cutoff = (datetime.now() - timedelta(days=self.retention_days)).isoformat()
+        # nosec B608 - table_name and timestamp_column validated against allowlists in __init__
+        query = f"SELECT COUNT(*) FROM {self.table_name} WHERE {self.timestamp_column} < ?"  # nosec B608
+        return query, (cutoff,)
 
 
 class RetentionManager:
@@ -288,9 +296,7 @@ class RetentionManager:
             logger.error(f"Failed to save retention policies: {e}")
             raise
 
-    async def get_cleanup_preview(
-        self, table_name: Optional[str] = None
-    ) -> Dict[str, Dict[str, Any]]:
+    async def get_cleanup_preview(self, table_name: str | None = None) -> Dict[str, Dict[str, Any]]:
         """Get preview of what would be cleaned up without actually deleting.
 
         Args:
@@ -321,29 +327,31 @@ class RetentionManager:
             try:
                 async with aiosqlite.connect(self.storage.db_path) as db:
                     # Count records to be deleted
-                    # Security: policy.table_name and policy.timestamp_column are
-                    # already validated in RetentionPolicy.__init__
-                    cursor = await db.execute(policy.get_count_query())
+                    count_query, count_params = policy.get_count_query()
+                    cursor = await db.execute(count_query, count_params)
                     count_result = await cursor.fetchone()
                     records_to_delete = count_result[0] if count_result else 0
 
                     # Get oldest and newest timestamps that would be deleted
-                    # Security: retention_days is cast to int, other fields are validated
-                    cutoff_date = f"datetime('now', '-{int(policy.retention_days)} days')"
-                    cursor = await db.execute(f"""
-                        SELECT
-                            MIN({policy.timestamp_column}) as oldest,
-                            MAX({policy.timestamp_column}) as newest
-                        FROM {policy.table_name}
-                        WHERE {policy.timestamp_column} < {cutoff_date}
-                    """)
+                    cutoff = (datetime.now() - timedelta(days=policy.retention_days)).isoformat()
+                    # nosec B608 - table_name and timestamp_column validated in RetentionPolicy.__init__
+                    cursor = await db.execute(
+                        f"SELECT MIN({policy.timestamp_column}) as oldest,"  # nosec B608
+                        f" MAX({policy.timestamp_column}) as newest"
+                        f" FROM {policy.table_name}"
+                        f" WHERE {policy.timestamp_column} < ?",
+                        (cutoff,),
+                    )
 
                     time_range = await cursor.fetchone()
                     oldest_record = time_range[0] if time_range else None
                     newest_record = time_range[1] if time_range else None
 
                     # Get total table size
-                    cursor = await db.execute(f"SELECT COUNT(*) FROM {policy.table_name}")
+                    # nosec B608 - table_name validated in RetentionPolicy.__init__
+                    cursor = await db.execute(
+                        f"SELECT COUNT(*) FROM {policy.table_name}",  # nosec B608
+                    )
                     total_records = (await cursor.fetchone())[0]
 
                     preview[policy.table_name] = {
@@ -377,7 +385,8 @@ class RetentionManager:
         try:
             async with aiosqlite.connect(self.storage.db_path) as db:
                 # Get preview first
-                cursor = await db.execute(policy.get_count_query())
+                count_query, count_params = policy.get_count_query()
+                cursor = await db.execute(count_query, count_params)
                 count_result = await cursor.fetchone()
                 records_to_delete = count_result[0] if count_result else 0
 
@@ -401,7 +410,8 @@ class RetentionManager:
 
                 await db.execute("BEGIN IMMEDIATE")
                 try:
-                    cursor = await db.execute(policy.get_cleanup_query())
+                    cleanup_query, cleanup_params = policy.get_cleanup_query()
+                    cursor = await db.execute(cleanup_query, cleanup_params)
                     records_deleted = cursor.rowcount
                     await db.commit()
 
@@ -536,26 +546,30 @@ class RetentionManager:
                         table_name = _validate_identifier(raw_table_name)
 
                         # Get record count
-                        cursor = await db.execute(f"SELECT COUNT(*) FROM {table_name}")
+                        # nosec B608 - table_name validated by _validate_identifier above
+                        cursor = await db.execute(
+                            f"SELECT COUNT(*) FROM {table_name}",  # nosec B608
+                        )
                         count = (await cursor.fetchone())[0]
 
                         # Get approximate size and date range
-                        cursor = await db.execute(f"""
-                            SELECT
-                                COUNT(*) as records,
-                                COALESCE(
-                                    (SELECT MIN(created_at) FROM {table_name}
-                                     WHERE created_at IS NOT NULL),
-                                    (SELECT MIN(timestamp) FROM {table_name}
-                                     WHERE timestamp IS NOT NULL)
-                                ) as oldest_record,
-                                COALESCE(
-                                    (SELECT MAX(created_at) FROM {table_name}
-                                     WHERE created_at IS NOT NULL),
-                                    (SELECT MAX(timestamp) FROM {table_name}
-                                     WHERE timestamp IS NOT NULL)
-                                ) as newest_record
-                        """)
+                        # table_name validated by _validate_identifier above
+                        cursor = await db.execute(
+                            f"SELECT"  # nosec B608
+                            f" COUNT(*) as records,"
+                            f" COALESCE("
+                            f"  (SELECT MIN(created_at) FROM {table_name}"
+                            f"   WHERE created_at IS NOT NULL),"
+                            f"  (SELECT MIN(timestamp) FROM {table_name}"
+                            f"   WHERE timestamp IS NOT NULL)"
+                            f" ) as oldest_record,"
+                            f" COALESCE("
+                            f"  (SELECT MAX(created_at) FROM {table_name}"
+                            f"   WHERE created_at IS NOT NULL),"
+                            f"  (SELECT MAX(timestamp) FROM {table_name}"
+                            f"   WHERE timestamp IS NOT NULL)"
+                            f" ) as newest_record",
+                        )
 
                         result = await cursor.fetchone()
 
