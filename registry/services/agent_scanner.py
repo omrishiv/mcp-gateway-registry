@@ -182,7 +182,7 @@ class AgentScannerService:
         logger.info(f"Using analyzers: {analyzers}")
 
         # Create temporary file for agent card
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp_file:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmp_file:
             json.dump(agent_card, tmp_file, indent=2, default=str)
             tmp_file_path = tmp_file.name
 
@@ -264,7 +264,9 @@ class AgentScannerService:
                             raw_output["analysis_results"][analyzer_name] = {"findings": []}
                         raw_output["analysis_results"][analyzer_name]["findings"].append(finding)
 
-                logger.debug(f"A2A scanner output:\n{json.dumps(raw_output, indent=2, default=str)}")
+                logger.debug(
+                    f"A2A scanner output:\n{json.dumps(raw_output, indent=2, default=str)}"
+                )
                 return raw_output
 
             except subprocess.TimeoutExpired as e:
@@ -340,7 +342,7 @@ class AgentScannerService:
             if scan_result:
                 logger.info(f"Loaded agent scan results for {agent_path} from repository")
                 # Convert to dict if needed
-                if hasattr(scan_result, 'model_dump'):
+                if hasattr(scan_result, "model_dump"):
                     return scan_result.model_dump()
                 return scan_result
 
@@ -348,9 +350,7 @@ class AgentScannerService:
             return None
 
         except Exception as e:
-            logger.exception(
-                f"Unexpected error loading agent scan results for {agent_path}"
-            )
+            logger.exception(f"Unexpected error loading agent scan results for {agent_path}")
             return None
 
 

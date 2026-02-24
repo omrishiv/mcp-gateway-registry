@@ -10,11 +10,11 @@ from pydantic import BaseModel
 
 class HealthStatus(str, Enum):
     """Health status constants for services."""
-    
+
     HEALTHY = "healthy"
     HEALTHY_AUTH_EXPIRED = "healthy-auth-expired"
     UNHEALTHY_TIMEOUT = "unhealthy: timeout"
-    UNHEALTHY_CONNECTION_ERROR = "unhealthy: connection error" 
+    UNHEALTHY_CONNECTION_ERROR = "unhealthy: connection error"
     UNHEALTHY_ENDPOINT_CHECK_FAILED = "unhealthy: endpoint check failed"
     UNHEALTHY_MISSING_PROXY_URL = "unhealthy: missing proxy URL"
     CHECKING = "checking"
@@ -24,7 +24,7 @@ class HealthStatus(str, Enum):
     def get_healthy_statuses(cls) -> List[str]:
         """Get list of statuses that should be considered healthy for nginx inclusion."""
         return [cls.HEALTHY, cls.HEALTHY_AUTH_EXPIRED]
-    
+
     @classmethod
     def is_healthy(cls, status: str) -> bool:
         """Check if a status should be considered healthy."""
@@ -33,7 +33,7 @@ class HealthStatus(str, Enum):
 
 class TransportType(str, Enum):
     """Supported transport types for MCP servers."""
-    
+
     STREAMABLE_HTTP = "streamable-http"
     SSE = "sse"
 
@@ -43,6 +43,7 @@ class RegistryConstants(BaseModel):
 
     class Config:
         """Pydantic config."""
+
         frozen = True
 
     # Health check settings
@@ -74,8 +75,7 @@ class RegistryConstants(BaseModel):
     # Comma-separated list of tags that identify external registry servers
     # Example: "anthropic-registry,workday-asor,custom-registry"
     EXTERNAL_REGISTRY_TAGS: str = os.getenv(
-        "EXTERNAL_REGISTRY_TAGS",
-        "anthropic-registry,workday-asor"
+        "EXTERNAL_REGISTRY_TAGS", "anthropic-registry,workday-asor"
     )
 
 

@@ -19,7 +19,9 @@ class EnvSettings:
     def __init__(self) -> None:
         """Initialize environment settings."""
         self.db_path: str = os.getenv("DB_PATH", "/app/data/bookings.db")
-        self.aws_region: str = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION", "us-east-1")
+        self.aws_region: str = os.getenv("AWS_REGION") or os.getenv(
+            "AWS_DEFAULT_REGION", "us-east-1"
+        )
         self.agent_name: str = os.getenv("AGENT_NAME", "flight-booking")
         self.agent_version: str = os.getenv("AGENT_VERSION", "1.0.0")
 
@@ -33,6 +35,8 @@ class EnvSettings:
         self.host: str = "0.0.0.0"
         self.port: int = 9000
 
-        logger.info(f"EnvSettings initialized: agent_name={self.agent_name}, version={self.agent_version}")
+        logger.info(
+            f"EnvSettings initialized: agent_name={self.agent_name}, version={self.agent_version}"
+        )
         logger.debug(f"Database path: {self.db_path}")
         logger.debug(f"Agent URL: {self.agent_url}")

@@ -726,8 +726,11 @@ class ServerService:
         # Trigger an immediate health check for the newly active version
         try:
             from ..health.service import health_service
+
             asyncio.create_task(health_service.perform_immediate_health_check(path))
-            logger.info(f"Triggered background health check for {path} after version swap to {version}")
+            logger.info(
+                f"Triggered background health check for {path} after version swap to {version}"
+            )
         except Exception as e:
             logger.error(f"Failed to trigger health check after version swap for {path}: {e}")
 

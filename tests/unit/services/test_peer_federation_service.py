@@ -226,9 +226,7 @@ class TestPeerFederationServiceCRUD:
             mock_repository.create_peer.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_add_peer_duplicate_peer_id_fails(
-        self, mock_repository, sample_peer_config
-    ):
+    async def test_add_peer_duplicate_peer_id_fails(self, mock_repository, sample_peer_config):
         """Test that adding duplicate peer_id raises error."""
         with patch(
             "registry.services.peer_federation_service.get_peer_federation_repository",
@@ -327,9 +325,7 @@ class TestPeerFederationServiceCRUD:
             result = await service.remove_peer(sample_peer_config.peer_id)
 
             assert result is True
-            mock_repository.delete_peer.assert_called_once_with(
-                sample_peer_config.peer_id
-            )
+            mock_repository.delete_peer.assert_called_once_with(sample_peer_config.peer_id)
 
     @pytest.mark.asyncio
     async def test_remove_peer_nonexistent_raises_error(self, mock_repository):
@@ -411,9 +407,7 @@ class TestPeerFederationServiceSyncStatus:
     """Tests for sync status operations."""
 
     @pytest.mark.asyncio
-    async def test_get_sync_status_from_cache(
-        self, mock_repository, sample_peer_config
-    ):
+    async def test_get_sync_status_from_cache(self, mock_repository, sample_peer_config):
         """Test getting sync status from in-memory cache."""
         with patch(
             "registry.services.peer_federation_service.get_peer_federation_repository",
@@ -447,9 +441,7 @@ class TestPeerFederationServiceSyncStatus:
             assert result is None
 
     @pytest.mark.asyncio
-    async def test_all_sync_statuses_in_cache(
-        self, mock_repository, sample_peer_config
-    ):
+    async def test_all_sync_statuses_in_cache(self, mock_repository, sample_peer_config):
         """Test all sync statuses are stored in cache."""
         with patch(
             "registry.services.peer_federation_service.get_peer_federation_repository",

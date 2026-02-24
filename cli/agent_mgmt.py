@@ -168,7 +168,7 @@ def _regenerate_token(token_file: str) -> bool:
                 cwd=keycloak_setup_dir,  # Run from keycloak/setup so ../../.oauth-tokens works
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=30,
             )
         else:
             # Use generate_creds.sh for ingress token
@@ -179,7 +179,7 @@ def _regenerate_token(token_file: str) -> bool:
                 cwd=project_root,
                 capture_output=True,
                 text=True,
-                timeout=60
+                timeout=60,
             )
 
         if result.returncode == 0:
@@ -263,7 +263,9 @@ def _make_request(
     logger.info(f"HTTP {method} Request:")
     logger.info(f"  URL: {url}")
     logger.info(f"  Headers:")
-    logger.info(f"    Authorization: Bearer {token[:50]}..." if token else f"    Authorization: <NO_TOKEN>")
+    logger.info(
+        f"    Authorization: Bearer {token[:50]}..." if token else f"    Authorization: <NO_TOKEN>"
+    )
     logger.info(f"    Content-Type: application/json")
     if params:
         logger.info(f"  Query Params: {json.dumps(params, indent=2)}")
@@ -290,8 +292,12 @@ def _make_request(
         logger.info(f"  Response Headers:")
         for header_name, header_value in response.headers.items():
             # Hide sensitive headers
-            if header_name.lower() in ['authorization', 'x-scopes']:
-                logger.info(f"    {header_name}: {header_value[:50]}..." if len(str(header_value)) > 50 else f"    {header_name}: {header_value}")
+            if header_name.lower() in ["authorization", "x-scopes"]:
+                logger.info(
+                    f"    {header_name}: {header_value[:50]}..."
+                    if len(str(header_value)) > 50
+                    else f"    {header_name}: {header_value}"
+                )
             else:
                 logger.info(f"    {header_name}: {header_value}")
 
@@ -686,7 +692,11 @@ def register_agent(
             logger.error(f"✗ Authentication failed (HTTP 401)")
             logger.error(f"  Token file location: {os.path.abspath('.oauth-tokens/ingress.json')}")
             logger.error(f"  Token length: {len(token) if token else 0} characters")
-            logger.error(f"  Authorization header: Bearer {token[:50]}..." if token else "  Authorization header: <NO_TOKEN>")
+            logger.error(
+                f"  Authorization header: Bearer {token[:50]}..."
+                if token
+                else "  Authorization header: <NO_TOKEN>"
+            )
             print("Error: Authentication failed (HTTP 401)")
             print("\nDEBUG INFORMATION:")
             print(f"  Token file: {os.path.abspath('.oauth-tokens/ingress.json')}")
@@ -705,7 +715,9 @@ def register_agent(
             _print_response(response)
         elif response.status_code == 403:
             print("Error: Permission denied. You do not have permission to register agents")
-            print("\nNote: Agent registration requires proper Keycloak authentication with 'register_service' permission.")
+            print(
+                "\nNote: Agent registration requires proper Keycloak authentication with 'register_service' permission."
+            )
             print("For testing/development, you may need to:")
             print("  1. Configure a Keycloak user with appropriate permissions")
             print("  2. Use the web UI dashboard to register agents")
@@ -931,7 +943,9 @@ For more information on creating agent JSON files:
 
     # Search command
     search_parser = subparsers.add_parser("search", help="Search agents using semantic query")
-    search_parser.add_argument("query", help="Natural language search query (e.g., 'code review agent')")
+    search_parser.add_argument(
+        "query", help="Natural language search query (e.g., 'code review agent')"
+    )
     search_parser.add_argument(
         "--max-results",
         type=int,
@@ -951,7 +965,11 @@ For more information on creating agent JSON files:
     # Toggle command
     toggle_parser = subparsers.add_parser("toggle", help="Toggle agent enabled/disabled status")
     toggle_parser.add_argument("path", help="Agent path (e.g., /code-reviewer)")
-    toggle_parser.add_argument("enabled", type=lambda x: x.lower() == "true", help="Enable (true) or disable (false) the agent")
+    toggle_parser.add_argument(
+        "enabled",
+        type=lambda x: x.lower() == "true",
+        help="Enable (true) or disable (false) the agent",
+    )
 
     args = parser.parse_args()
 

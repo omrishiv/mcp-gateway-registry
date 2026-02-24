@@ -41,10 +41,7 @@ def _ensure_mcp_compliant_schema(input_schema: dict[str, Any]) -> dict[str, Any]
             f"Tool inputSchema has non-object type '{input_schema.get('type')}'. "
             "Wrapping in object schema to comply with MCP spec."
         )
-        return {
-            "type": "object",
-            "properties": {"value": input_schema}
-        }
+        return {"type": "object", "properties": {"value": input_schema}}
 
     # If no "type" field but has "properties", add "type": "object"
     if "properties" in input_schema or "additionalProperties" in input_schema:
@@ -218,9 +215,7 @@ class NginxConfigService:
             return False
 
     async def generate_config_async(
-        self,
-        servers: dict[str, dict[str, Any]],
-        force_base_config: bool = False
+        self, servers: dict[str, dict[str, Any]], force_base_config: bool = False
     ) -> bool:
         """Generate Nginx configuration with additional server names and dynamic location blocks.
 
@@ -392,15 +387,16 @@ class NginxConfigService:
 
             # Parse Keycloak configuration from KEYCLOAK_URL environment variable
             import os
+
             auth_provider = os.environ.get("AUTH_PROVIDER", "keycloak").lower()
 
             # Strip Keycloak location blocks from nginx config when not using Keycloak
             if auth_provider != "keycloak":
                 template_content = re.sub(
-                    r'    # \{\{KEYCLOAK_LOCATIONS_START\}\}.*?# \{\{KEYCLOAK_LOCATIONS_END\}\}\n?',
+                    r"    # \{\{KEYCLOAK_LOCATIONS_START\}\}.*?# \{\{KEYCLOAK_LOCATIONS_END\}\}\n?",
                     "",
                     template_content,
-                    flags=re.DOTALL
+                    flags=re.DOTALL,
                 )
                 logger.info(
                     f"AUTH_PROVIDER is '{auth_provider}', removed Keycloak location blocks from nginx config"
@@ -532,9 +528,7 @@ class NginxConfigService:
         In registry-only mode, skip reload unless force=True.
         """
         if not settings.nginx_updates_enabled and not force:
-            logger.info(
-                f"Skipping nginx reload - DEPLOYMENT_MODE={settings.deployment_mode.value}"
-            )
+            logger.info(f"Skipping nginx reload - DEPLOYMENT_MODE={settings.deployment_mode.value}")
             NGINX_UPDATES_SKIPPED.labels(operation="reload").inc()
             return True
 
@@ -579,13 +573,13 @@ class NginxConfigService:
 
         # registry-only mode: block MCP proxy requests with 503
         # This regex matches paths that don't start with known API prefixes
-        block = '''
+        block = """
     # Registry-only mode: block MCP proxy requests with 503
     # Matches paths that don't start with known API/auth prefixes
     location ~ ^/(?!api/|oauth2/|keycloak/|realms/|resources/|v0\\.1/|health|static/|assets/|_next/|validate).+ {
         default_type application/json;
         return 503 '{"error":"gateway_proxy_disabled","message":"Gateway proxy is disabled in registry-only mode. Connect directly to the MCP server using the proxy_pass_url from server registration.","deployment_mode":"registry-only","hint":"Use GET /api/servers/{path} to retrieve the proxy_pass_url for direct connection."}';
-    }'''
+    }"""
         logger.info("Generated registry-only 503 block for MCP proxy requests")
         return block
 
