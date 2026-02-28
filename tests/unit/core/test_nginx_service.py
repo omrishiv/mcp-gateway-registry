@@ -471,7 +471,7 @@ def test_generate_transport_location_blocks_streamable_http(nginx_service):
     blocks = nginx_service._generate_transport_location_blocks("/test", server_info)
 
     assert len(blocks) == 1
-    assert "location /test" in blocks[0]
+    assert "location {{ROOT_PATH}}/test" in blocks[0]
     assert "proxy_pass http://localhost:8000/mcp" in blocks[0]
 
 
@@ -486,7 +486,7 @@ def test_generate_transport_location_blocks_sse(nginx_service):
     blocks = nginx_service._generate_transport_location_blocks("/test", server_info)
 
     assert len(blocks) == 1
-    assert "location /test" in blocks[0]
+    assert "location {{ROOT_PATH}}/test" in blocks[0]
     assert "proxy_pass http://localhost:8000/sse" in blocks[0]
 
 
@@ -502,7 +502,7 @@ def test_generate_transport_location_blocks_both_transports(nginx_service):
 
     # Should prefer streamable-http
     assert len(blocks) == 1
-    assert "location /test" in blocks[0]
+    assert "location {{ROOT_PATH}}/test" in blocks[0]
 
 
 @pytest.mark.unit
@@ -517,7 +517,7 @@ def test_generate_transport_location_blocks_no_transports(nginx_service):
 
     # Should default to streamable-http
     assert len(blocks) == 1
-    assert "location /test" in blocks[0]
+    assert "location {{ROOT_PATH}}/test" in blocks[0]
 
 
 # =============================================================================
@@ -532,7 +532,7 @@ def test_create_location_block_streamable_http(nginx_service):
         "/test", "http://localhost:8000/mcp", "streamable-http"
     )
 
-    assert "location /test" in block
+    assert "location {{ROOT_PATH}}/test" in block
     assert "proxy_pass http://localhost:8000/mcp" in block
     assert "proxy_buffering off" in block
     assert "auth_request /validate" in block
@@ -543,7 +543,7 @@ def test_create_location_block_sse(nginx_service):
     """Test creating location block for SSE."""
     block = nginx_service._create_location_block("/test", "http://localhost:8000/sse", "sse")
 
-    assert "location /test" in block
+    assert "location {{ROOT_PATH}}/test" in block
     assert "proxy_pass http://localhost:8000/sse" in block
     assert "proxy_buffering off" in block
     assert "proxy_set_header Connection $http_connection" in block
@@ -556,7 +556,7 @@ def test_create_location_block_external_service(nginx_service):
         "/test", "https://api.example.com/mcp", "streamable-http"
     )
 
-    assert "location /test" in block
+    assert "location {{ROOT_PATH}}/test" in block
     assert "proxy_pass https://api.example.com/mcp" in block
     # Should use upstream hostname for external services
     assert "proxy_set_header Host api.example.com" in block
@@ -569,7 +569,7 @@ def test_create_location_block_internal_service(nginx_service):
         "/test", "http://backend:8000/mcp", "streamable-http"
     )
 
-    assert "location /test" in block
+    assert "location {{ROOT_PATH}}/test" in block
     assert "proxy_pass http://backend:8000/mcp" in block
     # Should preserve original host for internal services
     assert "proxy_set_header Host $host" in block
@@ -580,7 +580,7 @@ def test_create_location_block_direct_transport(nginx_service):
     """Test creating location block for direct transport."""
     block = nginx_service._create_location_block("/test", "http://localhost:8000", "direct")
 
-    assert "location /test" in block
+    assert "location {{ROOT_PATH}}/test" in block
     assert "proxy_pass http://localhost:8000" in block
     assert "proxy_cache off" in block
 

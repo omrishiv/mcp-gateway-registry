@@ -604,7 +604,7 @@ def main():
     logger.info(f"Server will be available at: http://localhost:{args.port}{endpoint}")
 
     # Run the server with the specified transport from command line args
-    mcp.run(transport=args.transport, host="0.0.0.0", port=int(args.port))
+    mcp.run(transport=args.transport, host="0.0.0.0", port=int(args.port))  # nosec B104
 
 
 if __name__ == "__main__":

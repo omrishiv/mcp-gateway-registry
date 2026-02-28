@@ -49,7 +49,7 @@ logger.info(
 )
 
 # Initialize FastMCP server
-mcp = FastMCP("CurrentTimeAPI", host="0.0.0.0", port=int(args.port))
+mcp = FastMCP("CurrentTimeAPI", host="0.0.0.0", port=int(args.port))  # nosec B104
 mcp.settings.mount_path = "/currenttime"
 
 

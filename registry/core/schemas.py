@@ -1,3 +1,5 @@
+from enum import Enum
+
 from pydantic import BaseModel, Field, field_validator
 from typing import List, Dict, Any, Optional
 
@@ -33,8 +35,6 @@ class ServerInfo(BaseModel):
     proxy_pass_url: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
     num_tools: int = 0
-    num_stars: int = 0
-    is_python: bool = False
     license: str = "N/A"
     tool_list: List[Dict[str, Any]] = Field(default_factory=list)
     is_enabled: bool = False
@@ -109,6 +109,24 @@ class ServerInfo(BaseModel):
         default=None, description="Metadata for items synced from peer registries"
     )
 
+    # Backend authentication (replaces legacy auth_type)
+    auth_scheme: str = Field(
+        default="none",
+        description="Authentication scheme for backend server: none, bearer, api_key"
+    )
+    auth_credential_encrypted: Optional[str] = Field(
+        default=None,
+        description="Encrypted auth credential (Fernet). Never returned in API responses."
+    )
+    auth_header_name: Optional[str] = Field(
+        default=None,
+        description="Custom header name. Default: 'Authorization' for bearer, 'X-API-Key' for api_key."
+    )
+    credential_updated_at: Optional[str] = Field(
+        default=None,
+        description="ISO timestamp of last credential update."
+    )
+
     @field_validator("visibility")
     @classmethod
     def _validate_visibility(
@@ -169,8 +187,6 @@ class ServiceRegistrationRequest(BaseModel):
     proxy_pass_url: str = Field(..., min_length=1)
     tags: str = ""
     num_tools: int = Field(0, ge=0)
-    num_stars: int = Field(0, ge=0)
-    is_python: bool = False
     license: str = "N/A"
     transport: Optional[str] = Field(
         default="auto", description="Preferred transport: sse, streamable-http, or auto"
@@ -196,6 +212,35 @@ class ServiceRegistrationRequest(BaseModel):
     )
     allowed_groups: List[str] = Field(
         default_factory=list, description="Groups with access when visibility is group-restricted"
+    )
+    auth_scheme: str = Field(
+        default="none",
+        description="Authentication scheme: none, bearer, api_key"
+    )
+    auth_credential: Optional[str] = Field(
+        default=None,
+        description="Plaintext credential (encrypted before storage, never stored as-is)"
+    )
+    auth_header_name: Optional[str] = Field(
+        default=None,
+        description="Custom header name for API key auth. Default: X-API-Key"
+    )
+
+
+class AuthCredentialUpdateRequest(BaseModel):
+    """Request model for updating server auth credentials via PATCH."""
+
+    auth_scheme: str = Field(
+        ...,
+        description="Authentication scheme: none, bearer, api_key"
+    )
+    auth_credential: Optional[str] = Field(
+        default=None,
+        description="New credential (required if auth_scheme is not 'none')"
+    )
+    auth_header_name: Optional[str] = Field(
+        default=None,
+        description="Custom header name. Default: X-API-Key for api_key"
     )
 
 

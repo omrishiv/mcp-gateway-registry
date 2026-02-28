@@ -52,8 +52,6 @@ class FileServerRepository(ServerRepositoryBase):
                         server_info.setdefault("description", "")
                         server_info.setdefault("tags", [])
                         server_info.setdefault("num_tools", 0)
-                        server_info.setdefault("num_stars", 0)
-                        server_info.setdefault("is_python", False)
                         server_info.setdefault("license", "N/A")
                         server_info.setdefault("proxy_pass_url", None)
                         server_info.setdefault("tool_list", [])

@@ -335,7 +335,13 @@ class TestSyncPeer:
         mock_agent_service,
         sample_peer_config,
     ):
-        """Test sync handles None responses gracefully."""
+        """
+        Test sync fails when client returns None (indicates fetch error).
+
+        Updated for issue #561 fix: None indicates an error (auth failure,
+        network error, etc.), not an empty result. The sync should fail
+        with a clear error message.
+        """
         with patch(
             "registry.services.peer_federation_service.get_peer_federation_repository",
             return_value=mock_repository,
@@ -356,13 +362,71 @@ class TestSyncPeer:
                         peer_id=sample_peer_config.peer_id
                     )
 
-                    # Mock PeerRegistryClient - return None
+                    # Mock PeerRegistryClient - return None to simulate fetch failure
                     with patch(
                         "registry.services.peer_federation_service.PeerRegistryClient"
                     ) as mock_client_class:
                         mock_client = MagicMock()
                         mock_client.fetch_servers.return_value = None
                         mock_client.fetch_agents.return_value = None
+                        mock_client.fetch_security_scans.return_value = None
+                        mock_client_class.return_value = mock_client
+
+                        result = await service.sync_peer(sample_peer_config.peer_id)
+
+                        # Should fail with error message
+                        assert result.success is False
+                        assert result.servers_synced == 0
+                        assert result.agents_synced == 0
+                        assert result.error_message is not None
+                        assert "Failed to fetch" in result.error_message
+                        assert "authentication" in result.error_message.lower() or "network" in result.error_message.lower()
+
+    @pytest.mark.asyncio
+    async def test_sync_peer_succeeds_with_empty_list_responses(
+        self,
+        mock_repository,
+        mock_server_service,
+        mock_agent_service,
+        sample_peer_config,
+    ):
+        """
+        Test sync succeeds when client returns empty lists (legitimate empty result).
+
+        Updated for issue #561 fix: Empty list [] indicates a legitimate
+        empty result (peer has no servers/agents), not an error. This is
+        different from None which indicates a fetch failure.
+        """
+        with patch(
+            "registry.services.peer_federation_service.get_peer_federation_repository",
+            return_value=mock_repository,
+        ):
+            with patch(
+                "registry.services.peer_federation_service.server_service",
+                mock_server_service,
+            ):
+                with patch(
+                    "registry.services.peer_federation_service.agent_service",
+                    mock_agent_service,
+                ):
+                    service = PeerFederationService()
+
+                    # Set up peer in cache
+                    service.registered_peers[sample_peer_config.peer_id] = (
+                        sample_peer_config
+                    )
+                    service.peer_sync_status[sample_peer_config.peer_id] = (
+                        PeerSyncStatus(peer_id=sample_peer_config.peer_id)
+                    )
+
+                    # Mock PeerRegistryClient - return empty lists (legitimate empty result)
+                    with patch(
+                        "registry.services.peer_federation_service.PeerRegistryClient"
+                    ) as mock_client_class:
+                        mock_client = MagicMock()
+                        mock_client.fetch_servers.return_value = []
+                        mock_client.fetch_agents.return_value = []
+                        mock_client.fetch_security_scans.return_value = []
                         mock_client_class.return_value = mock_client
 
                         result = await service.sync_peer(sample_peer_config.peer_id)
@@ -371,6 +435,63 @@ class TestSyncPeer:
                         assert result.success is True
                         assert result.servers_synced == 0
                         assert result.agents_synced == 0
+                        assert result.error_message is None
+
+    @pytest.mark.asyncio
+    async def test_sync_peer_fails_with_partial_none_responses(
+        self,
+        mock_repository,
+        mock_server_service,
+        mock_agent_service,
+        sample_peer_config,
+    ):
+        """
+        Test sync fails when any fetch returns None (partial failure).
+
+        If servers fetch succeeds but agents fetch fails (None), the entire
+        sync should be marked as failed with a clear error message indicating
+        which fetch(es) failed.
+        """
+        with patch(
+            "registry.services.peer_federation_service.get_peer_federation_repository",
+            return_value=mock_repository,
+        ):
+            with patch(
+                "registry.services.peer_federation_service.server_service",
+                mock_server_service,
+            ):
+                with patch(
+                    "registry.services.peer_federation_service.agent_service",
+                    mock_agent_service,
+                ):
+                    service = PeerFederationService()
+
+                    # Set up peer in cache
+                    service.registered_peers[sample_peer_config.peer_id] = (
+                        sample_peer_config
+                    )
+                    service.peer_sync_status[sample_peer_config.peer_id] = (
+                        PeerSyncStatus(peer_id=sample_peer_config.peer_id)
+                    )
+
+                    # Mock PeerRegistryClient - servers succeed, agents fail
+                    with patch(
+                        "registry.services.peer_federation_service.PeerRegistryClient"
+                    ) as mock_client_class:
+                        mock_client = MagicMock()
+                        mock_client.fetch_servers.return_value = [
+                            {"path": "/server1", "name": "Server 1"}
+                        ]
+                        mock_client.fetch_agents.return_value = None  # Failure
+                        mock_client.fetch_security_scans.return_value = []
+                        mock_client_class.return_value = mock_client
+
+                        result = await service.sync_peer(sample_peer_config.peer_id)
+
+                        # Should fail even though servers fetch succeeded
+                        assert result.success is False
+                        assert result.error_message is not None
+                        assert "agents" in result.error_message
 
 
 @pytest.mark.unit

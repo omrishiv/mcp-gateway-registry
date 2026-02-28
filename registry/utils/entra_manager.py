@@ -340,8 +340,8 @@ async def _add_service_principal_to_group(
         try:
             error_detail = response.json()
             logger.debug(f"Error details: {error_detail}")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Could not parse error response from Entra: {e}")
         return
 
     logger.warning(

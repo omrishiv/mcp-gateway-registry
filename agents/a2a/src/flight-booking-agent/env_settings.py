@@ -32,7 +32,7 @@ class EnvSettings:
         self.agent_url: str = os.getenv("AGENTCORE_RUNTIME_URL", "http://127.0.0.1:9000/")
 
         # Server configuration (fixed for A2A protocol)
-        self.host: str = "0.0.0.0"
+        self.host: str = os.getenv("AGENT_HOST", "0.0.0.0")  # nosec B104
         self.port: int = 9000
 
         logger.info(

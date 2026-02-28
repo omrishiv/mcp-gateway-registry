@@ -50,7 +50,7 @@ logger.info(
 )
 
 # Initialize FastMCP server
-mcp = FastMCP("ExampleMCPServer", host="0.0.0.0", port=int(args.port))
+mcp = FastMCP("ExampleMCPServer", host="0.0.0.0", port=int(args.port))  # nosec B104
 mcp.settings.mount_path = "/example-server"
 
 

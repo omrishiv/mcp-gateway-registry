@@ -89,13 +89,41 @@ def _build_headers_for_server(server_info: dict = None) -> Dict[str, str]:
     headers = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
 
     # Merge server-specific headers if present
+    logger.info(f"[AUTH DEBUG] _build_headers_for_server called, server_info is None: {server_info is None}")
     if server_info:
+        logger.info(f"[AUTH DEBUG] server_info keys: {list(server_info.keys())}")
         server_headers = server_info.get("headers", [])
         if server_headers and isinstance(server_headers, list):
             for header_dict in server_headers:
                 if isinstance(header_dict, dict):
                     headers.update(header_dict)
                     logger.debug(f"Added server headers to MCP client: {header_dict}")
+
+        # Inject auth header from encrypted credentials (if present)
+        auth_scheme = server_info.get("auth_scheme", "none")
+        encrypted_credential = server_info.get("auth_credential_encrypted")
+
+        logger.debug(f"[AUTH DEBUG] auth_scheme: {auth_scheme}, has_credential: {bool(encrypted_credential)}")
+
+        if auth_scheme != "none" and encrypted_credential:
+            from ..utils.credential_encryption import decrypt_credential
+
+            credential = decrypt_credential(encrypted_credential)
+            if credential:
+                if auth_scheme == "bearer":
+                    header_name = server_info.get("auth_header_name", "Authorization")
+                    headers[header_name] = f"Bearer {credential}"
+                    logger.debug("Added Bearer auth header for MCP client")
+                elif auth_scheme == "api_key":
+                    header_name = server_info.get("auth_header_name", "X-API-Key")
+                    headers[header_name] = credential
+                    logger.debug(f"Added API key header '{header_name}' for MCP client")
+            else:
+                logger.warning(
+                    f"Could not decrypt credential for "
+                    f"'{server_info.get('service_path', 'unknown')}'. "
+                    f"MCP client will proceed without auth."
+                )
 
     return headers
 

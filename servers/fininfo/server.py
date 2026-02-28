@@ -613,7 +613,7 @@ def main():
     # Run the server with the specified transport from command line args
     # FastMCP 2.0 handles port and host in the run method
     logger.info(f"Starting fininfo server on port {args.port} with transport {args.transport}")
-    mcp.run(transport=args.transport, host="0.0.0.0", port=int(args.port), path="/sse")
+    mcp.run(transport=args.transport, host="0.0.0.0", port=int(args.port), path="/sse")  # nosec B104
 
 
 if __name__ == "__main__":

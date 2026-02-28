@@ -186,7 +186,6 @@ class AgentCardFactory(factory.Factory):
     # should be accessed via capabilities.get("streaming", False). See bug documentation:
     # .scratchpad/fixes/registry/fix-agent-streaming-attribute.md
     is_enabled = True
-    num_stars = fuzzy.FuzzyFloat(0.0, 5.0)
     rating_details = factory.List([])
     license = "MIT"
 
@@ -217,7 +216,6 @@ class AgentInfoFactory(factory.Factory):
     tags = factory.LazyAttribute(lambda _: TEST_TAGS_DATA.copy())
     skills = factory.LazyAttribute(lambda _: [TEST_SKILL_NAME_1])
     num_skills = 1
-    num_stars = fuzzy.FuzzyFloat(0.0, 5.0)
     is_enabled = True
     provider = factory.Faker("company")
     streaming = False

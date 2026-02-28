@@ -38,6 +38,20 @@ class TransportType(str, Enum):
     SSE = "sse"
 
 
+class AuthScheme(str, Enum):
+    """Authentication scheme for backend MCP servers."""
+
+    NONE = "none"
+    BEARER = "bearer"
+    API_KEY = "api_key"
+
+
+# Auth header defaults
+DEFAULT_API_KEY_HEADER: str = "X-API-Key"
+DEFAULT_BEARER_HEADER: str = "Authorization"
+VALID_AUTH_SCHEMES: list = ["none", "bearer", "api_key"]
+
+
 class RegistryConstants(BaseModel):
     """Registry configuration constants."""
 

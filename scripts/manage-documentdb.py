@@ -200,8 +200,8 @@ async def list_collections(
                 size_bytes = stats.get("size", 0)
                 size_mb = size_bytes / (1024 * 1024)
                 print(f"  Size: {size_mb:.2f} MB")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Could not retrieve collection stats for {coll_name}: {e}")
 
         print("\n" + "=" * 100)
 
