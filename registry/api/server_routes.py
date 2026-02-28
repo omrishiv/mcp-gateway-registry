@@ -2503,9 +2503,7 @@ async def update_server_auth_credential(
     )
 
     username = user_context.get("username", "unknown")
-    logger.info(
-        f"Auth credential update request for '{server_path}' by user '{username}'"
-    )
+    logger.info(f"Auth credential update request for '{server_path}' by user '{username}'")
 
     # Normalize path
     if not server_path.startswith("/"):
@@ -2532,9 +2530,7 @@ async def update_server_auth_credential(
         )
 
     # Look up existing server (with credentials so we can update properly)
-    existing_server = await server_service.get_server_info(
-        server_path, include_credentials=True
-    )
+    existing_server = await server_service.get_server_info(server_path, include_credentials=True)
     if not existing_server:
         return JSONResponse(
             status_code=404,

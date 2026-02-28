@@ -198,7 +198,9 @@ class DocumentDBAuditRepository(AuditRepositoryBase):
                 # Motor returns naive datetimes; re-attach UTC for correct serialization
                 if isinstance(doc.get("timestamp"), datetime) and doc["timestamp"].tzinfo is None:
                     doc["timestamp"] = doc["timestamp"].replace(tzinfo=timezone.utc)
-                logger.debug(f"DocumentDB READ: Found audit event with request_id={doc.get('request_id')}")
+                logger.debug(
+                    f"DocumentDB READ: Found audit event with request_id={doc.get('request_id')}"
+                )
             else:
                 logger.debug("DocumentDB READ: Audit event not found")
             return doc
@@ -244,9 +246,7 @@ class DocumentDBAuditRepository(AuditRepositoryBase):
             True if inserted successfully or if the record already exists (duplicate request_id),
             False if an unexpected error occurs
         """
-        logger.debug(
-            f"DocumentDB WRITE: Inserting audit event with request_id={record.request_id}"
-        )
+        logger.debug(f"DocumentDB WRITE: Inserting audit event with request_id={record.request_id}")
         collection = await self._get_collection()
 
         try:
@@ -258,9 +258,7 @@ class DocumentDBAuditRepository(AuditRepositoryBase):
                 doc["timestamp"] = datetime.fromisoformat(doc["timestamp"].replace("Z", "+00:00"))
 
             await collection.insert_one(doc)
-            logger.info(
-                f"DocumentDB WRITE: Inserted audit event request_id={record.request_id}"
-            )
+            logger.info(f"DocumentDB WRITE: Inserted audit event request_id={record.request_id}")
             return True
         except DuplicateKeyError:
             logger.debug(

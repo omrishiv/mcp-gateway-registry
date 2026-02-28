@@ -59,6 +59,7 @@ def _get_fernet() -> Optional[Fernet]:
     """
     try:
         from ..core.config import settings
+
         secret_key = settings.secret_key
     except Exception as e:
         logger.error(f"Could not load SECRET_KEY from settings: {e}")
@@ -113,9 +114,7 @@ def decrypt_credential(
     """
     fernet = _get_fernet()
     if not fernet:
-        logger.error(
-            "SECRET_KEY not configured. Cannot decrypt server credential."
-        )
+        logger.error("SECRET_KEY not configured. Cannot decrypt server credential.")
         return None
 
     try:

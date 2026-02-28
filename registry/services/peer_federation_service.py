@@ -625,9 +625,7 @@ class PeerFederationService:
             )
 
             # Record success metrics
-            PEER_SYNC_DURATION_SECONDS.labels(peer_id=peer_id, success="true").set(
-                duration_seconds
-            )
+            PEER_SYNC_DURATION_SECONDS.labels(peer_id=peer_id, success="true").set(duration_seconds)
 
             return SyncResult(
                 success=True,

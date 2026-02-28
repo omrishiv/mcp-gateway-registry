@@ -28,9 +28,7 @@ def setup_otel():
 
     try:
         # Create resource with service name
-        resource = Resource.create(attributes={
-            SERVICE_NAME: settings.OTEL_SERVICE_NAME
-        })
+        resource = Resource.create(attributes={SERVICE_NAME: settings.OTEL_SERVICE_NAME})
 
         # Create a View for duration histograms with configurable boundaries
         duration_view = View(
@@ -43,21 +41,23 @@ def setup_otel():
         # Setup Prometheus exporter if enabled
         if settings.OTEL_PROMETHEUS_ENABLED:
             # Start Prometheus HTTP server
-            start_http_server(port=settings.OTEL_PROMETHEUS_PORT, addr=settings.METRICS_SERVICE_HOST)  # nosec B104
+            start_http_server(
+                port=settings.OTEL_PROMETHEUS_PORT, addr=settings.METRICS_SERVICE_HOST
+            )  # nosec B104
 
             # Create PrometheusMetricReader (no endpoint parameter needed)
             prometheus_reader = PrometheusMetricReader()
             readers.append(prometheus_reader)
-            logger.info(f"Prometheus metrics exporter enabled on port {settings.OTEL_PROMETHEUS_PORT}")
+            logger.info(
+                f"Prometheus metrics exporter enabled on port {settings.OTEL_PROMETHEUS_PORT}"
+            )
 
         # Setup OTLP exporter if endpoint configured
         if settings.OTEL_OTLP_ENDPOINT:
-            otlp_exporter = OTLPMetricExporter(
-                endpoint=f"{settings.OTEL_OTLP_ENDPOINT}/v1/metrics"
-            )
+            otlp_exporter = OTLPMetricExporter(endpoint=f"{settings.OTEL_OTLP_ENDPOINT}/v1/metrics")
             otlp_reader = PeriodicExportingMetricReader(
                 exporter=otlp_exporter,
-                export_interval_millis=30000  # 30 seconds
+                export_interval_millis=30000,  # 30 seconds
             )
             readers.append(otlp_reader)
             logger.info(f"OTLP metrics exporter enabled for {settings.OTEL_OTLP_ENDPOINT}")

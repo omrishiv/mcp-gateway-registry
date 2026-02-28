@@ -411,9 +411,7 @@ async def update_peer_token(
     """
     _check_peer_management_scope(user_context)
     username = user_context.get("username", "unknown")
-    logger.info(
-        f"User '{username}' updating federation token for peer '{peer_id}'"
-    )
+    logger.info(f"User '{username}' updating federation token for peer '{peer_id}'")
 
     service = get_peer_federation_service()
 

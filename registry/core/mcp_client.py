@@ -89,7 +89,9 @@ def _build_headers_for_server(server_info: dict = None) -> Dict[str, str]:
     headers = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
 
     # Merge server-specific headers if present
-    logger.info(f"[AUTH DEBUG] _build_headers_for_server called, server_info is None: {server_info is None}")
+    logger.info(
+        f"[AUTH DEBUG] _build_headers_for_server called, server_info is None: {server_info is None}"
+    )
     if server_info:
         logger.info(f"[AUTH DEBUG] server_info keys: {list(server_info.keys())}")
         server_headers = server_info.get("headers", [])
@@ -103,7 +105,9 @@ def _build_headers_for_server(server_info: dict = None) -> Dict[str, str]:
         auth_scheme = server_info.get("auth_scheme", "none")
         encrypted_credential = server_info.get("auth_credential_encrypted")
 
-        logger.debug(f"[AUTH DEBUG] auth_scheme: {auth_scheme}, has_credential: {bool(encrypted_credential)}")
+        logger.debug(
+            f"[AUTH DEBUG] auth_scheme: {auth_scheme}, has_credential: {bool(encrypted_credential)}"
+        )
 
         if auth_scheme != "none" and encrypted_credential:
             from ..utils.credential_encryption import decrypt_credential

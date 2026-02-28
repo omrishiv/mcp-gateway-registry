@@ -280,7 +280,9 @@ def main():
 
     try:
         # Call the validate endpoint
-        validate_response = requests.post(f"{args.server_url}/validate", headers=headers, timeout=30)
+        validate_response = requests.post(
+            f"{args.server_url}/validate", headers=headers, timeout=30
+        )
         validate_response.raise_for_status()
         result = validate_response.json()
 

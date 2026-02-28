@@ -380,7 +380,10 @@ class TestSyncPeer:
                         assert result.agents_synced == 0
                         assert result.error_message is not None
                         assert "Failed to fetch" in result.error_message
-                        assert "authentication" in result.error_message.lower() or "network" in result.error_message.lower()
+                        assert (
+                            "authentication" in result.error_message.lower()
+                            or "network" in result.error_message.lower()
+                        )
 
     @pytest.mark.asyncio
     async def test_sync_peer_succeeds_with_empty_list_responses(
@@ -412,11 +415,9 @@ class TestSyncPeer:
                     service = PeerFederationService()
 
                     # Set up peer in cache
-                    service.registered_peers[sample_peer_config.peer_id] = (
-                        sample_peer_config
-                    )
-                    service.peer_sync_status[sample_peer_config.peer_id] = (
-                        PeerSyncStatus(peer_id=sample_peer_config.peer_id)
+                    service.registered_peers[sample_peer_config.peer_id] = sample_peer_config
+                    service.peer_sync_status[sample_peer_config.peer_id] = PeerSyncStatus(
+                        peer_id=sample_peer_config.peer_id
                     )
 
                     # Mock PeerRegistryClient - return empty lists (legitimate empty result)
@@ -467,11 +468,9 @@ class TestSyncPeer:
                     service = PeerFederationService()
 
                     # Set up peer in cache
-                    service.registered_peers[sample_peer_config.peer_id] = (
-                        sample_peer_config
-                    )
-                    service.peer_sync_status[sample_peer_config.peer_id] = (
-                        PeerSyncStatus(peer_id=sample_peer_config.peer_id)
+                    service.registered_peers[sample_peer_config.peer_id] = sample_peer_config
+                    service.peer_sync_status[sample_peer_config.peer_id] = PeerSyncStatus(
+                        peer_id=sample_peer_config.peer_id
                     )
 
                     # Mock PeerRegistryClient - servers succeed, agents fail

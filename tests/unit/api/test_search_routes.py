@@ -870,12 +870,10 @@ class TestSemanticSearchSuccess:
         """Test admin user sees all search results."""
         # Arrange
         mock_search_repo.search = AsyncMock(return_value=sample_faiss_search_results)
-        mock_agent_service.get_agent_info.side_effect = lambda path: (
-            AgentCardFactory(
-                path=path,
-                name=path.split("/")[-1],
-                visibility="public",
-            )
+        mock_agent_service.get_agent_info.side_effect = lambda path: AgentCardFactory(
+            path=path,
+            name=path.split("/")[-1],
+            visibility="public",
         )
 
         request = SemanticSearchRequest(query="test query", max_results=10)

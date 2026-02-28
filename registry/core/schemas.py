@@ -112,19 +112,18 @@ class ServerInfo(BaseModel):
     # Backend authentication (replaces legacy auth_type)
     auth_scheme: str = Field(
         default="none",
-        description="Authentication scheme for backend server: none, bearer, api_key"
+        description="Authentication scheme for backend server: none, bearer, api_key",
     )
     auth_credential_encrypted: Optional[str] = Field(
         default=None,
-        description="Encrypted auth credential (Fernet). Never returned in API responses."
+        description="Encrypted auth credential (Fernet). Never returned in API responses.",
     )
     auth_header_name: Optional[str] = Field(
         default=None,
-        description="Custom header name. Default: 'Authorization' for bearer, 'X-API-Key' for api_key."
+        description="Custom header name. Default: 'Authorization' for bearer, 'X-API-Key' for api_key.",
     )
     credential_updated_at: Optional[str] = Field(
-        default=None,
-        description="ISO timestamp of last credential update."
+        default=None, description="ISO timestamp of last credential update."
     )
 
     @field_validator("visibility")
@@ -214,33 +213,26 @@ class ServiceRegistrationRequest(BaseModel):
         default_factory=list, description="Groups with access when visibility is group-restricted"
     )
     auth_scheme: str = Field(
-        default="none",
-        description="Authentication scheme: none, bearer, api_key"
+        default="none", description="Authentication scheme: none, bearer, api_key"
     )
     auth_credential: Optional[str] = Field(
         default=None,
-        description="Plaintext credential (encrypted before storage, never stored as-is)"
+        description="Plaintext credential (encrypted before storage, never stored as-is)",
     )
     auth_header_name: Optional[str] = Field(
-        default=None,
-        description="Custom header name for API key auth. Default: X-API-Key"
+        default=None, description="Custom header name for API key auth. Default: X-API-Key"
     )
 
 
 class AuthCredentialUpdateRequest(BaseModel):
     """Request model for updating server auth credentials via PATCH."""
 
-    auth_scheme: str = Field(
-        ...,
-        description="Authentication scheme: none, bearer, api_key"
-    )
+    auth_scheme: str = Field(..., description="Authentication scheme: none, bearer, api_key")
     auth_credential: Optional[str] = Field(
-        default=None,
-        description="New credential (required if auth_scheme is not 'none')"
+        default=None, description="New credential (required if auth_scheme is not 'none')"
     )
     auth_header_name: Optional[str] = Field(
-        default=None,
-        description="Custom header name. Default: X-API-Key for api_key"
+        default=None, description="Custom header name. Default: X-API-Key for api_key"
     )
 
 

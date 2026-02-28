@@ -311,9 +311,7 @@ class TestUpdatePeerToken:
 
         # Mock service to raise generic ValueError during update
         mock_peer_federation_service.get_peer_by_id.return_value = None
-        mock_peer_federation_service.update_peer.side_effect = ValueError(
-            "Internal database error"
-        )
+        mock_peer_federation_service.update_peer.side_effect = ValueError("Internal database error")
 
         with patch(
             "registry.api.peer_management_routes.get_peer_federation_service",

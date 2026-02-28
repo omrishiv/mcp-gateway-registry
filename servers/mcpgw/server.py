@@ -1195,7 +1195,9 @@ async def register_service(
     auth_provider: str | None = Field(
         None, description="Authentication provider (e.g., 'bedrock-agentcore', 'oauth')."
     ),
-    auth_scheme: str | None = Field(None, description="Authentication scheme (e.g., 'bearer', 'api_key', 'none')."),
+    auth_scheme: str | None = Field(
+        None, description="Authentication scheme (e.g., 'bearer', 'api_key', 'none')."
+    ),
     supported_transports: list[str] | None = Field(
         None, description="List of supported transports (e.g., ['streamable-http'])."
     ),
