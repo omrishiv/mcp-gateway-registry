@@ -8,7 +8,7 @@ warm storage requirements.
 
 import logging
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
 from motor.motor_asyncio import AsyncIOMotorCollection
@@ -90,6 +90,40 @@ class AuditRepositoryBase(ABC):
         pass
 
     @abstractmethod
+    async def distinct(
+        self,
+        field: str,
+        query: Optional[Dict[str, Any]] = None,
+    ) -> List[str]:
+        """
+        Get distinct values for a field in audit events.
+
+        Args:
+            field: The document field path (e.g., 'identity.username')
+            query: Optional filter query to scope the distinct values
+
+        Returns:
+            Sorted list of distinct string values
+        """
+        pass
+
+    @abstractmethod
+    async def aggregate(
+        self,
+        pipeline: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """
+        Run a MongoDB aggregation pipeline on audit events.
+
+        Args:
+            pipeline: MongoDB aggregation pipeline stages
+
+        Returns:
+            List of aggregation result documents
+        """
+        pass
+
+    @abstractmethod
     async def insert(
         self,
         record: AuditRecord,
@@ -162,6 +196,9 @@ class DocumentDBAuditRepository(AuditRepositoryBase):
                 # Convert _id to string if it's an ObjectId
                 if "_id" in doc:
                     doc["_id"] = str(doc["_id"])
+                # Motor returns naive datetimes; re-attach UTC for correct serialization
+                if isinstance(doc.get("timestamp"), datetime) and doc["timestamp"].tzinfo is None:
+                    doc["timestamp"] = doc["timestamp"].replace(tzinfo=timezone.utc)
                 events.append(doc)
 
             logger.debug(f"DocumentDB READ: Found {len(events)} audit events")
@@ -192,7 +229,12 @@ class DocumentDBAuditRepository(AuditRepositoryBase):
                 # Convert _id to string if it's an ObjectId
                 if "_id" in doc:
                     doc["_id"] = str(doc["_id"])
-                logger.debug(f"DocumentDB READ: Found audit event with request_id={doc.get('request_id')}")
+                # Motor returns naive datetimes; re-attach UTC for correct serialization
+                if isinstance(doc.get("timestamp"), datetime) and doc["timestamp"].tzinfo is None:
+                    doc["timestamp"] = doc["timestamp"].replace(tzinfo=timezone.utc)
+                logger.debug(
+                    f"DocumentDB READ: Found audit event with request_id={doc.get('request_id')}"
+                )
             else:
                 logger.debug("DocumentDB READ: Audit event not found")
             return doc
@@ -224,6 +266,40 @@ class DocumentDBAuditRepository(AuditRepositoryBase):
             logger.error(f"Error counting audit events: {e}", exc_info=True)
             return 0
 
+    async def distinct(
+        self,
+        field: str,
+        query: Optional[Dict[str, Any]] = None,
+    ) -> List[str]:
+        """Get distinct values for a field in audit events."""
+        logger.debug(f"DocumentDB READ: Getting distinct values for field={field}")
+        collection = await self._get_collection()
+        try:
+            values = await collection.distinct(field, query or {})
+            result = sorted([str(v) for v in values if v])
+            logger.debug(f"DocumentDB READ: Found {len(result)} distinct values for {field}")
+            return result
+        except Exception as e:
+            logger.error(f"Error getting distinct values for {field}: {e}", exc_info=True)
+            return []
+
+    async def aggregate(
+        self,
+        pipeline: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Run a MongoDB aggregation pipeline on audit events."""
+        logger.debug(f"DocumentDB READ: Running aggregation pipeline with {len(pipeline)} stages")
+        collection = await self._get_collection()
+        try:
+            results = []
+            async for doc in collection.aggregate(pipeline):
+                results.append(doc)
+            logger.debug(f"DocumentDB READ: Aggregation returned {len(results)} results")
+            return results
+        except Exception as e:
+            logger.error(f"Error running aggregation pipeline: {e}", exc_info=True)
+            return []
+
     async def insert(
         self,
         record: AuditRecord,
@@ -238,9 +314,7 @@ class DocumentDBAuditRepository(AuditRepositoryBase):
             True if inserted successfully or if the record already exists (duplicate request_id),
             False if an unexpected error occurs
         """
-        logger.debug(
-            f"DocumentDB WRITE: Inserting audit event with request_id={record.request_id}"
-        )
+        logger.debug(f"DocumentDB WRITE: Inserting audit event with request_id={record.request_id}")
         collection = await self._get_collection()
 
         try:
@@ -252,9 +326,7 @@ class DocumentDBAuditRepository(AuditRepositoryBase):
                 doc["timestamp"] = datetime.fromisoformat(doc["timestamp"].replace("Z", "+00:00"))
 
             await collection.insert_one(doc)
-            logger.info(
-                f"DocumentDB WRITE: Inserted audit event request_id={record.request_id}"
-            )
+            logger.info(f"DocumentDB WRITE: Inserted audit event request_id={record.request_id}")
             return True
         except DuplicateKeyError:
             logger.debug(

@@ -1,4 +1,6 @@
-import React from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import SearchableSelect, { SelectOption } from './SearchableSelect';
+import axios from 'axios';
 import {
   FunnelIcon,
   XMarkIcon,
@@ -23,7 +25,7 @@ interface AuditFilterBarProps {
   loading?: boolean;
 }
 
-const OPERATION_OPTIONS = [
+const REGISTRY_OPERATION_OPTIONS = [
   { value: '', label: 'All Operations' },
   { value: 'create', label: 'Create' },
   { value: 'read', label: 'Read' },
@@ -37,7 +39,17 @@ const OPERATION_OPTIONS = [
   { value: 'search', label: 'Search' },
 ];
 
-const RESOURCE_TYPE_OPTIONS = [
+const MCP_OPERATION_OPTIONS = [
+  { value: '', label: 'All Methods' },
+  { value: 'initialize', label: 'Initialize' },
+  { value: 'tools/list', label: 'Tools List' },
+  { value: 'tools/call', label: 'Tools Call' },
+  { value: 'resources/list', label: 'Resources List' },
+  { value: 'resources/templates/list', label: 'Resource Templates' },
+  { value: 'notifications/initialized', label: 'Notifications' },
+];
+
+const REGISTRY_RESOURCE_TYPE_OPTIONS = [
   { value: '', label: 'All Resources' },
   { value: 'server', label: 'Server' },
   { value: 'agent', label: 'Agent' },
@@ -45,6 +57,10 @@ const RESOURCE_TYPE_OPTIONS = [
   { value: 'federation', label: 'Federation' },
   { value: 'health', label: 'Health' },
   { value: 'search', label: 'Search' },
+];
+
+const MCP_RESOURCE_TYPE_OPTIONS = [
+  { value: '', label: 'All Servers' },
 ];
 
 const STATUS_PRESETS = [
@@ -55,16 +71,79 @@ const STATUS_PRESETS = [
   { value: 'error', label: 'All Errors (4xx & 5xx)' },
 ];
 
+interface FilterOptionsCache {
+  registry_api?: { usernames: SelectOption[]; serverNames: SelectOption[] };
+  mcp_access?: { usernames: SelectOption[]; serverNames: SelectOption[] };
+}
+
 const AuditFilterBar: React.FC<AuditFilterBarProps> = ({
   filters,
   onFilterChange,
   onRefresh,
   loading = false,
 }) => {
+  const isMcpStream = filters.stream === 'mcp_access';
+  const operationOptions = isMcpStream ? MCP_OPERATION_OPTIONS : REGISTRY_OPERATION_OPTIONS;
+  const resourceTypeOptions = isMcpStream ? MCP_RESOURCE_TYPE_OPTIONS : REGISTRY_RESOURCE_TYPE_OPTIONS;
+
+  const [usernameOptions, setUsernameOptions] = useState<SelectOption[]>([]);
+  const [serverNameOptions, setServerNameOptions] = useState<SelectOption[]>([]);
+  const [optionsLoading, setOptionsLoading] = useState(false);
+  const optionsCacheRef = useRef<FilterOptionsCache>({});
+
+  // Prefetch both streams' filter options on mount
+  useEffect(() => {
+    const fetchAllOptions = async () => {
+      setOptionsLoading(true);
+      try {
+        const [registryRes, mcpRes] = await Promise.all([
+          axios.get('/api/audit/filter-options', { params: { stream: 'registry_api' } }),
+          axios.get('/api/audit/filter-options', { params: { stream: 'mcp_access' } }),
+        ]);
+
+        optionsCacheRef.current = {
+          registry_api: {
+            usernames: registryRes.data.usernames.map((u: string) => ({ value: u, label: u })),
+            serverNames: [],
+          },
+          mcp_access: {
+            usernames: mcpRes.data.usernames.map((u: string) => ({ value: u, label: u })),
+            serverNames: mcpRes.data.server_names.map((s: string) => ({ value: s, label: s })),
+          },
+        };
+
+        // Set current stream's options
+        const current = optionsCacheRef.current[filters.stream];
+        if (current) {
+          setUsernameOptions(current.usernames);
+          setServerNameOptions(current.serverNames);
+        }
+      } catch (error) {
+        console.error('Failed to fetch filter options:', error);
+      } finally {
+        setOptionsLoading(false);
+      }
+    };
+    fetchAllOptions();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // When stream changes, serve from cache
+  useEffect(() => {
+    const cached = optionsCacheRef.current[filters.stream];
+    if (cached) {
+      setUsernameOptions(cached.usernames);
+      setServerNameOptions(cached.serverNames);
+    }
+  }, [filters.stream]);
+
   const handleStreamChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    // Clear operation and resource type filters when switching streams
     onFilterChange({
       ...filters,
       stream: e.target.value as 'registry_api' | 'mcp_access',
+      operation: undefined,
+      resourceType: undefined,
     });
   };
 
@@ -82,10 +161,10 @@ const AuditFilterBar: React.FC<AuditFilterBarProps> = ({
     });
   };
 
-  const handleUsernameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleUsernameSelect = (value: string) => {
     onFilterChange({
       ...filters,
-      username: e.target.value || undefined,
+      username: value || undefined,
     });
   };
 
@@ -100,6 +179,13 @@ const AuditFilterBar: React.FC<AuditFilterBarProps> = ({
     onFilterChange({
       ...filters,
       resourceType: e.target.value || undefined,
+    });
+  };
+
+  const handleServerNameSelect = (value: string) => {
+    onFilterChange({
+      ...filters,
+      resourceType: value || undefined,
     });
   };
 
@@ -244,26 +330,29 @@ const AuditFilterBar: React.FC<AuditFilterBarProps> = ({
           <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
             Username
           </label>
-          <input
-            type="text"
+          <SearchableSelect
+            options={usernameOptions}
             value={filters.username || ''}
-            onChange={handleUsernameChange}
-            placeholder="Filter by username"
-            className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            onChange={handleUsernameSelect}
+            placeholder="Search username..."
+            isLoading={optionsLoading}
+            allowCustom={true}
+            specialOptions={[{ value: '', label: 'All Users' }]}
+            focusColor="focus:ring-blue-500"
           />
         </div>
 
-        {/* Operation Filter */}
+        {/* Operation / MCP Method Filter */}
         <div>
           <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-            Operation
+            {isMcpStream ? 'MCP Method' : 'Operation'}
           </label>
           <select
             value={filters.operation || ''}
             onChange={handleOperationChange}
             className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
           >
-            {OPERATION_OPTIONS.map((opt) => (
+            {operationOptions.map((opt) => (
               <option key={opt.value} value={opt.value}>
                 {opt.label}
               </option>
@@ -271,22 +360,35 @@ const AuditFilterBar: React.FC<AuditFilterBarProps> = ({
           </select>
         </div>
 
-        {/* Resource Type Filter */}
+        {/* Resource Type / Server Name Filter */}
         <div>
           <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-            Resource Type
+            {isMcpStream ? 'Server Name' : 'Resource Type'}
           </label>
-          <select
-            value={filters.resourceType || ''}
-            onChange={handleResourceTypeChange}
-            className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-          >
-            {RESOURCE_TYPE_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
+          {isMcpStream ? (
+            <SearchableSelect
+              options={serverNameOptions}
+              value={filters.resourceType || ''}
+              onChange={handleServerNameSelect}
+              placeholder="Search server..."
+              isLoading={optionsLoading}
+              allowCustom={true}
+              specialOptions={[{ value: '', label: 'All Servers' }]}
+              focusColor="focus:ring-blue-500"
+            />
+          ) : (
+            <select
+              value={filters.resourceType || ''}
+              onChange={handleResourceTypeChange}
+              className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            >
+              {resourceTypeOptions.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
 
         {/* Status Code Range Filter */}

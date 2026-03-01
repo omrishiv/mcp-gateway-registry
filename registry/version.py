@@ -6,7 +6,7 @@ or determined from git tags at runtime (for local development).
 """
 
 import os
-import subprocess
+import subprocess  # nosec B404
 import logging
 from pathlib import Path
 
@@ -36,14 +36,14 @@ def _get_git_version() -> str:
             capture_output=True,
             text=True,
             timeout=5,
-            check=False
+            check=False,
         )
 
         if result.returncode == 0:
             version_str = result.stdout.strip()
 
             # Remove 'v' prefix if present
-            if version_str.startswith('v'):
+            if version_str.startswith("v"):
                 version_str = version_str[1:]
 
             logger.info(f"Version from git: {version_str}")

@@ -1,14 +1,15 @@
 import React, { useState, useEffect, Fragment } from 'react';
 import { Menu, Transition } from '@headlessui/react';
 import { Link } from 'react-router-dom';
-import { 
-  Bars3Icon, 
-  UserIcon, 
+import {
+  Bars3Icon,
+  UserIcon,
   ChevronDownIcon,
   ArrowRightOnRectangleIcon,
   Cog6ToothIcon,
 } from '@heroicons/react/24/outline';
 import Sidebar from './Sidebar';
+import UptimeDisplay from './UptimeDisplay';
 import { useServerStats } from '../hooks/useServerStats';
 import { useAuth } from '../contexts/AuthContext';
 import logo from '../assets/logo.png';
@@ -64,11 +65,11 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
                 <Link to="/" className="flex items-center hover:opacity-80 transition-opacity">
                   <img
                     src={logo}
-                    alt="MCP Servers & A2A Agents Registry Logo"
+                    alt="AI Gateway & Registry Logo"
                     className="h-8 w-8 dark:brightness-0 dark:invert"
                   />
                   <span className="ml-2 text-xl font-bold text-gray-900 dark:text-white">
-                    MCP Servers & A2A Agents Registry
+                    AI Gateway & Registry
                   </span>
                 </Link>
               </div>
@@ -106,6 +107,9 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
                   </span>
                 </div>
               )}
+
+              {/* Uptime display */}
+              <UptimeDisplay />
 
               {/* Settings gear icon (admin only) */}
               {user?.is_admin && (

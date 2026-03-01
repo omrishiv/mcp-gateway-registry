@@ -72,8 +72,6 @@ def sample_server_dict() -> dict[str, Any]:
         "description": "A test server",
         "tags": ["test", "data"],
         "num_tools": 5,
-        "num_stars": 4,
-        "is_python": True,
         "license": "MIT",
         "proxy_pass_url": "http://localhost:8080",
         "tool_list": ["tool1", "tool2"],
@@ -94,8 +92,6 @@ def sample_server_dict_2() -> dict[str, Any]:
         "description": "Another test server",
         "tags": ["test"],
         "num_tools": 3,
-        "num_stars": 5,
-        "is_python": False,
         "license": "Apache-2.0",
         "proxy_pass_url": "http://localhost:9090",
         "tool_list": ["tool3"],
@@ -214,7 +210,6 @@ class TestLoadServersAndState:
 # The service layer should only test orchestration, not file I/O details.
 
 
-
 # =============================================================================
 # TEST: Registering Servers
 # =============================================================================
@@ -308,9 +303,7 @@ class TestRegisterServer:
 
         # Assert - verify search indexing
         mock_search_repository.index_server.assert_called_once_with(
-            sample_server_dict["path"],
-            sample_server_dict,
-            False
+            sample_server_dict["path"], sample_server_dict, False
         )
 
     @pytest.mark.asyncio
@@ -368,8 +361,7 @@ class TestUpdateServer:
         # Assert
         assert result is True
         mock_server_repository.update.assert_called_once_with(
-            sample_server_dict["path"],
-            updated_server
+            sample_server_dict["path"], updated_server
         )
         mock_search_repository.index_server.assert_called_once()
 
@@ -413,8 +405,7 @@ class TestUpdateServer:
 
         # Assert - verify orchestration
         mock_server_repository.update.assert_called_once_with(
-            sample_server_dict["path"],
-            updated_server
+            sample_server_dict["path"], updated_server
         )
 
     @pytest.mark.asyncio
@@ -438,10 +429,9 @@ class TestUpdateServer:
 
         # Assert - verify search indexing
         mock_search_repository.index_server.assert_called_once_with(
-            sample_server_dict["path"],
-            updated_server,
-            False
+            sample_server_dict["path"], updated_server, False
         )
+
 
 # NOTE: test_update_enabled_server_regenerates_nginx removed
 # This is more of an integration test and involves complex nginx mocking.
@@ -534,7 +524,7 @@ class TestGetAllServers:
         mock_server_repository.list_all.return_value = {}
 
         # Act
-        result = await server_service.get_all_servers(include_federated=False)
+        result = await server_service.get_all_servers()
 
         # Assert
         mock_server_repository.list_all.assert_called_once()
@@ -557,77 +547,13 @@ class TestGetAllServers:
         mock_server_repository.list_all.return_value = servers
 
         # Act
-        result = await server_service.get_all_servers(include_federated=False)
+        result = await server_service.get_all_servers()
 
         # Assert
         assert len(result) == 2
         assert sample_server_dict["path"] in result
         assert sample_server_dict_2["path"] in result
 
-    @pytest.mark.asyncio
-    async def test_get_all_servers_includes_federated(
-        self,
-        server_service: ServerService,
-        sample_server_dict: dict[str, Any],
-        mock_server_repository,
-    ):
-        """Test getting all servers includes federated servers."""
-        # Arrange
-        mock_server_repository.list_all.return_value = {
-            sample_server_dict["path"]: sample_server_dict
-        }
-
-        # Mock federation service
-        from unittest.mock import AsyncMock
-        mock_federation_service = MagicMock()
-        federated_server = {
-            "path": "/federated-server",
-            "server_name": "federated",
-            "description": "Federated server",
-        }
-        mock_federation_service.get_federated_servers = AsyncMock(return_value=[federated_server])
-
-        # Patch at the point of use
-        with patch("registry.services.federation_service.get_federation_service", return_value=mock_federation_service):
-            # Act
-            result = await server_service.get_all_servers(include_federated=True)
-
-        # Assert
-        assert len(result) == 2
-        assert sample_server_dict["path"] in result
-        assert "/federated-server" in result
-
-    @pytest.mark.asyncio
-    async def test_get_all_servers_skips_duplicate_federated(
-        self,
-        server_service: ServerService,
-        sample_server_dict: dict[str, Any],
-        mock_server_repository,
-    ):
-        """Test that federated servers don't override local servers."""
-        # Arrange
-        mock_server_repository.list_all.return_value = {
-            sample_server_dict["path"]: sample_server_dict
-        }
-
-        # Mock federation service with duplicate path
-        from unittest.mock import AsyncMock
-        mock_federation_service = MagicMock()
-        federated_server = {
-            "path": sample_server_dict["path"],  # Same path as local
-            "server_name": "federated-duplicate",
-        }
-        mock_federation_service.get_federated_servers = AsyncMock(return_value=[federated_server])
-
-        # Patch at the point of use
-        with patch("registry.services.federation_service.get_federation_service", return_value=mock_federation_service):
-            # Act
-            result = await server_service.get_all_servers(include_federated=True)
-
-        # Assert
-        assert len(result) == 1
-        # Local server should be preserved
-        assert result[sample_server_dict["path"]]["server_name"] == sample_server_dict["server_name"]
 
 
 # =============================================================================
@@ -691,9 +617,7 @@ class TestGetFilteredServers:
             "server_name": "Test Server Display Name",
             "description": "Test",
         }
-        mock_server_repository.list_all.return_value = {
-            server["path"]: server
-        }
+        mock_server_repository.list_all.return_value = {server["path"]: server}
 
         # Act - use technical name (path without slashes)
         result = await server_service.get_filtered_servers(["test-server"])
@@ -739,9 +663,7 @@ class TestGetFilteredServers:
             "server_name": "test",
             "description": "Test",
         }
-        mock_server_repository.list_all.return_value = {
-            server["path"]: server
-        }
+        mock_server_repository.list_all.return_value = {server["path"]: server}
 
         # Act
         result = await server_service.get_filtered_servers(["test-server"])
@@ -787,8 +709,7 @@ class TestGetFilteredServers:
 
         # Act
         result = await server_service.user_can_access_server_path(
-            sample_server_dict["path"],
-            ["test-server"]
+            sample_server_dict["path"], ["test-server"]
         )
 
         # Assert
@@ -808,8 +729,7 @@ class TestGetFilteredServers:
 
         # Act
         result = await server_service.user_can_access_server_path(
-            sample_server_dict["path"],
-            ["different-server"]
+            sample_server_dict["path"], ["different-server"]
         )
 
         # Assert
@@ -826,10 +746,7 @@ class TestGetFilteredServers:
         mock_server_repository.get.return_value = None
 
         # Act
-        result = await server_service.user_can_access_server_path(
-            "/nonexistent",
-            ["test-server"]
-        )
+        result = await server_service.user_can_access_server_path("/nonexistent", ["test-server"])
 
         # Assert
         assert result is False
@@ -863,9 +780,7 @@ class TestGetAllServersWithPermissions:
 
         # Act
         result = await server_service.get_all_servers_with_permissions(
-            accessible_servers=None,
-            include_federated=False
-        )
+            accessible_servers=None,         )
 
         # Assert
         assert len(result) == 2
@@ -889,45 +804,12 @@ class TestGetAllServersWithPermissions:
 
         # Act
         result = await server_service.get_all_servers_with_permissions(
-            accessible_servers=["test-server"],
-            include_federated=False
-        )
+            accessible_servers=["test-server"],         )
 
         # Assert
         assert len(result) == 1
         assert "/test-server" in result
 
-    @pytest.mark.asyncio
-    async def test_get_all_servers_with_permissions_includes_federated(
-        self,
-        server_service: ServerService,
-        sample_server_dict: dict[str, Any],
-        mock_server_repository,
-    ):
-        """Test that federated servers are included when requested."""
-        # Arrange
-        from unittest.mock import AsyncMock
-        mock_server_repository.list_all.return_value = {
-            sample_server_dict["path"]: sample_server_dict
-        }
-
-        mock_federation_service = MagicMock()
-        federated_server = {
-            "path": "/federated-server",
-            "server_name": "federated",
-        }
-        mock_federation_service.get_federated_servers = AsyncMock(return_value=[federated_server])
-
-        # Patch at the point of use
-        with patch("registry.services.federation_service.get_federation_service", return_value=mock_federation_service):
-            # Act
-            result = await server_service.get_all_servers_with_permissions(
-                accessible_servers=["test-server", "federated-server"],
-                include_federated=True
-            )
-
-        # Assert
-        assert len(result) == 2
 
 
 # =============================================================================
@@ -1259,7 +1141,9 @@ class TestRemoveServer:
 
         # Assert
         assert result is True
-        mock_server_repository.delete_with_versions.assert_called_once_with(sample_server_dict["path"])
+        mock_server_repository.delete_with_versions.assert_called_once_with(
+            sample_server_dict["path"]
+        )
         mock_search_repository.remove_entity.assert_called_once_with(sample_server_dict["path"])
 
     @pytest.mark.asyncio
@@ -1279,7 +1163,9 @@ class TestRemoveServer:
 
         # Assert
         assert result is True
-        mock_server_repository.delete_with_versions.assert_called_once_with(sample_server_dict["path"])
+        mock_server_repository.delete_with_versions.assert_called_once_with(
+            sample_server_dict["path"]
+        )
 
     @pytest.mark.asyncio
     async def test_remove_server_removes_from_search(
@@ -1336,7 +1222,6 @@ class TestRemoveServer:
         assert result is False
         # Search should not be called if repository deletes nothing
         mock_search_repository.remove_entity.assert_not_called()
-
 
 
 # =============================================================================
@@ -1535,7 +1420,7 @@ class TestServerVersionManagement:
         }
 
         # Act
-        result = await server_service.get_all_servers(include_federated=False)
+        result = await server_service.get_all_servers()
 
         # Assert - only active server should be returned
         assert len(result) == 1
@@ -1568,7 +1453,6 @@ class TestServerVersionManagement:
 
         # Act
         result = await server_service.get_all_servers(
-            include_federated=False,
             include_inactive=True
         )
 
@@ -1594,7 +1478,7 @@ class TestServerVersionManagement:
         }
 
         # Act
-        result = await server_service.get_all_servers(include_federated=False)
+        result = await server_service.get_all_servers()
 
         # Assert - server should be included (default is_active=True)
         assert len(result) == 1
@@ -1625,9 +1509,7 @@ class TestServerVersionManagement:
         }
 
         # Act - request both servers
-        result = await server_service.get_filtered_servers(
-            ["test-server", "inactive-server"]
-        )
+        result = await server_service.get_filtered_servers(["test-server", "inactive-server"])
 
         # Assert - only active server should be returned
         assert len(result) == 1
@@ -1665,7 +1547,7 @@ class TestServerVersionManagement:
                 version="v2.0.0",
                 proxy_pass_url="http://localhost:8081",
                 status="beta",
-                is_default=False
+                is_default=False,
             )
 
         # Assert
@@ -1692,9 +1574,7 @@ class TestServerVersionManagement:
         # Act & Assert
         with pytest.raises(ValueError, match="Server not found"):
             await server_service.add_server_version(
-                path="/nonexistent",
-                version="v1.0.0",
-                proxy_pass_url="http://localhost:8080"
+                path="/nonexistent", version="v1.0.0", proxy_pass_url="http://localhost:8080"
             )
 
         mock_server_repository.update.assert_not_called()
@@ -1741,8 +1621,10 @@ class TestServerVersionManagement:
         mock_server_repository.list_all.return_value = {}
 
         # Mock nginx service and health service
-        with patch("registry.core.nginx_service.nginx_service") as mock_nginx_service, \
-             patch("registry.health.service.health_service") as mock_health_service:
+        with (
+            patch("registry.core.nginx_service.nginx_service") as mock_nginx_service,
+            patch("registry.health.service.health_service") as mock_health_service,
+        ):
             mock_nginx_service.generate_config_async = AsyncMock()
             mock_nginx_service.reload_nginx = MagicMock()
             mock_health_service.perform_immediate_health_check = AsyncMock(
@@ -1751,8 +1633,7 @@ class TestServerVersionManagement:
 
             # Act
             result = await server_service.set_default_version(
-                path="/versioned-server",
-                version="v2.0.0"
+                path="/versioned-server", version="v2.0.0"
             )
 
         # Assert
@@ -1793,7 +1674,7 @@ class TestServerVersionManagement:
         with pytest.raises(ValueError, match="not found"):
             await server_service.set_default_version(
                 path="/versioned-server",
-                version="v99.0.0"  # Does not exist
+                version="v99.0.0",  # Does not exist
             )
 
         mock_server_repository.create.assert_not_called()
@@ -1844,8 +1725,7 @@ class TestServerVersionManagement:
 
             # Act
             result = await server_service.remove_server_version(
-                path="/versioned-server",
-                version="v2.0.0"
+                path="/versioned-server", version="v2.0.0"
             )
 
         # Assert
@@ -1878,7 +1758,7 @@ class TestServerVersionManagement:
         with pytest.raises(ValueError, match="Cannot remove active version"):
             await server_service.remove_server_version(
                 path="/versioned-server",
-                version="v1.0.0"  # This is the active version
+                version="v1.0.0",  # This is the active version
             )
 
         mock_server_repository.delete.assert_not_called()
@@ -1973,4 +1853,3 @@ class TestServerVersionManagement:
         # Act & Assert
         with pytest.raises(ValueError, match="Server not found"):
             await server_service.get_server_versions("/nonexistent")
-

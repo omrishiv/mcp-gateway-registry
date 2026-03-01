@@ -403,7 +403,7 @@ try:
         errors.append('proxy_pass_url must start with http:// or https://')
 
     # Check for unknown fields (not part of tool spec)
-    allowed_fields = {'server_name', 'path', 'proxy_pass_url', 'description', 'tags', 'num_tools', 'num_stars', 'is_python', 'license', 'auth_provider', 'auth_type', 'supported_transports', 'headers', 'tool_list', 'repository_url', 'website_url', 'package_npm'}
+    allowed_fields = {'server_name', 'path', 'proxy_pass_url', 'description', 'tags', 'num_tools', 'license', 'auth_provider', 'auth_scheme', 'supported_transports', 'headers', 'tool_list', 'repository_url', 'website_url', 'package_npm'}
     unknown_fields = set(config.keys()) - allowed_fields
     if unknown_fields:
         errors.append(f'Unknown fields not allowed by register_service tool spec: {sorted(unknown_fields)}')
@@ -422,14 +422,6 @@ try:
     if 'num_tools' in config and config['num_tools'] is not None:
         if not isinstance(config['num_tools'], int) or config['num_tools'] < 0:
             errors.append('num_tools must be a non-negative integer')
-
-    if 'num_stars' in config and config['num_stars'] is not None:
-        if not isinstance(config['num_stars'], int) or config['num_stars'] < 0:
-            errors.append('num_stars must be a non-negative integer')
-
-    if 'is_python' in config and config['is_python'] is not None:
-        if not isinstance(config['is_python'], bool):
-            errors.append('is_python must be a boolean')
 
     if 'license' in config and config['license'] is not None:
         if not isinstance(config['license'], str):
@@ -645,36 +637,43 @@ except Exception as e:
         echo ""
         echo "====Disabling the server===="
 
-        # Get admin credentials from environment
-        local admin_user="${ADMIN_USER:-admin}"
-        local admin_password="${ADMIN_PASSWORD}"
-
-        if [ -z "$admin_password" ]; then
-            print_error "ADMIN_PASSWORD not set in environment - cannot disable server"
+        # Generate JWT token for internal auth using shared SECRET_KEY
+        if [ -z "$SECRET_KEY" ]; then
+            print_error "SECRET_KEY not set in environment - cannot disable server"
         else
-            # Call the internal toggle endpoint to set service to disabled (false)
-            # Since the server was just auto-enabled during registration, we need to toggle it OFF
-            print_info "Calling toggle endpoint with: ${GATEWAY_URL}/api/internal/toggle"
-            print_info "Service path: $service_path"
+            local auth_token
+            auth_token=$(python3 -c "
+from registry.auth.internal import generate_internal_token
+print(generate_internal_token(subject='cli-service-mgmt', purpose='toggle-service'))
+" 2>/dev/null)
 
-            output=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST "${GATEWAY_URL}/api/internal/toggle" \
-                --user "$admin_user:$admin_password" \
-                --data-urlencode "service_path=$service_path" 2>&1)
-
-            # Extract HTTP status code from response
-            http_status=$(echo "$output" | grep "HTTP_STATUS:" | cut -d':' -f2)
-            response_body=$(echo "$output" | sed '/HTTP_STATUS:/d')
-
-            print_info "Toggle API HTTP Status: $http_status"
-            print_info "Toggle API Response: $response_body"
-
-            if [ "$http_status" = "200" ]; then
-                print_success "Server disabled due to failed security scan"
+            if [ -z "$auth_token" ]; then
+                print_error "Failed to generate auth token - cannot disable server"
             else
-                print_error "Failed to disable server - HTTP Status: $http_status"
-                print_error "Response: $response_body"
+                # Call the internal toggle endpoint to set service to disabled (false)
+                # Since the server was just auto-enabled during registration, we need to toggle it OFF
+                print_info "Calling toggle endpoint with: ${GATEWAY_URL}/api/internal/toggle"
+                print_info "Service path: $service_path"
+
+                output=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST "${GATEWAY_URL}/api/internal/toggle" \
+                    -H "Authorization: Bearer $auth_token" \
+                    --data-urlencode "service_path=$service_path" 2>&1)
+
+                # Extract HTTP status code from response
+                http_status=$(echo "$output" | grep "HTTP_STATUS:" | cut -d':' -f2)
+                response_body=$(echo "$output" | sed '/HTTP_STATUS:/d')
+
+                print_info "Toggle API HTTP Status: $http_status"
+                print_info "Toggle API Response: $response_body"
+
+                if [ "$http_status" = "200" ]; then
+                    print_success "Server disabled due to failed security scan"
+                else
+                    print_error "Failed to disable server - HTTP Status: $http_status"
+                    print_error "Response: $response_body"
+                fi
+                print_info "Review the security scan report before enabling this server"
             fi
-            print_info "Review the security scan report before enabling this server"
         fi
     fi
 
@@ -956,15 +955,14 @@ show_usage() {
     echo ""
     echo "Config File Requirements:"
     echo "  Required fields: server_name, path, proxy_pass_url"
-    echo "  Optional fields: description, tags, num_tools, num_stars, is_python, license,"
-    echo "                   auth_provider, auth_type, supported_transports, headers, tool_list"
+    echo "  Optional fields: description, tags, num_tools, license,"
+    echo "                   auth_provider, auth_scheme, supported_transports, headers, tool_list"
     echo "  Constraints:"
     echo "    - path must start with '/' and be more than just '/'"
     echo "    - proxy_pass_url must start with http:// or https://"
     echo "    - server_name must be non-empty string"
     echo "    - tags must be array of strings"
-    echo "    - num_tools/num_stars must be non-negative integers"
-    echo "    - is_python must be boolean"
+    echo "    - num_tools must be a non-negative integer"
     echo "    - supported_transports must be array of strings"
     echo "    - headers must be array of objects"
     echo "    - tool_list must be array of objects"

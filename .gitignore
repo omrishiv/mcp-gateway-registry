@@ -180,7 +180,7 @@ cython_debug/
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
-#.idea/
+.idea/
 
 # Ruff stuff:
 .ruff_cache/
@@ -352,7 +352,15 @@ terraform/.admin_password
 image-manifest.json
 agent_security_scans/
 
+# Helm dependency charts and lock files (fetched via helm dependency build)
+charts/*/charts/
+charts/*/Chart.lock
+
+# Shell config artifacts
+.ash/
+
 # Claude
 .claude/*
 !.claude/skills/
+.claude/skills/search-registry/
 .token?

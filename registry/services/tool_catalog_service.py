@@ -67,9 +67,12 @@ class ToolCatalogService:
             if ":" in path:
                 continue
 
-            # Apply server path filter if specified
-            if server_path_filter and path != server_path_filter:
-                continue
+            # Apply server path filter if specified (normalize slashes for comparison)
+            if server_path_filter:
+                normalized_filter = server_path_filter.strip("/")
+                normalized_path = path.strip("/")
+                if normalized_path != normalized_filter:
+                    continue
 
             # Check if server is enabled
             is_enabled = await self._server_repo.get_state(path)
@@ -82,9 +85,7 @@ class ToolCatalogService:
                 if server_required_scopes and not all(
                     s in user_scope_set for s in server_required_scopes
                 ):
-                    logger.debug(
-                        f"Filtering out server {path}: user lacks required scopes"
-                    )
+                    logger.debug(f"Filtering out server {path}: user lacks required scopes")
                     continue
 
             server_name = server_info.get("server_name", path)

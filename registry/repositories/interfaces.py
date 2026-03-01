@@ -39,6 +39,21 @@ class ServerRepositoryBase(ABC):
         pass
 
     @abstractmethod
+    async def list_by_source(
+        self,
+        source: str,
+    ) -> Dict[str, Dict[str, Any]]:
+        """List all servers from a specific federation source.
+
+        Args:
+            source: Federation source identifier (e.g., "anthropic")
+
+        Returns:
+            Dictionary mapping server path to server info
+        """
+        pass
+
+    @abstractmethod
     async def create(
         self,
         server_info: Dict[str, Any],
@@ -103,6 +118,15 @@ class ServerRepositoryBase(ABC):
         """Load/reload all servers from storage."""
         pass
 
+    @abstractmethod
+    async def count(self) -> int:
+        """Get total count of servers.
+
+        Returns:
+            Total number of servers in the repository.
+        """
+        pass
+
 
 class AgentRepositoryBase(ABC):
     """Abstract base class for A2A agent data access."""
@@ -165,6 +189,15 @@ class AgentRepositoryBase(ABC):
     @abstractmethod
     async def load_all(self) -> None:
         """Load/reload all agents from storage."""
+        pass
+
+    @abstractmethod
+    async def count(self) -> int:
+        """Get total count of agents.
+
+        Returns:
+            Total number of agents in the repository.
+        """
         pass
 
 
@@ -339,7 +372,6 @@ class ScopeRepositoryBase(ABC):
         Returns None if group not found.
         """
         pass
-
 
     async def list_groups(self) -> Dict[str, Any]:
         """
@@ -877,10 +909,7 @@ class FederationConfigRepositoryBase(ABC):
     """Abstract base class for federation configuration storage."""
 
     @abstractmethod
-    async def get_config(
-        self,
-        config_id: str = "default"
-    ) -> Optional[FederationConfig]:
+    async def get_config(self, config_id: str = "default") -> Optional[FederationConfig]:
         """
         Get federation configuration by ID.
 
@@ -894,9 +923,7 @@ class FederationConfigRepositoryBase(ABC):
 
     @abstractmethod
     async def save_config(
-        self,
-        config: FederationConfig,
-        config_id: str = "default"
+        self, config: FederationConfig, config_id: str = "default"
     ) -> FederationConfig:
         """
         Save or update federation configuration.
@@ -911,10 +938,7 @@ class FederationConfigRepositoryBase(ABC):
         pass
 
     @abstractmethod
-    async def delete_config(
-        self,
-        config_id: str = "default"
-    ) -> bool:
+    async def delete_config(self, config_id: str = "default") -> bool:
         """
         Delete federation configuration.
 
@@ -1038,6 +1062,15 @@ class SkillRepositoryBase(ABC):
         updates: Dict[str, Dict[str, Any]],
     ) -> int:
         """Update multiple skills by path, return count."""
+        pass
+
+    @abstractmethod
+    async def count(self) -> int:
+        """Get total count of skills.
+
+        Returns:
+            Total number of skills in the repository.
+        """
         pass
 
 
