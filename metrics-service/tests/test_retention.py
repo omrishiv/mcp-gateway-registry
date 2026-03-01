@@ -96,24 +96,32 @@ class TestRetentionPolicy:
             table_name="metrics", retention_days=30, cleanup_query=custom_query
         )
 
-        assert policy.get_cleanup_query() == custom_query
+        query, params = policy.get_cleanup_query()
+        assert query == custom_query
+        assert params == ()
 
     def test_default_cleanup_query(self):
         """Test default cleanup query generation."""
         policy = RetentionPolicy(table_name="metrics", retention_days=90)
 
-        query = policy.get_cleanup_query()
+        query, params = policy.get_cleanup_query()
         assert "DELETE FROM metrics" in query
-        assert "created_at < datetime('now', '-90 days')" in query
+        assert "created_at < ?" in query
+        assert len(params) == 1
+        # Verify param is an ISO formatted date string
+        assert isinstance(params[0], str)
 
     def test_count_query(self):
         """Test count query generation."""
         policy = RetentionPolicy(table_name="metrics", retention_days=30)
 
-        query = policy.get_count_query()
+        query, params = policy.get_count_query()
         assert "SELECT COUNT(*)" in query
         assert "FROM metrics" in query
-        assert "created_at < datetime('now', '-30 days')" in query
+        assert "created_at < ?" in query
+        assert len(params) == 1
+        # Verify param is an ISO formatted date string
+        assert isinstance(params[0], str)
 
 
 class TestRetentionManager:
