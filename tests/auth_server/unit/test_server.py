@@ -944,13 +944,11 @@ class TestReloadScopesEndpoint:
 
     @patch("registry.common.scopes_loader.reload_scopes_config")
     @patch("auth_server.server.get_auth_provider")
-    def test_reload_scopes_basic_auth_backward_compat(
-        self, mock_get_provider, mock_reload_scopes, auth_env_vars
+    def test_reload_scopes_basic_auth_rejected(
+        self, mock_get_provider, auth_env_vars
     ):
-        """Test that deprecated Basic Auth still works for backward compatibility."""
+        """Test that Basic Auth is rejected (no longer supported)."""
         # Arrange
-        mock_reload_scopes.return_value = {"group_mappings": {}}
-
         import base64
 
         import auth_server.server as server_module
@@ -964,30 +962,9 @@ class TestReloadScopesEndpoint:
             "/internal/reload-scopes", headers={"Authorization": f"Basic {credentials}"}
         )
 
-        # Assert
-        assert response.status_code == 200
-        data = response.json()
-        assert "successfully" in data["message"]
-
-    @patch("auth_server.server.get_auth_provider")
-    def test_reload_scopes_invalid_basic_auth(self, mock_get_provider, auth_env_vars):
-        """Test scopes reload with invalid Basic Auth credentials."""
-        # Arrange
-        import base64
-
-        import auth_server.server as server_module
-
-        client = TestClient(server_module.app)
-
-        credentials = base64.b64encode(b"wrong:password").decode()
-
-        # Act
-        response = client.post(
-            "/internal/reload-scopes", headers={"Authorization": f"Basic {credentials}"}
-        )
-
-        # Assert
+        # Assert - Basic Auth is no longer supported
         assert response.status_code == 401
+        assert "Unsupported authentication scheme" in response.json()["detail"]
 
 
 # =============================================================================

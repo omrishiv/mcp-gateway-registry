@@ -14,23 +14,21 @@ This document provides comprehensive technical documentation for the MCP Gateway
 
 ## Overview
 
-The MCP Gateway Registry implements a sophisticated dual-authentication system designed for both development and enterprise environments:
+The MCP Gateway Registry implements an OAuth2-based authentication system designed for enterprise environments:
 
 ### Core Authentication Methods
 
-- **Traditional Authentication**: Username/password for local development
 - **OAuth2 Integration**: Enterprise IdP integration (Amazon Cognito, SAML, etc.)
 - **Session Management**: Secure HTTP cookies with digital signatures
 - **Role-Based Access Control**: Dynamic permissions based on user groups
 
 ### Key Features
 
-- 🔐 **Dual Authentication**: Support for both traditional and OAuth2 flows
-- 🎯 **RBAC System**: Fine-grained role-based access control
-- 🏢 **IdP Integration**: Integration with Cognito and SAML providers
-- 🔒 **Secure Sessions**: Encrypted, signed session cookies
-- 🎛️ **Dynamic UI**: Permission-based interface rendering
-- 📊 **Audit Logging**: Comprehensive authentication event tracking
+- **RBAC System**: Fine-grained role-based access control
+- **IdP Integration**: Integration with Cognito and SAML providers
+- **Secure Sessions**: Encrypted, signed session cookies
+- **Dynamic UI**: Permission-based interface rendering
+- **Audit Logging**: Comprehensive authentication event tracking
 
 ## Authentication Architecture
 
@@ -62,7 +60,6 @@ graph TB
     subgraph "External Auth Systems"
         AuthServer[Auth Server<br/>localhost:8888]
         Cognito[Amazon Cognito]
-        LocalAuth[Local Credentials]
     end
     
     UI --> AuthRoutes
@@ -77,7 +74,6 @@ graph TB
     
     AuthRoutes -.-> AuthServer
     AuthServer -.-> Cognito
-    AuthRoutes -.-> LocalAuth
     
     classDef browser fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
     classDef registry fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
@@ -87,7 +83,7 @@ graph TB
     class UI,LoginForm,Dashboard browser
     class AuthRoutes,AuthDeps,ServerRoutes,Templates registry
     class Cookies,SessionSigner,SessionStore session
-    class AuthServer,Cognito,LocalAuth external
+    class AuthServer,Cognito external
 ```
 
 ### Authentication Flow Architecture
@@ -108,31 +104,22 @@ sequenceDiagram
     U->>R: GET /login
     R->>AS: GET /oauth2/providers (fetch available providers)
     AS-->>R: List of OAuth2 providers
-    R->>R: Render login form with options
-    R->>U: Login page with Traditional + OAuth2 options
-    
-    Note over U,IdP: Phase 3a: Traditional Authentication Flow
-    alt Traditional Login
-        U->>R: POST /login (username/password)
-        R->>R: validate_login_credentials()
-        R->>R: create_session_cookie(username)
-        R->>U: Set-Cookie mcp_gateway_session + 302 redirect to /
-    
-    Note over U,IdP: Phase 3b: OAuth2 Authentication Flow
-    else OAuth2 Login
-        U->>R: GET /auth/{provider}
-        R->>U: 302 Redirect to external auth server
-        U->>AS: OAuth2 PKCE flow initiation
-        AS->>IdP: OAuth2 authorization request
-        IdP->>AS: Authorization code + user info
-        AS->>AS: Exchange code for tokens
-        AS->>AS: Map Cognito groups to MCP scopes
-        AS->>AS: Create compatible session cookie
-        AS->>U: Set-Cookie mcp_gateway_session
-        U->>R: GET /auth/callback
-        R->>R: Validate existing session cookie
-        R->>U: 302 Redirect to / (authenticated)
-    end
+    R->>R: Render login form with OAuth2 options
+    R->>U: Login page with OAuth2 options
+
+    Note over U,IdP: Phase 3: OAuth2 Authentication Flow
+    U->>R: GET /auth/{provider}
+    R->>U: 302 Redirect to external auth server
+    U->>AS: OAuth2 PKCE flow initiation
+    AS->>IdP: OAuth2 authorization request
+    IdP->>AS: Authorization code + user info
+    AS->>AS: Exchange code for tokens
+    AS->>AS: Map Cognito groups to MCP scopes
+    AS->>AS: Create compatible session cookie
+    AS->>U: Set-Cookie mcp_gateway_session
+    U->>R: GET /auth/callback
+    R->>R: Validate existing session cookie
+    R->>U: 302 Redirect to / (authenticated)
     
     Note over U,IdP: Phase 4: Authenticated Dashboard Access
     U->>R: GET / (with valid session cookie)
@@ -150,7 +137,6 @@ sequenceDiagram
 
 **Key Endpoints**:
 - `GET /login` - Login form with dynamic OAuth2 provider loading
-- `POST /login` - Traditional username/password authentication
 - `GET /auth/{provider}` - OAuth2 provider redirect
 - `GET /auth/callback` - OAuth2 callback handling
 - `GET|POST /logout` - Session termination
@@ -189,39 +175,29 @@ flowchart TD
     SessionValid -->|No| RedirectLogin
     
     RedirectLogin --> LoginPage[Display Login Page<br/>with Available Providers]
-    
-    LoginPage --> UserChoice{User Authentication<br/>Method Choice}
-    
-    UserChoice -->|Traditional| TraditionalAuth[Username/Password<br/>Form Submission]
-    UserChoice -->|OAuth2| OAuth2Auth[Redirect to<br/>External Provider]
-    
-    TraditionalAuth --> ValidateCreds{Valid<br/>Credentials?}
-    ValidateCreds -->|Yes| CreateTraditionalSession[Create Session Cookie<br/>with Admin Permissions]
-    ValidateCreds -->|No| LoginError[Display Login Error]
-    
+
+    LoginPage --> OAuth2Auth[Redirect to<br/>External Provider]
+
     OAuth2Auth --> ExternalProvider[External OAuth2 Flow<br/>User Authentication]
     ExternalProvider --> OAuth2Callback[OAuth2 Callback<br/>with User Info]
     OAuth2Callback --> CreateOAuth2Session[Create Session Cookie<br/>with Mapped Permissions]
-    
-    CreateTraditionalSession --> SetSessionCookie[Set HTTP Cookie<br/>mcp_gateway_session]
-    CreateOAuth2Session --> SetSessionCookie
+
+    CreateOAuth2Session --> SetSessionCookie[Set HTTP Cookie<br/>mcp_gateway_session]
     
     SetSessionCookie --> RedirectDashboard[Redirect to Dashboard]
     RedirectDashboard --> ExtractUserContext
     
     ExtractUserContext --> RenderUI[Render Permission-Based UI]
     
-    LoginError --> LoginPage
-    
     classDef startEnd fill:#e8f5e8,stroke:#4caf50,stroke-width:2px
     classDef decision fill:#fff3e0,stroke:#ff9800,stroke-width:2px
     classDef process fill:#e3f2fd,stroke:#2196f3,stroke-width:2px
     classDef error fill:#ffebee,stroke:#f44336,stroke-width:2px
-    
+
     class Start,RenderUI startEnd
-    class HasSession,SessionValid,UserChoice,ValidateCreds decision
-    class ValidateSession,ExtractUserContext,LoginPage,TraditionalAuth,OAuth2Auth,ExternalProvider,OAuth2Callback,CreateTraditionalSession,CreateOAuth2Session,SetSessionCookie,RedirectDashboard process
-    class RedirectLogin,LoginError error
+    class HasSession,SessionValid decision
+    class ValidateSession,ExtractUserContext,LoginPage,OAuth2Auth,ExternalProvider,OAuth2Callback,CreateOAuth2Session,SetSessionCookie,RedirectDashboard process
+    class RedirectLogin error
 ```
 
 ## UI Authentication System
@@ -235,18 +211,7 @@ graph LR
     subgraph "Login Page (/login)"
         LoginHeader[Header with Logo & Branding]
         ErrorDisplay[Error Message Display]
-        
-        subgraph "Authentication Methods"
-            TraditionalSection[Traditional Login Section]
-            OAuth2Section[OAuth2 Providers Section]
-        end
-        
-        subgraph "Traditional Login Form"
-            UsernameField[Username Input Field]
-            PasswordField[Password Input Field]
-            LoginButton[Submit Button]
-        end
-        
+
         subgraph "OAuth2 Provider Buttons"
             ProviderButtons[Dynamic Provider Buttons]
             CognitoBtn[Amazon Cognito Button]
@@ -254,26 +219,17 @@ graph LR
             CustomBtn[Custom OAuth2 Button]
         end
     end
-    
+
     LoginHeader --> ErrorDisplay
-    ErrorDisplay --> TraditionalSection
-    ErrorDisplay --> OAuth2Section
-    TraditionalSection --> UsernameField
-    TraditionalSection --> PasswordField
-    TraditionalSection --> LoginButton
-    OAuth2Section --> ProviderButtons
+    ErrorDisplay --> ProviderButtons
     ProviderButtons --> CognitoBtn
     ProviderButtons --> SAMLBtn
     ProviderButtons --> CustomBtn
-    
+
     classDef header fill:#e8eaf6,stroke:#3f51b5,stroke-width:2px
-    classDef auth fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
-    classDef form fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
     classDef oauth fill:#fff3e0,stroke:#f57c00,stroke-width:2px
-    
+
     class LoginHeader,ErrorDisplay header
-    class TraditionalSection,OAuth2Section auth
-    class UsernameField,PasswordField,LoginButton form
     class ProviderButtons,CognitoBtn,SAMLBtn,CustomBtn oauth
 ```
 
@@ -318,28 +274,15 @@ async def login_form(request: Request, error: str | None = None):
         <img src="/static/logo.png" alt="MCP Gateway Registry" class="logo">
         <h2>MCP Gateway Registry</h2>
     </div>
-    
+
     {% if error %}
         <div class="error-message">{{ error }}</div>
     {% endif %}
-    
-    <!-- Traditional Authentication Form -->
-    <form method="post" action="/login" class="login-form">
-        <div class="form-group">
-            <label for="username">Username:</label>
-            <input type="text" id="username" name="username" required>
-        </div>
-        <div class="form-group">
-            <label for="password">Password:</label>
-            <input type="password" id="password" name="password" required>
-        </div>
-        <button type="submit">Login</button>
-    </form>
-    
+
     <!-- OAuth2 Providers Section -->
     {% if oauth_providers %}
         <div class="oauth2-section">
-            <h3>Or login with:</h3>
+            <h3>Login with:</h3>
             {% for provider in oauth_providers %}
                 <a href="/auth/{{ provider.name }}" class="oauth2-button">
                     {% if provider.icon %}
@@ -901,20 +844,13 @@ def enhanced_auth(session: str = Cookie(alias="mcp_gateway_session")) -> Dict[st
     
     username = session_data['username']
     groups = session_data.get('groups', [])
-    auth_method = session_data.get('auth_method', 'traditional')
-    
+    auth_method = session_data.get('auth_method', 'oauth2')
+
     logger.info(f"Enhanced auth for {username}: groups={groups}, auth_method={auth_method}")
-    
-    # Map groups to scopes based on authentication method
-    if auth_method == 'oauth2':
-        # OAuth2 users get scopes based on Cognito group mappings
-        scopes = map_cognito_groups_to_scopes(groups)
-        logger.info(f"OAuth2 user {username} mapped to scopes: {scopes}")
-    else:
-        # Traditional users get admin privileges by default
-        scopes = ['mcp-servers-unrestricted/read', 'mcp-servers-unrestricted/execute']
-        if not groups:
-            groups = ['mcp-admin']
+
+    # Map groups to scopes based on Cognito/IdP group mappings
+    scopes = map_cognito_groups_to_scopes(groups)
+    logger.info(f"User {username} mapped to scopes: {scopes}")
     
     # Calculate accessible servers from scopes
     accessible_servers = get_user_accessible_servers(scopes)
@@ -930,7 +866,7 @@ def enhanced_auth(session: str = Cookie(alias="mcp_gateway_session")) -> Dict[st
         'groups': groups,
         'scopes': scopes,
         'auth_method': auth_method,
-        'provider': session_data.get('provider', 'local'),
+        'provider': session_data.get('provider', 'oauth2'),
         'accessible_servers': accessible_servers,
         'can_modify_servers': can_modify,
         'is_admin': is_admin
@@ -1170,13 +1106,13 @@ from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
 # Initialize session signer with secret key
 signer = URLSafeTimedSerializer(settings.secret_key)
 
-def create_session_cookie(username: str, auth_method: str = "traditional", 
-                         provider: str = "local") -> str:
+def create_session_cookie(username: str, auth_method: str = "oauth2",
+                         provider: str = "cognito") -> str:
     """Create a secure session cookie for a user"""
     session_data = {
         "username": username,
-        "auth_method": auth_method,  # 'traditional' or 'oauth2'
-        "provider": provider,        # 'local', 'cognito', 'saml', etc.
+        "auth_method": auth_method,  # 'oauth2'
+        "provider": provider,        # 'cognito', 'saml', etc.
         "created_at": datetime.utcnow().isoformat(),
         "groups": [],               # Populated during OAuth2 flow
         "scopes": []                # Calculated from groups
@@ -1200,15 +1136,7 @@ def get_user_session_data(session: str = Cookie(alias="mcp_gateway_session")) ->
         
         if not data.get('username'):
             raise HTTPException(status_code=401, detail="Invalid session data")
-        
-        # Set defaults for traditional auth users
-        if data.get('auth_method') != 'oauth2':
-            data.setdefault('groups', ['mcp-admin'])
-            data.setdefault('scopes', [
-                'mcp-servers-unrestricted/read', 
-                'mcp-servers-unrestricted/execute'
-            ])
-        
+
         return data
         
     except SignatureExpired:
@@ -1277,7 +1205,7 @@ async def get_oauth2_providers():
     except Exception as e:
         logger.warning(f"Failed to fetch OAuth2 providers: {e}")
     
-    return []  # Fallback to traditional auth only
+    return []  # No providers available
 ```
 
 ### Authentication Dependencies System
@@ -1513,10 +1441,6 @@ SECRET_KEY=your-secure-random-secret-key-here
 SESSION_COOKIE_NAME=mcp_gateway_session
 SESSION_MAX_AGE_SECONDS=28800  # 8 hours default
 
-# Traditional Authentication (for local development)
-ADMIN_USER=admin
-ADMIN_PASSWORD=secure-password-here
-
 # External Auth Server Integration
 AUTH_SERVER_URL=http://localhost:8888
 AUTH_SERVER_EXTERNAL_URL=http://localhost:8888  # For browser redirects
@@ -1574,16 +1498,6 @@ else:
 ```
 
 ### Authentication Provider Setup
-
-#### Traditional Authentication Configuration
-
-```python
-# registry/auth/dependencies.py
-def validate_login_credentials(username: str, password: str) -> bool:
-    """Validate traditional login credentials against environment variables"""
-    return (username == settings.admin_user and 
-            password == settings.admin_password)
-```
 
 #### OAuth2 Integration Setup
 
@@ -1649,8 +1563,6 @@ services:
     build: .
     environment:
       - SECRET_KEY=${SECRET_KEY}
-      - ADMIN_USER=${ADMIN_USER}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - AUTH_SERVER_URL=http://auth-server:8888
       - AUTH_SERVER_EXTERNAL_URL=http://localhost:8888
     volumes:
@@ -1673,8 +1585,6 @@ services:
 ```bash
 # .env file template
 SECRET_KEY=generate-a-secure-random-key-here
-ADMIN_USER=admin
-ADMIN_PASSWORD=change-this-secure-password
 
 # Auth Server Configuration
 AUTH_SERVER_URL=http://localhost:8888

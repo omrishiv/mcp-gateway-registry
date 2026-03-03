@@ -113,7 +113,6 @@ class TestInfrastructure:
     def test_settings_fixture(self, test_settings):
         """Test that test_settings fixture works."""
         assert test_settings.secret_key == "test-secret-key-for-testing-only"
-        assert test_settings.admin_user == "testadmin"
 
     def test_sample_fixtures(self, sample_server_info, sample_agent_card):
         """Test sample data fixtures."""

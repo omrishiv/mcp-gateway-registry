@@ -3,7 +3,6 @@ Utility functions for managing scopes.yml file updates when servers are register
 """
 
 import logging
-import os
 from pathlib import Path
 from typing import Any
 
@@ -204,27 +203,23 @@ async def trigger_auth_server_reload() -> bool:
     """
     Trigger the auth server to reload its scopes configuration.
 
+    Uses JWT Bearer token signed with the shared SECRET_KEY for authentication.
+
     Returns:
         True if successful, False otherwise
     """
     try:
-        admin_user = os.environ.get("ADMIN_USER", "admin")
-        admin_password = os.environ.get("ADMIN_PASSWORD")
+        from ..auth.internal import generate_internal_token
 
-        if not admin_password:
-            logger.error("ADMIN_PASSWORD not set, cannot reload auth server")
-            return False
-
-        # Create Basic Auth header
-        import base64
-
-        credentials = f"{admin_user}:{admin_password}"
-        encoded_credentials = base64.b64encode(credentials.encode()).decode()
+        token = generate_internal_token(
+            subject="registry-service",
+            purpose="reload-scopes",
+        )
 
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 "http://auth-server:8888/internal/reload-scopes",
-                headers={"Authorization": f"Basic {encoded_credentials}"},
+                headers={"Authorization": f"Bearer {token}"},
                 timeout=10.0,
             )
 

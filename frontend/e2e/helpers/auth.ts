@@ -1,10 +1,5 @@
 import { Page, expect } from '@playwright/test';
 
-/**
- * Admin credentials for test authentication.
- */
-const ADMIN_USERNAME = 'admin';
-const ADMIN_PASSWORD = 'admin';
 const BASE_URL = 'http://localhost';
 
 /**
@@ -19,7 +14,7 @@ const ADMIN_AUTH_HEADERS: Record<string, string> = {
   'X-User': 'admin',
   'X-Username': 'admin',
   'X-Scopes': 'mcp-registry-admin,mcp-servers-unrestricted/read,mcp-servers-unrestricted/execute,federation/peers',
-  'X-Auth-Method': 'basic',
+  'X-Auth-Method': 'oauth2',
   'X-Client-Id': '',
 };
 
@@ -29,8 +24,8 @@ const ADMIN_AUTH_HEADERS: Record<string, string> = {
 const ADMIN_ME_RESPONSE = {
   username: 'admin',
   email: 'admin@local',
-  auth_method: 'basic',
-  provider: 'local',
+  auth_method: 'oauth2',
+  provider: 'oauth2',
   scopes: ['mcp-registry-admin'],
   groups: ['mcp-registry-admin'],
   can_modify_servers: true,
@@ -149,19 +144,7 @@ export async function loginAsAdmin(page: Page): Promise<void> {
     }
   });
 
-  // Call the login API to set the session cookie.
-  const context = page.context();
-  await context.request.post(`${BASE_URL}/api/auth/login`, {
-    form: {
-      username: ADMIN_USERNAME,
-      password: ADMIN_PASSWORD,
-    },
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-  });
-
-  // Navigate to the app.
+  // Navigate to the app (auth is handled via route interception above).
   await page.goto('/');
   await page.waitForLoadState('networkidle');
 

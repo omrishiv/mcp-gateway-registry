@@ -91,8 +91,7 @@ output "service_discovery_namespace_hosted_zone_id" {
 output "secret_arns" {
   description = "ARNs of MCP Gateway Registry secrets"
   value = {
-    secret_key     = aws_secretsmanager_secret.secret_key.arn
-    admin_password = aws_secretsmanager_secret.admin_password.arn
+    secret_key = aws_secretsmanager_secret.secret_key.arn
   }
   sensitive = false
 }
@@ -125,18 +124,6 @@ output "ecs_security_group_ids" {
   }
   sensitive = false
 }
-
-# Admin credentials output (for initial setup)
-output "admin_credentials" {
-  description = "Admin credentials for initial MCP Gateway Registry setup"
-  value = {
-    username = "admin"
-    # Note: Password is stored in AWS Secrets Manager
-    password_secret_arn = aws_secretsmanager_secret.admin_password.arn
-  }
-  sensitive = false
-}
-
 
 # Monitoring outputs
 output "monitoring_enabled" {

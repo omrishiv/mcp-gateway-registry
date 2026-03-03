@@ -26,7 +26,6 @@ class TestSettingsInstantiation:
     def test_settings_default_values(self, monkeypatch, tmp_path) -> None:
         """Test Settings instantiation with default values."""
         # Arrange - Clear environment variables and disable .env file loading
-        monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
         monkeypatch.delenv("AUTH_SERVER_URL", raising=False)
         monkeypatch.delenv("SECRET_KEY", raising=False)
 
@@ -37,8 +36,6 @@ class TestSettingsInstantiation:
         settings = Settings()
 
         # Assert - Auth settings
-        assert settings.admin_user == "admin"
-        assert settings.admin_password == "password"
         assert settings.session_cookie_name == "mcp_gateway_session"
         assert settings.session_max_age_seconds == 60 * 60 * 8  # 8 hours
         assert settings.session_cookie_secure is False
@@ -130,8 +127,6 @@ class TestSettingsInstantiation:
         # Arrange
         custom_values = {
             "secret_key": "test-secret",
-            "admin_user": "testadmin",
-            "admin_password": "testpass123",
             "session_cookie_name": "test_cookie",
             "session_max_age_seconds": 3600,
             "embeddings_provider": "litellm",
@@ -145,8 +140,6 @@ class TestSettingsInstantiation:
 
         # Assert
         assert settings.secret_key == custom_values["secret_key"]
-        assert settings.admin_user == custom_values["admin_user"]
-        assert settings.admin_password == custom_values["admin_password"]
         assert settings.session_cookie_name == custom_values["session_cookie_name"]
         assert settings.session_max_age_seconds == custom_values["session_max_age_seconds"]
         assert settings.embeddings_provider == custom_values["embeddings_provider"]
@@ -171,8 +164,6 @@ class TestSettingsEnvironmentVariables:
         """Test loading auth settings from environment variables."""
         # Arrange
         monkeypatch.setenv("SECRET_KEY", "env-secret-key")
-        monkeypatch.setenv("ADMIN_USER", "envadmin")
-        monkeypatch.setenv("ADMIN_PASSWORD", "envpass")
         monkeypatch.setenv("SESSION_COOKIE_NAME", "env_session")
 
         # Act
@@ -180,8 +171,6 @@ class TestSettingsEnvironmentVariables:
 
         # Assert
         assert settings.secret_key == "env-secret-key"
-        assert settings.admin_user == "envadmin"
-        assert settings.admin_password == "envpass"
         assert settings.session_cookie_name == "env_session"
 
     def test_settings_load_from_env_embeddings(self, monkeypatch) -> None:
@@ -234,15 +223,15 @@ class TestSettingsEnvironmentVariables:
     def test_settings_env_case_insensitive(self, monkeypatch) -> None:
         """Test that environment variables are case-insensitive."""
         # Arrange - using lowercase env var names
-        monkeypatch.setenv("admin_user", "lowercase_admin")
-        monkeypatch.setenv("ADMIN_PASSWORD", "UPPERCASE_PASS")
+        monkeypatch.setenv("session_cookie_name", "lowercase_session")
+        monkeypatch.setenv("AUTH_SERVER_URL", "http://uppercase:8888")
 
         # Act
         settings = Settings()
 
         # Assert
-        assert settings.admin_user == "lowercase_admin"
-        assert settings.admin_password == "UPPERCASE_PASS"
+        assert settings.session_cookie_name == "lowercase_session"
+        assert settings.auth_server_url == "http://uppercase:8888"
 
     def test_settings_extra_env_ignored(self, monkeypatch) -> None:
         """Test that extra environment variables are ignored."""
@@ -699,13 +688,13 @@ class TestSettingsModelConfig:
         """Test that constructor uses exact field names."""
         # Act
         settings = Settings(
-            admin_user="test_admin",
-            admin_password="test_pass",
+            session_cookie_name="test_cookie",
+            auth_server_url="http://test:8888",
         )
 
         # Assert
-        assert settings.admin_user == "test_admin"
-        assert settings.admin_password == "test_pass"
+        assert settings.session_cookie_name == "test_cookie"
+        assert settings.auth_server_url == "http://test:8888"
 
 
 # =============================================================================
@@ -723,8 +712,6 @@ class TestSettingsWithFixtures:
         # Assert
         assert isinstance(test_settings, Settings)
         assert test_settings.secret_key == "test-secret-key-for-testing-only"
-        assert test_settings.admin_user == "testadmin"
-        assert test_settings.admin_password == "testpass"
 
     def test_test_settings_paths_are_temp(self, test_settings: Settings, tmp_path: Path) -> None:
         """Test that test_settings uses temporary paths."""

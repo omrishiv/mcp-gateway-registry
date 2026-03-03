@@ -2007,8 +2007,7 @@ async def reload_scopes(request: Request, authorization: str | None = Header(Non
     Reload the scopes configuration.
 
     Accepts internal service authentication via self-signed JWT (Bearer token)
-    signed with the shared SECRET_KEY. Also accepts Basic Auth with
-    ADMIN_USER/ADMIN_PASSWORD as a deprecated fallback.
+    signed with the shared SECRET_KEY.
     """
     if not authorization:
         logger.warning("No Authorization header found for reload-scopes request")
@@ -2050,42 +2049,6 @@ async def reload_scopes(request: Request, authorization: str | None = Header(Non
             logger.warning(f"JWT validation failed for reload-scopes: {e}")
             raise HTTPException(status_code=401, detail="Invalid token")
 
-    elif authorization.startswith("Basic "):
-        # Deprecated: Basic Auth with ADMIN_USER/ADMIN_PASSWORD
-        import base64
-
-        try:
-            encoded_credentials = authorization.split(" ")[1]
-            decoded_credentials = base64.b64decode(encoded_credentials).decode("utf-8")
-            username, password = decoded_credentials.split(":", 1)
-        except (IndexError, ValueError, Exception) as e:
-            logger.warning(f"Failed to decode Basic Auth credentials: {e}")
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid authentication format",
-                headers={"WWW-Authenticate": "Basic"},
-            )
-
-        admin_user = os.environ.get("ADMIN_USER", "admin")
-        admin_password = os.environ.get("ADMIN_PASSWORD")
-
-        if not admin_password:
-            logger.error("ADMIN_PASSWORD not set and Basic Auth attempted on reload-scopes")
-            raise HTTPException(status_code=500, detail="Server configuration error")
-
-        if username != admin_user or password != admin_password:
-            logger.warning(f"Failed admin authentication attempt for reload-scopes from {username}")
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid admin credentials",
-                headers={"WWW-Authenticate": "Basic"},
-            )
-
-        caller_identity = username
-        logger.warning(
-            "reload-scopes called with deprecated Basic Auth. "
-            "Migrate to Bearer token using shared SECRET_KEY."
-        )
     else:
         raise HTTPException(status_code=401, detail="Unsupported authentication scheme")
 

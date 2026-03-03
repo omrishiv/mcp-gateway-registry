@@ -44,7 +44,6 @@ interface User {
 
 interface AuthContextType {
   user: User | null;
-  login: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   loading: boolean;
 }
@@ -82,7 +81,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         email: userData.email,
         scopes: userData.scopes || [],
         groups: userData.groups || [],
-        auth_method: userData.auth_method || 'basic',
+        auth_method: userData.auth_method || 'oauth2',
         provider: userData.provider,
         can_modify_servers: userData.can_modify_servers || false,
         is_admin: userData.is_admin || false,
@@ -93,22 +92,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       setUser(null);
     } finally {
       setLoading(false);
-    }
-  };
-
-  const login = async (username: string, password: string) => {
-    const formData = new FormData();
-    formData.append('username', username);
-    formData.append('password', password);
-    
-    const response = await axios.post('/api/auth/login', formData, {
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-    });
-    
-    if (response.status === 200) {
-      await checkAuth();
     }
   };
 
@@ -124,7 +107,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const value = {
     user,
-    login,
     logout,
     loading,
   };

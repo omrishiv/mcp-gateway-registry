@@ -35,8 +35,6 @@ class Settings(BaseSettings):
 
     # Auth settings
     secret_key: str = ""
-    admin_user: str = "admin"
-    admin_password: str = "password"
     session_cookie_name: str = "mcp_gateway_session"
     session_max_age_seconds: int = 60 * 60 * 8  # 8 hours
     session_cookie_secure: bool = False  # Set to True in production with HTTPS

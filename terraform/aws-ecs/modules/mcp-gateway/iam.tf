@@ -15,7 +15,6 @@ resource "aws_iam_policy" "ecs_secrets_access" {
         Resource = concat(
           [
             aws_secretsmanager_secret.secret_key.arn,
-            aws_secretsmanager_secret.admin_password.arn,
             aws_secretsmanager_secret.keycloak_client_secret.arn,
             aws_secretsmanager_secret.keycloak_m2m_client_secret.arn,
             aws_secretsmanager_secret.embeddings_api_key.arn,

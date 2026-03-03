@@ -72,8 +72,6 @@ services:
       - REGISTRY_MODE=${REGISTRY_MODE:-full}
       - GATEWAY_ADDITIONAL_SERVER_NAMES=${GATEWAY_ADDITIONAL_SERVER_NAMES:-}
       - SECRET_KEY=${SECRET_KEY}
-      - ADMIN_USER=${ADMIN_USER:-admin}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - AUTH_SERVER_URL=${AUTH_SERVER_URL}
       - AUTH_SERVER_EXTERNAL_URL=${AUTH_SERVER_EXTERNAL_URL}
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
@@ -220,8 +218,6 @@ services:
     environment:
       - REGISTRY_URL=${REGISTRY_URL}
       - SECRET_KEY=${SECRET_KEY}
-      - ADMIN_USER=${ADMIN_USER:-admin}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
       - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
       - GITHUB_ENABLED=${GITHUB_ENABLED:-false}
@@ -328,8 +324,6 @@ services:
       - HOST=0.0.0.0
       - PORT=8003
       - REGISTRY_BASE_URL=http://registry:7860
-      - REGISTRY_USERNAME=${ADMIN_USER:-admin}
-      - REGISTRY_PASSWORD=${ADMIN_PASSWORD}
     volumes:
       - ${HOME}/mcp-gateway/servers:/app/registry/servers
       - ${HOME}/mcp-gateway/models:/app/registry/models

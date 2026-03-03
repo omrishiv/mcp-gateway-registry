@@ -73,8 +73,6 @@ fi\n\
 \n\
 if [ ! -z "$REGISTRY_BASE_URL" ]; then\n\
     echo "REGISTRY_BASE_URL=$REGISTRY_BASE_URL" > /app/.env\n\
-    echo "REGISTRY_USERNAME=$REGISTRY_USERNAME" >> /app/.env\n\
-    echo "REGISTRY_PASSWORD=$REGISTRY_PASSWORD" >> /app/.env\n\
 fi\n\
 \n\
 # Activate virtual environment and run the server\n\

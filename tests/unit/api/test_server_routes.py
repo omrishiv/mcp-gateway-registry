@@ -6,11 +6,10 @@ Tests the main server routes including:
 - GET /servers - JSON API for servers list
 - POST /toggle/{service_path:path} - Toggle service on/off
 - POST /register - Register new service
-- POST /internal/register - Internal registration with Basic Auth
-- POST /internal/remove - Internal removal with Basic Auth
+- POST /internal/register - Internal registration with JWT Bearer Auth
+- POST /internal/remove - Internal removal with JWT Bearer Auth
 """
 
-import base64
 import logging
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -18,6 +17,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.templating import Jinja2Templates
 from fastapi.testclient import TestClient
+
+from registry.auth.internal import generate_internal_token
 
 logger = logging.getLogger(__name__)
 
@@ -791,19 +792,19 @@ class TestInternalRegister:
         mock_nginx_service,
         mock_health_service,
     ):
-        """Test successful internal registration with valid Basic Auth."""
+        """Test successful internal registration with valid JWT Bearer token."""
         # Arrange - register_server returns a dict now
         mock_server_service.register_server.return_value = {
             "success": True,
             "message": "Server registered successfully",
             "is_new_version": False,
         }
-        credentials = base64.b64encode(b"admin:testpass").decode("utf-8")
 
         with (
-            patch.dict("os.environ", {"ADMIN_USER": "admin", "ADMIN_PASSWORD": "testpass"}),
+            patch.dict("os.environ", {"SECRET_KEY": "testpass"}),
             patch("registry.utils.scopes_manager.update_server_scopes", new_callable=AsyncMock),
         ):
+            token = generate_internal_token(subject="test-service", purpose="test")
             # Act
             response = test_client_no_auth.post(
                 "/api/internal/register",
@@ -815,7 +816,7 @@ class TestInternalRegister:
                     "tags": "internal",
                     "num_tools": 3,
                 },
-                headers={"Authorization": f"Basic {credentials}"},
+                headers={"Authorization": f"Bearer {token}"},
             )
 
             # Assert
@@ -842,12 +843,13 @@ class TestInternalRegister:
         assert response.status_code == 401
         assert "authorization" in response.json()["detail"].lower()
 
-    def test_internal_register_invalid_credentials(self, test_client_no_auth, mock_server_service):
-        """Test internal registration fails with invalid credentials."""
-        # Arrange
-        credentials = base64.b64encode(b"admin:wrongpass").decode("utf-8")
+    def test_internal_register_invalid_token(self, test_client_no_auth, mock_server_service):
+        """Test internal registration fails with a token signed by a different key."""
+        # Arrange - generate token with a different key than what the server expects
+        with patch.dict("os.environ", {"SECRET_KEY": "wrong-secret-key"}):
+            token = generate_internal_token(subject="test-service", purpose="test")
 
-        with patch.dict("os.environ", {"ADMIN_USER": "admin", "ADMIN_PASSWORD": "testpass"}):
+        with patch.dict("os.environ", {"SECRET_KEY": "correct-secret-key"}):
             # Act
             response = test_client_no_auth.post(
                 "/api/internal/register",
@@ -857,20 +859,21 @@ class TestInternalRegister:
                     "path": "/test",
                     "proxy_pass_url": "http://localhost:9000",
                 },
-                headers={"Authorization": f"Basic {credentials}"},
+                headers={"Authorization": f"Bearer {token}"},
             )
 
             # Assert
             assert response.status_code == 401
-            assert "Invalid admin credentials" in response.json()["detail"]
+            assert "Invalid token" in response.json()["detail"]
 
-    def test_internal_register_admin_password_not_set(self, test_client_no_auth):
-        """Test internal registration fails when ADMIN_PASSWORD not set."""
-        # Arrange
-        credentials = base64.b64encode(b"admin:testpass").decode("utf-8")
+    def test_internal_register_secret_key_not_set(self, test_client_no_auth):
+        """Test internal registration fails when SECRET_KEY is not set on server."""
+        # Arrange - generate a token with some key, but the server won't have SECRET_KEY set
+        with patch.dict("os.environ", {"SECRET_KEY": "some-key"}):
+            token = generate_internal_token(subject="test-service", purpose="test")
 
-        with patch.dict("os.environ", {"ADMIN_USER": "admin"}, clear=True):
-            # Remove ADMIN_PASSWORD from env
+        # Ensure SECRET_KEY is not set in the server's environment
+        with patch.dict("os.environ", {}, clear=True):
             # Act
             response = test_client_no_auth.post(
                 "/api/internal/register",
@@ -880,7 +883,7 @@ class TestInternalRegister:
                     "path": "/test",
                     "proxy_pass_url": "http://localhost:9000",
                 },
-                headers={"Authorization": f"Basic {credentials}"},
+                headers={"Authorization": f"Bearer {token}"},
             )
 
             # Assert
@@ -894,12 +897,12 @@ class TestInternalRegister:
         # Arrange
         mock_server_service.get_server_info.return_value = sample_server_info
         mock_server_service.update_server.return_value = True
-        credentials = base64.b64encode(b"admin:testpass").decode("utf-8")
 
         with (
-            patch.dict("os.environ", {"ADMIN_USER": "admin", "ADMIN_PASSWORD": "testpass"}),
+            patch.dict("os.environ", {"SECRET_KEY": "testpass"}),
             patch("registry.utils.scopes_manager.update_server_scopes", new_callable=AsyncMock),
         ):
+            token = generate_internal_token(subject="test-service", purpose="test")
             # Act
             response = test_client_no_auth.post(
                 "/api/internal/register",
@@ -910,7 +913,7 @@ class TestInternalRegister:
                     "proxy_pass_url": "http://localhost:9001",
                     "overwrite": "true",
                 },
-                headers={"Authorization": f"Basic {credentials}"},
+                headers={"Authorization": f"Bearer {token}"},
             )
 
             # Assert
@@ -923,9 +926,9 @@ class TestInternalRegister:
         """Test internal registration fails without overwrite flag for existing service."""
         # Arrange
         mock_server_service.get_server_info.return_value = sample_server_info
-        credentials = base64.b64encode(b"admin:testpass").decode("utf-8")
 
-        with patch.dict("os.environ", {"ADMIN_USER": "admin", "ADMIN_PASSWORD": "testpass"}):
+        with patch.dict("os.environ", {"SECRET_KEY": "testpass"}):
+            token = generate_internal_token(subject="test-service", purpose="test")
             # Act
             response = test_client_no_auth.post(
                 "/api/internal/register",
@@ -936,7 +939,7 @@ class TestInternalRegister:
                     "proxy_pass_url": "http://localhost:9000",
                     "overwrite": "false",
                 },
-                headers={"Authorization": f"Basic {credentials}"},
+                headers={"Authorization": f"Bearer {token}"},
             )
 
             # Assert
@@ -955,12 +958,12 @@ class TestInternalRegister:
         }
         mock_server_service.toggle_service.return_value = True
         mock_server_service.is_service_enabled.return_value = True
-        credentials = base64.b64encode(b"admin:testpass").decode("utf-8")
 
         with (
-            patch.dict("os.environ", {"ADMIN_USER": "admin", "ADMIN_PASSWORD": "testpass"}),
+            patch.dict("os.environ", {"SECRET_KEY": "testpass"}),
             patch("registry.utils.scopes_manager.update_server_scopes", new_callable=AsyncMock),
         ):
+            token = generate_internal_token(subject="test-service", purpose="test")
             # Act
             response = test_client_no_auth.post(
                 "/api/internal/register",
@@ -970,7 +973,7 @@ class TestInternalRegister:
                     "path": "/auto-enabled",
                     "proxy_pass_url": "http://localhost:9000",
                 },
-                headers={"Authorization": f"Basic {credentials}"},
+                headers={"Authorization": f"Bearer {token}"},
             )
 
             # Assert
@@ -996,14 +999,14 @@ class TestInternalRemove:
         # Arrange
         mock_server_service.get_server_info.return_value = sample_server_info
         mock_server_service.remove_server.return_value = True
-        credentials = base64.b64encode(b"admin:testpass").decode("utf-8")
 
-        with patch.dict("os.environ", {"ADMIN_USER": "admin", "ADMIN_PASSWORD": "testpass"}):
+        with patch.dict("os.environ", {"SECRET_KEY": "testpass"}):
+            token = generate_internal_token(subject="test-service", purpose="test")
             # Act
             response = test_client_no_auth.post(
                 "/api/internal/remove",
                 data={"service_path": "/test-server"},
-                headers={"Authorization": f"Basic {credentials}"},
+                headers={"Authorization": f"Bearer {token}"},
             )
 
             # Assert
@@ -1014,14 +1017,14 @@ class TestInternalRemove:
         """Test internal removal fails when service not found."""
         # Arrange
         mock_server_service.get_server_info.return_value = None
-        credentials = base64.b64encode(b"admin:testpass").decode("utf-8")
 
-        with patch.dict("os.environ", {"ADMIN_USER": "admin", "ADMIN_PASSWORD": "testpass"}):
+        with patch.dict("os.environ", {"SECRET_KEY": "testpass"}):
+            token = generate_internal_token(subject="test-service", purpose="test")
             # Act
             response = test_client_no_auth.post(
                 "/api/internal/remove",
                 data={"service_path": "/nonexistent"},
-                headers={"Authorization": f"Basic {credentials}"},
+                headers={"Authorization": f"Bearer {token}"},
             )
 
             # Assert
@@ -1044,14 +1047,14 @@ class TestInternalRemove:
         # Arrange
         mock_server_service.get_server_info.return_value = sample_server_info
         mock_server_service.remove_server.return_value = True
-        credentials = base64.b64encode(b"admin:testpass").decode("utf-8")
 
-        with patch.dict("os.environ", {"ADMIN_USER": "admin", "ADMIN_PASSWORD": "testpass"}):
+        with patch.dict("os.environ", {"SECRET_KEY": "testpass"}):
+            token = generate_internal_token(subject="test-service", purpose="test")
             # Act
             response = test_client_no_auth.post(
                 "/api/internal/remove",
                 data={"service_path": "test-server"},  # Missing leading slash
-                headers={"Authorization": f"Basic {credentials}"},
+                headers={"Authorization": f"Bearer {token}"},
             )
 
             # Assert

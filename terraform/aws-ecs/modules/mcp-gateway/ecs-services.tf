@@ -645,10 +645,6 @@ module "ecs_service_registry" {
             valueFrom = aws_secretsmanager_secret.secret_key.arn
           },
           {
-            name      = "ADMIN_PASSWORD"
-            valueFrom = aws_secretsmanager_secret.admin_password.arn
-          },
-          {
             name      = "KEYCLOAK_CLIENT_SECRET"
             valueFrom = "${aws_secretsmanager_secret.keycloak_client_secret.arn}:client_secret::"
           },
@@ -1056,12 +1052,7 @@ module "ecs_service_mcpgw" {
         }
       ]
 
-      secrets = [
-        {
-          name      = "REGISTRY_PASSWORD"
-          valueFrom = aws_secretsmanager_secret.admin_password.arn
-        }
-      ]
+      secrets = []
 
       mountPoints = [
         {

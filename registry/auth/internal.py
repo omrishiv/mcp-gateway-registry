@@ -3,8 +3,7 @@ Internal service-to-service authentication using self-signed JWTs.
 
 This module provides utilities for authenticating internal API calls
 between services (e.g., mcpgw -> registry, registry -> auth-server)
-using JWTs signed with the shared SECRET_KEY instead of hardcoded
-admin credentials.
+using JWTs signed with the shared SECRET_KEY.
 """
 
 import logging
@@ -68,15 +67,13 @@ async def validate_internal_auth(request: Request) -> str:
     """
     FastAPI dependency that validates internal service authentication.
 
-    Accepts either:
-    - Bearer JWT signed with the shared SECRET_KEY (preferred)
-    - Basic Auth with ADMIN_USER/ADMIN_PASSWORD (deprecated fallback)
+    Accepts Bearer JWT signed with the shared SECRET_KEY.
 
     Args:
         request: The FastAPI request object
 
     Returns:
-        Caller identity string (e.g., 'registry-service' or admin username)
+        Caller identity string (e.g., 'registry-service')
 
     Raises:
         HTTPException: If authentication fails
@@ -93,12 +90,9 @@ async def validate_internal_auth(request: Request) -> str:
     if auth_header.startswith("Bearer "):
         return _validate_bearer_token(auth_header)
 
-    if auth_header.startswith("Basic "):
-        return _validate_basic_auth_deprecated(auth_header)
-
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Unsupported authentication scheme",
+        detail="Unsupported authentication scheme. Use Bearer token.",
     )
 
 
@@ -150,45 +144,3 @@ def _validate_bearer_token(auth_header: str) -> str:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token",
         )
-
-
-def _validate_basic_auth_deprecated(auth_header: str) -> str:
-    """Validate Basic Auth credentials (deprecated, for backward compatibility)."""
-    import base64
-
-    logger.warning(
-        "Internal API called with deprecated Basic Auth. "
-        "Migrate to Bearer token using shared SECRET_KEY."
-    )
-
-    try:
-        encoded_credentials = auth_header.split(" ")[1]
-        decoded_credentials = base64.b64decode(encoded_credentials).decode("utf-8")
-        username, password = decoded_credentials.split(":", 1)
-    except (IndexError, ValueError, Exception) as e:
-        logger.warning(f"Failed to decode Basic Auth credentials: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication format",
-            headers={"WWW-Authenticate": "Basic"},
-        )
-
-    admin_user = os.environ.get("ADMIN_USER", "admin")
-    admin_password = os.environ.get("ADMIN_PASSWORD")
-
-    if not admin_password:
-        logger.error("ADMIN_PASSWORD not set and Basic Auth attempted on internal endpoint")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server configuration error",
-        )
-
-    if username != admin_user or password != admin_password:
-        logger.warning(f"Failed admin authentication attempt from {username}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid admin credentials",
-            headers={"WWW-Authenticate": "Basic"},
-        )
-
-    return username

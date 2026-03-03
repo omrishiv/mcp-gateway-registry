@@ -7,15 +7,6 @@ resource "random_password" "secret_key" {
   special = true
 }
 
-resource "random_password" "admin_password" {
-  length      = 32
-  special     = true
-  min_lower   = 1
-  min_upper   = 1
-  min_numeric = 1
-  min_special = 1
-}
-
 # Core application secrets
 
 resource "aws_secretsmanager_secret" "secret_key" {
@@ -28,18 +19,6 @@ resource "aws_secretsmanager_secret" "secret_key" {
 resource "aws_secretsmanager_secret_version" "secret_key" {
   secret_id     = aws_secretsmanager_secret.secret_key.id
   secret_string = random_password.secret_key.result
-}
-
-resource "aws_secretsmanager_secret" "admin_password" {
-  name_prefix             = "${local.name_prefix}-admin-password-"
-  description             = "Admin password for MCP Gateway Registry"
-  recovery_window_in_days = 0
-  tags                    = local.common_tags
-}
-
-resource "aws_secretsmanager_secret_version" "admin_password" {
-  secret_id     = aws_secretsmanager_secret.admin_password.id
-  secret_string = random_password.admin_password.result
 }
 
 # Keycloak client secrets (created with placeholder, updated by init-keycloak.sh)

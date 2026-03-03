@@ -243,8 +243,6 @@ def auth_env_vars(monkeypatch) -> dict[str, str]:
     """
     env_vars = {
         "SECRET_KEY": "test-secret-key-for-auth-testing-do-not-use-in-prod",
-        "ADMIN_USER": "testadmin",
-        "ADMIN_PASSWORD": "testadminpass",
         "AUTH_PROVIDER": "cognito",
         "COGNITO_USER_POOL_ID": "us-east-1_TEST12345",
         "COGNITO_CLIENT_ID": "test-client-id",

@@ -234,8 +234,6 @@ def test_settings(tmp_path: Path) -> Settings:
     # Override settings with test values
     settings = Settings(
         secret_key="test-secret-key-for-testing-only",
-        admin_user="testadmin",
-        admin_password="testpass",
         session_cookie_name="test_session",
         auth_server_url="http://localhost:8888",
         embeddings_provider="sentence-transformers",

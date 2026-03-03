@@ -20,10 +20,6 @@ class TestConfigExport:
         """Verify _export_as_env(include_sensitive=False) masks sensitive values."""
         output = _export_as_env(include_sensitive=False)
         assert "SENSITIVE_VALUE_MASKED" in output
-        # Should not contain raw password values from settings
-        from registry.core.config import settings
-
-        raw_password = settings.admin_password
         # Sensitive fields should be commented out, not exposed
         assert "# SECRET_KEY=<SENSITIVE_VALUE_MASKED>" in output
 

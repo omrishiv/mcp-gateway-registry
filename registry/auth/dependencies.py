@@ -83,11 +83,16 @@ def get_user_session_data(
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session data"
             )
 
-        # Set defaults for traditional auth users
+        # All sessions must be OAuth2 - reject legacy "traditional" sessions
         if data.get("auth_method") != "oauth2":
-            # Traditional users get admin privileges via registry-admins group
-            data.setdefault("groups", ["registry-admins"])
-            data.setdefault("scopes", ["registry-admins"])
+            logger.warning(
+                f"Rejecting non-OAuth2 session for user {data.get('username')} "
+                f"(auth_method={data.get('auth_method')}). Please re-login via OAuth2."
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Session expired. Please login again via OAuth2.",
+            )
 
         logger.debug(f"Session data extracted for user: {data.get('username')}")
         return data
@@ -431,29 +436,17 @@ async def enhanced_auth(
 
     username = session_data["username"]
     groups = session_data.get("groups", [])
-    auth_method = session_data.get("auth_method", "traditional")
+    auth_method = session_data.get("auth_method", "oauth2")
 
     logger.info(f"Enhanced auth debug for {username}: groups={groups}, auth_method={auth_method}")
 
-    # Map groups to scopes for OAuth2 users
-    if auth_method == "oauth2":
-        scopes = await map_cognito_groups_to_scopes(groups)
-        logger.info(f"OAuth2 user {username} with groups {groups} mapped to scopes: {scopes}")
-        # If OAuth2 user has no groups, they should get minimal permissions, not admin
-        if not groups:
-            logger.warning(
-                f"OAuth2 user {username} has no groups! This user may not have proper group assignments in Cognito."
-            )
-    else:
-        # Traditional users dynamically map to admin via registry-admins group
-        if not groups:
-            groups = ["registry-admins"]
-        # Map traditional admin groups to scopes dynamically
-        scopes = await map_cognito_groups_to_scopes(groups)
-        if not scopes:
-            # Fallback for traditional users if no mapping exists
-            scopes = ["registry-admins"]
-        logger.info(f"Traditional user {username} with groups {groups} mapped to scopes: {scopes}")
+    # Map groups to scopes via OAuth2 group-to-scope mapping
+    scopes = await map_cognito_groups_to_scopes(groups)
+    logger.info(f"OAuth2 user {username} with groups {groups} mapped to scopes: {scopes}")
+    if not groups:
+        logger.warning(
+            f"OAuth2 user {username} has no groups! This user may not have proper group assignments."
+        )
 
     # Get UI permissions
     ui_permissions = await get_ui_permissions_for_user(scopes)
@@ -662,24 +655,11 @@ async def nginx_proxied_auth(
 
 
 def create_session_cookie(
-    username: str, auth_method: str = "traditional", provider: str = "local"
+    username: str, auth_method: str = "oauth2", provider: str = "local"
 ) -> str:
     """Create a session cookie for a user."""
     session_data = {"username": username, "auth_method": auth_method, "provider": provider}
-
-    # For traditional (local) auth users, include groups and scopes in the session cookie
-    # This ensures the auth server can validate access without needing to query external systems
-    # Use registry-admins group which has wildcard access to all servers and agents
-    if auth_method == "traditional":
-        session_data["groups"] = ["registry-admins"]
-        session_data["scopes"] = ["registry-admins"]
-
     return signer.dumps(session_data)
-
-
-def validate_login_credentials(username: str, password: str) -> bool:
-    """Validate traditional login credentials."""
-    return username == settings.admin_user and password == settings.admin_password
 
 
 def ui_permission_required(permission: str, service_name: str = None):

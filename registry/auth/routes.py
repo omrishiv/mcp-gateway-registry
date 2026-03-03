@@ -3,13 +3,11 @@ import urllib.parse
 from typing import Annotated
 
 import httpx
-from fastapi import APIRouter, Cookie, Form, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi import APIRouter, Cookie, Request, status
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from ..audit import set_audit_action
 from ..core.config import settings
-from .dependencies import create_session_cookie, validate_login_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -132,74 +130,6 @@ async def oauth2_callback(request: Request, error: str = None, details: str = No
     except Exception as e:
         logger.error(f"Error in OAuth2 callback: {e}")
         return RedirectResponse(url="/login?error=oauth2_callback_error", status_code=302)
-
-
-@router.post("/login")
-async def login_submit(
-    request: Request, username: Annotated[str, Form()], password: Annotated[str, Form()]
-):
-    """Handle login form submission - supports both traditional and API calls"""
-    logger.info(f"Login attempt for username: {username}")
-
-    # Check if this is an API call (React) or traditional form submission
-    accept_header = request.headers.get("accept", "")
-    is_api_call = "application/json" in accept_header
-
-    if validate_login_credentials(username, password):
-        # Set audit action for successful login
-        set_audit_action(
-            request, "login", "auth", description=f"User {username} logged in successfully"
-        )
-
-        session_data = create_session_cookie(username)
-
-        if is_api_call:
-            # API response for React
-            response = JSONResponse(content={"success": True, "message": "Login successful"})
-        else:
-            # Traditional redirect response
-            response = RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
-
-        # Security Note: This implementation uses domain cookies for single-tenant deployments
-        # where cross-subdomain authentication is required (e.g., auth.domain.com and registry.domain.com).
-        # For multi-tenant SaaS deployments with tenant-based subdomains, do NOT use domain cookies
-        # as they would allow cross-tenant session sharing. Consider alternative authentication methods
-        # such as token-based auth or separate auth domains per tenant.
-        cookie_params = {
-            "key": settings.session_cookie_name,
-            "value": session_data,
-            "max_age": settings.session_max_age_seconds,
-            "httponly": True,  # Prevents JavaScript access (XSS protection)
-            "samesite": "lax",  # CSRF protection
-            "secure": settings.session_cookie_secure,  # Only transmit over HTTPS when True
-            "path": "/",  # Explicit path for clarity
-        }
-
-        # Add domain attribute if configured for cross-subdomain cookie sharing
-        if settings.session_cookie_domain:
-            cookie_params["domain"] = settings.session_cookie_domain
-
-        response.set_cookie(**cookie_params)
-        logger.info(f"User '{username}' logged in successfully.")
-        return response
-    else:
-        # Set audit action for failed login
-        set_audit_action(
-            request, "login_failed", "auth", description=f"Login failed for user {username}"
-        )
-        logger.info(f"Login failed for user '{username}'.")
-
-        if is_api_call:
-            # API error response for React
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password"
-            )
-        else:
-            # Traditional redirect with error
-            return RedirectResponse(
-                url="/login?error=Invalid+username+or+password",
-                status_code=status.HTTP_303_SEE_OTHER,
-            )
 
 
 async def logout_handler(

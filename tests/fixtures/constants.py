@@ -29,7 +29,6 @@ TEST_AGENT_URL_2: str = "http://localhost:9000/agent-2"
 TEST_USERNAME: str = "testuser"
 TEST_USER_EMAIL: str = "testuser@example.com"
 TEST_ADMIN_USERNAME: str = "admin"
-TEST_ADMIN_PASSWORD: str = "adminpass"
 
 # Test Authentication
 TEST_JWT_SECRET: str = "test-secret-key-for-jwt-tokens"

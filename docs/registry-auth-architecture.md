@@ -14,9 +14,8 @@ This document provides comprehensive technical documentation for the MCP Gateway
 
 ## Overview
 
-The MCP Gateway Registry implements a sophisticated dual-authentication system that supports:
+The MCP Gateway Registry implements an OAuth2-based authentication system that supports:
 
-- **Traditional username/password authentication** for local development and basic setups
 - **OAuth2/SAML integration** with enterprise identity providers (Cognito, etc.)
 - **Session-based authentication** using secure HTTP cookies
 - **Role-based access control** with groups and scopes
@@ -24,12 +23,11 @@ The MCP Gateway Registry implements a sophisticated dual-authentication system t
 
 ### Key Features
 
-- 🔐 **Dual Authentication Methods**: Traditional + OAuth2
-- 🎯 **Role-Based Access Control**: Admin, User, and custom roles
-- 🏢 **Enterprise Integration**: Cognito, SAML, and other IdPs
-- 🔒 **Secure Session Management**: Encrypted cookies with expiration
-- 🎛️ **Permission-Based UI**: Dynamic UI based on user permissions
-- 📊 **Audit Trail**: Comprehensive logging of authentication events
+- **Role-Based Access Control**: Admin, User, and custom roles
+- **Enterprise Integration**: Cognito, SAML, and other IdPs
+- **Secure Session Management**: Encrypted cookies with expiration
+- **Permission-Based UI**: Dynamic UI based on user permissions
+- **Audit Trail**: Comprehensive logging of authentication events
 
 ## Authentication Architecture
 
@@ -58,7 +56,6 @@ graph TB
     subgraph "External Systems"
         AuthServer[Auth Server<br/>:8888]
         Cognito[Amazon Cognito]
-        LocalAuth[Local User DB]
     end
     
     UI --> AuthRoutes
@@ -72,7 +69,6 @@ graph TB
     
     AuthRoutes -.-> AuthServer
     AuthServer -.-> Cognito
-    AuthRoutes -.-> LocalAuth
     
     classDef browser fill:#e3f2fd,stroke:#1976d2
     classDef registry fill:#f3e5f5,stroke:#7b1fa2
@@ -82,7 +78,7 @@ graph TB
     class UI,LoginForm browser
     class AuthRoutes,AuthDeps,ServerRoutes,Templates registry
     class Cookies,SessionSigner,Sessions session
-    class AuthServer,Cognito,LocalAuth external
+    class AuthServer,Cognito external
 ```
 
 ### Authentication Flow Architecture
@@ -103,29 +99,20 @@ sequenceDiagram
     U->>R: GET /login
     R->>AS: GET /oauth2/providers
     AS->>R: Available OAuth2 providers
-    R->>U: Login form with OAuth options
-    
-    Note over U,IdP: 3a. Traditional Authentication
-    alt Traditional Login
-        U->>R: POST /login (username/password)
-        R->>R: validate_login_credentials()
-        R->>R: create_session_cookie()
-        R->>U: Set mcp_gateway_session cookie + redirect
-    
-    Note over U,IdP: 3b. OAuth2 Authentication
-    else OAuth2 Login
-        U->>R: GET /auth/{provider}
-        R->>U: 302 Redirect to Auth Server
-        U->>AS: OAuth2 flow initiation
-        AS->>IdP: OAuth2 PKCE flow
-        IdP->>AS: Auth code + user info
-        AS->>AS: Map groups to scopes
-        AS->>AS: Create session cookie
-        AS->>U: Set mcp_gateway_session cookie
-        U->>R: GET /auth/callback
-        R->>R: Validate session cookie
-        R->>U: 302 Redirect to /
-    end
+    R->>U: Login form with OAuth2 options
+
+    Note over U,IdP: 3. OAuth2 Authentication
+    U->>R: GET /auth/{provider}
+    R->>U: 302 Redirect to Auth Server
+    U->>AS: OAuth2 flow initiation
+    AS->>IdP: OAuth2 PKCE flow
+    IdP->>AS: Auth code + user info
+    AS->>AS: Map groups to scopes
+    AS->>AS: Create session cookie
+    AS->>U: Set mcp_gateway_session cookie
+    U->>R: GET /auth/callback
+    R->>R: Validate session cookie
+    R->>U: 302 Redirect to /
     
     Note over U,IdP: 4. Authenticated Access
     U->>R: GET / (with session cookie)
@@ -148,41 +135,23 @@ graph LR
     subgraph "Login Page (/login)"
         LoginHeader[Header with Logo]
         ErrorDisplay[Error Message Display]
-        
-        subgraph "Authentication Options"
-            TraditionalForm[Traditional Login Form]
-            OAuth2Section[OAuth2 Provider Buttons]
-        end
-        
-        subgraph "Traditional Form"
-            UsernameField[Username Input]
-            PasswordField[Password Input]
-            LoginButton[Login Button]
-        end
-        
+
         subgraph "OAuth2 Providers"
             CognitoBtn[Amazon Cognito Button]
             SAMLBtn[SAML Provider Button]
             CustomBtn[Custom Provider Button]
         end
     end
-    
+
     LoginHeader --> ErrorDisplay
-    ErrorDisplay --> TraditionalForm
-    ErrorDisplay --> OAuth2Section
-    TraditionalForm --> UsernameField
-    TraditionalForm --> PasswordField
-    TraditionalForm --> LoginButton
-    OAuth2Section --> CognitoBtn
-    OAuth2Section --> SAMLBtn
-    OAuth2Section --> CustomBtn
-    
-    classDef form fill:#e3f2fd,stroke:#1976d2
+    ErrorDisplay --> CognitoBtn
+    ErrorDisplay --> SAMLBtn
+    ErrorDisplay --> CustomBtn
+
     classDef oauth fill:#fff3e0,stroke:#f57c00
     classDef input fill:#f3e5f5,stroke:#7b1fa2
-    
-    class TraditionalForm,UsernameField,PasswordField,LoginButton form
-    class OAuth2Section,CognitoBtn,SAMLBtn,CustomBtn oauth
+
+    class CognitoBtn,SAMLBtn,CustomBtn oauth
     class LoginHeader,ErrorDisplay input
 ```
 
@@ -455,16 +424,10 @@ def enhanced_auth(session: str = None) -> Dict[str, Any]:
     
     username = session_data['username']
     groups = session_data.get('groups', [])
-    auth_method = session_data.get('auth_method', 'traditional')
-    
-    # Map groups to scopes
-    if auth_method == 'oauth2':
-        scopes = map_cognito_groups_to_scopes(groups)
-    else:
-        # Traditional users get admin scopes
-        scopes = ['mcp-servers-unrestricted/read', 'mcp-servers-unrestricted/execute']
-        if not groups:
-            groups = ['mcp-admin']
+    auth_method = session_data.get('auth_method', 'oauth2')
+
+    # Map groups to scopes based on IdP group mappings
+    scopes = map_cognito_groups_to_scopes(groups)
     
     # Calculate permissions
     accessible_servers = get_user_accessible_servers(scopes)
@@ -516,8 +479,8 @@ from itsdangerous import URLSafeTimedSerializer
 
 signer = URLSafeTimedSerializer(settings.secret_key)
 
-def create_session_cookie(username: str, auth_method: str = "traditional", 
-                         provider: str = "local") -> str:
+def create_session_cookie(username: str, auth_method: str = "oauth2",
+                         provider: str = "cognito") -> str:
     """Create a session cookie for a user"""
     session_data = {
         "username": username,
@@ -677,10 +640,6 @@ SECRET_KEY=your-secure-secret-key-here
 SESSION_COOKIE_NAME=mcp_gateway_session
 SESSION_MAX_AGE_SECONDS=28800  # 8 hours
 
-# Traditional authentication
-ADMIN_USER=admin
-ADMIN_PASSWORD=secure-password
-
 # OAuth2/External auth server integration
 AUTH_SERVER_URL=http://localhost:8888
 AUTH_SERVER_EXTERNAL_URL=http://localhost:8888
@@ -714,14 +673,6 @@ def templates_dir(self) -> Path:
 
 ### Authentication Provider Configuration
 
-#### Traditional Authentication
-```python
-# registry/auth/dependencies.py
-def validate_login_credentials(username: str, password: str) -> bool:
-    """Validate traditional login credentials"""
-    return username == settings.admin_user and password == settings.admin_password
-```
-
 #### OAuth2 Provider Setup
 ```python
 # External auth server integration
@@ -731,7 +682,7 @@ async def get_oauth2_providers():
         response = await client.get(f"{settings.auth_server_url}/oauth2/providers")
         return response.json().get("providers", [])
     except Exception:
-        return []  # Fallback to traditional auth only
+        return []  # No providers available
 ```
 
 ## Troubleshooting

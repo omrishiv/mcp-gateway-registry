@@ -65,11 +65,9 @@ Before using the Registry Management API, ensure:
    docker compose ps
    ```
 
-2. **Authentication is configured**: You need admin credentials
+2. **Authentication is configured**: You need OAuth2/JWT access
    ```bash
-   # Admin credentials from .env file
-   export ADMIN_USER=admin
-   export ADMIN_PASSWORD=your_admin_password
+   # Obtain an access token via OAuth2 flow or API authentication
    ```
 
 3. **Python environment**: Use `uv` for package management
@@ -87,9 +85,7 @@ from api.registry_client import RegistryClient
 
 # Initialize client
 client = RegistryClient(
-    base_url="http://localhost",
-    admin_user="admin",
-    admin_password="your_password"
+    base_url="http://localhost"
 )
 
 # Add a server
@@ -113,10 +109,10 @@ client.delete_server("my-server")
 ### Using the REST API (HTTP)
 
 ```bash
-# Get admin access token
-TOKEN=$(curl -X POST http://localhost/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"your_password"}' | jq -r '.access_token')
+# Get access token via OAuth2 client credentials flow
+TOKEN=$(curl -X POST http://localhost/api/auth/token \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d 'grant_type=client_credentials&client_id=your_client_id&client_secret=your_client_secret' | jq -r '.access_token')
 
 # Add a server
 curl -X POST http://localhost/api/management/servers \
@@ -149,9 +145,7 @@ curl -X DELETE http://localhost/api/management/servers/my-server \
 from api.registry_client import RegistryClient
 
 client = RegistryClient(
-    base_url="http://localhost",
-    admin_user="admin",
-    admin_password="your_password"
+    base_url="http://localhost"
 )
 
 # Add server with all options
@@ -384,9 +378,7 @@ from api.registry_client import RegistryClient
 
 # Initialize client
 client = RegistryClient(
-    base_url="http://localhost",
-    admin_user="admin",
-    admin_password="your_password"
+    base_url="http://localhost"
 )
 
 # Step 1: Create a new access group
@@ -494,7 +486,7 @@ print("\nWorkflow complete!")
 ```
 ERROR: Authentication failed: 401 Unauthorized
 ```
-**Solution**: Verify admin credentials in `.env` file
+**Solution**: Verify your OAuth2 credentials or JWT token are valid and not expired
 
 #### Server Already Exists
 ```
@@ -523,7 +515,7 @@ logging.basicConfig(level=logging.DEBUG)
 
 # Test connectivity
 from api.registry_client import RegistryClient
-client = RegistryClient(base_url="http://localhost", admin_user="admin", admin_password="password")
+client = RegistryClient(base_url="http://localhost")
 
 # This will show detailed request/response logs
 servers = client.list_servers()
@@ -555,9 +547,7 @@ import sys
 def deploy_server(config_file):
     """Deploy server from configuration file"""
     client = RegistryClient(
-        base_url="http://localhost",
-        admin_user="admin",
-        admin_password="password"
+        base_url="http://localhost"
     )
 
     try:

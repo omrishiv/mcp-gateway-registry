@@ -51,21 +51,10 @@ if [ -z "$SECRET_KEY" ]; then
     SECRET_KEY=$(python -c 'import secrets; print(secrets.token_hex(32))')
 fi
 
-ADMIN_USER_VALUE=${ADMIN_USER:-admin}
-
-# Check if ADMIN_PASSWORD is set
-if [ -z "$ADMIN_PASSWORD" ]; then
-    echo "ERROR: ADMIN_PASSWORD environment variable is not set."
-    echo "Please set ADMIN_PASSWORD to a secure value before running the container."
-    exit 1
-fi
-
 # Create .env file for registry
 REGISTRY_ENV_FILE="/app/registry/.env"
 echo "Creating Registry .env file..."
 echo "SECRET_KEY=${SECRET_KEY}" > "$REGISTRY_ENV_FILE"
-echo "ADMIN_USER=${ADMIN_USER_VALUE}" >> "$REGISTRY_ENV_FILE"
-echo "ADMIN_PASSWORD=${ADMIN_PASSWORD}" >> "$REGISTRY_ENV_FILE"
 echo "Registry .env created."
 
 # DocumentDB CA Bundle already downloaded at the beginning of this script

@@ -31,14 +31,12 @@ from registry.auth.dependencies import (
     get_ui_permissions_for_user,
     get_user_accessible_servers,
     get_user_session_data,
-    # load_scopes_config,  # Function does not exist in dependencies.py
     map_cognito_groups_to_scopes,
     nginx_proxied_auth,
     user_can_access_server,
     user_can_modify_servers,
     user_has_ui_permission_for_service,
     user_has_wildcard_access,
-    validate_login_credentials,
     web_auth,
 )
 from tests.fixtures.mocks.mock_auth import MockSessionValidator
@@ -281,8 +279,8 @@ class TestGetCurrentUser:
 class TestGetUserSessionData:
     """Tests for get_user_session_data dependency."""
 
-    def test_get_session_data_traditional_user(self, mock_signer: URLSafeTimedSerializer):
-        """Test extracting session data for traditional auth user."""
+    def test_get_session_data_traditional_user_rejected(self, mock_signer: URLSafeTimedSerializer):
+        """Test that non-OAuth2 sessions are rejected."""
         # Arrange
         session_data = {
             "username": "admin",
@@ -290,15 +288,10 @@ class TestGetUserSessionData:
         }
         session_cookie = mock_signer.dumps(session_data)
 
-        # Act
-        result = get_user_session_data(session=session_cookie)
-
-        # Assert
-        assert result["username"] == "admin"
-        assert result["auth_method"] == "traditional"
-        # Traditional users get admin privileges via registry-admins group
-        assert "registry-admins" in result["groups"]
-        assert "registry-admins" in result["scopes"]
+        # Act & Assert - traditional sessions should be rejected
+        with pytest.raises(HTTPException) as exc_info:
+            get_user_session_data(session=session_cookie)
+        assert exc_info.value.status_code == 401
 
     def test_get_session_data_oauth2_user(self, mock_signer: URLSafeTimedSerializer):
         """Test extracting session data for OAuth2 user."""
@@ -966,11 +959,11 @@ class TestUserCanAccessServer:
 class TestCreateSessionCookie:
     """Tests for create_session_cookie function."""
 
-    def test_create_traditional_session(self, mock_signer: URLSafeTimedSerializer):
-        """Test creating traditional auth session cookie."""
+    def test_create_default_session(self, mock_signer: URLSafeTimedSerializer):
+        """Test creating session cookie with default auth_method (oauth2)."""
         # Act
         session_cookie = create_session_cookie(
-            username="testuser", auth_method="traditional", provider="local"
+            username="testuser",
         )
 
         # Assert
@@ -978,7 +971,7 @@ class TestCreateSessionCookie:
         # Validate we can decode it
         data = mock_signer.loads(session_cookie)
         assert data["username"] == "testuser"
-        assert data["auth_method"] == "traditional"
+        assert data["auth_method"] == "oauth2"
         assert data["provider"] == "local"
 
     def test_create_oauth2_session(self, mock_signer: URLSafeTimedSerializer):
@@ -994,52 +987,6 @@ class TestCreateSessionCookie:
         assert data["username"] == "oauth_user"
         assert data["auth_method"] == "oauth2"
         assert data["provider"] == "cognito"
-
-
-# =============================================================================
-# TEST: validate_login_credentials
-# =============================================================================
-
-
-@pytest.mark.unit
-@pytest.mark.auth
-class TestValidateLoginCredentials:
-    """Tests for validate_login_credentials function."""
-
-    def test_valid_credentials(self, test_settings, monkeypatch):
-        """Test valid admin credentials."""
-        # Arrange - patch settings in dependencies module
-        monkeypatch.setattr("registry.auth.dependencies.settings", test_settings)
-
-        # Act
-        is_valid = validate_login_credentials(
-            test_settings.admin_user, test_settings.admin_password
-        )
-
-        # Assert
-        assert is_valid is True
-
-    def test_invalid_username(self, test_settings, monkeypatch):
-        """Test invalid username."""
-        # Arrange
-        monkeypatch.setattr("registry.auth.dependencies.settings", test_settings)
-
-        # Act
-        is_valid = validate_login_credentials("wronguser", test_settings.admin_password)
-
-        # Assert
-        assert is_valid is False
-
-    def test_invalid_password(self, test_settings, monkeypatch):
-        """Test invalid password."""
-        # Arrange
-        monkeypatch.setattr("registry.auth.dependencies.settings", test_settings)
-
-        # Act
-        is_valid = validate_login_credentials(test_settings.admin_user, "wrongpassword")
-
-        # Assert
-        assert is_valid is False
 
 
 # =============================================================================
@@ -1088,12 +1035,12 @@ class TestEnhancedAuth:
     """Tests for enhanced_auth dependency."""
 
     @pytest.mark.asyncio
-    async def test_enhanced_auth_traditional_user(
+    async def test_enhanced_auth_traditional_user_rejected(
         self,
         mock_signer: URLSafeTimedSerializer,
         mock_scopes_config: dict[str, Any],
     ):
-        """Test enhanced_auth for traditional user."""
+        """Test enhanced_auth rejects traditional (non-OAuth2) sessions."""
         # Arrange
         session_data = {
             "username": "admin",
@@ -1104,18 +1051,10 @@ class TestEnhancedAuth:
         mock_request = Mock(spec=Request)
         mock_request.state = Mock()
 
-        # Act
-        context = await enhanced_auth(request=mock_request, session=session_cookie)
-
-        # Assert
-        assert context["username"] == "admin"
-        assert context["auth_method"] == "traditional"
-        # Traditional users get admin privileges via registry-admins group
-        assert "registry-admins" in context["groups"]
-        assert len(context["scopes"]) > 0
-        assert context["can_modify_servers"] is True
-        assert context["is_admin"] is True
-        assert context["accessible_servers"] == ["*"]
+        # Act & Assert - traditional sessions should be rejected
+        with pytest.raises(HTTPException) as exc_info:
+            await enhanced_auth(request=mock_request, session=session_cookie)
+        assert exc_info.value.status_code == 401
 
     @pytest.mark.asyncio
     async def test_enhanced_auth_oauth2_user(
@@ -1201,12 +1140,49 @@ class TestNginxProxiedAuth:
         assert "mcp-registry-admin" in context["groups"]
 
     @pytest.mark.asyncio
-    async def test_nginx_auth_fallback_to_session(
+    async def test_nginx_auth_fallback_to_session_oauth2(
         self,
         mock_signer: URLSafeTimedSerializer,
         mock_scopes_config: dict[str, Any],
     ):
-        """Test nginx auth falls back to session cookie."""
+        """Test nginx auth falls back to OAuth2 session cookie."""
+        # Arrange
+        mock_request = Mock(spec=Request)
+        mock_request.url.path = "/api/test"
+        mock_request.method = "GET"
+        mock_request.state = Mock()
+        mock_request.headers = {}
+
+        session_data = {
+            "username": "session_user",
+            "auth_method": "oauth2",
+            "provider": "cognito",
+            "groups": ["registry-admins"],
+        }
+        session_cookie = mock_signer.dumps(session_data)
+
+        # Act
+        context = await nginx_proxied_auth(
+            request=mock_request,
+            session=session_cookie,
+            x_user=None,
+            x_username=None,
+            x_scopes=None,
+            x_auth_method=None,
+            x_client_id=None,
+        )
+
+        # Assert
+        assert context["username"] == "session_user"
+        assert context["auth_method"] == "oauth2"
+
+    @pytest.mark.asyncio
+    async def test_nginx_auth_fallback_rejects_traditional_session(
+        self,
+        mock_signer: URLSafeTimedSerializer,
+        mock_scopes_config: dict[str, Any],
+    ):
+        """Test nginx auth rejects traditional (non-OAuth2) session cookies."""
         # Arrange
         mock_request = Mock(spec=Request)
         mock_request.url.path = "/api/test"
@@ -1220,19 +1196,18 @@ class TestNginxProxiedAuth:
         }
         session_cookie = mock_signer.dumps(session_data)
 
-        # Act
-        context = await nginx_proxied_auth(
-            request=mock_request,
-            session=session_cookie,
-            x_user=None,
-            x_username=None,
-            x_scopes=None,
-            x_auth_method=None,
-        )
-
-        # Assert
-        assert context["username"] == "session_user"
-        assert context["auth_method"] == "traditional"
+        # Act & Assert - traditional sessions should be rejected
+        with pytest.raises(HTTPException) as exc_info:
+            await nginx_proxied_auth(
+                request=mock_request,
+                session=session_cookie,
+                x_user=None,
+                x_username=None,
+                x_scopes=None,
+                x_auth_method=None,
+                x_client_id=None,
+            )
+        assert exc_info.value.status_code == 401
 
     @pytest.mark.asyncio
     async def test_nginx_auth_oauth2_user_without_admin_scopes(

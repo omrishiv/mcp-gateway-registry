@@ -55,9 +55,7 @@ class Identity(BaseModel):
     """
 
     username: str = Field(description="Username or identifier of the requester")
-    auth_method: str = Field(
-        description="Authentication method: oauth2, traditional, jwt_bearer, anonymous"
-    )
+    auth_method: str = Field(description="Authentication method: oauth2, jwt_bearer, anonymous")
     provider: str | None = Field(
         default=None, description="Identity provider: cognito, entra_id, keycloak"
     )
