@@ -398,6 +398,22 @@ When an MCP server requires authentication, you can provide the credentials duri
 | `none` | No authentication required | Public MCP servers |
 | `bearer` | Bearer token in `Authorization` header | OAuth2-protected services |
 | `api_key` | API key with custom header name | Services requiring API keys (e.g., `X-API-Key`, `CONTEXT7_API_KEY`) |
+| `basic` | HTTP Basic Auth in `Authorization` header | Username/password-protected MCP servers |
+
+### Basic Auth Details
+
+For MCP servers protected by HTTP Basic Authentication, the registry stores the base64-encoded `username:password` string. The credential value should be the base64 encoding of `username:password` (e.g., `YWRtaW46cGFzc3dvcmQ=` for `admin:password`).
+
+Generate the base64 credential:
+```bash
+echo -n "admin:password" | base64
+# Output: YWRtaW46cGFzc3dvcmQ=
+```
+
+When the registry communicates with the server (health checks, security scans, tool discovery), it sends:
+```
+Authorization: Basic YWRtaW46cGFzc3dvcmQ=
+```
 
 ### Credential Encryption
 
@@ -426,9 +442,11 @@ ENCRYPTION_KEY=your-base64-encoded-fernet-key-here
    - `none` - No authentication
    - `bearer` - Bearer token
    - `api_key` - API key
-4. If `bearer` or `api_key`:
-   - Enter the **credential** (API key or bearer token)
+   - `basic` - HTTP Basic Auth
+4. If `bearer`, `api_key`, or `basic`:
+   - Enter the **credential** (API key, bearer token, or base64-encoded `user:pass`)
    - For `api_key`: Specify the **header name** (e.g., `CONTEXT7_API_KEY`, `X-API-Key`)
+   - For `basic`: Enter the base64-encoded `username:password` (e.g., `YWRtaW46cGFzc3dvcmQ=`)
 5. Click **Register**
 
 ![Server Registration with Authentication Scheme](img/auth-scheme.gif)
@@ -462,6 +480,20 @@ curl -X POST https://registry.example.com/api/servers/register \
   -F "auth_credential=ctx7sk-6dd75bd4-80ef-486e-99ef-b5493df4e578" \
   -F "auth_header_name=CONTEXT7_API_KEY" \
   -F "description=Context7 LLM context service"
+```
+
+**Register server with Basic Auth:**
+
+```bash
+# Generate base64 credential: echo -n "admin:password" | base64
+curl -X POST https://registry.example.com/api/servers/register \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "server_name=My Basic Auth Server" \
+  -F "path=/basic-auth-server" \
+  -F "proxy_pass_url=http://basic-auth-mcp-server:8080/" \
+  -F "auth_scheme=basic" \
+  -F "auth_credential=YWRtaW46cGFzc3dvcmQ=" \
+  -F "description=An MCP server with Basic Auth"
 ```
 
 **Response:**
@@ -530,10 +562,23 @@ curl -X PUT https://registry.example.com/api/servers/context7/credentials \
   }'
 ```
 
+**Set or update Basic Auth credentials:**
+
+```bash
+# echo -n "admin:password" | base64 => YWRtaW46cGFzc3dvcmQ=
+curl -X PATCH https://registry.example.com/api/servers/basic-auth-server/auth-credential \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "auth_scheme": "basic",
+    "auth_credential": "YWRtaW46cGFzc3dvcmQ="
+  }'
+```
+
 **Switch to bearer token:**
 
 ```bash
-curl -X PUT https://registry.example.com/api/servers/my-server/credentials \
+curl -X PATCH https://registry.example.com/api/servers/my-server/auth-credential \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -619,6 +664,7 @@ When the health check service performs periodic checks, it:
 3. Includes the appropriate header in the MCP initialize request:
    - Bearer: `Authorization: Bearer <decrypted_token>`
    - API Key: `<auth_header_name>: <decrypted_key>`
+   - Basic: `Authorization: Basic <decrypted_base64_credential>`
 
 **Example health check with auth:**
 
@@ -630,6 +676,8 @@ if server.auth_scheme == "bearer":
 elif server.auth_scheme == "api_key":
     header_name = server.auth_header_name or "X-API-Key"
     headers[header_name] = decrypt_credential(server.auth_credential_encrypted)
+elif server.auth_scheme == "basic":
+    headers["Authorization"] = f"Basic {decrypt_credential(server.auth_credential_encrypted)}"
 
 # MCP initialize request with auth headers
 response = await mcp_client.initialize(url=server.proxy_pass_url, headers=headers)
@@ -652,8 +700,37 @@ When AI coding assistants connect to a server through the gateway:
 3. Gateway retrieves and decrypts server credential
 4. Gateway proxies the request with the server's auth header
 
-**Example MCP client configuration:**
+#### 4. Security Scanning
 
+When a security scan is triggered (on registration or via rescan), the registry:
+
+1. Retrieves the server's stored credentials (if any)
+2. Decrypts and builds the appropriate `Authorization` header
+3. Passes it to the `mcp-scanner` tool via `--header` or `--bearer-token` flags
+
+This means servers registered with `basic`, `bearer`, or `api_key` auth schemes are scanned automatically with the correct credentials. No manual header passing is needed for rescans.
+
+**Manual CLI scan with Basic Auth:**
+
+```bash
+# Scan a Basic Auth server directly via CLI
+uv run cli/mcp_security_scanner.py \
+  --server-url http://basic-auth-mcp-server:8080/mcp \
+  --headers '{"Authorization": "Basic YWRtaW46cGFzc3dvcmQ="}'
+```
+
+**Trigger rescan via API (uses stored credentials automatically):**
+
+```bash
+curl -X POST https://registry.example.com/api/servers/basic-auth-server/rescan \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+#### 5. Client Connections
+
+**Example MCP client configurations:**
+
+Connecting to a server with API key auth via the gateway:
 ```json
 {
   "mcpServers": {
@@ -669,6 +746,59 @@ When AI coding assistants connect to a server through the gateway:
   }
 }
 ```
+
+Connecting directly to a Basic Auth-protected MCP server (without the gateway):
+```json
+{
+  "mcpServers": {
+    "basic-auth-server": {
+      "type": "streamable-http",
+      "url": "http://basic-auth-mcp-server:8080/mcp",
+      "disabled": false,
+      "headers": {
+        "Authorization": "Basic YWRtaW46cGFzc3dvcmQ="
+      }
+    }
+  }
+}
+```
+
+Connecting to a Basic Auth server through the gateway (gateway handles server auth):
+```json
+{
+  "mcpServers": {
+    "basic-auth-server": {
+      "type": "streamable-http",
+      "url": "https://mcpgateway.ddns.net/basic-auth-server/mcp",
+      "disabled": false,
+      "headers": {
+        "X-Authorization": "Bearer <user_gateway_token>"
+      }
+    }
+  }
+}
+```
+
+When connecting through the gateway, the client only needs the gateway JWT token. The gateway retrieves the server's stored Basic Auth credentials and injects them into the proxied request automatically.
+
+Connecting to a Basic Auth server through the gateway (client sends credentials):
+```json
+{
+  "mcpServers": {
+    "basic-auth-server": {
+      "type": "streamable-http",
+      "url": "https://mcpgateway.ddns.net/basic-auth-server/mcp",
+      "disabled": false,
+      "headers": {
+        "X-Authorization": "Bearer <user_gateway_token>",
+        "Authorization": "Basic YWRtaW46cGFzc3dvcmQ="
+      }
+    }
+  }
+}
+```
+
+When connecting through the gateway without the credentials stored in the gateway, the client needs both the gateway JWT token and mcp server credentials.
 
 ### Security Considerations
 
@@ -716,7 +846,22 @@ curl -H "Authorization: Bearer $TOKEN" \
   https://registry.example.com/api/servers
 
 # Check auth scheme is valid
-# Valid values: none, bearer, api_key
+# Valid values: none, bearer, api_key, basic
+```
+
+**Security Scan Fails with "Authentication failed":**
+
+This means the scanner could not authenticate to the MCP server. Ensure credentials are set:
+```bash
+# 1. Set credentials on the server (example for Basic Auth)
+curl -X PATCH https://registry.example.com/api/servers/my-server/auth-credential \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"auth_scheme": "basic", "auth_credential": "YWRtaW46cGFzc3dvcmQ="}'
+
+# 2. Trigger rescan (will now use stored credentials)
+curl -X POST https://registry.example.com/api/servers/my-server/rescan \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 **Health Check Shows "auth-expired":**
