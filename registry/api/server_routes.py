@@ -3760,6 +3760,18 @@ async def rescan_server(
             mcp_endpoint=server_info.get("mcp_endpoint"),
         )
 
+        # If scan passed, remove 'security-pending' tag
+        if scan_result.is_safe and not scan_result.scan_failed:
+            # Re-fetch without credentials (for tag update)
+            current_info = await server_service.get_server_info(path)
+            if current_info:
+                current_tags = current_info.get("tags", [])
+                if "security-pending" in current_tags:
+                    current_tags.remove("security-pending")
+                    current_info["tags"] = current_tags
+                    await server_service.update_server(path, current_info)
+                    logger.info(f"Removed 'security-pending' tag from {path} after successful rescan")
+
         # Return the scan result data
         return {
             "server_url": scan_result.server_url,
