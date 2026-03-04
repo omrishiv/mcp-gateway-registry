@@ -50,6 +50,7 @@ RUN . .venv/bin/activate && \
 COPY registry/ /app/registry/
 COPY auth_server/ /app/auth_server/
 COPY api/ /app/api/
+COPY common/ /app/common/
 COPY scripts/ /app/scripts/
 COPY cli/examples/ /app/cli/examples/
 
@@ -101,6 +102,7 @@ RUN chmod +x /app/registry-entrypoint.sh
 COPY --from=backend-builder /app/registry /app/registry
 COPY --from=backend-builder /app/auth_server /app/auth_server
 COPY --from=backend-builder /app/api /app/api
+COPY --from=backend-builder /app/common /app/common
 COPY --from=backend-builder /app/config /app/config
 COPY --from=backend-builder /app/scripts /app/scripts
 COPY --from=backend-builder /app/cli/examples /app/cli/examples

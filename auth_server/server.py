@@ -42,30 +42,22 @@ from providers.factory import get_auth_provider
 from pydantic import BaseModel
 
 sys.path.insert(0, "/app")
-# Import MCP audit logging components
+# Import from common shared package
+from common.auth.internal import _INTERNAL_JWT_AUDIENCE as JWT_AUDIENCE
+from common.auth.internal import _INTERNAL_JWT_ISSUER as JWT_ISSUER
+from common.models.audit import Identity, MCPServer
+from common.logging_config import configure_logging, get_logger
+from common.utils.request import get_client_ip
+
+# Import registry-specific components that depend on registry internals
 from registry.audit.mcp_logger import MCPLogger
-from registry.audit.models import Identity, MCPServer
 from registry.audit.service import AuditLogger
 from registry.common.scopes_loader import reload_scopes_config
 from registry.core.config import settings
 from registry.repositories.factory import get_scope_repository
-from registry.utils.request_utils import get_client_ip
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,  # Set the log level to INFO
-    # Define log message format
-    format="%(asctime)s,p%(process)s,{%(filename)s:%(lineno)d},%(levelname)s,%(message)s",
-)
-logger = logging.getLogger(__name__)
-
-# Import JWT constants from shared internal auth module
-from registry.auth.internal import (
-    _INTERNAL_JWT_AUDIENCE as JWT_AUDIENCE,
-)
-from registry.auth.internal import (
-    _INTERNAL_JWT_ISSUER as JWT_ISSUER,
-)
+configure_logging()
+logger = get_logger(__name__)
 
 MAX_TOKEN_LIFETIME_HOURS = 24
 DEFAULT_TOKEN_LIFETIME_HOURS = 8

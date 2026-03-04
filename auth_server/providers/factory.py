@@ -1,19 +1,16 @@
 """Factory for creating authentication provider instances."""
 
-import logging
 import os
+
+from common.logging_config import configure_logging, get_logger
 
 from .base import AuthProvider
 from .cognito import CognitoProvider
 from .entra import EntraIdProvider
 from .keycloak import KeycloakProvider
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s,p%(process)s,{%(filename)s:%(lineno)d},%(levelname)s,%(message)s",
-)
-
-logger = logging.getLogger(__name__)
+configure_logging()
+logger = get_logger(__name__)
 
 
 def get_auth_provider(provider_type: str | None = None) -> AuthProvider:

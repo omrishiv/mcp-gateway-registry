@@ -34,6 +34,12 @@ RUN if [ -d /tmp/build-context/registry ]; then \
     else \
         echo "Registry module not found in build context (expected for non-mcpgw servers)"; \
     fi && \
+    if [ -d /tmp/build-context/common ]; then \
+        cp -r /tmp/build-context/common /app/common && \
+        echo "Common module copied successfully"; \
+    else \
+        echo "Common module not found in build context"; \
+    fi && \
     rm -rf /tmp/build-context
 
 # Install uv and setup Python environment

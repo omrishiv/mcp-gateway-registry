@@ -1,6 +1,5 @@
 """AWS Cognito authentication provider implementation."""
 
-import logging
 import time
 from typing import Any
 from urllib.parse import urlencode
@@ -8,14 +7,12 @@ from urllib.parse import urlencode
 import jwt
 import requests
 
+from common.logging_config import configure_logging, get_logger
+
 from .base import AuthProvider
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s,p%(process)s,{%(filename)s:%(lineno)d},%(levelname)s,%(message)s",
-)
-
-logger = logging.getLogger(__name__)
+configure_logging()
+logger = get_logger(__name__)
 
 
 class CognitoProvider(AuthProvider):

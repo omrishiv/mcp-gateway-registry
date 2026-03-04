@@ -46,6 +46,7 @@ RUN chmod +x /app/auth-entrypoint.sh
 # Now copy the actual application code (this layer changes frequently but deps are cached above)
 COPY auth_server/ /app/
 COPY registry/ /app/registry/
+COPY common/ /app/common/
 
 # Create logs directory
 RUN mkdir -p /app/logs

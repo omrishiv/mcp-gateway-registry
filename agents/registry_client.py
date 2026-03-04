@@ -1,75 +1,26 @@
 """Client for MCP Registry API - tool discovery and search."""
 
 import json
-import logging
 import time
 from typing import (
     Any,
 )
 
 import aiohttp
-from pydantic import (
-    BaseModel,
-    Field,
+
+from common.logging_config import configure_logging, get_logger
+from common.models.search import (
+    MatchingTool,
+    SearchResponse,
+    ServerSearchResult,
+    ToolSearchResult,
 )
 
-# Configure logging with basicConfig
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s,p%(process)s,{%(filename)s:%(lineno)d},%(levelname)s,%(message)s",
-)
-logger = logging.getLogger(__name__)
+configure_logging()
+logger = get_logger(__name__)
 
-
-class MatchingTool(BaseModel):
-    """Tool matching result from semantic search.
-
-    Note: inputSchema is NOT included here to avoid duplication.
-    Full tool details including inputSchema are in the tools[] array.
-    """
-
-    tool_name: str = Field(..., description="Name of the matching tool")
-    description: str | None = Field(None, description="Tool description")
-    relevance_score: float = Field(0.0, ge=0.0, le=1.0, description="Relevance score")
-    match_context: str | None = Field(None, description="Match context")
-
-
-class ServerSearchResult(BaseModel):
-    """MCP Server search result from semantic search."""
-
-    path: str = Field(..., description="Server path in registry")
-    server_name: str = Field(..., description="Server name")
-    description: str | None = Field(None, description="Server description")
-    tags: list[str] = Field(default_factory=list, description="Server tags")
-    num_tools: int = Field(0, description="Number of tools")
-    is_enabled: bool = Field(False, description="Whether server is enabled")
-    relevance_score: float = Field(0.0, ge=0.0, le=1.0, description="Relevance score")
-    match_context: str | None = Field(None, description="Match context")
-    matching_tools: list[MatchingTool] = Field(
-        default_factory=list, description="Tools matching the query"
-    )
-
-
-class ToolSearchResult(BaseModel):
-    """Tool search result from semantic search."""
-
-    server_path: str = Field(..., description="Server path in registry")
-    server_name: str = Field(..., description="Server name")
-    tool_name: str = Field(..., description="Tool name")
-    description: str | None = Field(None, description="Tool description")
-    inputSchema: dict[str, Any] | None = Field(None, description="JSON Schema for tool input")
-    relevance_score: float = Field(0.0, ge=0.0, le=1.0, description="Relevance score")
-    match_context: str | None = Field(None, description="Match context")
-
-
-class SearchResponse(BaseModel):
-    """Response from semantic search API."""
-
-    query: str = Field(..., description="Original query")
-    servers: list[ServerSearchResult] = Field(default_factory=list, description="Matching servers")
-    tools: list[ToolSearchResult] = Field(default_factory=list, description="Matching tools")
-    total_servers: int = Field(0, description="Total matching servers")
-    total_tools: int = Field(0, description="Total matching tools")
+# Re-export for backward compatibility
+__all__ = ["MatchingTool", "ServerSearchResult", "ToolSearchResult", "SearchResponse"]
 
 
 class RegistryClient:

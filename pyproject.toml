@@ -78,7 +78,7 @@ docs = [
 ]
 
 [tool.setuptools]
-packages = ["registry"]
+packages = ["registry", "common"]
 
 # Pytest Configuration
 [tool.pytest.ini_options]

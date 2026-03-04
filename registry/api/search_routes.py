@@ -7,6 +7,9 @@ from typing import (
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
+from common.models.search import MatchingTool as MatchingToolResult
+from common.models.search import ToolSearchResult as _ToolSearchResultBase
+
 from ..audit import set_audit_action
 from ..auth.dependencies import nginx_proxied_auth
 from ..core.config import DeploymentMode, RegistryMode, settings
@@ -26,18 +29,6 @@ EntityType = Literal["mcp_server", "tool", "a2a_agent", "skill", "virtual_server
 def get_search_repo() -> SearchRepositoryBase:
     """Dependency injection function for search repository."""
     return get_search_repository()
-
-
-class MatchingToolResult(BaseModel):
-    """Tool matching result with optional schema for display."""
-
-    tool_name: str
-    description: str | None = None
-    relevance_score: float = Field(0.0, ge=0.0, le=1.0)
-    match_context: str | None = None
-    inputSchema: dict | None = Field(
-        default=None, description="JSON Schema for tool input parameters"
-    )
 
 
 class SyncMetadata(BaseModel):
@@ -121,15 +112,9 @@ class ServerSearchResult(BaseModel):
     )
 
 
-class ToolSearchResult(BaseModel):
-    server_path: str
-    server_name: str
-    tool_name: str
-    description: str | None = None
-    inputSchema: dict | None = Field(default=None, description="JSON Schema for tool input")
-    relevance_score: float = Field(..., ge=0.0, le=1.0)
-    match_context: str | None = None
-    # Endpoint URL for the parent MCP server
+class ToolSearchResult(_ToolSearchResultBase):
+    """Tool search result with endpoint URL for agent connectivity."""
+
     endpoint_url: str | None = Field(
         default=None, description="URL for agents to connect to the parent MCP server"
     )

@@ -6,21 +6,17 @@ It acts as a thin protocol adapter, translating MCP tool calls into registry HTT
 All tools require bearer token authentication via the Authorization header.
 """
 
-import logging
 import os
 from typing import Any
 
 import httpx
 from fastmcp import Context, FastMCP
 
+from common.logging_config import configure_logging, get_logger
 from models import AgentInfo, RegistryStats, ServerInfo, SkillInfo, ToolSearchResult
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s,p%(process)s,{%(filename)s:%(lineno)d},%(levelname)s,%(message)s",
-)
-logger = logging.getLogger(__name__)
+configure_logging()
+logger = get_logger(__name__)
 
 # Get registry URL from environment (used inside Docker containers)
 # This is the internal registry URL that mcpgw uses to communicate with the registry

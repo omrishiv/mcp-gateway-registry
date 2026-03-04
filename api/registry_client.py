@@ -12,7 +12,6 @@ the get-m2m-token.sh script.
 """
 
 import json
-import logging
 from datetime import datetime
 from enum import Enum
 from typing import Any
@@ -21,12 +20,10 @@ from urllib.parse import quote
 import requests
 from pydantic import BaseModel, ConfigDict, Field
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s,p%(process)s,{%(filename)s:%(lineno)d},%(levelname)s,%(message)s",
-)
-logger = logging.getLogger(__name__)
+from common.logging_config import configure_logging, get_logger
+
+configure_logging()
+logger = get_logger(__name__)
 
 
 class HealthStatus(str, Enum):
@@ -663,16 +660,8 @@ class AgentSemanticDiscoveryResponse(BaseModel):
     agents: list[SemanticDiscoveredAgent] = Field(..., description="Semantically discovered agents")
 
 
-class MatchingToolResult(BaseModel):
-    """Tool matching result with optional schema for display."""
-
-    tool_name: str = Field(..., description="Tool name")
-    description: str | None = Field(None, description="Tool description")
-    relevance_score: float = Field(0.0, ge=0.0, le=1.0, description="Relevance score")
-    match_context: str | None = Field(None, description="Why this tool matched")
-    inputSchema: dict[str, Any] | None = Field(
-        None, description="JSON Schema for tool input parameters"
-    )
+from common.models.search import MatchingTool as MatchingToolResult
+from common.models.search import ToolSearchResult as _ToolSearchResultBase
 
 
 class SyncMetadata(BaseModel):
@@ -719,17 +708,9 @@ class SemanticDiscoveredServer(BaseModel):
     )
 
 
-class ToolSearchResult(BaseModel):
-    """Tool search result model."""
+class ToolSearchResult(_ToolSearchResultBase):
+    """Tool search result model with endpoint URL."""
 
-    server_path: str = Field(..., description="Parent server path")
-    server_name: str = Field(..., description="Parent server name")
-    tool_name: str = Field(..., description="Tool name")
-    description: str | None = Field(None, description="Tool description")
-    inputSchema: dict[str, Any] | None = Field(None, description="JSON Schema for tool input")
-    relevance_score: float = Field(..., ge=0.0, le=1.0, description="Relevance score")
-    match_context: str | None = Field(None, description="Why this tool matched")
-    # Endpoint URL for the parent MCP server
     endpoint_url: str | None = Field(
         None, description="URL for agents to connect to the parent MCP server"
     )

@@ -1,15 +1,12 @@
 """Base authentication provider interface."""
 
-import logging
 from abc import ABC, abstractmethod
 from typing import Any
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s,p%(process)s,{%(filename)s:%(lineno)d},%(levelname)s,%(message)s",
-)
+from common.logging_config import configure_logging, get_logger
 
-logger = logging.getLogger(__name__)
+configure_logging()
+logger = get_logger(__name__)
 
 
 class AuthProvider(ABC):

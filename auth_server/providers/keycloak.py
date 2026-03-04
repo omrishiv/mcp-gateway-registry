@@ -1,6 +1,5 @@
 """Keycloak authentication provider implementation."""
 
-import logging
 import os
 import time
 from functools import lru_cache
@@ -10,6 +9,8 @@ from urllib.parse import urlencode
 import jwt
 import requests
 
+from common.logging_config import configure_logging, get_logger
+
 from .base import AuthProvider
 
 # Constants for self-signed token validation
@@ -17,13 +18,8 @@ JWT_ISSUER = os.environ.get("JWT_ISSUER", "mcp-auth-server")
 JWT_AUDIENCE = os.environ.get("JWT_AUDIENCE", "mcp-registry")
 SECRET_KEY = os.environ.get("SECRET_KEY", "development-secret-key")
 
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s,p%(process)s,{%(filename)s:%(lineno)d},%(levelname)s,%(message)s",
-)
-
-logger = logging.getLogger(__name__)
+configure_logging()
+logger = get_logger(__name__)
 
 
 class KeycloakProvider(AuthProvider):
