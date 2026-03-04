@@ -605,20 +605,21 @@ const RegisterPage: React.FC = () => {
             <option value="none">None</option>
             <option value="bearer">Bearer Token</option>
             <option value="api_key">API Key</option>
+            <option value="basic">Basic Auth</option>
           </select>
         </div>
 
         {serverForm.auth_scheme !== 'none' && (
           <div>
             <label className={labelClass}>
-              {serverForm.auth_scheme === 'bearer' ? 'Bearer Token' : 'API Key'} *
+              {serverForm.auth_scheme === 'bearer' ? 'Bearer Token' : serverForm.auth_scheme === 'basic' ? 'Basic Credential' : 'API Key'} *
             </label>
             <input
               type="password"
               className={inputClass}
               value={serverForm.auth_credential}
               onChange={(e) => setServerForm(prev => ({ ...prev, auth_credential: e.target.value }))}
-              placeholder={serverForm.auth_scheme === 'bearer' ? 'Enter bearer token' : 'Enter API key'}
+              placeholder={serverForm.auth_scheme === 'bearer' ? 'Enter bearer token' : serverForm.auth_scheme === 'basic' ? 'Enter base64-encoded username:password' : 'Enter API key'}
             />
             <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
               This credential is stored securely and never displayed after saving.

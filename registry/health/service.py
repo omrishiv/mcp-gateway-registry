@@ -516,6 +516,10 @@ class HealthMonitoringService:
                     header_name = server_info.get("auth_header_name", "X-API-Key")
                     headers[header_name] = credential
                     logger.debug(f"Added API key header '{header_name}' for health check")
+                elif auth_scheme == "basic":
+                    header_name = server_info.get("auth_header_name", "Authorization")
+                    headers[header_name] = f"Basic {credential}"
+                    logger.debug("Added Basic auth header for health check")
             else:
                 logger.warning(
                     f"Could not decrypt credential for "

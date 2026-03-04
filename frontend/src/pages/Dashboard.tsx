@@ -2522,13 +2522,14 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
                       <option value="none">None</option>
                       <option value="bearer">Bearer Token</option>
                       <option value="api_key">API Key</option>
+                      <option value="basic">Basic Auth</option>
                     </select>
                   </div>
 
                   {editForm.auth_scheme !== 'none' && (
                     <div>
                       <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                        {editForm.auth_scheme === 'bearer' ? 'Bearer Token' : 'API Key'}
+                        {editForm.auth_scheme === 'bearer' ? 'Bearer Token' : editForm.auth_scheme === 'basic' ? 'Basic Credential' : 'API Key'}
                       </label>
                       <input
                         type="password"

@@ -117,6 +117,10 @@ def _build_headers_for_server(server_info: dict = None) -> dict[str, str]:
                     header_name = server_info.get("auth_header_name", "X-API-Key")
                     headers[header_name] = credential
                     logger.debug(f"Added API key header '{header_name}' for MCP client")
+                elif auth_scheme == "basic":
+                    header_name = server_info.get("auth_header_name", "Authorization")
+                    headers[header_name] = f"Basic {credential}"
+                    logger.debug("Added Basic auth header for MCP client")
             else:
                 logger.warning(
                     f"Could not decrypt credential for "

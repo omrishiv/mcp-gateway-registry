@@ -1175,6 +1175,25 @@ def test_health_service_build_headers_for_server_invalid_headers(health_service)
 
 
 @pytest.mark.unit
+def test_health_service_build_headers_for_server_basic_auth(health_service):
+    """Test building headers with basic auth injects Authorization: Basic header."""
+    server_info = {
+        "server_name": "test-server",
+        "proxy_pass_url": "http://localhost:8000/mcp",
+        "auth_scheme": "basic",
+        "auth_credential_encrypted": "encrypted_cred",
+    }
+
+    with patch(
+        "registry.utils.credential_encryption.decrypt_credential",
+        return_value="dXNlcjpwYXNz",
+    ):
+        headers = health_service._build_headers_for_server(server_info)
+
+    assert headers["Authorization"] == "Basic dXNlcjpwYXNz"
+
+
+@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_health_service_initialize_mcp_session_no_server_session_id(health_service):
     """Test initializing MCP session when server doesn't return session ID."""

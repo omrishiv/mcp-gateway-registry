@@ -151,6 +151,11 @@
                         headerContainer.style.display = 'block';
                         credLabel.textContent = 'API Key';
                         credInput.placeholder = 'Enter new API key (leave blank to keep existing)';
+                    } else if (scheme === 'basic') {
+                        credContainer.style.display = 'block';
+                        headerContainer.style.display = 'none';
+                        credLabel.textContent = 'Basic Credential';
+                        credInput.placeholder = 'Enter new base64-encoded username:password (leave blank to keep existing)';
                     }
                 }
             </script>
@@ -163,10 +168,11 @@
                     <option value="none" {% if not server.auth_scheme or server.auth_scheme == 'none' %}selected{% endif %}>None</option>
                     <option value="bearer" {% if server.auth_scheme == 'bearer' %}selected{% endif %}>Bearer Token</option>
                     <option value="api_key" {% if server.auth_scheme == 'api_key' %}selected{% endif %}>API Key</option>
+                    <option value="basic" {% if server.auth_scheme == 'basic' %}selected{% endif %}>Basic Auth</option>
                 </select>
             </div>
             <div class="form-group" id="auth-credential-container" style="{% if not server.auth_scheme or server.auth_scheme == 'none' %}display: none;{% endif %}">
-                <label for="auth_credential" id="auth-credential-label">{% if server.auth_scheme == 'bearer' %}Bearer Token{% elif server.auth_scheme == 'api_key' %}API Key{% else %}Credential{% endif %}</label>
+                <label for="auth_credential" id="auth-credential-label">{% if server.auth_scheme == 'bearer' %}Bearer Token{% elif server.auth_scheme == 'api_key' %}API Key{% elif server.auth_scheme == 'basic' %}Basic Credential{% else %}Credential{% endif %}</label>
                 <input type="password" id="auth_credential" name="auth_credential" placeholder="Leave blank to keep existing credential">
                 <small style="color: #666;">Only fill in to update the credential. Leave blank to keep the current one.</small>
             </div>

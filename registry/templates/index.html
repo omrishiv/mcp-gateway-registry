@@ -1298,6 +1298,11 @@
                 headerContainer.style.display = 'block';
                 credLabel.textContent = 'API Key';
                 credInput.placeholder = 'Enter API key';
+            } else if (scheme === 'basic') {
+                credContainer.style.display = 'block';
+                headerContainer.style.display = 'none';
+                credLabel.textContent = 'Basic Credential';
+                credInput.placeholder = 'Enter base64-encoded username:password';
             }
         }
 
@@ -2499,6 +2504,7 @@
                             <option value="none" selected>None</option>
                             <option value="bearer">Bearer Token</option>
                             <option value="api_key">API Key</option>
+                            <option value="basic">Basic Auth</option>
                         </select>
                     </div>
                     <div class="form-group" id="reg-auth-credential-container" style="display: none;">

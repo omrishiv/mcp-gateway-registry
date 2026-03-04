@@ -205,6 +205,42 @@ def test_build_headers_for_server_empty_headers():
     assert "Content-Type" in headers
 
 
+@pytest.mark.unit
+def test_build_headers_for_server_basic_auth():
+    """Test building headers with basic auth injects Authorization: Basic header."""
+    server_info = {
+        "auth_scheme": "basic",
+        "auth_credential_encrypted": "encrypted_cred",
+    }
+
+    with patch(
+        "registry.utils.credential_encryption.decrypt_credential",
+        return_value="dXNlcjpwYXNz",
+    ):
+        headers = _build_headers_for_server(server_info)
+
+    assert headers["Authorization"] == "Basic dXNlcjpwYXNz"
+
+
+@pytest.mark.unit
+def test_build_headers_for_server_basic_auth_custom_header():
+    """Test building headers with basic auth and a custom header name."""
+    server_info = {
+        "auth_scheme": "basic",
+        "auth_credential_encrypted": "encrypted_cred",
+        "auth_header_name": "X-Custom-Auth",
+    }
+
+    with patch(
+        "registry.utils.credential_encryption.decrypt_credential",
+        return_value="dXNlcjpwYXNz",
+    ):
+        headers = _build_headers_for_server(server_info)
+
+    assert headers["X-Custom-Auth"] == "Basic dXNlcjpwYXNz"
+    assert "Authorization" not in headers
+
+
 # =============================================================================
 # DETECT_SERVER_TRANSPORT TESTS
 # =============================================================================

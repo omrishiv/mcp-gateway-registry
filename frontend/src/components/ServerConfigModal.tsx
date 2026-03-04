@@ -122,6 +122,8 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
         } else if (server.auth_scheme === 'api_key') {
           const headerName = server.auth_header_name || 'X-API-Key';
           headers[headerName] = '[YOUR_API_KEY]';
+        } else if (server.auth_scheme === 'basic') {
+          headers['Authorization'] = 'Basic [YOUR_BASE64_CREDENTIALS]';
         }
       }
 

@@ -169,6 +169,8 @@ def _get_authentication_info(server_info: dict) -> dict:
     elif auth_scheme == "api_key":
         header_name = server_info.get("auth_header_name", "X-API-Key")
         return {"type": "api-key", "required": True, "header": header_name}
+    elif auth_scheme == "basic":
+        return {"type": "http-basic", "required": True}
     else:
         return {"type": "none", "required": False}
 

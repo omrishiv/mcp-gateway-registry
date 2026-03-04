@@ -12,7 +12,6 @@ from typing import Any
 
 import httpx
 from fastmcp import Context, FastMCP
-
 from models import AgentInfo, RegistryStats, ServerInfo, SkillInfo, ToolSearchResult
 
 # Configure logging

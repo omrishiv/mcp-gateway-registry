@@ -377,13 +377,14 @@ When MCP servers require their own authentication (API keys, bearer tokens, etc.
 
 ### Supported Authentication Schemes
 
-The registry supports three backend authentication schemes:
+The registry supports four backend authentication schemes:
 
 | Scheme | Description | Example Header |
 |--------|-------------|----------------|
 | `none` | No backend authentication required | N/A |
 | `bearer` | Bearer token authentication | `Authorization: Bearer <token>` |
 | `api_key` | API key with custom header | `CONTEXT7_API_KEY: <key>` or `X-API-Key: <key>` |
+| `basic` | HTTP Basic authentication | `Authorization: Basic <base64-encoded credentials>` |
 
 ### Example Configurations
 

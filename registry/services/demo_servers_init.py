@@ -37,7 +37,7 @@ def _load_server_config(config_path: str) -> dict[str, Any]:
     if not full_path.exists():
         raise FileNotFoundError(f"Server config not found: {full_path}")
 
-    with open(full_path, "r") as f:
+    with open(full_path) as f:
         return json.load(f)
 
 

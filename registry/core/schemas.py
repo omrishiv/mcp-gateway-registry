@@ -112,7 +112,7 @@ class ServerInfo(BaseModel):
     # Backend authentication (replaces legacy auth_type)
     auth_scheme: str = Field(
         default="none",
-        description="Authentication scheme for backend server: none, bearer, api_key",
+        description="Authentication scheme for backend server: none, bearer, api_key, basic",
     )
     auth_credential_encrypted: str | None = Field(
         default=None,
@@ -213,7 +213,7 @@ class ServiceRegistrationRequest(BaseModel):
         default_factory=list, description="Groups with access when visibility is group-restricted"
     )
     auth_scheme: str = Field(
-        default="none", description="Authentication scheme: none, bearer, api_key"
+        default="none", description="Authentication scheme: none, bearer, api_key, basic"
     )
     auth_credential: str | None = Field(
         default=None,
@@ -227,7 +227,7 @@ class ServiceRegistrationRequest(BaseModel):
 class AuthCredentialUpdateRequest(BaseModel):
     """Request model for updating server auth credentials via PATCH."""
 
-    auth_scheme: str = Field(..., description="Authentication scheme: none, bearer, api_key")
+    auth_scheme: str = Field(..., description="Authentication scheme: none, bearer, api_key, basic")
     auth_credential: str | None = Field(
         default=None, description="New credential (required if auth_scheme is not 'none')"
     )

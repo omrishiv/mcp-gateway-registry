@@ -44,12 +44,14 @@ class AuthScheme(str, Enum):
     NONE = "none"
     BEARER = "bearer"
     API_KEY = "api_key"
+    BASIC = "basic"
 
 
 # Auth header defaults
 DEFAULT_API_KEY_HEADER: str = "X-API-Key"
 DEFAULT_BEARER_HEADER: str = "Authorization"
-VALID_AUTH_SCHEMES: list = ["none", "bearer", "api_key"]
+DEFAULT_BASIC_HEADER: str = "Authorization"
+VALID_AUTH_SCHEMES: list = ["none", "bearer", "api_key", "basic"]
 
 
 class RegistryConstants(BaseModel):
