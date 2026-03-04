@@ -110,21 +110,31 @@ def _run_mcp_scanner(
         server_url,
     ]
 
-    # Add headers if provided - parse JSON and extract bearer token
+    # Add authentication headers if provided
     if headers:
         logger.info("Adding custom headers for scanning")
         try:
             headers_dict = json.loads(headers)
-            # Check for X-Authorization header with Bearer token
-            auth_header = headers_dict.get("X-Authorization", "")
-            if auth_header.startswith("Bearer "):
-                bearer_token = auth_header.replace("Bearer ", "")
-                cmd.extend(["--bearer-token", bearer_token])
+
+            # Check for Bearer token in X-Authorization header
+            x_auth = headers_dict.get("X-Authorization", "")
+            auth_header = headers_dict.get("Authorization", "")
+
+            if x_auth.startswith("Bearer "):
+                cmd.extend(["--bearer-token", x_auth.replace("Bearer ", "")])
                 logger.info("Using bearer token authentication")
+            elif auth_header.startswith("Bearer "):
+                cmd.extend(["--bearer-token", auth_header.replace("Bearer ", "")])
+                logger.info("Using bearer token authentication from Authorization header")
+            elif auth_header.startswith("Basic "):
+                cmd.extend(["--header", f"Authorization: {auth_header}"])
+                logger.info("Using basic auth authentication")
             else:
-                logger.warning(
-                    "Headers provided but no Bearer token found in X-Authorization header"
-                )
+                # Pass all headers as --header flags
+                for name, value in headers_dict.items():
+                    cmd.extend(["--header", f"{name}: {value}"])
+                    logger.info(f"Passing custom header: {name}")
+
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse headers JSON: {e}")
             raise ValueError(f"Invalid headers JSON: {headers}") from e
@@ -515,8 +525,11 @@ Example usage:
     # Scan with LLM only, passing API key directly
     uv run cli/mcp_security_scanner.py --server-url https://example.com/mcp --analyzers llm --api-key sk-...
 
-    # Scan with custom headers (e.g., authentication)
-    uv run cli/mcp_security_scanner.py --server-url https://example.com/mcp --headers '{"X-Authorization": "Bearer token123"}'
+    # Scan with Bearer token authentication
+    uv run cli/mcp_security_scanner.py --server-url https://example.com/mcp --headers '{"Authorization": "Bearer token123"}'
+
+    # Scan with Basic Auth authentication
+    uv run cli/mcp_security_scanner.py --server-url https://example.com/mcp --headers '{"Authorization": "Basic YWRtaW46cGFzc3dvcmQ="}'
 
     # Output as JSON
     uv run cli/mcp_security_scanner.py --server-url https://example.com/mcp --json
@@ -548,7 +561,7 @@ Example usage:
 
     parser.add_argument(
         "--headers",
-        help='JSON string of headers to include in requests (e.g., \'{"X-Authorization": "token"}\')',
+        help='JSON string of headers for auth (e.g., \'{"Authorization": "Basic YWRtaW46cGFzc3dvcmQ="}\' or \'{"Authorization": "Bearer token123"}\')',
     )
 
     args = parser.parse_args()

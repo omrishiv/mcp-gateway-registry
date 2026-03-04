@@ -33,6 +33,51 @@ class RatingRequest(BaseModel):
 templates = Jinja2Templates(directory=settings.templates_dir)
 
 
+def _build_scan_headers_from_server_info(server_info: dict) -> str | None:
+    """Build JSON headers string from a server's stored auth credentials.
+
+    Decrypts the server's auth_credential_encrypted and constructs the
+    appropriate Authorization header so the security scanner can authenticate.
+
+    Args:
+        server_info: Server metadata dictionary
+
+    Returns:
+        JSON string like '{"Authorization": "Basic ..."}', or None if no auth
+    """
+    auth_scheme = server_info.get("auth_scheme", "none")
+    encrypted_credential = server_info.get("auth_credential_encrypted")
+
+    if auth_scheme == "none" or not encrypted_credential:
+        return None
+
+    from ..utils.credential_encryption import decrypt_credential
+
+    credential = decrypt_credential(encrypted_credential)
+    if not credential:
+        logger.warning(
+            f"Could not decrypt credential for '{server_info.get('path', 'unknown')}'. "
+            "Security scan will proceed without auth."
+        )
+        return None
+
+    header_name = server_info.get("auth_header_name", "Authorization")
+
+    if auth_scheme == "bearer":
+        headers = {header_name: f"Bearer {credential}"}
+    elif auth_scheme == "basic":
+        headers = {header_name: f"Basic {credential}"}
+    elif auth_scheme == "api_key":
+        header_name = server_info.get("auth_header_name", "X-API-Key")
+        headers = {header_name: credential}
+    else:
+        logger.warning(f"Unknown auth_scheme '{auth_scheme}' for scanner headers")
+        return None
+
+    logger.info(f"Built {auth_scheme} auth header for security scan")
+    return json.dumps(headers)
+
+
 async def _perform_security_scan_on_registration(
     path: str,
     proxy_pass_url: str,
@@ -66,6 +111,9 @@ async def _perform_security_scan_on_registration(
         headers_json = None
         if headers_list:
             headers_json = json.dumps(headers_list)
+        elif not headers_json:
+            # Fall back to stored server credentials
+            headers_json = _build_scan_headers_from_server_info(server_entry)
 
         # Run the security scan
         scan_result = await security_scanner_service.scan_server(
@@ -3676,8 +3724,8 @@ async def rescan_server(
     if not path.startswith("/"):
         path = "/" + path
 
-    # Check if server exists
-    server_info = await server_service.get_server_info(path)
+    # Check if server exists (include credentials so scanner can authenticate)
+    server_info = await server_service.get_server_info(path, include_credentials=True)
     if not server_info:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -3698,13 +3746,16 @@ async def rescan_server(
     )
 
     try:
+        # Build auth headers from stored server credentials (if any)
+        headers_json = _build_scan_headers_from_server_info(server_info)
+
         # Trigger security scan
         scan_result = await security_scanner_service.scan_server(
             server_url=server_url,
             server_path=path,
             analyzers=None,
             api_key=None,
-            headers=None,
+            headers=headers_json,
             timeout=None,
             mcp_endpoint=server_info.get("mcp_endpoint"),
         )

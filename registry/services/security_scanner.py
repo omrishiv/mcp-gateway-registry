@@ -27,15 +27,20 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 OUTPUT_DIR = PROJECT_ROOT / "security_scans"
 
 
-def _extract_bearer_token_from_headers(headers: str) -> str | None:
+def _extract_scanner_auth_args(headers: str) -> list[str]:
     """
-    Extract bearer token from headers JSON string.
+    Extract authentication arguments for mcp-scanner from headers JSON string.
+
+    Supports:
+    - Bearer token via X-Authorization header
+    - Basic Auth via Authorization header
+    - Arbitrary headers passed through via --header flags
 
     Args:
         headers: JSON string containing headers
 
     Returns:
-        Bearer token if found, None otherwise
+        List of CLI arguments to append to the mcp-scanner command
 
     Raises:
         ValueError: If headers JSON is invalid
@@ -43,18 +48,42 @@ def _extract_bearer_token_from_headers(headers: str) -> str | None:
     logger.info("Adding custom headers for scanning")
     try:
         headers_dict = json.loads(headers)
-        # Check for X-Authorization header with Bearer token
-        auth_header = headers_dict.get("X-Authorization", "")
-        if auth_header.startswith("Bearer "):
-            bearer_token = auth_header.replace("Bearer ", "")
-            logger.info("Using bearer token authentication")
-            return bearer_token
-        else:
-            logger.warning("Headers provided but no Bearer token found in X-Authorization header")
-            return None
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse headers JSON: {e}")
         raise ValueError(f"Invalid headers JSON: {headers}") from e
+
+    args: list[str] = []
+
+    # Check for Bearer token in X-Authorization header
+    x_auth = headers_dict.get("X-Authorization", "")
+    if x_auth.startswith("Bearer "):
+        bearer_token = x_auth.replace("Bearer ", "")
+        args.extend(["--bearer-token", bearer_token])
+        logger.info("Using bearer token authentication")
+        return args
+
+    # Check for Authorization header (Basic Auth or Bearer)
+    auth_header = headers_dict.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        bearer_token = auth_header.replace("Bearer ", "")
+        args.extend(["--bearer-token", bearer_token])
+        logger.info("Using bearer token authentication from Authorization header")
+        return args
+
+    if auth_header.startswith("Basic "):
+        args.extend(["--header", f"Authorization: {auth_header}"])
+        logger.info("Using basic auth authentication")
+        return args
+
+    # Pass any remaining headers as --header flags
+    for name, value in headers_dict.items():
+        args.extend(["--header", f"{name}: {value}"])
+        logger.info(f"Passing custom header: {name}")
+
+    if not args:
+        logger.warning("Headers provided but no recognized authentication found")
+
+    return args
 
 
 def _parse_scanner_json_output(stdout: str) -> list:
@@ -365,11 +394,10 @@ class SecurityScannerService:
             server_url,
         ]
 
-        # Add headers if provided - parse JSON and extract bearer token
+        # Add authentication headers if provided
         if headers:
-            bearer_token = _extract_bearer_token_from_headers(headers)
-            if bearer_token:
-                cmd.extend(["--bearer-token", bearer_token])
+            auth_args = _extract_scanner_auth_args(headers)
+            cmd.extend(auth_args)
 
         # Set environment variable for API key if provided
         env = os.environ.copy()
