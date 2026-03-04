@@ -323,7 +323,7 @@ services:
     environment:
       - HOST=0.0.0.0
       - PORT=8003
-      - REGISTRY_BASE_URL=http://registry:7860
+      - REGISTRY_BASE_URL=http://registry:80
     volumes:
       - ${HOME}/mcp-gateway/servers:/app/registry/servers
       - ${HOME}/mcp-gateway/models:/app/registry/models

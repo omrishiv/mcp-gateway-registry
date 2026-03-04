@@ -10,18 +10,24 @@ from pydantic import BaseModel, Field
 class ServerInfo(BaseModel):
     """Information about a registered MCP server."""
 
-    server_name: str = Field(..., description="Display name of the server")
+    model_config = {"populate_by_name": True}
+
+    server_name: str | None = Field(
+        None, alias="display_name", description="Display name of the server"
+    )
     path: str = Field(..., description="URL path for the server (e.g., '/fininfo')")
     description: str | None = Field(None, description="Server description")
-    enabled: bool = Field(..., description="Whether the server is enabled")
+    enabled: bool = Field(..., alias="is_enabled", description="Whether the server is enabled")
     tags: list[str] = Field(default_factory=list, description="Server tags")
-    tool_count: int | None = Field(None, description="Number of tools provided")
+    tool_count: int | None = Field(
+        None, alias="num_tools", description="Number of tools provided"
+    )
 
 
 class AgentInfo(BaseModel):
     """Information about a registered agent."""
 
-    agent_name: str = Field(..., description="Name of the agent")
+    name: str | None = Field(None, description="Name of the agent")
     description: str | None = Field(None, description="Agent description")
     tags: list[str] = Field(default_factory=list, description="Agent tags")
     created_at: str | None = Field(None, description="Creation timestamp")
@@ -30,7 +36,8 @@ class AgentInfo(BaseModel):
 class SkillInfo(BaseModel):
     """Information about a registered skill."""
 
-    skill_name: str = Field(..., description="Name of the skill")
+    path: str = Field(..., description="Skill path")
+    name: str | None = Field(None, description="Name of the skill")
     description: str | None = Field(None, description="Skill description")
     tags: list[str] = Field(default_factory=list, description="Skill tags")
     created_at: str | None = Field(None, description="Creation timestamp")
@@ -47,12 +54,13 @@ class ToolSearchResult(BaseModel):
 
 
 class RegistryStats(BaseModel):
-    """Registry statistics and health information."""
+    """Registry statistics and health information.
 
-    total_servers: int = Field(..., description="Total number of servers")
-    enabled_servers: int | None = Field(None, description="Number of enabled servers")
-    total_tools: int | None = Field(None, description="Total number of tools")
-    health_status: str = Field(default="unknown", description="Health status")
+    Accepts any fields from the health endpoint response.
+    """
+
+    class Config:
+        extra = "allow"
 
 
 class ErrorResponse(BaseModel):

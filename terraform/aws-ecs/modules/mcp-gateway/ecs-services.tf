@@ -400,10 +400,10 @@ module "ecs_service_registry" {
     namespace = aws_service_discovery_private_dns_namespace.mcp.arn
     service = [{
       client_alias = {
-        port     = 7860
+        port     = 80
         dns_name = "registry"
       }
-      port_name      = "registry"
+      port_name      = "http"
       discovery_name = "registry"
     }]
   }
@@ -801,6 +801,13 @@ module "ecs_service_registry" {
       ip_protocol                  = "tcp"
       referenced_security_group_id = module.alb.security_group_id
     }
+    mcpgw_internal = {
+      description                  = "HTTP from mcpgw for internal API calls"
+      from_port                    = 80
+      to_port                      = 80
+      ip_protocol                  = "tcp"
+      referenced_security_group_id = module.ecs_service_mcpgw.security_group_id
+    }
   }
   security_group_egress_rules = {
     all = {
@@ -1044,7 +1051,7 @@ module "ecs_service_mcpgw" {
         },
         {
           name  = "REGISTRY_BASE_URL"
-          value = "http://registry:7860"
+          value = "http://registry"
         },
         {
           name  = "REGISTRY_USERNAME"

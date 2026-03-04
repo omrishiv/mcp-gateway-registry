@@ -76,34 +76,38 @@ module "alb" {
   # Security Groups
   # Create dynamic ingress rules for each CIDR block and port combination
   # Note: CloudFront prefix list is in a separate SG (alb_cloudfront) to avoid rules limit
-  security_group_ingress_rules = merge([
-    for idx, cidr in var.ingress_cidr_blocks : {
-      "http_${idx}" = {
-        from_port   = 80
-        to_port     = 80
-        ip_protocol = "tcp"
-        cidr_ipv4   = cidr
+  security_group_ingress_rules = merge(
+    merge([
+      for idx, cidr in var.ingress_cidr_blocks : {
+        "http_${idx}" = {
+          from_port   = 80
+          to_port     = 80
+          ip_protocol = "tcp"
+          cidr_ipv4   = cidr
+        }
+        "https_${idx}" = {
+          from_port   = 443
+          to_port     = 443
+          ip_protocol = "tcp"
+          cidr_ipv4   = cidr
+        }
+        "auth_port_${idx}" = {
+          from_port   = 8888
+          to_port     = 8888
+          ip_protocol = "tcp"
+          cidr_ipv4   = cidr
+        }
+        "gradio_port_${idx}" = {
+          from_port   = 7860
+          to_port     = 7860
+          ip_protocol = "tcp"
+          cidr_ipv4   = cidr
+        }
       }
-      "https_${idx}" = {
-        from_port   = 443
-        to_port     = 443
-        ip_protocol = "tcp"
-        cidr_ipv4   = cidr
-      }
-      "auth_port_${idx}" = {
-        from_port   = 8888
-        to_port     = 8888
-        ip_protocol = "tcp"
-        cidr_ipv4   = cidr
-      }
-      "gradio_port_${idx}" = {
-        from_port   = 7860
-        to_port     = 7860
-        ip_protocol = "tcp"
-        cidr_ipv4   = cidr
-      }
+    ]...),
+    {
     }
-  ]...)
+  )
   security_group_egress_rules = {
     all = {
       ip_protocol = "-1"

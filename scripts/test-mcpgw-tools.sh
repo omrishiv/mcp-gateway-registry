@@ -12,13 +12,11 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-MCPGW_URL="${MCPGW_URL:-https://mcpgateway.ddns.net/mcpgw/mcp}"
+MCPGW_URL="${MCPGW_URL:-https://mcpgateway.ddns.net/airegistry-tools/mcp}"
 TOKEN_FILE="${TOKEN_FILE:-.token}"
-REGISTRY_URL="https://mcpgateway.ddns.net"
 
 echo -e "${BLUE}=== MCP Gateway Tools Test Script ===${NC}"
 echo "MCPGW URL: $MCPGW_URL"
-echo "Registry URL: $REGISTRY_URL"
 echo
 
 # Read token from .token file
@@ -199,14 +197,10 @@ echo -e "${GREEN}=== Step 4: Test All Tools ===${NC}"
 
 # Tool 1: list_services
 echo -e "${YELLOW}--- Testing: list_services ---${NC}"
-LIST_SERVICES_PARAMS=$(jq -n \
-    --arg url "$REGISTRY_URL" \
-    '{
-        name: "list_services",
-        arguments: {
-            registry_url: $url
-        }
-    }')
+LIST_SERVICES_PARAMS=$(jq -n '{
+    name: "list_services",
+    arguments: {}
+}')
 
 LIST_SERVICES_OUTPUT=$(make_request "tools/call" "$LIST_SERVICES_PARAMS" "call-1")
 LIST_SERVICES_RESPONSE=$(extract_response "$LIST_SERVICES_OUTPUT")
@@ -216,14 +210,10 @@ echo
 
 # Tool 2: list_agents
 echo -e "${YELLOW}--- Testing: list_agents ---${NC}"
-LIST_AGENTS_PARAMS=$(jq -n \
-    --arg url "$REGISTRY_URL" \
-    '{
-        name: "list_agents",
-        arguments: {
-            registry_url: $url
-        }
-    }')
+LIST_AGENTS_PARAMS=$(jq -n '{
+    name: "list_agents",
+    arguments: {}
+}')
 
 LIST_AGENTS_OUTPUT=$(make_request "tools/call" "$LIST_AGENTS_PARAMS" "call-2")
 LIST_AGENTS_RESPONSE=$(extract_response "$LIST_AGENTS_OUTPUT")
@@ -233,14 +223,10 @@ echo
 
 # Tool 3: list_skills
 echo -e "${YELLOW}--- Testing: list_skills ---${NC}"
-LIST_SKILLS_PARAMS=$(jq -n \
-    --arg url "$REGISTRY_URL" \
-    '{
-        name: "list_skills",
-        arguments: {
-            registry_url: $url
-        }
-    }')
+LIST_SKILLS_PARAMS=$(jq -n '{
+    name: "list_skills",
+    arguments: {}
+}')
 
 LIST_SKILLS_OUTPUT=$(make_request "tools/call" "$LIST_SKILLS_PARAMS" "call-3")
 LIST_SKILLS_RESPONSE=$(extract_response "$LIST_SKILLS_OUTPUT")
@@ -250,16 +236,13 @@ echo
 
 # Tool 4: intelligent_tool_finder
 echo -e "${YELLOW}--- Testing: intelligent_tool_finder ---${NC}"
-SEARCH_PARAMS=$(jq -n \
-    --arg url "$REGISTRY_URL" \
-    '{
-        name: "intelligent_tool_finder",
-        arguments: {
-            query: "find weather information",
-            top_n: 3,
-            registry_url: $url
-        }
-    }')
+SEARCH_PARAMS=$(jq -n '{
+    name: "intelligent_tool_finder",
+    arguments: {
+        query: "find weather information",
+        top_n: 3
+    }
+}')
 
 SEARCH_OUTPUT=$(make_request "tools/call" "$SEARCH_PARAMS" "call-4")
 SEARCH_RESPONSE=$(extract_response "$SEARCH_OUTPUT")
@@ -269,14 +252,10 @@ echo
 
 # Tool 5: healthcheck
 echo -e "${YELLOW}--- Testing: healthcheck ---${NC}"
-HEALTH_PARAMS=$(jq -n \
-    --arg url "$REGISTRY_URL" \
-    '{
-        name: "healthcheck",
-        arguments: {
-            registry_url: $url
-        }
-    }')
+HEALTH_PARAMS=$(jq -n '{
+    name: "healthcheck",
+    arguments: {}
+}')
 
 HEALTH_OUTPUT=$(make_request "tools/call" "$HEALTH_PARAMS" "call-5")
 HEALTH_RESPONSE=$(extract_response "$HEALTH_OUTPUT")
@@ -301,11 +280,3 @@ echo -e "${GREEN}=== Test Summary ===${NC}"
 echo -e "${GREEN}✓ Session ID: $SESSION_ID${NC}"
 echo -e "${GREEN}✓ All 5 tools tested successfully${NC}"
 echo -e "${GREEN}✓ Session persistence verified${NC}"
-echo
-echo -e "${BLUE}Key Insight:${NC}"
-echo "Without the Mcp-Session-Id header being forwarded by nginx,"
-echo "the FastMCP streamable-http transport cannot maintain sessions."
-echo "Each request would create a NEW session, causing 404 errors"
-echo "when clients try to reuse session IDs."
-echo
-echo -e "${GREEN}This proves the nginx configuration change is NECESSARY!${NC}"

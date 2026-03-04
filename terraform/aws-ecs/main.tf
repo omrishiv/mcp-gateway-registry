@@ -81,7 +81,7 @@ module "mcp_gateway" {
 
   # Auto-scaling configuration
   enable_autoscaling        = true
-  autoscaling_min_capacity  = 2
+  autoscaling_min_capacity  = 1
   autoscaling_max_capacity  = 4
   autoscaling_target_cpu    = 70
   autoscaling_target_memory = 80

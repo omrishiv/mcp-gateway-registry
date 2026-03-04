@@ -13,7 +13,7 @@ app:
   port: 8000
 
   # Registry connection
-  registryUrl: http://registry:7860
+  registryUrl: http://registry:80
 
   # Security settings
   # secretKey: Required for standalone deployment (not needed when deployed via stack).

@@ -7,8 +7,8 @@ All tools require bearer token authentication via the Authorization header.
 """
 
 import logging
+import os
 from typing import Any
-from urllib.parse import urlparse
 
 import httpx
 from fastmcp import Context, FastMCP
@@ -22,42 +22,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Security constants
-ALLOWED_REGISTRY_HOSTS: list[str] = [
-    "localhost",
-    "127.0.0.1",
-    "mcpgw-server",
-    "registry",
-]
+# Get registry URL from environment (used inside Docker containers)
+# This is the internal registry URL that mcpgw uses to communicate with the registry
+# Example: http://registry:7860 (Docker), http://registry.namespace.svc.cluster.local:8000 (K8s)
+REGISTRY_URL = os.getenv("REGISTRY_BASE_URL", "http://localhost")
+
+# Input validation constants
 MAX_QUERY_LENGTH: int = 500
 MIN_TOP_N: int = 1
 MAX_TOP_N: int = 100
 
+logger.info(f"Registry URL: {REGISTRY_URL}")
+
 # Initialize FastMCP server
 mcp = FastMCP("mcpgw")
-
-
-def _validate_registry_url(registry_url: str) -> str:
-    """Validate registry URL against allowlist to prevent SSRF attacks.
-
-    Args:
-        registry_url: Registry base URL to validate
-
-    Returns:
-        Validated registry URL
-
-    Raises:
-        ValueError: If hostname is not in the allowlist
-    """
-    parsed = urlparse(registry_url)
-    hostname = parsed.hostname
-
-    if not hostname or hostname not in ALLOWED_REGISTRY_HOSTS:
-        raise ValueError(
-            f"Invalid registry URL. Hostname must be one of: {', '.join(ALLOWED_REGISTRY_HOSTS)}"
-        )
-
-    return registry_url
 
 
 def _validate_top_n(top_n: int) -> int:
@@ -105,6 +83,8 @@ def _validate_query(query: str) -> str:
 def _extract_bearer_token(ctx: Context | None) -> str:
     """Extract bearer token from FastMCP context via Starlette Request.
 
+    Supports both standard Authorization header and MCP Gateway's X-Authorization header.
+
     Args:
         ctx: FastMCP context containing request information
 
@@ -122,15 +102,21 @@ def _extract_bearer_token(ctx: Context | None) -> str:
         if hasattr(ctx, "request_context") and ctx.request_context:
             request = ctx.request_context.request
             if request and hasattr(request, "headers"):
-                # Get Authorization header (case-insensitive)
+                # Try standard Authorization header first (case-insensitive)
                 auth_header = request.headers.get("authorization")
+
+                # If not found, try MCP Gateway's X-Authorization header
+                if not auth_header:
+                    auth_header = request.headers.get("x-authorization")
 
                 if auth_header and auth_header.lower().startswith("bearer "):
                     token = auth_header.split(" ", 1)[1]
                     logger.debug(f"Successfully extracted token (length: {len(token)})")
                     return token
 
-                raise ValueError("Authorization header not found or not a Bearer token")
+                raise ValueError(
+                    "Authorization or X-Authorization header not found or not a Bearer token"
+                )
             else:
                 raise ValueError(
                     "Request object or headers not found in request_context"
@@ -146,42 +132,42 @@ def _extract_bearer_token(ctx: Context | None) -> str:
 
 
 @mcp.tool()
-async def list_services(
-    registry_url: str = "http://localhost", ctx: Context | None = None
-) -> dict[str, Any]:
+async def list_services(ctx: Context | None = None) -> dict[str, Any]:
     """
     List all MCP servers registered in the gateway.
-
-    Args:
-        registry_url: Base URL of the registry (default: http://localhost)
 
     Returns:
         Dictionary containing services, total_count, enabled_count, and status
     """
-    logger.info(f"list_services called with registry_url: {registry_url}")
+    logger.info("list_services called")
 
     try:
-        # Validate inputs
-        registry_url = _validate_registry_url(registry_url)
         token = _extract_bearer_token(ctx)
-        headers = {"Authorization": f"Bearer {token}"}
+        # Use X-Authorization header for internal registry API calls
+        headers = {"X-Authorization": f"Bearer {token}"}
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(
-                f"{registry_url}/api/servers", headers=headers
+                f"{REGISTRY_URL}/api/servers", headers=headers
             )
             response.raise_for_status()
             data = response.json()
 
         # Parse response
-        if isinstance(data, dict) and "services" in data:
-            servers = data["services"]
+        if isinstance(data, dict) and "servers" in data:
+            servers = data["servers"]
         elif isinstance(data, list):
             servers = data
         else:
             servers = []
 
-        services = [ServerInfo(**s).model_dump() for s in servers]
+        # Validate and convert to ServerInfo models
+        services = []
+        for s in servers:
+            try:
+                services.append(ServerInfo(**s).model_dump())
+            except Exception as e:
+                logger.warning(f"Failed to parse server {s.get('path', 'unknown')}: {e}")
         enabled_count = sum(1 for s in services if s.get("enabled"))
 
         return {
@@ -218,28 +204,22 @@ async def list_services(
 
 
 @mcp.tool()
-async def list_agents(
-    registry_url: str = "http://localhost", ctx: Context | None = None
-) -> dict[str, Any]:
+async def list_agents(ctx: Context | None = None) -> dict[str, Any]:
     """
     List all agents registered in the gateway.
-
-    Args:
-        registry_url: Base URL of the registry (default: http://localhost)
 
     Returns:
         Dictionary containing agents, total_count, and status
     """
-    logger.info(f"list_agents called with registry_url: {registry_url}")
+    logger.info("list_agents called")
 
     try:
-        # Validate inputs
-        registry_url = _validate_registry_url(registry_url)
         token = _extract_bearer_token(ctx)
-        headers = {"Authorization": f"Bearer {token}"}
+        # Use X-Authorization header for internal registry API calls
+        headers = {"X-Authorization": f"Bearer {token}"}
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(f"{registry_url}/api/agents", headers=headers)
+            response = await client.get(f"{REGISTRY_URL}/api/agents", headers=headers)
             response.raise_for_status()
             data = response.json()
 
@@ -279,28 +259,22 @@ async def list_agents(
 
 
 @mcp.tool()
-async def list_skills(
-    registry_url: str = "http://localhost", ctx: Context | None = None
-) -> dict[str, Any]:
+async def list_skills(ctx: Context | None = None) -> dict[str, Any]:
     """
     List all skills registered in the gateway.
-
-    Args:
-        registry_url: Base URL of the registry (default: http://localhost)
 
     Returns:
         Dictionary containing skills, total_count, and status
     """
-    logger.info(f"list_skills called with registry_url: {registry_url}")
+    logger.info("list_skills called")
 
     try:
-        # Validate inputs
-        registry_url = _validate_registry_url(registry_url)
         token = _extract_bearer_token(ctx)
-        headers = {"Authorization": f"Bearer {token}"}
+        # Use X-Authorization header for internal registry API calls
+        headers = {"X-Authorization": f"Bearer {token}"}
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(f"{registry_url}/api/skills", headers=headers)
+            response = await client.get(f"{REGISTRY_URL}/api/skills", headers=headers)
             response.raise_for_status()
             data = response.json()
 
@@ -343,7 +317,6 @@ async def list_skills(
 async def intelligent_tool_finder(
     query: str,
     top_n: int = 5,
-    registry_url: str = "http://localhost",
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """
@@ -352,34 +325,47 @@ async def intelligent_tool_finder(
     Args:
         query: Natural language description of what you want to do
         top_n: Number of results to return (default: 5, max: 100)
-        registry_url: Base URL of the registry (default: http://localhost)
 
     Returns:
         Dictionary containing results, query, total_results, and status
     """
-    logger.info(
-        f"intelligent_tool_finder called: query={query}, top_n={top_n}, registry_url={registry_url}"
-    )
+    logger.info(f"intelligent_tool_finder called: query={query}, top_n={top_n}")
 
     try:
         # Validate inputs
         query = _validate_query(query)
         top_n = _validate_top_n(top_n)
-        registry_url = _validate_registry_url(registry_url)
         token = _extract_bearer_token(ctx)
-        headers = {"Authorization": f"Bearer {token}"}
+        # Use X-Authorization header for internal registry API calls
+        headers = {"X-Authorization": f"Bearer {token}"}
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
-                f"{registry_url}/api/search/semantic",
+                f"{REGISTRY_URL}/api/search/semantic",
                 headers=headers,
                 json={"query": query, "entity_type": "tool", "top_k": top_n},
             )
             response.raise_for_status()
             data = response.json()
 
-        results = data.get("results", []) if isinstance(data, dict) else data
-        result_list = [ToolSearchResult(**r).model_dump() for r in results]
+        # Extract servers array from response
+        servers = data.get("servers", []) if isinstance(data, dict) else []
+
+        # Flatten matching_tools from all servers into ToolSearchResult objects
+        result_list = []
+        for server in servers:
+            server_path = server.get("path", "")
+            server_name = server.get("server_name", "")
+            for tool in server.get("matching_tools", []):
+                result_list.append(
+                    ToolSearchResult(
+                        tool_name=tool.get("tool_name", ""),
+                        server_name=server_name,
+                        description=tool.get("description"),
+                        score=tool.get("relevance_score"),
+                        path=server_path,
+                    ).model_dump()
+                )
 
         return {
             "results": result_list,
@@ -418,29 +404,23 @@ async def intelligent_tool_finder(
 
 
 @mcp.tool()
-async def healthcheck(
-    registry_url: str = "http://localhost", ctx: Context | None = None
-) -> dict[str, Any]:
+async def healthcheck(ctx: Context | None = None) -> dict[str, Any]:
     """
     Get registry health status and statistics.
-
-    Args:
-        registry_url: Base URL of the registry (default: http://localhost)
 
     Returns:
         Dictionary containing health stats and status
     """
-    logger.info(f"healthcheck called with registry_url: {registry_url}")
+    logger.info("healthcheck called")
 
     try:
-        # Validate inputs
-        registry_url = _validate_registry_url(registry_url)
         token = _extract_bearer_token(ctx)
-        headers = {"Authorization": f"Bearer {token}"}
+        # Use X-Authorization header for internal registry API calls
+        headers = {"X-Authorization": f"Bearer {token}"}
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(
-                f"{registry_url}/api/servers/health", headers=headers
+                f"{REGISTRY_URL}/api/servers/health", headers=headers
             )
             response.raise_for_status()
             data = response.json()
@@ -475,7 +455,6 @@ if __name__ == "__main__":
     import os
 
     logger.info("Starting mcpgw server")
-    logger.info("All tools accept registry_url parameter (default: http://localhost)")
 
     # Use HTTP transport if PORT is set (Docker container), otherwise stdio
     port = os.environ.get("PORT")

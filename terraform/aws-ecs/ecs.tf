@@ -8,6 +8,11 @@ module "ecs_cluster" {
 
   name = "${var.name}-ecs-cluster"
 
+  # Enable Service Connect at cluster level
+  service_connect_defaults = {
+    namespace = module.mcp_gateway.service_discovery_namespace_arn
+  }
+
   configuration = {
     execute_command_configuration = {
       logging = "OVERRIDE"
