@@ -3,9 +3,6 @@
 # Build context can be either the server directory or repo root (for servers needing registry module)
 FROM python:3.12-slim
 
-# Build arg for server directory (when building from repo root)
-ARG SERVER_DIR
-
 ENV PYTHONUNBUFFERED=1
 
 # Install system dependencies
@@ -18,6 +15,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+
+# Install uv and setup Python environment
+RUN pip install uv && \
+    uv venv .venv --python 3.12
+
+# Install CPU-only PyTorch first to avoid GPU dependencies (for sentence-transformers)
+RUN . .venv/bin/activate && \
+    uv pip install --index-url https://download.pytorch.org/whl/cpu \
+    "torch>=2.0.0" \
+    "torchvision"
+
+# Build arg for server directory (when building from repo root)
+ARG SERVER_DIR
 
 # Copy server files - handle both build contexts
 # If SERVER_DIR is set (building from root), copy from that directory
@@ -35,16 +45,6 @@ RUN if [ -d /tmp/build-context/registry ]; then \
         echo "Registry module not found in build context (expected for non-mcpgw servers)"; \
     fi && \
     rm -rf /tmp/build-context
-
-# Install uv and setup Python environment
-RUN pip install uv && \
-    uv venv .venv --python 3.12
-
-# Install CPU-only PyTorch first to avoid GPU dependencies (for sentence-transformers)
-RUN . .venv/bin/activate && \
-    uv pip install --index-url https://download.pytorch.org/whl/cpu \
-    "torch>=2.0.0" \
-    "torchvision"
 
 # Install dependencies from pyproject.toml (copied from SERVER_PATH)
 RUN . .venv/bin/activate && \
