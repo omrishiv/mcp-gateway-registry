@@ -7,7 +7,7 @@ global:
 
 # Application configuration
 app:
-  name: mcpgw
+  name: mcpgw-server
   replicas: 1
   envSecretName: mcpgw-secret
   port: 8000
@@ -32,7 +32,7 @@ app:
 # Service configuration
 service:
   type: ClusterIP
-  port: 8000
+  port: 8003
   annotations: {}
 
 # Resource limits and requests

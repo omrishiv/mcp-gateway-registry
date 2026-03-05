@@ -23,10 +23,6 @@ dependencies:
     version: 0.1.0
     repository: "file://../mcpgw"
     condition: mcpgw.enabled
-  - name: mcpgw-configure
-    version: 0.1.0
-    repository: "file://../mcpgw-configure"
-    condition: mcpgw.enabled
   - name: keycloak-configure
     version: 0.1.0
     repository: "file://../keycloak-configure"
