@@ -1,5 +1,6 @@
 import React from 'react';
 import { ClipboardDocumentIcon } from '@heroicons/react/24/outline';
+import useEscapeKey from '../hooks/useEscapeKey';
 interface AgentLike {
   name: string;
   path: string;
@@ -28,6 +29,8 @@ const AgentDetailsModal: React.FC<AgentDetailsModalProps> = ({
   fullDetails,
   onCopy,
 }) => {
+  useEscapeKey(onClose, isOpen);
+
   if (!isOpen) {
     return null;
   }

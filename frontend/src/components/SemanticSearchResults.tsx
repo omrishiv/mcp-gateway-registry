@@ -22,6 +22,7 @@ import ServerConfigModal from './ServerConfigModal';
 import AgentDetailsModal from './AgentDetailsModal';
 import type { Server } from './ServerCard';
 import type { Agent as AgentType } from './AgentCard';
+import useEscapeKey from '../hooks/useEscapeKey';
 
 interface SemanticSearchResultsProps {
   query: string;
@@ -49,6 +50,7 @@ const ToolSchemaModal: React.FC<ToolSchemaModalProps> = ({
   isOpen,
   onClose
 }) => {
+  useEscapeKey(onClose, isOpen);
   if (!isOpen) return null;
 
   return (
@@ -124,6 +126,7 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
   isOpen,
   onClose
 }) => {
+  useEscapeKey(onClose, isOpen);
   if (!isOpen) return null;
 
   const isFederatedServer = server.sync_metadata?.is_federated === true;
@@ -253,6 +256,8 @@ const SkillContentModal: React.FC<SkillContentModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [content, setContent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEscapeKey(onClose, isOpen);
 
   // Fetch content when modal opens
   React.useEffect(() => {
@@ -437,6 +442,7 @@ const VirtualServerDetailsModal: React.FC<VirtualServerDetailsModalProps> = ({
   const [copiedEndpoint, setCopiedEndpoint] = useState(false);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
 
+  useEscapeKey(onClose, isOpen);
   if (!isOpen) return null;
 
   const tools = virtualServer.matching_tools || [];

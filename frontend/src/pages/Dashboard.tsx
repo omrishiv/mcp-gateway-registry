@@ -664,6 +664,22 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
     }
   }, [searchTerm, committedQuery]);
 
+  // Close any open inline modal on Escape key
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (showVirtualServerForm) { handleCancelVirtualServerEdit(); return; }
+      if (deleteVirtualServerTarget) { setDeleteVirtualServerTarget(null); setDeleteVirtualServerTypedName(''); return; }
+      if (showDeleteSkillConfirm) { setShowDeleteSkillConfirm(null); return; }
+      if (showSkillModal) { setShowSkillModal(false); return; }
+      if (editingAgent) { setEditingAgent(null); return; }
+      if (editingServer) { setEditingServer(null); return; }
+      if (showRegisterModal) { setShowRegisterModal(false); return; }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [showVirtualServerForm, deleteVirtualServerTarget, showDeleteSkillConfirm, showSkillModal, editingAgent, editingServer, showRegisterModal, handleCancelVirtualServerEdit]);
+
   const handleSemanticSearch = useCallback(() => {
     const trimmed = searchTerm.trim();
     setCommittedQuery(trimmed);

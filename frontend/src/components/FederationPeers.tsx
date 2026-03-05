@@ -19,6 +19,7 @@ import {
   deletePeer,
   syncPeer,
 } from '../hooks/useFederationPeers';
+import useEscapeKey from '../hooks/useEscapeKey';
 
 
 /**
@@ -219,6 +220,8 @@ const FederationPeers: React.FC<FederationPeersProps> = ({ onShowToast }) => {
   const [deleteTarget, setDeleteTarget] = useState<PeerWithStatus | null>(null);
   const [typedName, setTypedName] = useState('');
   const [isDeleting, setIsDeleting] = useState(false);
+
+  useEscapeKey(() => { setDeleteTarget(null); setTypedName(''); }, !!deleteTarget);
 
   // Auto-refresh every 30 seconds for sync status updates
   useEffect(() => {

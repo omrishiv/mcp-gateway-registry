@@ -6,6 +6,7 @@ import {
   ExclamationTriangleIcon,
   ArrowPathIcon,
 } from '@heroicons/react/24/outline';
+import useEscapeKey from '../hooks/useEscapeKey';
 
 
 interface ServerVersion {
@@ -52,6 +53,8 @@ const VersionSelectorModal: React.FC<VersionSelectorModalProps> = ({
   canModify = false,
 }) => {
   const [loading, setLoading] = useState<string | null>(null);
+
+  useEscapeKey(onClose, isOpen);
 
   if (!isOpen) {
     return null;

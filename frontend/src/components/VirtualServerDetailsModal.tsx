@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { XMarkIcon, ChevronDownIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
 import { VirtualServerInfo, VirtualServerConfig, ToolMapping } from '../types/virtualServer';
 import axios from 'axios';
+import useEscapeKey from '../hooks/useEscapeKey';
 
 
 interface VirtualServerDetailsModalProps {
@@ -19,6 +20,8 @@ const VirtualServerDetailsModal: React.FC<VirtualServerDetailsModalProps> = ({
   const [fullConfig, setFullConfig] = useState<VirtualServerConfig | null>(null);
   const [loading, setLoading] = useState(false);
   const [expandedBackends, setExpandedBackends] = useState<Record<string, boolean>>({});
+
+  useEscapeKey(onClose, isOpen);
 
   // Fetch full config when modal opens
   useEffect(() => {

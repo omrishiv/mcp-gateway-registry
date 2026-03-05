@@ -12,6 +12,7 @@ import {
 import { VirtualServerInfo, ResolvedTool } from '../types/virtualServer';
 import ServerConfigModal from './ServerConfigModal';
 import StarRatingWidget from './StarRatingWidget';
+import useEscapeKey from '../hooks/useEscapeKey';
 
 
 /**
@@ -51,6 +52,8 @@ const VirtualServerCard: React.FC<VirtualServerCardProps> = ({
   const [expandedBackends, setExpandedBackends] = useState<Record<string, boolean>>({});
   const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({});
   const [showConfig, setShowConfig] = useState(false);
+
+  useEscapeKey(() => setShowTools(false), showTools);
 
   const handleViewTools = useCallback(async () => {
     if (loadingTools) return;

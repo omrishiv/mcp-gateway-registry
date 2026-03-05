@@ -8,6 +8,7 @@ import {
   ChevronDownIcon,
   ChevronRightIcon,
 } from '@heroicons/react/24/outline';
+import useEscapeKey from '../hooks/useEscapeKey';
 
 
 export interface SecurityScanResult {
@@ -134,6 +135,8 @@ const SecurityScanModal: React.FC<SecurityScanModalProps> = ({
   const [showRawJson, setShowRawJson] = useState(false);
   const [expandedAnalyzers, setExpandedAnalyzers] = useState<Set<string>>(new Set());
   const [rescanning, setRescanning] = useState(false);
+
+  useEscapeKey(onClose, isOpen);
 
   if (!isOpen) {
     return null;

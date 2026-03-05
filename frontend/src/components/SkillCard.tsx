@@ -24,6 +24,7 @@ import {
 import { Skill } from '../types/skill';
 import StarRatingWidget from './StarRatingWidget';
 import SecurityScanModal from './SecurityScanModal';
+import useEscapeKey from '../hooks/useEscapeKey';
 
 /**
  * Props for the SkillCard component.
@@ -128,6 +129,8 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
   const [showDetails, setShowDetails] = useState(false);
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [skillMdContent, setSkillMdContent] = useState<string | null>(null);
+
+  useEscapeKey(() => setShowDetails(false), showDetails);
   const [loadingToolCheck, setLoadingToolCheck] = useState(false);
   const [toolCheckResult, setToolCheckResult] = useState<any>(null);
   const [loadingHealthCheck, setLoadingHealthCheck] = useState(false);

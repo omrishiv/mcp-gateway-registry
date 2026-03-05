@@ -3,6 +3,7 @@ import { ClipboardDocumentIcon, KeyIcon } from '@heroicons/react/24/outline';
 import axios from 'axios';
 import type { Server } from './ServerCard';
 import { useRegistryConfig } from '../hooks/useRegistryConfig';
+import useEscapeKey from '../hooks/useEscapeKey';
 
 type IDE = 'cursor' | 'roo-code' | 'claude-code' | 'kiro';
 
@@ -25,6 +26,8 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
   const [tokenError, setTokenError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const { config: registryConfig, loading: configLoading } = useRegistryConfig();
+
+  useEscapeKey(onClose, isOpen);
 
   // Determine if we're in registry-only mode
   // While config is loading, default to with-gateway behavior (safer default)

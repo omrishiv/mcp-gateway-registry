@@ -21,6 +21,7 @@ import StarRatingWidget from './StarRatingWidget';
 import VersionBadge from './VersionBadge';
 import VersionSelectorModal from './VersionSelectorModal';
 import DeleteConfirmation from './DeleteConfirmation';
+import useEscapeKey from '../hooks/useEscapeKey';
 
 interface ServerVersion {
   version: string;
@@ -144,6 +145,13 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
   const [showVersionSelector, setShowVersionSelector] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [expandedDescriptions, setExpandedDescriptions] = useState<Set<number>>(new Set());
+
+  const closeToolsModal = useCallback(() => {
+    setShowTools(false);
+    setExpandedDescriptions(new Set());
+  }, []);
+  useEscapeKey(closeToolsModal, showTools);
+  useEscapeKey(() => setShowDeleteConfirm(false), showDeleteConfirm);
 
   // Fetch security scan status on mount to show correct icon color
   useEffect(() => {

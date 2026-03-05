@@ -17,6 +17,7 @@ import {
   UpdateVirtualServerRequest,
 } from '../types/virtualServer';
 import VirtualServerForm from './VirtualServerForm';
+import useEscapeKey from '../hooks/useEscapeKey';
 
 
 /**
@@ -51,6 +52,9 @@ const VirtualServerList: React.FC<VirtualServerListProps> = ({ onShowToast }) =>
   const [deleteTarget, setDeleteTarget] = useState<VirtualServerInfo | null>(null);
   const [typedName, setTypedName] = useState('');
   const [isDeleting, setIsDeleting] = useState(false);
+
+  useEscapeKey(() => { setShowForm(false); setEditingPath(undefined); }, showForm);
+  useEscapeKey(() => { setDeleteTarget(null); setTypedName(''); }, !!deleteTarget);
 
   const canModify = user?.can_modify_servers || user?.is_admin || false;
 
