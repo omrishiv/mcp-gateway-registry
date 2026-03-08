@@ -685,33 +685,9 @@ module "ecs_service_registry" {
         ] : []
       )
 
-      mountPoints = [
-        {
-          sourceVolume  = "mcp-servers"
-          containerPath = "/app/registry/servers"
-          readOnly      = false
-        },
-        {
-          sourceVolume  = "mcp-agents"
-          containerPath = "/app/registry/agents"
-          readOnly      = false
-        },
-        {
-          sourceVolume  = "mcp-models"
-          containerPath = "/app/registry/models"
-          readOnly      = false
-        },
-        {
-          sourceVolume  = "mcp-logs"
-          containerPath = "/app/logs"
-          readOnly      = false
-        },
-        {
-          sourceVolume  = "auth-config"
-          containerPath = "/app/auth_server"
-          readOnly      = false
-        }
-      ]
+      # EFS volumes removed - registry now uses ephemeral storage and DocumentDB for persistence
+      # Logs go to CloudWatch only
+      mountPoints = []
 
       enable_cloudwatch_logging              = true
       cloudwatch_log_group_name              = "/ecs/${local.name_prefix}-registry"
@@ -727,43 +703,8 @@ module "ecs_service_registry" {
     }
   }
 
-  volume = {
-    mcp-servers = {
-      efs_volume_configuration = {
-        file_system_id     = module.efs.id
-        access_point_id    = module.efs.access_points["servers"].id
-        transit_encryption = "ENABLED"
-      }
-    }
-    mcp-agents = {
-      efs_volume_configuration = {
-        file_system_id     = module.efs.id
-        access_point_id    = module.efs.access_points["agents"].id
-        transit_encryption = "ENABLED"
-      }
-    }
-    mcp-models = {
-      efs_volume_configuration = {
-        file_system_id     = module.efs.id
-        access_point_id    = module.efs.access_points["models"].id
-        transit_encryption = "ENABLED"
-      }
-    }
-    mcp-logs = {
-      efs_volume_configuration = {
-        file_system_id     = module.efs.id
-        access_point_id    = module.efs.access_points["logs"].id
-        transit_encryption = "ENABLED"
-      }
-    }
-    auth-config = {
-      efs_volume_configuration = {
-        file_system_id     = module.efs.id
-        access_point_id    = module.efs.access_points["auth_config"].id
-        transit_encryption = "ENABLED"
-      }
-    }
-  }
+  # EFS volumes removed - registry uses ephemeral storage and DocumentDB for persistence
+  volume = {}
 
   load_balancer = {
     http = {
