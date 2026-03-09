@@ -1034,7 +1034,6 @@ uv run python cli/mcp_services.py rate-agent \
 
 **Core Variables:**
 - `REGISTRY_URL`: Public URL of registry
-- `ADMIN_USER`, `ADMIN_PASSWORD`: Registry admin credentials
 - `AUTH_PROVIDER`: `keycloak` or `cognito`
 - `AWS_REGION`: AWS region for services
 

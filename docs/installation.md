@@ -237,7 +237,7 @@ open http://localhost:8080  # macOS
    ```
 
    **Required Configuration:**
-   - `ADMIN_PASSWORD`: Secure admin password
+   - `KEYCLOAK_ADMIN_PASSWORD`: Keycloak admin password (if using Keycloak)
    - `COGNITO_USER_POOL_ID`: Amazon Cognito User Pool ID
    - `COGNITO_CLIENT_ID`: Cognito App Client ID
    - `COGNITO_CLIENT_SECRET`: Cognito App Client Secret

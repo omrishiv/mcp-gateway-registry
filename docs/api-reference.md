@@ -76,24 +76,7 @@ curl -b "mcp_gateway_session=<session_value>" \
 
 ---
 
-### 3. HTTP Basic Auth
-
-**Used by:** Internal Admin Endpoints
-
-**How it works:**
-- Credentials: `ADMIN_USER:ADMIN_PASSWORD` from environment
-- Sent in `Authorization: Basic <base64>` header
-- Used for internal mcpgw-server operations
-
-**Example:**
-```bash
-curl -u admin:password http://localhost/api/internal/register \
-  -d "service_path=/example"
-```
-
----
-
-### 4. Public (No Authentication)
+### 3. Public (No Authentication)
 
 **Used by:** Discovery endpoints, login page, OAuth2 providers list
 

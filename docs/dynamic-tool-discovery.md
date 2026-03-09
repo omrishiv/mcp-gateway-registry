@@ -106,8 +106,7 @@ tools = await intelligent_tool_finder(
 # Advanced usage with multiple results
 tools = await intelligent_tool_finder(
     natural_language_query="stock market information and financial data",
-    username="admin",
-    password="your_password",
+    session_cookie="your_session_cookie",
     top_k_services=5,
     top_n_tools=3
 )
@@ -252,8 +251,7 @@ tools = await intelligent_tool_finder(
 # Advanced usage with multiple results
 tools = await intelligent_tool_finder(
     natural_language_query="stock market information and financial data",
-    username="admin",
-    password="your_password",
+    session_cookie="your_session_cookie",
     top_k_services=5,
     top_n_tools=3
 )

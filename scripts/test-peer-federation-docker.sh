@@ -34,8 +34,8 @@ REGISTRY_B_URL="http://localhost:7861"
 AUTH_A_URL="http://localhost:8888"
 AUTH_B_URL="http://localhost:8889"
 
-ADMIN_USER="${ADMIN_USER:-admin}"
-ADMIN_PASSWORD="${ADMIN_PASSWORD:-admin}"
+SECRET_KEY_A="${SECRET_KEY:-federation-test-secret-key-a}"
+SECRET_KEY_B="${SECRET_KEY:-federation-test-secret-key-b}"
 
 # Parse arguments
 CLEANUP=true
@@ -107,28 +107,32 @@ wait_for_service() {
     return 1
 }
 
-# Login and get session cookie
-login() {
-    local registry_url=$1
+# Generate a session cookie using the SECRET_KEY (same signing as the registry)
+generate_session_cookie() {
+    local secret_key=$1
     local cookie_file=$2
+    local cookie_name="mcp_gateway_session"
 
-    print_info "Logging in to $registry_url..."
+    print_info "Generating session cookie using SECRET_KEY..."
 
-    # Login with credentials (303 redirect is expected on success)
-    local login_response=$(curl -s -c "$cookie_file" \
-        -X POST "$registry_url/api/auth/login" \
-        -H "Content-Type: application/x-www-form-urlencoded" \
-        -d "username=$ADMIN_USER&password=$ADMIN_PASSWORD" \
-        -w "%{http_code}" \
-        -o /dev/null)
+    local cookie_value
+    cookie_value=$(python3 -c "
+from itsdangerous import URLSafeTimedSerializer
+signer = URLSafeTimedSerializer('${secret_key}')
+data = {'username': 'admin', 'auth_method': 'oauth2', 'provider': 'test', 'groups': ['mcp-registry-admin']}
+print(signer.dumps(data))
+" 2>/dev/null)
 
-    if [ "$login_response" = "200" ] || [ "$login_response" = "303" ] || [ "$login_response" = "302" ]; then
-        print_success "Logged in successfully"
-        return 0
-    else
-        print_error "Login failed with status $login_response"
+    if [ -z "$cookie_value" ]; then
+        print_error "Failed to generate session cookie (is itsdangerous installed?)"
         return 1
     fi
+
+    # Write cookie in Netscape cookie format for curl -b
+    echo "# Netscape HTTP Cookie File" > "$cookie_file"
+    echo "localhost	FALSE	/	FALSE	0	${cookie_name}	${cookie_value}" >> "$cookie_file"
+    print_success "Session cookie generated"
+    return 0
 }
 
 # Main test flow
@@ -138,7 +142,6 @@ main() {
     print_section "Peer Federation Docker Test"
     echo "Registry A: $REGISTRY_A_URL"
     echo "Registry B: $REGISTRY_B_URL"
-    echo "Admin user: $ADMIN_USER"
 
     # Start services
     print_section "Starting Docker Services"
@@ -162,10 +165,10 @@ main() {
     COOKIE_B=$(mktemp)
     trap "rm -f $COOKIE_A $COOKIE_B; cleanup" EXIT INT TERM
 
-    # Login to both registries (login is on registry, not auth server)
+    # Generate session cookies for both registries using their SECRET_KEYs
     print_section "Authenticating"
-    login "$REGISTRY_A_URL" "$COOKIE_A" || exit 1
-    login "$REGISTRY_B_URL" "$COOKIE_B" || exit 1
+    generate_session_cookie "$SECRET_KEY_A" "$COOKIE_A" || exit 1
+    generate_session_cookie "$SECRET_KEY_B" "$COOKIE_B" || exit 1
 
     # Register test servers on Registry A
     print_section "Registering Test Servers on Registry A"
@@ -291,7 +294,7 @@ main() {
     echo "Registry A: $REGISTRY_A_URL (UI: http://localhost:80)"
     echo "Registry B: $REGISTRY_B_URL (UI: http://localhost:81)"
     echo ""
-    echo "Login credentials: $ADMIN_USER / $ADMIN_PASSWORD"
+    echo "Authentication: via SECRET_KEY signed session cookies"
     echo ""
     echo "To manually test:"
     echo "  1. Open Registry A UI and register/enable servers"

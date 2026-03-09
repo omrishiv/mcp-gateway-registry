@@ -35,8 +35,6 @@ Based on your selection, configure the corresponding provider-specific variables
 | Variable | Description | Example | Required |
 |----------|-------------|---------|----------|
 | `REGISTRY_URL` | Public URL of the MCP Gateway Registry | `https://mcpgateway.ddns.net` | ✅ |
-| `ADMIN_USER` | Registry admin username | `admin` | ✅ |
-| `ADMIN_PASSWORD` | Registry admin password | `your-secure-password` | ✅ |
 | `AUTH_PROVIDER` | Authentication provider (`cognito` or `keycloak`) | `keycloak` | ✅ |
 | `AWS_REGION` | AWS region for services | `us-east-1` | ✅ |
 
@@ -124,7 +122,7 @@ SESSION_COOKIE_SECURE=false  # MUST be false
 ```
 - Localhost runs over HTTP (not HTTPS)
 - Cookies with `secure=true` are ONLY sent over HTTPS
-- Setting this to `true` on localhost = **login will fail** ❌
+- Setting this to `true` on localhost = **login will fail**
 
 **For Production with HTTPS:**
 ```bash

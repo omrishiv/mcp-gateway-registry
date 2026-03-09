@@ -71,8 +71,6 @@ services:
     container_name: fed-test-registry-a
     environment:
       - SECRET_KEY=${SECRET_KEY:-federation-test-secret-key-a}
-      - ADMIN_USER=${ADMIN_USER:-admin}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
       - AUTH_SERVER_URL=http://auth-server:8888
       # Storage Backend - use MongoDB with separate namespace
       - STORAGE_BACKEND=mongodb-ce
@@ -120,8 +118,6 @@ services:
     environment:
       - REGISTRY_URL=http://registry-a:7860
       - SECRET_KEY=${SECRET_KEY:-federation-test-secret-key-a}
-      - ADMIN_USER=${ADMIN_USER:-admin}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
       - STORAGE_BACKEND=mongodb-ce
       - DOCUMENTDB_HOST=mongodb
       - DOCUMENTDB_PORT=27017
@@ -154,8 +150,6 @@ services:
     container_name: fed-test-registry-b
     environment:
       - SECRET_KEY=${SECRET_KEY:-federation-test-secret-key-b}
-      - ADMIN_USER=${ADMIN_USER:-admin}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
       - AUTH_SERVER_URL=http://auth-server:8888
       # Storage Backend - use MongoDB with separate namespace
       - STORAGE_BACKEND=mongodb-ce
@@ -205,8 +199,6 @@ services:
     environment:
       - REGISTRY_URL=http://registry-b:7860
       - SECRET_KEY=${SECRET_KEY:-federation-test-secret-key-b}
-      - ADMIN_USER=${ADMIN_USER:-admin}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
       - STORAGE_BACKEND=mongodb-ce
       - DOCUMENTDB_HOST=mongodb
       - DOCUMENTDB_PORT=27017

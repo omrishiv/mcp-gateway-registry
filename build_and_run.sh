@@ -211,8 +211,7 @@ if [ ! -f .env ]; then
     log "Please create a .env file with your configuration values:"
     log "Example .env file:"
     log "SECRET_KEY=your_secret_key_here"
-    log "ADMIN_USER=admin"
-    log "ADMIN_PASSWORD=your_secure_password"
+    log "# SECRET_KEY is auto-generated if not set. It is used to sign JWT session tokens."
     log "# For Financial Info server API keys, see servers/fininfo/README_SECRETS.md"
     exit 1
 fi
@@ -429,11 +428,6 @@ fi
 # Validate required environment variables
 log "Validating required environment variables..."
 source .env
-
-if [ -z "$ADMIN_PASSWORD" ] || [ "$ADMIN_PASSWORD" = "your_secure_password" ]; then
-    log "ERROR: ADMIN_PASSWORD must be set to a secure value in .env file"
-    exit 1
-fi
 
 # Determine BUILD_VERSION from git
 log "Determining version from git..."
