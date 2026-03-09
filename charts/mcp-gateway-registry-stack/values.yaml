@@ -66,8 +66,9 @@ mongodb-kubernetes:
 # MongoDB configuration
 mongodb:
   enabled: true
-  user: my-user # username for MongDB
-  password: CHANGEME # Set the password for the MongoDB user
+  user: &mongoUser my-user # username for MongoDB
+  password: &mongoPassword CHANGEME # Set the password for the MongoDB user
+  database: &mongoDatabase mcp_registry
 
 # Keycloak configuration
 # Set create: true to deploy Keycloak as part of this stack
@@ -162,6 +163,10 @@ keycloakIngress:
 # Mongodb configuration job
 mongodb-configure:
   enabled: true # Whether to run the MongoDB configuration job
+  mongodb:
+    username: *mongoUser
+    password: *mongoPassword
+    database: *mongoDatabase
 
 # Registry service configuration
 registry:
