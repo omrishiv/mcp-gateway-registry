@@ -30,6 +30,34 @@ if [ "$RUN_INIT_SCRIPTS" = "true" ]; then
     exec "$@"
 fi
 
+# --- Wait for MongoDB Replica Set ---
+if [ -n "$DOCUMENTDB_HOST" ]; then
+    echo "Waiting for MongoDB replica set to be ready..."
+    python3 -c "
+import pymongo, os, time
+host = os.getenv('DOCUMENTDB_HOST', 'mongodb')
+port = os.getenv('DOCUMENTDB_PORT', '27017')
+user = os.getenv('DOCUMENTDB_USERNAME', '')
+pwd = os.getenv('DOCUMENTDB_PASSWORD', '')
+uri = f'mongodb://{user}:{pwd}@{host}:{port}/?authSource=admin'
+while True:
+    try:
+        c = pymongo.MongoClient(uri, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)
+        c.admin.command('ping')
+        st = c.admin.command('replSetGetStatus')
+        ready = [m for m in st['members'] if m['state'] in [1, 2]]
+        if st['ok'] == 1 and len(ready) == len(st['members']):
+            print(f'MongoDB replica set ready ({len(ready)}/{len(st[\"members\"])} members)')
+            c.close()
+            break
+        print(f'Waiting for replica set: {len(ready)}/{len(st[\"members\"])} ready')
+    except Exception as e:
+        print(f'MongoDB not ready yet: {e}')
+    time.sleep(5)
+"
+    echo "MongoDB is ready."
+fi
+
 # --- Environment Variable Setup ---
 echo "Setting up environment variables..."
 

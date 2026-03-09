@@ -17,7 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user early (before creating any app files)
-RUN groupadd -r appuser && useradd -r -g appuser appuser
+RUN groupadd -g 1000 appuser && useradd -u 1000 -g appuser appuser
 
 WORKDIR /app
 

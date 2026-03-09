@@ -22,32 +22,24 @@ spec:
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      initContainers:
-        - name: wait-for-mongodb
-          image: public.ecr.aws/docker/library/python:3.13-slim
-          command: ['sh', '-c']
-          envFrom:
-            - secretRef:
-                name: mongo-credentials
-          args:
-            - |
-              echo "Installing pymongo..."
-              pip install --no-cache-dir pymongo
-
-              echo "Waiting for MongoDB replica set to be ready..."
-              python3 /app/wait.py
-          volumeMounts:
-            - mountPath: /app/wait.py
-              name: script
-              subPath: wait.py
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
       containers:
         - name: {{ .Values.app.name }}
           image: "{{ .Values.global.image.repository }}:{{ .Values.global.image.tag }}"
           imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
           ports:
-            - containerPort: 80
+            - containerPort: 8080
               name: http
-            - containerPort: 443
+            - containerPort: 8443
               name: https
             - containerPort: 7860
               name: registry
@@ -82,7 +74,19 @@ spec:
                   name: {{ .Release.Name }}-keycloak
                   key: admin-password
             {{- end }}
-      volumes:
-        - name: script
-          configMap:
-            name: setup-mongodb
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
