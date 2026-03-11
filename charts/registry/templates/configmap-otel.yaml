@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: registry-otel-config
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    app.kubernetes.io/name: {{ .Values.app.name }}
+    app.kubernetes.io/component: {{ .Values.app.name }}
+data:
+  OTEL_OTLP_ENDPOINT: {{ .Values.app.otelOtlpEndpoint | default "" | quote }}
+  OTEL_EXPORTER_OTLP_HEADERS: {{ .Values.app.otelExporterOtlpHeaders | default "" | quote }}
+  OTEL_OTLP_EXPORT_INTERVAL_MS: {{ .Values.app.otelOtlpExportIntervalMs | default "30000" | quote }}
+  OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: {{ .Values.app.otelExporterOtlpMetricsTemporalityPreference | default "cumulative" | quote }}

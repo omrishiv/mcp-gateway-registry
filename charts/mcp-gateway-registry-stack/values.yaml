@@ -181,6 +181,12 @@ registry:
     # Skill security scanning configuration
     skillSecurityScanEnabled: true  # Enable/disable skill security scanning
     skillSecurityAnalyzers: "static"  # Comma-separated: static, behavioral, llm, meta, virustotal, ai-defense
+
+    # OpenTelemetry direct OTLP push export configuration
+    otelOtlpEndpoint: ""  # OTLP endpoint URL (e.g., https://otlp.datadoghq.com)
+    otelExporterOtlpHeaders: ""  # OTLP headers (e.g., dd-api-key=YOUR_KEY)
+    otelOtlpExportIntervalMs: "30000"  # Export interval in milliseconds
+    otelExporterOtlpMetricsTemporalityPreference: "cumulative"  # cumulative or delta
   ingress:
     enabled: true
     ingressClassName: alb
