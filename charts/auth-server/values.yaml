@@ -30,9 +30,9 @@ app:
   registryId: # Unique identifier for this registry instance (optional)
 
 # Authentication Provider Configuration
-# Choose ONE provider: keycloak or entra
+# Choose ONE provider: keycloak, entra, or okta
 authProvider:
-  # Provider type: "keycloak" or "entra"
+  # Provider type: "keycloak", "entra", or "okta"
   type: keycloak
 
 # Keycloak integration (used when authProvider.type = "keycloak")
@@ -45,6 +45,16 @@ entra:
   clientId: ""
   clientSecret: ""
   tenantId: ""
+
+# Okta integration (used when authProvider.type = "okta")
+okta:
+  domain: ""  # e.g., dev-123456.okta.com
+  clientId: ""
+  clientSecret: ""
+  m2mClientId: ""  # Optional: defaults to clientId
+  m2mClientSecret: ""  # Optional: defaults to clientSecret
+  apiToken: ""  # Optional: required for IAM operations
+  authServerId: ""  # Optional: uses default Org Authorization Server if not set
 
 # Service configuration
 service:

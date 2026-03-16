@@ -239,6 +239,24 @@ helm install mcp-gateway-registry -n mcp-gateway-registry --create-namespace . \
 --set global.ingress.inboundCidrs='my.public.ip.address/32'
 ```
 
+### Subdomain with Okta and Inbound IP Allowlisting
+
+Creates a deployment using Okta.
+
+```bash
+helm install mcp-gateway-registry -n mcp-gateway-registry --create-namespace . \
+--set global.domain=agents.domain.example \
+--set global.ingress.routingMode=subdomain \
+--set global.authProvider.type=okta \
+--set auth-server.okta.domain=OKTA_DOMAIN \
+--set auth-server.okta.clientId=OKTA_CLIENT_ID \
+--set auth-server.okta.clientSecret=OKTA_CLIENT_SECRET  \
+--set keycloak-configure.enabled=false \
+--set keycloak.create=false \
+--set global.ingress.inboundCidrs='my.public.ip.address/32'
+```
+
+
 ### Path with Keycloak and git hash retention for debugging
 
 Will create a configmap in the `mcp-gateway-registry` namespace called `chart-version` with the git hash of the current

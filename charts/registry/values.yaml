@@ -48,6 +48,16 @@ entra:
   clientSecret: ""
   tenantId: ""
 
+# Okta integration (used when authProvider.type = "okta" in standalone deployment)
+okta:
+  domain: ""  # e.g., dev-123456.okta.com
+  clientId: ""
+  clientSecret: ""
+  m2mClientId: ""  # Optional: defaults to clientId
+  m2mClientSecret: ""  # Optional: defaults to clientSecret
+  apiToken: ""  # Optional: required for IAM operations
+  authServerId: ""  # Optional: uses default Org Authorization Server if not set
+
 # Service configuration
 service:
   type: ClusterIP
