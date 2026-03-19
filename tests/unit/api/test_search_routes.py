@@ -437,10 +437,10 @@ class TestPydanticModels:
 
     def test_semantic_search_request_query_length_validation(self):
         """Test SemanticSearchRequest query length constraints."""
-        # Act & Assert - empty query
-        with pytest.raises(ValidationError) as exc_info:
-            SemanticSearchRequest(query="")
-        assert "query" in str(exc_info.value)
+        # Act & Assert - empty query is allowed (for tag-only searches)
+        req = SemanticSearchRequest(query="", tags=["production"])
+        assert req.query == ""
+        assert req.tags == ["production"]
 
         # Act & Assert - query too long
         with pytest.raises(ValidationError) as exc_info:

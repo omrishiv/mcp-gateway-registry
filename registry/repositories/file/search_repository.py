@@ -32,6 +32,58 @@ class FaissSearchRepository(SearchRepositoryBase):
         """Remove entity from FAISS index."""
         await self.faiss_service.remove_entity(entity_path)
 
+    async def search_by_tags(
+        self,
+        tags: list[str],
+        entity_types: list[str] | None = None,
+        max_results: int = 10,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Search entities by exact tag match from FAISS metadata store."""
+        required = {t.lower() for t in tags}
+        results: dict[str, list[dict[str, Any]]] = {
+            "servers": [], "tools": [], "agents": [], "skills": [], "virtual_servers": [],
+        }
+        for path, metadata in self.faiss_service.metadata_store.items():
+            entity_tags = {t.lower() for t in metadata.get("tags", [])}
+            if not required.issubset(entity_tags):
+                continue
+            entity_type = metadata.get("entity_type", "")
+            if entity_types and entity_type not in entity_types:
+                continue
+            entry = {
+                "path": path,
+                "server_name": metadata.get("server_name", metadata.get("name", "")),
+                "description": metadata.get("description", ""),
+                "tags": metadata.get("tags", []),
+                "is_enabled": metadata.get("is_enabled", False),
+                "relevance_score": 1.0,
+                "match_context": metadata.get("description", ""),
+                "matching_tools": [],
+            }
+            if entity_type == "mcp_server":
+                entry["num_tools"] = metadata.get("num_tools", 0)
+                results["servers"].append(entry)
+            elif entity_type == "a2a_agent":
+                results["agents"].append(entry)
+            elif entity_type == "skill":
+                entry["skill_name"] = metadata.get("name", "")
+                results["skills"].append(entry)
+            elif entity_type == "virtual_server":
+                results["virtual_servers"].append(entry)
+        # Limit each group
+        for key in results:
+            results[key] = results[key][:max_results]
+        return results
+
+    async def get_all_tags(self) -> list[str]:
+        """Return a sorted list of all unique tags from the FAISS metadata store."""
+        tags_set: set[str] = set()
+        for metadata in self.faiss_service.metadata_store.values():
+            for tag in metadata.get("tags", []):
+                if tag:
+                    tags_set.add(tag)
+        return sorted(tags_set, key=str.lower)
+
     async def search(
         self,
         query: str,

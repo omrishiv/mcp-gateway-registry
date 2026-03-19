@@ -124,9 +124,10 @@ const buildAgentAuthHeaders = (token?: string | null) =>
 
 interface DashboardProps {
   activeFilter?: string;
+  selectedTags?: string[];
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
+const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTags = [] }) => {
   const navigate = useNavigate();
   const { servers, agents: agentsFromStats, loading, error, refreshData, setServers, setAgents } = useServerStats();
   const { skills, setSkills, loading: skillsLoading, error: skillsError, refreshData: refreshSkills } = useSkills();
@@ -436,7 +437,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
   } = useSemanticSearch(committedQuery, {
     minLength: 2,
     maxResults: 12,
-    enabled: semanticEnabled
+    enabled: semanticEnabled,
+    tags: selectedTags.length > 0 ? selectedTags : undefined,
   });
 
   const semanticServers = semanticResults?.servers ?? [];
@@ -456,7 +458,43 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
         semanticSkills.length === 0 &&
         semanticVirtualServers.length === 0));
 
-  // Filter servers based on activeFilter and searchTerm
+  // Helper: check if entity has all selected tags (case-insensitive)
+  const matchesSelectedTags = useCallback((entityTags: string[] | undefined) => {
+    if (selectedTags.length === 0) return true;
+    if (!entityTags || entityTags.length === 0) return false;
+    const lowerTags = entityTags.map(t => t.toLowerCase());
+    return selectedTags.every(st => lowerTags.includes(st.toLowerCase()));
+  }, [selectedTags]);
+
+  // Parse #tag tokens from the search term for local filtering
+  const parsedSearch = useMemo(() => {
+    const hashtagPattern = /#([\w-]+)/g;
+    const hashTags: string[] = [];
+    let match;
+    while ((match = hashtagPattern.exec(searchTerm)) !== null) {
+      hashTags.push(match[1].toLowerCase());
+    }
+    // Remove matched #tag tokens AND any trailing/leading lone # characters
+    const textQuery = searchTerm
+      .replace(/#[\w-]+/g, '')
+      .replace(/#/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+    return { textQuery, hashTags };
+  }, [searchTerm]);
+
+  // Helper: check if entity matches #tag tokens from search term (prefix match while typing)
+  const matchesHashTags = useCallback((entityTags: string[] | undefined) => {
+    if (parsedSearch.hashTags.length === 0) return true;
+    if (!entityTags || entityTags.length === 0) return false;
+    const lowerTags = entityTags.map(t => t.toLowerCase());
+    return parsedSearch.hashTags.every(ht =>
+      lowerTags.some(tag => tag.startsWith(ht))
+    );
+  }, [parsedSearch.hashTags]);
+
+  // Filter servers based on activeFilter, searchTerm, and selectedTags
   const filteredServers = useMemo(() => {
     let filtered = internalServers;
 
@@ -465,9 +503,17 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
     else if (activeFilter === 'disabled') filtered = filtered.filter(s => !s.enabled);
     else if (activeFilter === 'unhealthy') filtered = filtered.filter(s => s.status === 'unhealthy');
 
-    // Then apply search
-    if (searchTerm) {
-      const query = searchTerm.toLowerCase();
+    // Apply sidebar tag filter
+    if (selectedTags.length > 0) {
+      filtered = filtered.filter(s => matchesSelectedTags(s.tags));
+    }
+
+    // Apply #tag and text search from search box
+    if (parsedSearch.hashTags.length > 0) {
+      filtered = filtered.filter(s => matchesHashTags(s.tags));
+    }
+    if (parsedSearch.textQuery) {
+      const query = parsedSearch.textQuery;
       filtered = filtered.filter(server =>
         server.name.toLowerCase().includes(query) ||
         (server.description || '').toLowerCase().includes(query) ||
@@ -477,14 +523,21 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
     }
 
     return filtered;
-  }, [internalServers, activeFilter, searchTerm]);
+  }, [internalServers, activeFilter, selectedTags, matchesSelectedTags, parsedSearch, matchesHashTags]);
 
-  // Filter external servers based on searchTerm
+  // Filter external servers based on searchTerm and selectedTags
   const filteredExternalServers = useMemo(() => {
     let filtered = externalServers;
 
-    if (searchTerm) {
-      const query = searchTerm.toLowerCase();
+    if (selectedTags.length > 0) {
+      filtered = filtered.filter(s => matchesSelectedTags(s.tags));
+    }
+
+    if (parsedSearch.hashTags.length > 0) {
+      filtered = filtered.filter(s => matchesHashTags(s.tags));
+    }
+    if (parsedSearch.textQuery) {
+      const query = parsedSearch.textQuery;
       filtered = filtered.filter(server =>
         server.name.toLowerCase().includes(query) ||
         (server.description || '').toLowerCase().includes(query) ||
@@ -494,14 +547,21 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
     }
 
     return filtered;
-  }, [externalServers, searchTerm]);
+  }, [externalServers, selectedTags, matchesSelectedTags, parsedSearch, matchesHashTags]);
 
-  // Filter external agents based on searchTerm
+  // Filter external agents based on searchTerm and selectedTags
   const filteredExternalAgents = useMemo(() => {
     let filtered = externalAgents;
 
-    if (searchTerm) {
-      const query = searchTerm.toLowerCase();
+    if (selectedTags.length > 0) {
+      filtered = filtered.filter(a => matchesSelectedTags(a.tags));
+    }
+
+    if (parsedSearch.hashTags.length > 0) {
+      filtered = filtered.filter(a => matchesHashTags(a.tags));
+    }
+    if (parsedSearch.textQuery) {
+      const query = parsedSearch.textQuery;
       filtered = filtered.filter(agent =>
         agent.name.toLowerCase().includes(query) ||
         (agent.description || '').toLowerCase().includes(query) ||
@@ -511,9 +571,9 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
     }
 
     return filtered;
-  }, [externalAgents, searchTerm]);
+  }, [externalAgents, selectedTags, matchesSelectedTags, parsedSearch, matchesHashTags]);
 
-  // Filter agents based on activeFilter and searchTerm
+  // Filter agents based on activeFilter, searchTerm, and selectedTags
   const filteredAgents = useMemo(() => {
     let filtered = internalAgents;
 
@@ -522,9 +582,17 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
     else if (activeFilter === 'disabled') filtered = filtered.filter(a => !a.enabled);
     else if (activeFilter === 'unhealthy') filtered = filtered.filter(a => a.status === 'unhealthy');
 
-    // Then apply search
-    if (searchTerm) {
-      const query = searchTerm.toLowerCase();
+    // Apply sidebar tag filter
+    if (selectedTags.length > 0) {
+      filtered = filtered.filter(a => matchesSelectedTags(a.tags));
+    }
+
+    // Apply #tag and text search from search box
+    if (parsedSearch.hashTags.length > 0) {
+      filtered = filtered.filter(a => matchesHashTags(a.tags));
+    }
+    if (parsedSearch.textQuery) {
+      const query = parsedSearch.textQuery;
       filtered = filtered.filter(agent =>
         agent.name.toLowerCase().includes(query) ||
         (agent.description || '').toLowerCase().includes(query) ||
@@ -534,9 +602,9 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
     }
 
     return filtered;
-  }, [internalAgents, activeFilter, searchTerm]);
+  }, [internalAgents, activeFilter, selectedTags, matchesSelectedTags, parsedSearch, matchesHashTags]);
 
-  // Filter skills based on activeFilter and searchTerm
+  // Filter skills based on activeFilter, searchTerm, and selectedTags
   const filteredSkills = useMemo(() => {
     let filtered = skills;
 
@@ -544,9 +612,17 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
     if (activeFilter === 'enabled') filtered = filtered.filter(s => s.is_enabled);
     else if (activeFilter === 'disabled') filtered = filtered.filter(s => !s.is_enabled);
 
-    // Then apply search
-    if (searchTerm) {
-      const query = searchTerm.toLowerCase();
+    // Apply sidebar tag filter
+    if (selectedTags.length > 0) {
+      filtered = filtered.filter(s => matchesSelectedTags(s.tags));
+    }
+
+    // Apply #tag and text search from search box
+    if (parsedSearch.hashTags.length > 0) {
+      filtered = filtered.filter(s => matchesHashTags(s.tags));
+    }
+    if (parsedSearch.textQuery) {
+      const query = parsedSearch.textQuery;
       filtered = filtered.filter(skill =>
         skill.name.toLowerCase().includes(query) ||
         (skill.description || '').toLowerCase().includes(query) ||
@@ -557,9 +633,9 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
     }
 
     return filtered;
-  }, [skills, activeFilter, searchTerm]);
+  }, [skills, activeFilter, selectedTags, matchesSelectedTags, parsedSearch, matchesHashTags]);
 
-  // Filter virtual servers based on activeFilter and searchTerm
+  // Filter virtual servers based on activeFilter, searchTerm, and selectedTags
   const filteredVirtualServers = useMemo(() => {
     let filtered = virtualServers;
 
@@ -567,9 +643,17 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
     if (activeFilter === 'enabled') filtered = filtered.filter(s => s.is_enabled);
     else if (activeFilter === 'disabled') filtered = filtered.filter(s => !s.is_enabled);
 
-    // Apply search
-    if (searchTerm) {
-      const query = searchTerm.toLowerCase();
+    // Apply sidebar tag filter
+    if (selectedTags.length > 0) {
+      filtered = filtered.filter(vs => matchesSelectedTags(vs.tags));
+    }
+
+    // Apply #tag and text search from search box
+    if (parsedSearch.hashTags.length > 0) {
+      filtered = filtered.filter(vs => matchesHashTags(vs.tags));
+    }
+    if (parsedSearch.textQuery) {
+      const query = parsedSearch.textQuery;
       filtered = filtered.filter(vs =>
         vs.server_name.toLowerCase().includes(query) ||
         (vs.description || '').toLowerCase().includes(query) ||
@@ -579,7 +663,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
     }
 
     return filtered;
-  }, [virtualServers, activeFilter, searchTerm]);
+  }, [virtualServers, activeFilter, selectedTags, matchesSelectedTags, parsedSearch, matchesHashTags]);
 
   // Virtual server action handlers
   const handleToggleVirtualServer = useCallback(async (path: string, enabled: boolean) => {
@@ -612,6 +696,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
     try {
       await deleteVirtualServer(deleteVirtualServerTarget.path);
       showToast('Virtual server deleted successfully', 'success');
+      notifyDataChanged();
       setDeleteVirtualServerTarget(null);
       setDeleteVirtualServerTypedName('');
     } catch (err) {
@@ -634,6 +719,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
     try {
       await updateVirtualServer(editingVirtualServerPath, data as UpdateVirtualServerRequest);
       showToast('Virtual server updated successfully', 'success');
+      notifyDataChanged();
       setShowVirtualServerForm(false);
       setEditingVirtualServerPath(undefined);
       refreshVirtualServers();
@@ -701,6 +787,11 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
     [semanticSectionVisible]
   );
 
+  // Notify Layout to refresh the sidebar tag list after data changes
+  const notifyDataChanged = useCallback(() => {
+    window.dispatchEvent(new Event('registry-data-changed'));
+  }, []);
+
   const handleRefreshHealth = async () => {
     setRefreshing(true);
     try {
@@ -734,6 +825,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
 
       // Refresh the server list to show updated data
       await refreshData();
+      notifyDataChanged();
     } catch (error) {
       console.error('Failed to sync peer:', error);
       setToast({ message: `Failed to sync from ${peerId}`, type: 'error' });
@@ -855,6 +947,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
       setEditingServer(null);
 
       showToast('Server updated successfully!', 'success');
+      notifyDataChanged();
     } catch (error: any) {
       console.error('Failed to update server:', error);
       showToast(error.response?.data?.detail || 'Failed to update server', 'error');
@@ -948,6 +1041,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
     // Remove from local state immediately for responsive UI
     setServers(prevServers => prevServers.filter(s => s.path !== path));
     showToast('Server deleted successfully', 'success');
+    notifyDataChanged();
   }, [setServers, showToast]);
 
   const handleDeleteAgent = useCallback(async (path: string) => {
@@ -956,6 +1050,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
     // Remove from local state immediately for responsive UI
     setAgents(prevAgents => prevAgents.filter(a => a.path !== path));
     showToast('Agent deleted successfully', 'success');
+    notifyDataChanged();
   }, [setAgents, showToast]);
 
   const handleToggleAgent = useCallback(async (path: string, enabled: boolean) => {
@@ -1140,10 +1235,12 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
         // Update existing skill
         await axios.put(`/api/skills${editingSkill.path}`, payload);
         showToast('Skill updated successfully!', 'success');
+        notifyDataChanged();
       } else {
         // Create new skill
         await axios.post('/api/skills', payload);
         showToast('Skill registered successfully!', 'success');
+        notifyDataChanged();
       }
 
       // Refresh skills list
@@ -1169,6 +1266,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
       // Remove from local state immediately for responsive UI
       setSkills(prevSkills => prevSkills.filter(s => s.path !== path));
       showToast('Skill deleted successfully', 'success');
+      notifyDataChanged();
       setShowDeleteSkillConfirm(null);
     } catch (error: any) {
       console.error('Failed to delete skill:', error);
@@ -1216,6 +1314,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
       await refreshData();
 
       showToast('Server registered successfully!', 'success');
+      notifyDataChanged();
     } catch (error: any) {
       console.error('Failed to register server:', error);
       showToast(error.response?.data?.detail || 'Failed to register server', 'error');
@@ -1364,11 +1463,13 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
               <div className="text-center py-12 bg-gray-50 dark:bg-gray-800 rounded-lg">
                 <div className="text-gray-400 text-lg mb-2">No servers found</div>
                 <p className="text-gray-500 dark:text-gray-300 text-sm">
-                  {searchTerm || activeFilter !== 'all'
-                    ? 'Press Enter in the search bar to search semantically'
-                    : 'No servers are registered yet'}
+                  {selectedTags.length > 0
+                    ? `No servers match the selected tag${selectedTags.length > 1 ? 's' : ''}`
+                    : searchTerm || activeFilter !== 'all'
+                      ? 'Press Enter in the search bar to search semantically'
+                      : 'No servers are registered yet'}
                 </p>
-                {!searchTerm && activeFilter === 'all' && (
+                {!searchTerm && activeFilter === 'all' && selectedTags.length === 0 && (
                   <button
                     onClick={handleRegisterServer}
                     className="mt-4 inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-blue-600 hover:bg-blue-700 transition-colors"
@@ -1388,9 +1489,17 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
                   else if (activeFilter === 'disabled') filteredRegistryServers = registryServers.filter(s => !s.enabled);
                   else if (activeFilter === 'unhealthy') filteredRegistryServers = registryServers.filter(s => s.status === 'unhealthy');
 
-                  // Apply search filter
-                  if (searchTerm) {
-                    const query = searchTerm.toLowerCase();
+                  // Apply sidebar tag filter
+                  if (selectedTags.length > 0) {
+                    filteredRegistryServers = filteredRegistryServers.filter(s => matchesSelectedTags(s.tags));
+                  }
+
+                  // Apply #tag and text search from search box
+                  if (parsedSearch.hashTags.length > 0) {
+                    filteredRegistryServers = filteredRegistryServers.filter(s => matchesHashTags(s.tags));
+                  }
+                  if (parsedSearch.textQuery) {
+                    const query = parsedSearch.textQuery;
                     filteredRegistryServers = filteredRegistryServers.filter(server =>
                       server.name.toLowerCase().includes(query) ||
                       (server.description || '').toLowerCase().includes(query) ||
@@ -1641,9 +1750,17 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
                   else if (activeFilter === 'disabled') filteredRegistryAgents = registryAgents.filter(a => !a.enabled);
                   else if (activeFilter === 'unhealthy') filteredRegistryAgents = registryAgents.filter(a => a.status === 'unhealthy');
 
-                  // Apply search filter
-                  if (searchTerm) {
-                    const query = searchTerm.toLowerCase();
+                  // Apply sidebar tag filter
+                  if (selectedTags.length > 0) {
+                    filteredRegistryAgents = filteredRegistryAgents.filter(a => matchesSelectedTags(a.tags));
+                  }
+
+                  // Apply #tag and text search from search box
+                  if (parsedSearch.hashTags.length > 0) {
+                    filteredRegistryAgents = filteredRegistryAgents.filter(a => matchesHashTags(a.tags));
+                  }
+                  if (parsedSearch.textQuery) {
+                    const query = parsedSearch.textQuery;
                     filteredRegistryAgents = filteredRegistryAgents.filter(agent =>
                       agent.name.toLowerCase().includes(query) ||
                       (agent.description || '').toLowerCase().includes(query) ||
@@ -2024,11 +2141,13 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all' }) => {
         (viewFilter === 'agents' && filteredAgents.length === 0) ||
         (viewFilter === 'skills' && filteredSkills.length === 0) ||
         (viewFilter === 'virtual' && filteredVirtualServers.length === 0)) &&
-        (searchTerm || activeFilter !== 'all') && (
+        (searchTerm || activeFilter !== 'all' || selectedTags.length > 0) && (
           <div className="text-center py-16">
             <div className="text-gray-400 text-xl mb-4">No items found</div>
             <p className="text-gray-500 dark:text-gray-300 text-base max-w-md mx-auto">
-              Press Enter in the search bar to search semantically
+              {selectedTags.length > 0
+                ? `No items match the selected tag${selectedTags.length > 1 ? 's' : ''}: ${selectedTags.join(', ')}`
+                : 'Press Enter in the search bar to search semantically'}
             </p>
           </div>
         )}

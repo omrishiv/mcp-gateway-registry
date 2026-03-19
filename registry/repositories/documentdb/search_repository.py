@@ -744,6 +744,57 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
 
         return dot_product / (magnitude1 * magnitude2)
 
+    async def search_by_tags(
+        self,
+        tags: list[str],
+        entity_types: list[str] | None = None,
+        max_results: int = 10,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Search entities by exact tag match using a direct DB query."""
+        collection = await self._get_collection()
+
+        # Build a case-insensitive match for ALL tags
+        tag_conditions = [
+            {"tags": {"$regex": f"^{re.escape(tag)}$", "$options": "i"}}
+            for tag in tags
+        ]
+        query_filter: dict[str, Any] = {"$and": tag_conditions}
+        if entity_types:
+            query_filter["entity_type"] = {"$in": entity_types}
+
+        cursor = collection.find(query_filter).limit(max_results * 5)
+        results = await cursor.to_list(length=max_results * 5)
+
+        logger.info(
+            "Tag-only search for %s returned %d documents",
+            tags,
+            len(results),
+        )
+
+        # Format into grouped results using the lexical formatter
+        # Assign relevance 1.0 since these are exact tag matches
+        for doc in results:
+            doc["text_boost"] = MAX_LEXICAL_BOOST
+            doc["matching_tools"] = []
+        return self._format_lexical_results(results)
+
+    async def get_all_tags(self) -> list[str]:
+        """Return a sorted list of all unique tags across all indexed entities."""
+        collection = await self._get_collection()
+        try:
+            pipeline = [
+                {"$match": {"tags": {"$exists": True, "$ne": []}}},
+                {"$unwind": "$tags"},
+                {"$group": {"_id": {"$toLower": "$tags"}, "original": {"$first": "$tags"}}},
+                {"$sort": {"_id": 1}},
+            ]
+            cursor = collection.aggregate(pipeline)
+            results = await cursor.to_list(length=500)
+            return [doc["original"] for doc in results]
+        except Exception as e:
+            logger.error("Failed to retrieve tags: %s", e, exc_info=True)
+            return []
+
     async def remove_entity(
         self,
         path: str,

@@ -12,6 +12,7 @@ import {
   ClipboardIcon,
   CheckIcon,
   ArrowDownTrayIcon,
+  TagIcon,
 } from '@heroicons/react/24/outline';
 import { useAuth } from '../contexts/AuthContext';
 import axios from 'axios';
@@ -27,14 +28,20 @@ interface SidebarProps {
   };
   activeFilter: string;
   setActiveFilter: (filter: string) => void;
+  availableTags: string[];
+  selectedTags: string[];
+  onTagSelect: (tag: string) => void;
 }
 
 
-const Sidebar: React.FC<SidebarProps> = ({ sidebarOpen, setSidebarOpen, stats, activeFilter, setActiveFilter }) => {
+const Sidebar: React.FC<SidebarProps> = ({ sidebarOpen, setSidebarOpen, stats, activeFilter, setActiveFilter, availableTags, selectedTags, onTagSelect }) => {
   // const { stats, activeFilter, setActiveFilter } = useServerStats();
   const { user } = useAuth();
   const location = useLocation();
   const [showScopes, setShowScopes] = useState(false);
+  const [tagDropdownOpen, setTagDropdownOpen] = useState(false);
+  const [tagSearch, setTagSearch] = useState('');
+  const tagDropdownRef = React.useRef<HTMLDivElement>(null);
   const [showTokenModal, setShowTokenModal] = useState(false);
   const [tokenData, setTokenData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
@@ -49,6 +56,17 @@ const Sidebar: React.FC<SidebarProps> = ({ sidebarOpen, setSidebarOpen, stats, a
   ];
 
   const isTokenPage = location.pathname === '/generate-token';
+
+  // Close tag dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (tagDropdownRef.current && !tagDropdownRef.current.contains(e.target as Node)) {
+        setTagDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   // Debug logging
   useEffect(() => {
@@ -336,6 +354,90 @@ const fetchAdminTokens = async () => {
               ))}
             </div>
           </div>
+
+          {/* Tags Section */}
+          {availableTags.length > 0 && (
+            <div className="border-t border-gray-200 dark:border-gray-700 p-4 md:p-6">
+              <div className="flex items-center space-x-2 mb-3">
+                <TagIcon className="h-4 w-4 text-gray-600 dark:text-gray-400" />
+                <h3 className="text-sm font-medium text-gray-900 dark:text-white">Filter by Tag</h3>
+                {selectedTags.length > 0 && (
+                  <button
+                    onClick={() => selectedTags.forEach(t => onTagSelect(t))}
+                    className="text-xs text-purple-600 dark:text-purple-400 hover:underline ml-auto"
+                  >
+                    Clear all
+                  </button>
+                )}
+              </div>
+
+              {/* Selected tag chips */}
+              {selectedTags.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mb-3">
+                  {selectedTags.map((tag) => (
+                    <span
+                      key={tag}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300"
+                    >
+                      {tag}
+                      <button
+                        onClick={() => onTagSelect(tag)}
+                        className="hover:text-purple-900 dark:hover:text-purple-100 focus:outline-none"
+                        aria-label={`Remove tag ${tag}`}
+                      >
+                        <XMarkIcon className="h-3 w-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {/* Tag dropdown */}
+              <div className="relative" ref={tagDropdownRef}>
+                <input
+                  type="text"
+                  placeholder="Search tags..."
+                  value={tagSearch}
+                  onChange={(e) => {
+                    setTagSearch(e.target.value);
+                    setTagDropdownOpen(true);
+                  }}
+                  onFocus={() => setTagDropdownOpen(true)}
+                  className="w-full px-3 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                />
+                {tagDropdownOpen && (
+                  <div className="absolute z-50 mt-1 w-full max-h-40 overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 shadow-lg">
+                    {availableTags
+                      .filter(tag =>
+                        !selectedTags.includes(tag) &&
+                        tag.toLowerCase().includes(tagSearch.toLowerCase())
+                      )
+                      .map((tag) => (
+                        <button
+                          key={tag}
+                          onClick={() => {
+                            onTagSelect(tag);
+                            setTagSearch('');
+                            setTagDropdownOpen(false);
+                          }}
+                          className="w-full text-left px-3 py-1.5 text-xs text-gray-700 dark:text-gray-300 hover:bg-purple-50 dark:hover:bg-purple-900/30 hover:text-purple-700 dark:hover:text-purple-300 transition-colors"
+                        >
+                          {tag}
+                        </button>
+                      ))}
+                    {availableTags.filter(tag =>
+                      !selectedTags.includes(tag) &&
+                      tag.toLowerCase().includes(tagSearch.toLowerCase())
+                    ).length === 0 && (
+                      <div className="px-3 py-2 text-xs text-gray-400 dark:text-gray-500">
+                        No matching tags
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Statistics Section */}
           <div className="border-t border-gray-200 dark:border-gray-700 p-4 md:p-6">

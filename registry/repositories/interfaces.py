@@ -832,6 +832,42 @@ class SearchRepositoryBase(ABC):
         """
         pass
 
+    async def search_by_tags(
+        self,
+        tags: list[str],
+        entity_types: list[str] | None = None,
+        max_results: int = 10,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Search entities by exact tag match (case-insensitive).
+
+        Returns entities that have ALL specified tags. Default implementation
+        falls back to search() with the tag names as query text.
+
+        Args:
+            tags: Required tags (all must match)
+            entity_types: Optional entity type filter
+            max_results: Max results per entity type
+
+        Returns:
+            Grouped search results dict
+        """
+        return await self.search(
+            query=" ".join(tags),
+            entity_types=entity_types,
+            max_results=max_results,
+        )
+
+    async def get_all_tags(self) -> list[str]:
+        """Return a sorted list of all unique tags across all indexed entities.
+
+        Default implementation returns an empty list. Override in implementations
+        that support tag retrieval.
+
+        Returns:
+            Sorted list of unique tag strings
+        """
+        return []
+
 
 class PeerFederationRepositoryBase(ABC):
     """Abstract base class for peer federation storage."""

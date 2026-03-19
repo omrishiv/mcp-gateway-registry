@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import (
     Annotated,
     Literal,
@@ -185,9 +186,17 @@ class VirtualServerSearchResult(BaseModel):
 
 
 class SemanticSearchRequest(BaseModel):
-    query: str = Field(..., min_length=1, max_length=512, description="Natural language query")
+    query: str = Field(
+        default="",
+        max_length=512,
+        description="Natural language query. Can be empty when filtering by tags only.",
+    )
     entity_types: list[EntityType] | None = Field(
         default=None, description="Optional entity filters"
+    )
+    tags: list[str] | None = Field(
+        default=None,
+        description="Exact tag filters. Only return entities that have ALL specified tags.",
     )
     max_results: int = Field(
         default=10, ge=1, le=50, description="Maximum results per entity collection"
@@ -350,6 +359,34 @@ async def _user_can_access_skill(
     return False
 
 
+_HASHTAG_PATTERN = re.compile(r"#([\w-]+)")
+
+
+def _parse_hashtags(
+    query: str,
+) -> tuple[str, list[str]]:
+    """Extract #tag tokens from the query string.
+
+    Returns:
+        Tuple of (remaining_query, extracted_tags).
+        Tags are lowercased for case-insensitive matching.
+    """
+    tags = [m.group(1).lower() for m in _HASHTAG_PATTERN.finditer(query)]
+    remaining = _HASHTAG_PATTERN.sub("", query).strip()
+    # Collapse multiple spaces left after removal
+    remaining = re.sub(r"\s+", " ", remaining).strip()
+    return remaining, tags
+
+
+def _entity_has_all_tags(
+    entity_tags: list[str],
+    required_tags: list[str],
+) -> bool:
+    """Check if an entity has ALL required tags (case-insensitive)."""
+    entity_tags_lower = {t.lower() for t in entity_tags}
+    return all(tag in entity_tags_lower for tag in required_tags)
+
+
 @router.post(
     "/semantic",
     response_model=SemanticSearchResponse,
@@ -364,24 +401,52 @@ async def semantic_search(
     """
     Run a semantic search against MCP servers (and their tools) using FAISS embeddings.
     """
+    # Parse #tag tokens from query for exact tag matching
+    search_query, hashtag_tags = _parse_hashtags(request.query)
+
+    # Merge hashtag-extracted tags with explicitly provided tags
+    required_tags: list[str] = list(
+        {t.lower() for t in (request.tags or []) + hashtag_tags}
+    )
+
     # Set audit action for search
     set_audit_action(
         http_request, "search", "search", description=f"Semantic search: {request.query[:50]}..."
     )
 
     logger.info(
-        "Semantic search requested by %s (entities=%s, max=%s)",
+        "Semantic search requested by %s (entities=%s, max=%s, tags=%s)",
         user_context.get("username"),
         request.entity_types or ["mcp_server", "tool"],
         request.max_results,
+        required_tags or None,
     )
 
-    try:
-        raw_results = await search_repo.search(
-            query=request.query,
-            entity_types=request.entity_types,
-            max_results=request.max_results,
+    # Determine the effective text query after removing #tag tokens
+    effective_query = search_query.strip()
+
+    # Validate: must have either a text query or tags
+    if not effective_query and not required_tags:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Provide a search query, tags, or both.",
         )
+
+    try:
+        if not effective_query and required_tags:
+            # Tag-only search: query DB directly by tags
+            raw_results = await search_repo.search_by_tags(
+                tags=required_tags,
+                entity_types=request.entity_types,
+                max_results=request.max_results,
+            )
+        else:
+            # Text search (possibly combined with tags filtered after)
+            raw_results = await search_repo.search(
+                query=effective_query,
+                entity_types=request.entity_types,
+                max_results=request.max_results,
+            )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -612,6 +677,36 @@ async def semantic_search(
             )
         )
 
+    # Filter results by required tags (from #tag syntax or explicit tags param)
+    if required_tags:
+        filtered_servers = [
+            s for s in filtered_servers if _entity_has_all_tags(s.tags, required_tags)
+        ]
+        filtered_tools = [
+            t for t in filtered_tools
+            if _entity_has_all_tags(
+                # Tools don't have tags directly; filter by parent server tags
+                next(
+                    (s.tags for s in filtered_servers if s.path == t.server_path),
+                    [],
+                ),
+                required_tags,
+            )
+        ]
+        filtered_agents = [
+            a for a in filtered_agents
+            if _entity_has_all_tags(
+                a.agent_card.get("tags", []),
+                required_tags,
+            )
+        ]
+        filtered_skills = [
+            s for s in filtered_skills if _entity_has_all_tags(s.tags, required_tags)
+        ]
+        filtered_virtual_servers = [
+            vs for vs in filtered_virtual_servers if _entity_has_all_tags(vs.tags, required_tags)
+        ]
+
     # Filter results based on registry mode
     # In skills-only mode, only return skills; in servers-only mode, only return servers, etc.
     mode = settings.registry_mode
@@ -647,3 +742,20 @@ async def semantic_search(
         total_skills=len(filtered_skills),
         total_virtual_servers=len(filtered_virtual_servers),
     )
+
+
+@router.get(
+    "/tags",
+    summary="Get all unique tags across all indexed entities",
+)
+async def get_all_tags(
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    search_repo: SearchRepositoryBase = Depends(get_search_repo),
+) -> dict[str, list[str]]:
+    """Return a sorted list of all unique tags across servers, agents, skills, and virtual servers."""
+    try:
+        tags = await search_repo.get_all_tags()
+        return {"tags": tags}
+    except Exception as e:
+        logger.error("Failed to retrieve tags: %s", e, exc_info=True)
+        return {"tags": []}

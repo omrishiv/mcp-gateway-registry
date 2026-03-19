@@ -1,4 +1,4 @@
-import React, { useState, useEffect, Fragment } from 'react';
+import React, { useState, useEffect, useCallback, Fragment } from 'react';
 import { Menu, Transition } from '@headlessui/react';
 import { Link } from 'react-router-dom';
 import {
@@ -23,6 +23,21 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   const [version, setVersion] = useState<string | null>(null);
   const { user, logout } = useAuth();
   const { stats, activeFilter, setActiveFilter } = useServerStats();
+  const [availableTags, setAvailableTags] = useState<string[]>([]);
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+
+  const handleTagSelect = useCallback((tag: string) => {
+    setSelectedTags(prev =>
+      prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag]
+    );
+  }, []);
+
+  const fetchTags = useCallback(() => {
+    fetch('/api/search/tags')
+      .then(res => res.json())
+      .then(data => setAvailableTags(data.tags || []))
+      .catch(err => console.error('Failed to fetch tags:', err));
+  }, []);
 
   useEffect(() => {
     // Fetch version from API
@@ -30,7 +45,15 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       .then(res => res.json())
       .then(data => setVersion(data.version))
       .catch(err => console.error('Failed to fetch version:', err));
-  }, []);
+
+    // Initial tag fetch
+    fetchTags();
+
+    // Re-fetch tags when servers/agents are registered, updated, or deleted
+    const handleTagRefresh = () => fetchTags();
+    window.addEventListener('registry-data-changed', handleTagRefresh);
+    return () => window.removeEventListener('registry-data-changed', handleTagRefresh);
+  }, [fetchTags]);
 
   const handleLogout = async () => {
     try {
@@ -169,12 +192,15 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
 
       <div className="flex h-screen pt-16">
         {/* Sidebar */}
-        <Sidebar 
-          sidebarOpen={sidebarOpen} 
+        <Sidebar
+          sidebarOpen={sidebarOpen}
           setSidebarOpen={setSidebarOpen}
           stats={stats}
           activeFilter={activeFilter}
           setActiveFilter={setActiveFilter}
+          availableTags={availableTags}
+          selectedTags={selectedTags}
+          onTagSelect={handleTagSelect}
         />
 
 
@@ -183,7 +209,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
           sidebarOpen ? 'md:ml-64 lg:ml-72 xl:ml-80' : ''
         }`}>
           <div className="flex-1 flex flex-col px-4 sm:px-6 lg:px-8 py-4 md:py-8 overflow-y-auto">
-            {React.cloneElement(children as React.ReactElement, { activeFilter })}
+            {React.cloneElement(children as React.ReactElement, { activeFilter, selectedTags })}
           </div>
         </main>
       </div>

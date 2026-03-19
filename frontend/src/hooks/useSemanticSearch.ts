@@ -124,6 +124,7 @@ interface UseSemanticSearchOptions {
   minLength?: number;
   maxResults?: number;
   entityTypes?: EntityType[];
+  tags?: string[];
 }
 
 interface UseSemanticSearchReturn {
@@ -148,6 +149,8 @@ export const useSemanticSearch = (
   const entityTypes = options.entityTypes ?? DEFAULT_ENTITY_TYPES;
   const entityTypesKey =
     options.entityTypes?.join('|') ?? DEFAULT_ENTITY_TYPES_KEY;
+  const tags = options.tags;
+  const tagsKey = tags?.join('|') ?? '';
 
   // Debounce user input to minimize API calls
   useEffect(() => {
@@ -159,7 +162,10 @@ export const useSemanticSearch = (
   }, [query]);
 
   useEffect(() => {
-    if (!enabled || debouncedQuery.length < minLength) {
+    // Allow search if we have a text query or explicit tag filters
+    const hasQuery = debouncedQuery.length >= minLength;
+    const hasTags = tags && tags.length > 0;
+    if (!enabled || (!hasQuery && !hasTags)) {
       setResults(null);
       setError(null);
       setLoading(false);
@@ -173,13 +179,17 @@ export const useSemanticSearch = (
       setLoading(true);
       setError(null);
       try {
+        const body: Record<string, unknown> = {
+          query: debouncedQuery || '*',
+          entity_types: entityTypes,
+          max_results: maxResults,
+        };
+        if (tags && tags.length > 0) {
+          body.tags = tags;
+        }
         const response = await axios.post<SemanticSearchResponse>(
           '/api/search/semantic',
-          {
-            query: debouncedQuery,
-            entity_types: entityTypes,
-            max_results: maxResults
-          },
+          body,
           { signal: controller.signal }
         );
         if (!cancelled) {
@@ -206,7 +216,7 @@ export const useSemanticSearch = (
       cancelled = true;
       controller.abort();
     };
-  }, [debouncedQuery, enabled, minLength, maxResults, entityTypesKey]);
+  }, [debouncedQuery, enabled, minLength, maxResults, entityTypesKey, tagsKey]);
 
   return { results, loading, error, debouncedQuery };
 };
