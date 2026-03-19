@@ -143,7 +143,7 @@ const fetchAdminTokens = async () => {
     URL.revokeObjectURL(url);
   };
 
-  const SidebarContent = () => (
+  const sidebarContent = (
     <div className="flex h-full flex-col">
       {/* Conditional Content */}
       {isTokenPage ? (
@@ -521,7 +521,7 @@ const fetchAdminTokens = async () => {
                   </Transition.Child>
                   
                   <div className="flex grow flex-col gap-y-5 overflow-y-auto bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700">
-                    <SidebarContent />
+                    {sidebarContent}
                   </div>
                 </Dialog.Panel>
               </Transition.Child>
@@ -543,7 +543,7 @@ const fetchAdminTokens = async () => {
             leaveTo="-translate-x-full"
           >
             <div className="fixed left-0 top-16 bottom-0 z-40 w-64 lg:w-72 xl:w-80 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 overflow-y-auto">
-              <SidebarContent />
+              {sidebarContent}
             </div>
           </Transition.Child>
         </Transition>
