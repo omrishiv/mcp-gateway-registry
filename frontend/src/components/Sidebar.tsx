@@ -41,6 +41,7 @@ const Sidebar: React.FC<SidebarProps> = ({ sidebarOpen, setSidebarOpen, stats, a
   const [showScopes, setShowScopes] = useState(false);
   const [tagDropdownOpen, setTagDropdownOpen] = useState(false);
   const [tagSearch, setTagSearch] = useState('');
+  const [tagHighlightIndex, setTagHighlightIndex] = useState(0);
   const tagDropdownRef = React.useRef<HTMLDivElement>(null);
   const [showTokenModal, setShowTokenModal] = useState(false);
   const [tokenData, setTokenData] = useState<any>(null);
@@ -393,49 +394,80 @@ const fetchAdminTokens = async () => {
               )}
 
               {/* Tag dropdown */}
-              <div className="relative" ref={tagDropdownRef}>
-                <input
-                  type="text"
-                  placeholder="Search tags..."
-                  value={tagSearch}
-                  onChange={(e) => {
-                    setTagSearch(e.target.value);
-                    setTagDropdownOpen(true);
-                  }}
-                  onFocus={() => setTagDropdownOpen(true)}
-                  className="w-full px-3 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-                />
-                {tagDropdownOpen && (
-                  <div className="absolute z-50 mt-1 w-full max-h-40 overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 shadow-lg">
-                    {availableTags
-                      .filter(tag =>
-                        !selectedTags.includes(tag) &&
-                        tag.toLowerCase().includes(tagSearch.toLowerCase())
-                      )
-                      .map((tag) => (
-                        <button
-                          key={tag}
-                          onClick={() => {
+              {(() => {
+                const filteredTags = availableTags.filter(tag =>
+                  !selectedTags.includes(tag) &&
+                  tag.toLowerCase().includes(tagSearch.toLowerCase())
+                );
+                return (
+                  <div className="relative" ref={tagDropdownRef}>
+                    <input
+                      type="text"
+                      placeholder="Search tags..."
+                      value={tagSearch}
+                      onChange={(e) => {
+                        setTagSearch(e.target.value);
+                        setTagHighlightIndex(0);
+                        setTagDropdownOpen(true);
+                      }}
+                      onFocus={() => {
+                        setTagDropdownOpen(true);
+                        setTagHighlightIndex(0);
+                      }}
+                      onKeyDown={(e) => {
+                        if (!tagDropdownOpen || filteredTags.length === 0) return;
+                        if (e.key === 'ArrowDown') {
+                          e.preventDefault();
+                          setTagHighlightIndex(prev => Math.min(prev + 1, filteredTags.length - 1));
+                        } else if (e.key === 'ArrowUp') {
+                          e.preventDefault();
+                          setTagHighlightIndex(prev => Math.max(prev - 1, 0));
+                        } else if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const tag = filteredTags[tagHighlightIndex];
+                          if (tag) {
                             onTagSelect(tag);
                             setTagSearch('');
+                            setTagHighlightIndex(0);
                             setTagDropdownOpen(false);
-                          }}
-                          className="w-full text-left px-3 py-1.5 text-xs text-gray-700 dark:text-gray-300 hover:bg-purple-50 dark:hover:bg-purple-900/30 hover:text-purple-700 dark:hover:text-purple-300 transition-colors"
-                        >
-                          {tag}
-                        </button>
-                      ))}
-                    {availableTags.filter(tag =>
-                      !selectedTags.includes(tag) &&
-                      tag.toLowerCase().includes(tagSearch.toLowerCase())
-                    ).length === 0 && (
-                      <div className="px-3 py-2 text-xs text-gray-400 dark:text-gray-500">
-                        No matching tags
+                          }
+                        } else if (e.key === 'Escape') {
+                          setTagDropdownOpen(false);
+                        }
+                      }}
+                      className="w-full px-3 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                    />
+                    {tagDropdownOpen && (
+                      <div className="absolute z-50 mt-1 w-full max-h-40 overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 shadow-lg">
+                        {filteredTags.map((tag, idx) => (
+                          <button
+                            key={tag}
+                            onClick={() => {
+                              onTagSelect(tag);
+                              setTagSearch('');
+                              setTagHighlightIndex(0);
+                              setTagDropdownOpen(false);
+                            }}
+                            onMouseEnter={() => setTagHighlightIndex(idx)}
+                            className={`w-full text-left px-3 py-1.5 text-xs transition-colors ${
+                              idx === tagHighlightIndex
+                                ? 'bg-purple-50 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300'
+                                : 'text-gray-700 dark:text-gray-300 hover:bg-purple-50 dark:hover:bg-purple-900/30 hover:text-purple-700 dark:hover:text-purple-300'
+                            }`}
+                          >
+                            {tag}
+                          </button>
+                        ))}
+                        {filteredTags.length === 0 && (
+                          <div className="px-3 py-2 text-xs text-gray-400 dark:text-gray-500">
+                            No matching tags
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
-                )}
-              </div>
+                );
+              })()}
             </div>
           )}
 
