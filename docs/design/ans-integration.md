@@ -1,5 +1,7 @@
 # ANS (Agent Name Service) Integration
 
+**Demo Video:** [ANS Integration Walkthrough](https://app.vidcast.io/share/c2240a78-8899-46ad-9375-6fb0cc1345f3?playerMode=vidcast)
+
 This document describes the ANS integration architecture, configuration, API usage, and operational procedures for the MCP Gateway Registry.
 
 ## Overview
