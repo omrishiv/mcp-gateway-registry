@@ -1,0 +1,46 @@
+# AWS Configuration
+aws_region = "us-east-1"
+
+# Deployment Stage
+# Options: "testing" or "production"
+deployment_stage = "testing"
+
+# DocumentDB Configuration
+# Instance classes:
+#   - db.t3.medium: Testing (~$50/month)
+#   - db.r5.large: Production (~$160/month)
+documentdb_instance_class = "db.t3.medium"
+
+# DocumentDB master username (default: telemetry_admin)
+documentdb_master_username = "telemetry_admin"
+
+# DocumentDB database name (default: telemetry)
+documentdb_database_name = "telemetry"
+
+# VPC Configuration
+vpc_cidr = "10.0.0.0/16"
+
+# CloudWatch Logs Retention (days)
+log_retention_days = 30
+
+# Rate Limiting Configuration
+rate_limit_max_requests = 10  # Requests per minute per IP
+rate_limit_window_seconds = 60  # Time window in seconds
+
+# CORS Allowed Origins
+# Restrict which domains can submit telemetry via browser
+# cors_allowed_origins = ["https://mcpgateway.io", "https://app.mcpgateway.io"]
+
+# Optional: Custom Domain (Production Only)
+# Leave empty for testing, set for production
+# custom_domain = "telemetry.mcpgateway.io"
+# route53_zone_id = "Z1234567890ABC"
+
+# Optional: CloudWatch Alarms Email (Production Only)
+# Leave empty to disable alarms
+# alarm_email = "alerts@example.com"
+
+# Bastion host for DocumentDB access (free tier t2.micro)
+bastion_enabled      = true
+# bastion_public_key   = "ssh-rsa AAAA..."   # your ~/.ssh/id_rsa.pub
+# bastion_allowed_cidrs = ["YOUR_IP/32"]      # restrict to your IP for security

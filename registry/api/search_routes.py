@@ -431,9 +431,7 @@ async def semantic_search(
     search_query, hashtag_tags = _parse_hashtags(request.query)
 
     # Merge hashtag-extracted tags with explicitly provided tags
-    required_tags: list[str] = list(
-        {t.lower() for t in (request.tags or []) + hashtag_tags}
-    )
+    required_tags: list[str] = list({t.lower() for t in (request.tags or []) + hashtag_tags})
 
     # Set audit action for search
     set_audit_action(
@@ -720,7 +718,8 @@ async def semantic_search(
             s for s in filtered_servers if _entity_has_all_tags(s.tags, required_tags)
         ]
         filtered_tools = [
-            t for t in filtered_tools
+            t
+            for t in filtered_tools
             if _entity_has_all_tags(
                 # Tools don't have tags directly; filter by parent server tags
                 next(
@@ -731,7 +730,8 @@ async def semantic_search(
             )
         ]
         filtered_agents = [
-            a for a in filtered_agents
+            a
+            for a in filtered_agents
             if _entity_has_all_tags(
                 a.agent_card.get("tags", []),
                 required_tags,
@@ -765,6 +765,11 @@ async def semantic_search(
         filtered_skills = []
         filtered_virtual_servers = []
     # In FULL mode, return all results (no filtering needed)
+
+    # Increment semantic search counter (fail-silent)
+    from registry.repositories.stats_repository import increment_search_counter
+
+    await increment_search_counter()
 
     return SemanticSearchResponse(
         query=request.query.strip(),

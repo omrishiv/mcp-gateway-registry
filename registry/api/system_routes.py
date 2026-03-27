@@ -33,6 +33,15 @@ def set_server_start_time(
     logger.info(f"System routes: Server start time set to {start_time.isoformat()}")
 
 
+def get_server_start_time() -> datetime | None:
+    """Get the server start time.
+
+    Returns:
+        Server start time if set, None otherwise
+    """
+    return _server_start_time
+
+
 def _detect_deployment_type() -> str:
     """Auto-detect deployment environment based on environment variables.
 
@@ -50,9 +59,7 @@ def _detect_deployment_type() -> str:
         return "Kubernetes"
 
     # Check for ECS
-    if os.getenv("ECS_CONTAINER_METADATA_URI") or os.getenv(
-        "ECS_CONTAINER_METADATA_URI_V4"
-    ):
+    if os.getenv("ECS_CONTAINER_METADATA_URI") or os.getenv("ECS_CONTAINER_METADATA_URI_V4"):
         return "ECS"
 
     # Check for EC2
@@ -323,6 +330,4 @@ async def get_system_stats():
         return stats
     except Exception as e:
         logger.error(f"Failed to get system stats: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500, detail="Failed to compute system statistics"
-        )
+        raise HTTPException(status_code=500, detail="Failed to compute system statistics")
