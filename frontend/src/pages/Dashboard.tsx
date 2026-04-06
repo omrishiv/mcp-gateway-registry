@@ -18,6 +18,7 @@ import {
   UpdateVirtualServerRequest,
 } from '../types/virtualServer';
 import VirtualServerForm from '../components/VirtualServerForm';
+import DiscoverTab from '../components/DiscoverTab';
 import axios from 'axios';
 
 
@@ -198,7 +199,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
   const [agentApiToken, setAgentApiToken] = useState<string | null>(null);
 
   // View filter state
-  const [viewFilter, setViewFilter] = useState<'all' | 'servers' | 'agents' | 'skills' | 'virtual' | 'external'>('all');
+  const [viewFilter, setViewFilter] = useState<'discover' | 'servers' | 'agents' | 'skills' | 'virtual' | 'external'>('discover');
 
   // Collapsible state for registry groups (tracks which groups are expanded)
   // Key is registry name: 'local' or peer registry ID like 'peer-registry-lob-1'
@@ -1469,7 +1470,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
     <>
       {/* MCP Servers Section - Grouped by Registry */}
       {registryConfig?.features.mcp_servers !== false &&
-        (viewFilter === 'all' || viewFilter === 'servers') && (
+        (viewFilter === 'servers') && (
           <div className="mb-8">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-xl font-bold text-gray-900 dark:text-white">
@@ -1749,7 +1750,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
 
       {/* Agents Section - Grouped by Registry */}
       {registryConfig?.features.agents !== false &&
-        (viewFilter === 'all' || viewFilter === 'agents') && (
+        (viewFilter === 'agents') && (
           <div className="mb-8">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-xl font-bold text-gray-900 dark:text-white">
@@ -1991,7 +1992,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
 
       {/* Agent Skills Section */}
       {registryConfig?.features.skills !== false &&
-        (viewFilter === 'all' || viewFilter === 'skills') && (
+        (viewFilter === 'skills') && (
           <div className="mb-8">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-xl font-bold text-gray-900 dark:text-white">
@@ -2064,7 +2065,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
         )}
 
       {/* Virtual MCP Servers Section */}
-      {(viewFilter === 'all' || viewFilter === 'virtual') &&
+      {(viewFilter === 'virtual') &&
         (filteredVirtualServers.length > 0 || viewFilter === 'virtual') && (
           <div className="mb-8">
             <div className="flex items-center justify-between mb-4">
@@ -2220,8 +2221,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
       )}
 
       {/* Empty state when all are filtered out */}
-      {((viewFilter === 'all' && filteredServers.length === 0 && filteredAgents.length === 0 && filteredSkills.length === 0 && filteredVirtualServers.length === 0) ||
-        (viewFilter === 'servers' && filteredServers.length === 0) ||
+      {((viewFilter === 'servers' && filteredServers.length === 0) ||
         (viewFilter === 'agents' && filteredAgents.length === 0) ||
         (viewFilter === 'skills' && filteredSkills.length === 0) ||
         (viewFilter === 'virtual' && filteredVirtualServers.length === 0)) &&
@@ -2281,24 +2281,16 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
           {/* View Filter Tabs - conditionally show based on registry mode */}
           {/* Calculate if multiple features are enabled to determine if "All" tab is needed */}
           <div className="flex gap-2 border-b border-gray-200 dark:border-gray-700 overflow-x-auto">
-{/* Only show "All" tab if more than one feature is enabled */}
-            {[
-              registryConfig?.features.mcp_servers !== false,
-              registryConfig?.features.agents !== false,
-              registryConfig?.features.skills !== false,
-              registryConfig?.features.federation !== false
-            ].filter(Boolean).length > 1 && (
-              <button
-                onClick={() => handleChangeViewFilter('all')}
-                className={`px-4 py-2 text-sm font-medium whitespace-nowrap transition-colors border-b-2 ${
-                  viewFilter === 'all'
-                    ? 'border-purple-500 text-purple-600 dark:text-purple-400'
-                    : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
-                }`}
-              >
-                All
-              </button>
-            )}
+            <button
+              onClick={() => handleChangeViewFilter('discover')}
+              className={`px-4 py-2 text-sm font-medium whitespace-nowrap transition-colors border-b-2 ${
+                viewFilter === 'discover'
+                  ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                  : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+              }`}
+            >
+              Discover
+            </button>
             {registryConfig?.features.mcp_servers !== false && (
               <button
                 onClick={() => handleChangeViewFilter('servers')}
@@ -2359,6 +2351,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
             )}
           </div>
 
+          {viewFilter !== 'discover' && (
+          <>
           {/* Search Bar and Refresh Button */}
           <div className="flex gap-4 items-center">
             <div className="relative flex-1">
@@ -2441,41 +2435,71 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
               Press Enter to run semantic search; typing filters locally.
             </p>
           </div>
+          </>
+          )}
         </div>
 
         {/* Scrollable Content Area */}
         <div className="flex-1 overflow-y-auto min-h-0 space-y-10">
-          {semanticSectionVisible ? (
+          {viewFilter === 'discover' ? (
+            <DiscoverTab
+              servers={filteredServers}
+              agents={filteredAgents}
+              skills={skills}
+              virtualServers={virtualServers}
+              externalServers={externalServers}
+              externalAgents={externalAgents}
+              loading={loading || skillsLoading || virtualServersLoading}
+              onServerToggle={handleToggleServer}
+              onServerEdit={handleEditServer}
+              onServerDelete={handleDeleteServer}
+              onAgentToggle={handleToggleAgent}
+              onAgentEdit={handleEditAgent}
+              onAgentDelete={handleDeleteAgent}
+              onSkillToggle={handleToggleSkill}
+              onSkillEdit={handleEditSkill}
+              onSkillDelete={handleDeleteSkill}
+              onVirtualServerToggle={handleToggleVirtualServer}
+              onVirtualServerEdit={handleEditVirtualServer}
+              onVirtualServerDelete={handleDeleteVirtualServer}
+              onShowToast={showToast}
+              authToken={agentApiToken}
+            />
+          ) : (
             <>
-              <SemanticSearchResults
-                query={semanticDisplayQuery}
-                loading={semanticLoading}
-                error={semanticError}
-                servers={semanticServers}
-                tools={semanticTools}
-                agents={semanticAgents}
-                skills={semanticSkills}
-                virtualServers={semanticVirtualServers}
-              />
+              {semanticSectionVisible ? (
+                <>
+                  <SemanticSearchResults
+                    query={semanticDisplayQuery}
+                    loading={semanticLoading}
+                    error={semanticError}
+                    servers={semanticServers}
+                    tools={semanticTools}
+                    agents={semanticAgents}
+                    skills={semanticSkills}
+                    virtualServers={semanticVirtualServers}
+                  />
 
-              {shouldShowFallbackGrid && (
-                <div className="border-t border-gray-200 dark:border-gray-700 pt-6">
-                  <div className="flex items-center justify-between mb-4">
-                    <h4 className="text-base font-semibold text-gray-900 dark:text-gray-200">
-                      Keyword search fallback
-                    </h4>
-                    {semanticError && (
-                      <span className="text-xs font-medium text-red-500">
-                        Showing local matches because semantic search is unavailable
-                      </span>
-                    )}
-                  </div>
-                  {renderDashboardCollections()}
-                </div>
+                  {shouldShowFallbackGrid && (
+                    <div className="border-t border-gray-200 dark:border-gray-700 pt-6">
+                      <div className="flex items-center justify-between mb-4">
+                        <h4 className="text-base font-semibold text-gray-900 dark:text-gray-200">
+                          Keyword search fallback
+                        </h4>
+                        {semanticError && (
+                          <span className="text-xs font-medium text-red-500">
+                            Showing local matches because semantic search is unavailable
+                          </span>
+                        )}
+                      </div>
+                      {renderDashboardCollections()}
+                    </div>
+                  )}
+                </>
+              ) : (
+                renderDashboardCollections()
               )}
             </>
-          ) : (
-            renderDashboardCollections()
           )}
         </div>
 
