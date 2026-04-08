@@ -124,6 +124,7 @@ jobs:
           echo "Extracted version: $VERSION"
 
       - name: Update image tags in Helm charts
+        id: update
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           for VALUES_FILE in \
@@ -135,7 +136,15 @@ jobs:
             echo "Updated $VALUES_FILE"
           done
 
+          if git diff --quiet; then
+            echo "Charts already at version $VERSION, skipping PR creation"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Create Pull Request
+        if: steps.update.outputs.changed == 'true'
         uses: peter-evans/create-pull-request@271a8d0340265f705b14b6d32b9829c1cb33d45e # v7.0.8
         with:
           branch: helm-update-${{ steps.version.outputs.version }}
