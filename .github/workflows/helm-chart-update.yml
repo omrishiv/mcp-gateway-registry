@@ -1,0 +1,144 @@
+name: Update Helm Charts on Release
+
+on:
+  workflow_run:
+    workflows: ["Release Docker Images"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-helm-charts:
+    name: Update Helm Chart Image Tags
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.repository == 'agentic-community/mcp-gateway-registry'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          TAG="${{ github.event.workflow_run.head_branch }}"
+          VERSION="${TAG#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Extracted version: $VERSION from tag: $TAG"
+
+      - name: Update image tags in Helm charts
+        id: update
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          for VALUES_FILE in \
+            charts/mcp-gateway-registry-stack/values.yaml \
+            charts/auth-server/values.yaml \
+            charts/registry/values.yaml \
+            charts/mcpgw/values.yaml; do
+            sed -i "s/^\(\s*tag:\s*\).*/\1${VERSION}/" "$VALUES_FILE"
+            echo "Updated $VALUES_FILE"
+          done
+
+          if git diff --quiet; then
+            echo "Charts already at version $VERSION, skipping PR creation"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check for new environment variables
+        id: envcheck
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+
+          # Find the previous release tag
+          PREV_TAG=$(git tag --list 'v*.*.*' --sort=-v:refname | grep -v "^${TAG}$" | head -n 1)
+          if [ -z "$PREV_TAG" ]; then
+            echo "No previous tag found, skipping env var check"
+            echo "comment=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Comparing env vars between $PREV_TAG and $TAG"
+
+          # Extract env var names from app code at each tag
+          extract_env_vars() {
+            local ref="$1"
+            git show "${ref}:registry/core/config.py" 2>/dev/null | \
+              grep -oP '(?:env=")[A-Z_][A-Z0-9_]*(?:")' | sed 's/env="//;s/"//' || true
+            for f in auth_server/server.py servers/mcpgw/server.py; do
+              git show "${ref}:${f}" 2>/dev/null | \
+                grep -oP '(?:os\.environ\.get|os\.getenv|os\.environ\[)\s*\(?\s*["\x27]([A-Z_][A-Z0-9_]*)["\x27]' | \
+                grep -oP '[A-Z_][A-Z0-9_]+' || true
+            done
+          }
+
+          extract_env_vars "$PREV_TAG" | sort -u > /tmp/env_old.txt
+          extract_env_vars "$TAG" | sort -u > /tmp/env_new.txt
+
+          # Find newly added env vars
+          NEW_VARS=$(comm -13 /tmp/env_old.txt /tmp/env_new.txt)
+          if [ -z "$NEW_VARS" ]; then
+            echo "No new environment variables detected"
+            echo "comment=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Check which new vars are missing from helm templates
+          MISSING=""
+          for VAR in $NEW_VARS; do
+            if ! grep -rq "$VAR" charts/*/templates/; then
+              MISSING="${MISSING}\n- \`${VAR}\`"
+            fi
+          done
+
+          if [ -z "$MISSING" ]; then
+            echo "All new env vars are already in helm templates"
+            echo "comment=" >> "$GITHUB_OUTPUT"
+          else
+            COMMENT=$(cat <<INNEREOF
+          **Warning: New environment variables detected that are not in Helm chart templates.**
+
+          The following env vars were added between \`$PREV_TAG\` and \`$TAG\` but are not referenced in any chart template under \`charts/*/templates/\`:
+          $(echo -e "$MISSING")
+
+          Please verify whether these need to be added to the Helm secret/configmap templates and \`values.yaml\` files before merging.
+          INNEREOF
+          )
+            # Write multiline output
+            {
+              echo "comment<<EOF"
+              echo "$COMMENT"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create Pull Request
+        id: create-pr
+        if: steps.update.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@271a8d0340265f705b14b6d32b9829c1cb33d45e # v7.0.8
+        with:
+          branch: helm-update-${{ steps.version.outputs.version }}
+          commit-message: "chore: update Helm chart image tags to ${{ steps.version.outputs.version }}"
+          title: "chore: update Helm chart image tags to ${{ steps.version.outputs.version }}"
+          body: |
+            Automated update of Helm chart image tags to `${{ steps.version.outputs.version }}` following release `${{ steps.version.outputs.tag }}`.
+
+            Updated files:
+            - `charts/mcp-gateway-registry-stack/values.yaml`
+            - `charts/auth-server/values.yaml`
+            - `charts/registry/values.yaml`
+            - `charts/mcpgw/values.yaml`
+          labels: helm
+
+      - name: Comment on PR with missing env vars
+        if: steps.update.outputs.changed == 'true' && steps.envcheck.outputs.comment != ''
+        uses: peter-evans/create-or-update-comment@71345be0265236311c031f5c7866368bd1eff043 # v4.0.0
+        with:
+          issue-number: ${{ steps.create-pr.outputs.pull-request-number }}
+          body: ${{ steps.envcheck.outputs.comment }}

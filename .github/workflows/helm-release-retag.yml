@@ -1,0 +1,35 @@
+name: Move Release Tag After Helm Chart Update
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  retag-release:
+    name: Move Release Tag to Main
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.head.ref, 'helm-update-') &&
+      github.repository == 'agentic-community/mcp-gateway-registry'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Extract version and move tag
+        run: |
+          BRANCH="${{ github.event.pull_request.head.ref }}"
+          VERSION="${BRANCH#helm-update-}"
+          TAG="v${VERSION}"
+
+          echo "Moving tag $TAG to current main HEAD"
+
+          git tag -f "$TAG"
+          git push origin "$TAG" --force
