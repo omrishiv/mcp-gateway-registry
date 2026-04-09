@@ -114,7 +114,9 @@ class GitHubAuthProvider:
             "exp": now + 600,
             "iss": settings.github_app_id,
         }
-        return jwt.encode(payload, settings.github_app_private_key, algorithm="RS256")
+        # Handle PEM key from env vars where newlines may be literal \n strings
+        private_key = settings.github_app_private_key.replace("\\n", "\n")
+        return jwt.encode(payload, private_key, algorithm="RS256")
 
     async def _get_github_app_token(self) -> str | None:
         """Get or refresh cached GitHub App installation token.
@@ -151,9 +153,24 @@ class GitHubAuthProvider:
                 return None
 
             data = response.json()
-            self._cached_token = data.get("token")
-            # Cache for 1 hour (GitHub's token lifetime)
-            self._token_expires_at = time.time() + 3600
+            token = data.get("token")
+            if not token:
+                logger.error("GitHub App token response missing 'token' field")
+                return None
+
+            self._cached_token = token
+
+            # Parse expiry from response, fall back to 1 hour
+            expires_at = data.get("expires_at")
+            if expires_at:
+                from datetime import UTC, datetime
+                try:
+                    expiry_dt = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+                    self._token_expires_at = expiry_dt.timestamp()
+                except ValueError:
+                    self._token_expires_at = time.time() + 3600
+            else:
+                self._token_expires_at = time.time() + 3600
 
             logger.debug("GitHub App installation token refreshed successfully")
             return self._cached_token
