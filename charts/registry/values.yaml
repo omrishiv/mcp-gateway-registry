@@ -26,6 +26,14 @@ app:
   federationStaticToken: # If not provided, a random token is auto-generated
   federationEncryptionKey: # If not provided, a Fernet key is auto-generated
   registryId: # Unique identifier for this registry instance (optional)
+  # Federation OAuth2 authentication (alternative to static token for outbound peer connections)
+  federationTokenEndpoint: ""  # OAuth2 token endpoint for federation authentication
+  federationClientId: ""  # OAuth2 client ID for federation
+  federationClientSecret: ""  # OAuth2 client secret for federation
+
+  # ASOR (Workday) integration (independent of peer federation)
+  asorAccessToken: ""  # Pre-obtained access token for ASOR federation
+  workdayTokenUrl: ""  # Workday OAuth2 token endpoint URL
 
   # Skill security scanning configuration
   skillSecurityScanEnabled: true  # Enable/disable skill security scanning
@@ -112,6 +120,14 @@ auth0:
   managementApiToken: ""  # Optional: alternative to M2M credentials (expires after 24h)
   managementApiTokenExistingSecret: ""  # If set, read AUTH0_MANAGEMENT_API_TOKEN from this K8s secret
   managementApiTokenExistingSecretKey: "AUTH0_MANAGEMENT_API_TOKEN"
+
+# Cognito integration (used when authProvider.type = "cognito" in standalone deployment)
+cognito:
+  userPoolId: ""  # Cognito User Pool ID
+  clientId: ""
+  clientSecret: ""
+  domain: ""  # Optional: custom Cognito domain
+  region: "us-east-1"  # AWS region for the User Pool
 
 # Service configuration
 service:

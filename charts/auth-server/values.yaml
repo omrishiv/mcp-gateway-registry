@@ -24,6 +24,17 @@ app:
   sessionCookieSecure: true
   oauthStoreTokensInSession: false  # Store OAuth tokens in session (default: false)
 
+  # Internal JWT configuration for service-to-service tokens
+  jwtIssuer: "mcp-auth-server"  # Issuer claim for internal JWT tokens
+  jwtAudience: "mcp-registry"  # Audience claim for internal JWT tokens
+
+  # Static token authentication (alternative to IdP JWT for Registry API)
+  registryStaticTokenAuthEnabled: false  # Enable static API key auth for Registry API
+  registryApiToken: ""  # Static API key value (required when registryStaticTokenAuthEnabled is true)
+
+  # Rate limiting
+  maxTokensPerUserPerHour: "100"  # Max token generations per user per hour
+
   # Federation configuration
   federationStaticTokenAuthEnabled: false #If not provided, defaults to false
   federationStaticToken: # If not provided, a random token is auto-generated
@@ -31,15 +42,18 @@ app:
   registryId: # Unique identifier for this registry instance (optional)
 
 # Authentication Provider Configuration
-# Choose ONE provider: keycloak, entra, okta, or auth0
+# Choose ONE provider: keycloak, entra, okta, auth0, or cognito
 authProvider:
-  # Provider type: "keycloak", "entra", "okta", or "auth0"
+  # Provider type: "keycloak", "entra", "okta", "auth0", or "cognito"
   type: keycloak
 
 # Keycloak integration (used when authProvider.type = "keycloak")
 keycloak:
+  enabled: true
   externalUrl: http://localhost:8080
   realm: mcp-gateway
+  m2mClientId: ""  # Optional: M2M client ID for machine-to-machine authentication
+  m2mClientSecret: ""  # Optional: M2M client secret
 
 # Entra ID integration (used when authProvider.type = "entra")
 entra:
@@ -48,6 +62,7 @@ entra:
   clientSecretExistingSecret: ""  # If set, read ENTRA_CLIENT_SECRET from this K8s secret instead of clientSecret
   clientSecretExistingSecretKey: "ENTRA_CLIENT_SECRET"  # Key within the existing secret
   tenantId: ""
+  loginBaseUrl: ""  # Custom Entra login base URL for sovereign/national clouds (default: https://login.microsoftonline.com)
 
 # Okta integration (used when authProvider.type = "okta")
 okta:
@@ -81,6 +96,14 @@ auth0:
   managementApiToken: ""  # Optional: alternative to M2M credentials (expires after 24h)
   managementApiTokenExistingSecret: ""  # If set, read AUTH0_MANAGEMENT_API_TOKEN from this K8s secret
   managementApiTokenExistingSecretKey: "AUTH0_MANAGEMENT_API_TOKEN"
+
+# Cognito integration (used when authProvider.type = "cognito")
+cognito:
+  userPoolId: ""  # Cognito User Pool ID
+  clientId: ""
+  clientSecret: ""
+  domain: ""  # Optional: custom Cognito domain
+  region: "us-east-1"  # AWS region for the User Pool
 
 # Service configuration
 service:

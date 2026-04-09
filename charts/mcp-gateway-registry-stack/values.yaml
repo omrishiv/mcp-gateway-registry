@@ -41,9 +41,9 @@ global:
     registryId: # Unique identifier for this registry instance (optional)
 
   # Authentication Provider Configuration
-  # Choose ONE provider: keycloak, entra, or okta
+  # Choose ONE provider: keycloak, entra, okta, auth0, or cognito
   authProvider:
-    # Provider type: "keycloak", "entra", or "okta"
+    # Provider type: "keycloak", "entra", "okta", "auth0", or "cognito"
     type: keycloak
     keycloak:
       adminUsername: &keycloakAdmin "user"
@@ -193,6 +193,15 @@ registry:
     # Registry mode: full, skills-only, mcp-servers-only, agents-only
     registryMode: full
 
+    # Federation OAuth2 authentication (alternative to static token)
+    federationTokenEndpoint: ""
+    federationClientId: ""
+    federationClientSecret: ""
+
+    # ASOR (Workday) federation integration
+    asorAccessToken: ""
+    workdayTokenUrl: ""
+
     # Skill security scanning configuration
     skillSecurityScanEnabled: true  # Enable/disable skill security scanning
     skillSecurityAnalyzers: "static"  # Comma-separated: static, behavioral, llm, meta, virustotal, ai-defense
@@ -256,10 +265,20 @@ auth-server:
   app:
     replicas: 2 # set to > 1 replica for high availability
     oauthStoreTokensInSession: false  # Store OAuth tokens in session (default: false)
+    # Internal JWT configuration
+    jwtIssuer: "mcp-auth-server"  # Issuer claim for internal JWT tokens
+    jwtAudience: "mcp-registry"  # Audience claim for internal JWT tokens
+    # Static token authentication (alternative to IdP JWT for Registry API)
+    registryStaticTokenAuthEnabled: false
+    registryApiToken: ""
+    # Rate limiting
+    maxTokensPerUserPerHour: "100"
 
   keycloak:
     enabled: true
     realm: *keycloakRealm
+    m2mClientId: ""  # Optional: M2M client ID
+    m2mClientSecret: ""  # Optional: M2M client secret
     # externalUrl will be templated in the subchart using global.domain
 
   # Entra ID settings (used when global.authProvider.type = "entra")
@@ -267,6 +286,7 @@ auth-server:
     clientId: ""
     clientSecret: ""
     tenantId: ""
+    loginBaseUrl: ""  # Custom Entra login base URL for sovereign clouds
 
   # Okta settings (used when global.authProvider.type = "okta")
   okta:
@@ -277,6 +297,25 @@ auth-server:
     m2mClientSecret: ""  # Optional: defaults to clientSecret
     apiToken: ""  # Optional: required for IAM operations
     authServerId: ""  # Optional: uses default Org Authorization Server if not set
+
+  # Auth0 settings (used when global.authProvider.type = "auth0")
+  auth0:
+    domain: ""  # e.g., your-tenant.us.auth0.com
+    clientId: ""
+    clientSecret: ""
+    audience: ""  # Optional: API audience for M2M tokens
+    groupsClaim: "https://mcp-gateway/groups"
+    m2mClientId: ""
+    m2mClientSecret: ""
+    managementApiToken: ""  # Optional: alternative to M2M credentials (expires after 24h)
+
+  # Cognito settings (used when global.authProvider.type = "cognito")
+  cognito:
+    userPoolId: ""
+    clientId: ""
+    clientSecret: ""
+    domain: ""  # Optional: custom Cognito domain
+    region: "us-east-1"
 
   ingress:
     enabled: true

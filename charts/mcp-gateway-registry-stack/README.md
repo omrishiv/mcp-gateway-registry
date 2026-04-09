@@ -59,7 +59,16 @@ The `values.yaml` file needs to be updated for your setup, specifically:
 
 ### Authentication Provider Selection
 
-This chart supports two authentication providers:
+This chart supports five authentication providers: Keycloak (default), Microsoft Entra ID, Okta, Auth0, and AWS Cognito.
+
+When using any provider other than Keycloak, disable the Keycloak components:
+
+```yaml
+keycloak:
+  create: false
+keycloak-configure:
+  enabled: false
+```
 
 #### Option 1: Keycloak (Default)
 
@@ -93,33 +102,86 @@ keycloak-configure:
   enabled: true  # Still configure the external Keycloak
 ```
 
-#### Option 2: Microsoft Entra ID
+**Optional: Keycloak M2M authentication:**
 
-Configure the following in your values file:
+```yaml
+auth-server:
+  keycloak:
+    m2mClientId: "mcp-gateway-m2m"
+    m2mClientSecret: "your-m2m-client-secret"
+```
+
+#### Option 2: Microsoft Entra ID
 
 ```yaml
 global:
   authProvider:
     type: entra
+    entra:
+      adminGroupId: "your-admin-group-uuid"  # Optional: maps Entra group to admin role
 
-# Disable Keycloak components
-keycloak:
-  create: false
-
-keycloak-configure:
-  enabled: false
-
-# Configure Entra ID
 auth-server:
-  authProvider:
-    type: entra
   entra:
     clientId: "your-entra-client-id"
     clientSecret: "your-entra-client-secret"
     tenantId: "your-entra-tenant-id"
+    loginBaseUrl: ""  # Optional: override for sovereign clouds (e.g., https://login.microsoftonline.us)
 ```
 
 See the [Entra ID documentation](../../docs/entra.md) for details on setting up your Entra ID app registration.
+
+#### Option 3: Okta
+
+```yaml
+global:
+  authProvider:
+    type: okta
+
+auth-server:
+  okta:
+    domain: "dev-123456.okta.com"
+    clientId: "your-client-id"
+    clientSecret: "your-client-secret"
+    m2mClientId: ""       # Optional: for machine-to-machine auth
+    m2mClientSecret: ""   # Optional: for machine-to-machine auth
+    apiToken: ""          # Optional: for IAM operations
+    authServerId: ""      # Optional: custom authorization server
+```
+
+#### Option 4: Auth0
+
+```yaml
+global:
+  authProvider:
+    type: auth0
+
+auth-server:
+  auth0:
+    domain: "your-tenant.us.auth0.com"
+    clientId: "your-client-id"
+    clientSecret: "your-client-secret"
+    audience: ""                              # Optional: API audience for M2M tokens
+    groupsClaim: "https://mcp-gateway/groups" # Custom claim for group memberships
+    m2mClientId: ""                           # Required for IAM management
+    m2mClientSecret: ""                       # Required for IAM management
+    managementApiToken: ""                    # Optional: alternative to M2M credentials (expires 24h)
+```
+
+#### Option 5: AWS Cognito
+
+```yaml
+global:
+  authProvider:
+    type: cognito
+
+auth-server:
+  cognito:
+    userPoolId: "us-east-1_xxxxxxxxx"
+    clientId: "your-client-id"
+    clientSecret: "your-client-secret"
+    domain: ""              # Optional: custom Cognito domain
+    region: "us-east-1"     # AWS region for the User Pool
+```
 
 ### Routing Modes
 
@@ -203,11 +265,11 @@ identify which version was used to deploy the charts.
   the auth-server.
 - The registry will start as soon as the image is pulled
 
-### With Entra ID:
+### With Entra ID, Okta, Auth0, or Cognito:
 
 - MongoDB, registry, and auth-server will be deployed as the core components
 - Keycloak and keycloak-configure are skipped
-- auth-server will use the Entra ID credentials from your values file
+- auth-server will use the configured IdP credentials from your values file
 - The registry will start as soon as the image is pulled
 
 ## Deployment Examples (all run from charts/mcp-gateway-registry-stack)
@@ -257,6 +319,36 @@ helm install mcp-gateway-registry -n mcp-gateway-registry --create-namespace . \
 ```
 
 
+### Subdomain with Auth0
+
+Creates a deployment using Auth0.
+
+```bash
+helm install mcp-gateway-registry -n mcp-gateway-registry --create-namespace . \
+--set global.domain=agents.domain.example \
+--set global.authProvider.type=auth0 \
+--set auth-server.auth0.domain=YOUR_TENANT.us.auth0.com \
+--set auth-server.auth0.clientId=AUTH0_CLIENT_ID \
+--set auth-server.auth0.clientSecret=AUTH0_CLIENT_SECRET \
+--set keycloak-configure.enabled=false \
+--set keycloak.create=false
+```
+
+### Subdomain with AWS Cognito
+
+Creates a deployment using AWS Cognito.
+
+```bash
+helm install mcp-gateway-registry -n mcp-gateway-registry --create-namespace . \
+--set global.domain=agents.domain.example \
+--set global.authProvider.type=cognito \
+--set auth-server.cognito.userPoolId=us-east-1_XXXXXXXXX \
+--set auth-server.cognito.clientId=COGNITO_CLIENT_ID \
+--set auth-server.cognito.clientSecret=COGNITO_CLIENT_SECRET \
+--set keycloak-configure.enabled=false \
+--set keycloak.create=false
+```
+
 ### Path with Keycloak and git hash retention for debugging
 
 Will create a configmap in the `mcp-gateway-registry` namespace called `chart-version` with the git hash of the current
@@ -281,7 +373,50 @@ helm install mcp-gateway-registry -n mcp-gateway-registry --create-namespace . \
  --set global.domain=agents.domain.example \
  --set global.ingress.routingMode=path \
  --set keycloak.httpRelativePath=/keycloak/ \
-  --set global.federation.staticTokenAuthEnabled=true
+ --set global.federation.staticTokenAuthEnabled=true
+```
+
+**Federation with OAuth2 for outbound peer connections:**
+
+```bash
+helm install mcp-gateway-registry -n mcp-gateway-registry --create-namespace . \
+ --set global.domain=agents.domain.example \
+ --set global.federation.staticTokenAuthEnabled=true \
+ --set registry.app.federationTokenEndpoint=https://idp.example.com/oauth2/token \
+ --set registry.app.federationClientId=federation-client \
+ --set registry.app.federationClientSecret=federation-secret
+```
+
+### ASOR (Workday) Integration
+
+ASOR integration is independent of peer federation and can be enabled alongside any auth provider:
+
+```bash
+helm install mcp-gateway-registry -n mcp-gateway-registry --create-namespace . \
+ --set global.domain=agents.domain.example \
+ --set registry.app.asorAccessToken=your-asor-access-token \
+ --set registry.app.workdayTokenUrl=https://services.wd101.myworkday.com/ccx/oauth2/instance/token
+```
+
+### Auth Server Advanced Configuration
+
+**Static token authentication** (use a static API key instead of IdP JWT for Registry API):
+
+```bash
+helm install mcp-gateway-registry -n mcp-gateway-registry --create-namespace . \
+ --set global.domain=agents.domain.example \
+ --set auth-server.app.registryStaticTokenAuthEnabled=true \
+ --set auth-server.app.registryApiToken=your-secure-api-token
+```
+
+**Custom JWT configuration** (override internal service-to-service token claims):
+
+```yaml
+auth-server:
+  app:
+    jwtIssuer: "custom-issuer"      # Default: mcp-auth-server
+    jwtAudience: "custom-audience"  # Default: mcp-registry
+    maxTokensPerUserPerHour: "50"   # Default: 100
 ```
 
 ## Use
@@ -326,6 +461,14 @@ Ensure that:
 3. Group mappings are configured in your scopes.yml or MongoDB
 
 See the [Entra ID documentation](../../docs/entra.md) for complete setup instructions.
+
+### With Okta, Auth0, or Cognito:
+
+Navigate to https://mcpregistry.DOMAIN to log in. Users will authenticate through your configured identity provider.
+Ensure that your IdP application has the correct redirect URIs configured:
+
+- Callback URL: `https://auth-server.DOMAIN/callback` (subdomain) or `https://DOMAIN/auth-server/callback` (path)
+- Logout URL: `https://mcpregistry.DOMAIN` (subdomain) or `https://DOMAIN/registry` (path)
 
 ## Scaling and Redundancy
 
@@ -446,7 +589,7 @@ can reference pre-existing secrets instead.
 | Value | Default Secret Name | Description |
 |-------|---------------------|-------------|
 | `global.existingSharedSecret` | `shared-secret` | SECRET_KEY and federation tokens shared by auth-server and registry |
-| `global.existingOauthProviderSecret` | `oauth-provider-secret` | Auth provider credentials (Keycloak/Entra/Okta) |
+| `global.existingOauthProviderSecret` | `oauth-provider-secret` | Auth provider credentials (Keycloak/Entra/Okta/Auth0/Cognito) |
 | `global.existingMongoCredentialsSecret` | `mongo-credentials` | MongoDB connection credentials used by auth-server and registry |
 | `mongodb.existingPasswordSecret` | `my-user-password` | MongoDB operator user password |
 
