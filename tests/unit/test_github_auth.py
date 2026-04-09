@@ -1,6 +1,9 @@
 """Unit tests for GitHubAuthProvider."""
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import httpx
+import jwt
 
 
 class TestDomainMatching:
@@ -133,3 +136,66 @@ class TestPATAuth:
             "https://raw.githubusercontent.com/owner/repo/main/SKILL.md"
         )
         assert headers == {"Authorization": "Bearer ghp_test_token_123"}
+
+
+class TestJWTCreation:
+    """Tests for GitHub App JWT creation."""
+
+    @patch("registry.services.github_auth.settings")
+    def test_jwt_has_correct_claims(self, mock_settings):
+        """JWT contains iat, exp, iss claims."""
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        pem = private_key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        ).decode()
+
+        mock_settings.github_pat = ""
+        mock_settings.github_app_id = "12345"
+        mock_settings.github_app_installation_id = "67890"
+        mock_settings.github_app_private_key = pem
+        mock_settings.github_extra_hosts = ""
+
+        from registry.services.github_auth import GitHubAuthProvider
+
+        provider = GitHubAuthProvider()
+        token = provider._create_jwt()
+
+        # Decode without verification to check claims
+        claims = jwt.decode(token, options={"verify_signature": False})
+        assert claims["iss"] == "12345"
+        assert "iat" in claims
+        assert "exp" in claims
+        # exp should be ~10 minutes after iat
+        assert claims["exp"] - claims["iat"] <= 660  # 10 min + 60s skew
+
+    @patch("registry.services.github_auth.settings")
+    def test_jwt_uses_rs256(self, mock_settings):
+        """JWT is signed with RS256 algorithm."""
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        pem = private_key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        ).decode()
+
+        mock_settings.github_pat = ""
+        mock_settings.github_app_id = "12345"
+        mock_settings.github_app_installation_id = "67890"
+        mock_settings.github_app_private_key = pem
+        mock_settings.github_extra_hosts = ""
+
+        from registry.services.github_auth import GitHubAuthProvider
+
+        provider = GitHubAuthProvider()
+        token = provider._create_jwt()
+
+        header = jwt.get_unverified_header(token)
+        assert header["alg"] == "RS256"
