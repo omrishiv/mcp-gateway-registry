@@ -39,6 +39,7 @@ from ..schemas.skill_models import (
 )
 from ..utils.path_utils import normalize_skill_path
 from ..utils.url_utils import translate_skill_url
+from .github_auth import GitHubAuthProvider
 
 # Configure logging
 logging.basicConfig(
@@ -47,6 +48,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# GitHub auth provider for private repository access
+_github_auth = GitHubAuthProvider()
 
 # Constants
 URL_VALIDATION_TIMEOUT: int = 10
@@ -183,8 +186,9 @@ async def _validate_skill_md_url(
 
     try:
         async with httpx.AsyncClient() as client:
+            headers = await _github_auth.get_auth_headers(str(url))
             response = await client.get(
-                str(url), follow_redirects=True, timeout=URL_VALIDATION_TIMEOUT
+                str(url), headers=headers, follow_redirects=True, timeout=URL_VALIDATION_TIMEOUT
             )
 
             # SSRF protection: validate final URL after redirects
@@ -256,9 +260,10 @@ async def _parse_skill_md_content(
 
     try:
         async with httpx.AsyncClient() as client:
-            # Fetch from raw URL
+            # Fetch from raw URL with GitHub auth if applicable
+            headers = await _github_auth.get_auth_headers(raw_url_str)
             response = await client.get(
-                raw_url_str, follow_redirects=True, timeout=URL_VALIDATION_TIMEOUT
+                raw_url_str, headers=headers, follow_redirects=True, timeout=URL_VALIDATION_TIMEOUT
             )
 
             # SSRF protection: validate final URL after redirects
@@ -425,8 +430,9 @@ async def _check_skill_health(
 
     try:
         async with httpx.AsyncClient() as client:
+            headers = await _github_auth.get_auth_headers(str(url))
             response = await client.head(
-                str(url), follow_redirects=True, timeout=URL_VALIDATION_TIMEOUT
+                str(url), headers=headers, follow_redirects=True, timeout=URL_VALIDATION_TIMEOUT
             )
 
             # SSRF protection: validate final URL after redirects

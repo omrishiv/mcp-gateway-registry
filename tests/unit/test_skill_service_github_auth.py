@@ -1,0 +1,97 @@
+"""Tests that GitHub auth headers are injected into skill service httpx calls."""
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+
+class TestValidateSkillMdUrlAuth:
+    """Tests for auth header injection in _validate_skill_md_url."""
+
+    @patch("registry.services.skill_service._github_auth")
+    @patch("registry.services.skill_service._is_safe_url", return_value=True)
+    async def test_auth_headers_passed_to_get(self, mock_safe_url, mock_auth):
+        """Auth headers from GitHubAuthProvider are passed to httpx.get."""
+        mock_auth.get_auth_headers = AsyncMock(
+            return_value={"Authorization": "Bearer ghp_test"}
+        )
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.content = b"# Test Skill"
+        mock_response.url = "https://raw.githubusercontent.com/o/r/main/SKILL.md"
+
+        with patch("registry.services.skill_service.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            from registry.services.skill_service import _validate_skill_md_url
+
+            result = await _validate_skill_md_url(
+                "https://raw.githubusercontent.com/o/r/main/SKILL.md"
+            )
+
+            call_kwargs = mock_client.get.call_args
+            assert call_kwargs.kwargs.get("headers") == {"Authorization": "Bearer ghp_test"}
+            assert result["valid"] is True
+
+    @patch("registry.services.skill_service._github_auth")
+    @patch("registry.services.skill_service._is_safe_url", return_value=True)
+    async def test_empty_headers_when_no_credentials(self, mock_safe_url, mock_auth):
+        """Empty headers passed when no credentials configured."""
+        mock_auth.get_auth_headers = AsyncMock(return_value={})
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.content = b"# Test Skill"
+        mock_response.url = "https://raw.githubusercontent.com/o/r/main/SKILL.md"
+
+        with patch("registry.services.skill_service.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            from registry.services.skill_service import _validate_skill_md_url
+
+            await _validate_skill_md_url(
+                "https://raw.githubusercontent.com/o/r/main/SKILL.md"
+            )
+
+            call_kwargs = mock_client.get.call_args
+            assert call_kwargs.kwargs.get("headers") == {}
+
+
+class TestCheckSkillHealthAuth:
+    """Tests for auth header injection in _check_skill_health."""
+
+    @patch("registry.services.skill_service._github_auth")
+    @patch("registry.services.skill_service._is_safe_url", return_value=True)
+    async def test_auth_headers_passed_to_head(self, mock_safe_url, mock_auth):
+        """Auth headers are passed to httpx.head in health check."""
+        mock_auth.get_auth_headers = AsyncMock(
+            return_value={"Authorization": "Bearer ghp_test"}
+        )
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.url = "https://raw.githubusercontent.com/o/r/main/SKILL.md"
+
+        with patch("registry.services.skill_service.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.head.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            from registry.services.skill_service import _check_skill_health
+
+            result = await _check_skill_health(
+                "https://raw.githubusercontent.com/o/r/main/SKILL.md"
+            )
+
+            call_kwargs = mock_client.head.call_args
+            assert call_kwargs.kwargs.get("headers") == {"Authorization": "Bearer ghp_test"}
+            assert result["healthy"] is True
