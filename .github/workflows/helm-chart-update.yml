@@ -54,8 +54,10 @@ jobs:
 
       - name: Check for new environment variables
         id: envcheck
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
-          TAG="${{ steps.version.outputs.tag }}"
+          TAG="$TAG"
 
           # Find the previous release tag
           PREV_TAG=$(git tag --list 'v*.*.*' --sort=-v:refname | grep -v "^${TAG}$" | head -n 1)
