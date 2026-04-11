@@ -627,6 +627,16 @@ variable "federation_encryption_key" {
 }
 
 # =============================================================================
+# AWS AGENT REGISTRY FEDERATION CONFIGURATION
+# =============================================================================
+
+variable "aws_registry_federation_enabled" {
+  description = "Enable AWS Agent Registry federation."
+  type        = bool
+  default     = false
+}
+
+# =============================================================================
 # ANS (AGENT NAMING SERVICE) CONFIGURATION
 # =============================================================================
 

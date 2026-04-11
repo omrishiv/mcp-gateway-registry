@@ -602,6 +602,16 @@ grafana_admin_password = "CHANGE-ME-SET-STRONG-PASSWORD"
 # telemetry_debug = "false"
 
 # ============================================================================
+# AWS REGISTRY FEDERATION (optional)
+# ============================================================================
+# Registry IDs and sync details are managed via /api/federation/config API.
+# These are global flags only.
+
+# Enable AWS Registry federation (default: false)
+# Registry IDs, region, sync settings are managed via /api/federation/config API.
+aws_registry_federation_enabled = true
+
+# ============================================================================
 # DEMO SERVER CONFIGURATION (Issue #764)
 # ============================================================================
 # Disable built-in airegistry-tools server auto-registration.

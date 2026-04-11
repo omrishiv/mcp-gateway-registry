@@ -181,6 +181,199 @@ def _initialize_deployment_metrics() -> None:
 # Stats and deployment detection functions moved to registry/api/system_routes.py
 
 
+async def _sync_agentcore_on_startup(
+    federation_config: Any,
+    server_service: Any,
+) -> None:
+    """Sync records from AWS Agent Registry on startup.
+
+    Fetches all records from configured AgentCore registries,
+    registers them locally, and reconciles stale records.
+
+    Args:
+        federation_config: FederationConfig with agentcore settings
+        server_service: ServerService for server registration
+    """
+    from registry.schemas.agent_models import AgentCard
+    from registry.schemas.skill_models import SkillCard
+    from registry.repositories.factory import (
+        get_agent_repository,
+        get_server_repository,
+        get_skill_repository,
+    )
+    from registry.services.agent_service import agent_service
+    from registry.services.federation.agentcore_client import (
+        AgentCoreFederationClient,
+    )
+    from registry.services.federation_reconciliation import (
+        reconcile_agentcore_records,
+    )
+    from registry.services.skill_service import get_skill_service
+
+    logger.info("Syncing from AWS Agent Registry...")
+
+    agentcore_client = AgentCoreFederationClient(
+        aws_region=federation_config.aws_registry.aws_region
+    )
+    records = agentcore_client.fetch_all_records(
+        registry_configs=federation_config.aws_registry.registries,
+        sync_timeout_seconds=federation_config.aws_registry.sync_timeout_seconds,
+        max_concurrent_fetches=federation_config.aws_registry.max_concurrent_fetches,
+    )
+
+    synced_paths: dict[str, set[str]] = {
+        "servers": set(),
+        "agents": set(),
+        "skills": set(),
+    }
+
+    # Register servers (MCP records)
+    server_count = 0
+    for server_data in records["servers"]:
+        try:
+            server_path = server_data.get("path")
+            if not server_path:
+                continue
+
+            if "id" not in server_data or not server_data["id"]:
+                server_data["id"] = str(uuid4())
+
+            success = await server_service.register_server(server_data)
+            if not success:
+                if "id" not in server_data or not server_data["id"]:
+                    server_data["id"] = str(uuid4())
+                success = await server_service.update_server(server_path, server_data)
+
+            if success:
+                await server_service.toggle_service(server_path, True)
+                server_count += 1
+                synced_paths["servers"].add(server_path)
+        except Exception as e:
+            logger.error(
+                f"Failed to sync AgentCore server "
+                f"{server_data.get('server_name', 'unknown')}: {e}"
+            )
+
+    # Register agents (A2A + CUSTOM records)
+    agent_count = 0
+    for agent_data in records["agents"]:
+        try:
+            agent_path = agent_data.get("path")
+            if not agent_path:
+                continue
+
+            try:
+                agent_card = AgentCard(**agent_data)
+                await agent_service.register_agent(agent_card)
+                agent_count += 1
+                synced_paths["agents"].add(agent_path)
+            except ValueError:
+                # Path already exists -- update instead
+                await agent_service.update_agent(agent_path, agent_data)
+                agent_count += 1
+                synced_paths["agents"].add(agent_path)
+        except Exception as e:
+            logger.error(
+                f"Failed to sync AgentCore agent "
+                f"{agent_data.get('name', 'unknown')}: {e}"
+            )
+
+    # Register skills (AGENT_SKILLS records)
+    skill_count = 0
+    skill_service = get_skill_service()
+    skill_repo = get_skill_repository()
+    for skill_data in records["skills"]:
+        try:
+            skill_path = skill_data.get("path")
+            if not skill_path:
+                continue
+
+            try:
+                skill_card = SkillCard(**skill_data)
+                await skill_repo.create(skill_card)
+                skill_count += 1
+                synced_paths["skills"].add(skill_path)
+            except Exception as create_err:
+                # Skill already exists -- update instead
+                logger.debug(f"Skill create failed for {skill_path}, trying update: {create_err}")
+                update_fields = {
+                    k: v for k, v in skill_data.items()
+                    if k not in ("path", "id", "created_at")
+                }
+                await skill_repo.update(skill_path, update_fields)
+                skill_count += 1
+                synced_paths["skills"].add(skill_path)
+        except Exception as e:
+            logger.error(
+                f"Failed to sync AgentCore skill "
+                f"{skill_data.get('name', 'unknown')}: {e}"
+            )
+
+    logger.info(
+        f"Synced from AWS Agent Registry: "
+        f"{server_count} servers, {agent_count} agents, {skill_count} skills"
+    )
+
+    # Run reconciliation to remove stale records
+    logger.info("Running AgentCore reconciliation after startup sync...")
+    try:
+        server_repo = get_server_repository()
+        agent_repo = get_agent_repository()
+
+        reconciliation_result = await reconcile_agentcore_records(
+            config=federation_config,
+            server_service=server_service,
+            server_repo=server_repo,
+            agent_repo=agent_repo,
+            skill_repo=skill_repo,
+            synced_paths=synced_paths,
+        )
+
+        logger.info(
+            f"AgentCore reconciliation complete: "
+            f"removed {reconciliation_result.get('total_removed', 0)} stale records"
+        )
+    except Exception as e:
+        logger.error(
+            f"AgentCore reconciliation failed (continuing with startup): {e}",
+            exc_info=True,
+        )
+
+
+async def _apply_aws_registry_env_vars() -> None:
+    """Apply AWS_REGISTRY_FEDERATION_ENABLED env var to the federation config.
+
+    When the env var is set (e.g. via ECS task definition or .env),
+    it overrides the aws_registry.enabled flag in the MongoDB federation
+    config document. Creates the config document if it does not exist.
+
+    Other aws_registry settings (region, sync_on_startup, registries)
+    are managed exclusively via the /api/federation/config API.
+    """
+    from registry.repositories.factory import get_federation_config_repository
+    from registry.schemas.federation_schema import FederationConfig
+
+    env_enabled = os.environ.get("AWS_REGISTRY_FEDERATION_ENABLED", "").lower()
+
+    if not env_enabled:
+        logger.debug("AWS_REGISTRY_FEDERATION_ENABLED not set, skipping env var override")
+        return
+
+    enabled = env_enabled in ("true", "1", "yes")
+    logger.info(f"AWS_REGISTRY_FEDERATION_ENABLED={enabled} (from env var)")
+
+    federation_repo = get_federation_config_repository()
+    config = await federation_repo.get_config("default")
+
+    if config is None:
+        config = FederationConfig()
+
+    config.aws_registry.enabled = enabled
+
+    await federation_repo.save_config(config, "default")
+    logger.info(f"Federation config updated: aws_registry.enabled={enabled}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup and shutdown lifecycle management."""
@@ -304,6 +497,15 @@ async def lifespan(app: FastAPI):
         logger.info("🔗 Checking federation configuration...")
         from registry.repositories.factory import get_federation_config_repository
 
+        # Apply env var overrides (e.g. from ECS/terraform) before loading config
+        try:
+            await _apply_aws_registry_env_vars()
+        except Exception as e:
+            logger.error(
+                f"Failed to apply AWS Registry env vars (continuing with startup): {e}",
+                exc_info=True,
+            )
+
         try:
             # Load federation config
             federation_repo = get_federation_config_repository()
@@ -318,7 +520,13 @@ async def lifespan(app: FastAPI):
                 sync_on_startup = (
                     federation_config.anthropic.enabled
                     and federation_config.anthropic.sync_on_startup
-                ) or (federation_config.asor.enabled and federation_config.asor.sync_on_startup)
+                ) or (
+                    federation_config.asor.enabled
+                    and federation_config.asor.sync_on_startup
+                ) or (
+                    federation_config.aws_registry.enabled
+                    and federation_config.aws_registry.sync_on_startup
+                )
 
                 if sync_on_startup:
                     logger.info("🔄 Syncing servers from federated registries on startup...")
@@ -408,6 +616,22 @@ async def lifespan(app: FastAPI):
                                 )
 
                         # ASOR sync would go here if needed
+
+                        # AgentCore sync (AWS Agent Registry)
+                        if (
+                            federation_config.aws_registry.enabled
+                            and federation_config.aws_registry.sync_on_startup
+                        ):
+                            try:
+                                await _sync_agentcore_on_startup(
+                                    federation_config=federation_config,
+                                    server_service=server_service,
+                                )
+                            except Exception as e:
+                                logger.error(
+                                    f"AgentCore federation sync failed (continuing with startup): {e}",
+                                    exc_info=True,
+                                )
 
                     except Exception as e:
                         logger.error(

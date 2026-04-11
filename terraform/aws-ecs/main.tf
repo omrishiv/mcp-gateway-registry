@@ -166,6 +166,9 @@ module "mcp_gateway" {
   federation_static_token              = var.federation_static_token
   federation_encryption_key            = var.federation_encryption_key
 
+  # AWS Agent Registry federation configuration
+  aws_registry_federation_enabled = var.aws_registry_federation_enabled
+
   # ANS (Agent Name Service) configuration
   ans_integration_enabled            = var.ans_integration_enabled
   ans_api_endpoint                   = var.ans_api_endpoint

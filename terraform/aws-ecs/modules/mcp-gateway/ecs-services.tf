@@ -495,10 +495,15 @@ module "ecs_service_registry" {
     EcsExecTaskExecution = aws_iam_policy.ecs_exec_task_execution.arn
   }
   create_tasks_iam_role = true
-  tasks_iam_role_policies = {
-    SecretsManagerAccess = aws_iam_policy.ecs_secrets_access.arn
-    EcsExecTask          = aws_iam_policy.ecs_exec_task.arn
-  }
+  tasks_iam_role_policies = merge(
+    {
+      SecretsManagerAccess = aws_iam_policy.ecs_secrets_access.arn
+      EcsExecTask          = aws_iam_policy.ecs_exec_task.arn
+    },
+    var.aws_registry_federation_enabled ? {
+      BedrockAgentCoreAccess = aws_iam_policy.bedrock_agentcore_access[0].arn
+    } : {}
+  )
 
   # Enable Service Connect
   service_connect_configuration = {
@@ -774,6 +779,11 @@ module "ecs_service_registry" {
         {
           name  = "FEDERATION_ENCRYPTION_KEY"
           value = var.federation_encryption_key
+        },
+        # AWS Agent Registry federation configuration
+        {
+          name  = "AWS_REGISTRY_FEDERATION_ENABLED"
+          value = tostring(var.aws_registry_federation_enabled)
         },
         {
           name  = "ANS_INTEGRATION_ENABLED"

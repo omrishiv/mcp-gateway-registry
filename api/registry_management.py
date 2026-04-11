@@ -3298,6 +3298,22 @@ def cmd_federation_sync(args: argparse.Namespace) -> int:
                 for agent in results["asor"].get("agents", []):
                     print(f"    - {agent}")
 
+            if results.get("aws_registry", {}).get("count", 0) > 0:
+                aws_reg = results["aws_registry"]
+                print(f"\n  AWS Agent Registry ({aws_reg['count']}):")
+                if aws_reg.get("servers"):
+                    print(f"    Servers ({len(aws_reg['servers'])}):")
+                    for server in aws_reg["servers"]:
+                        print(f"      - {server}")
+                if aws_reg.get("agents"):
+                    print(f"    Agents ({len(aws_reg['agents'])}):")
+                    for agent in aws_reg["agents"]:
+                        print(f"      - {agent}")
+                if aws_reg.get("skills"):
+                    print(f"    Skills ({len(aws_reg['skills'])}):")
+                    for skill in aws_reg["skills"]:
+                        print(f"      - {skill}")
+
         return 0
 
     except Exception as e:
@@ -4984,8 +5000,8 @@ Examples:
     )
     federation_sync_parser.add_argument(
         "--source",
-        choices=["anthropic", "asor"],
-        help="Optional source filter (anthropic or asor). Syncs all enabled sources if not specified.",
+        choices=["anthropic", "asor", "aws_registry"],
+        help="Optional source filter (anthropic, asor, or aws_registry). Syncs all enabled sources if not specified.",
     )
     federation_sync_parser.add_argument(
         "--json", action="store_true", help="Output raw JSON instead of formatted text"
