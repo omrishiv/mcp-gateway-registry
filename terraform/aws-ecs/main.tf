@@ -205,9 +205,10 @@ module "mcp_gateway" {
   otel_exporter_otlp_metrics_temporality_preference = var.otel_exporter_otlp_metrics_temporality_preference
 
   # Telemetry configuration
-  mcp_telemetry_disabled = var.mcp_telemetry_disabled
-  mcp_telemetry_opt_in   = var.mcp_telemetry_opt_in
-  telemetry_debug        = var.telemetry_debug
+  mcp_telemetry_disabled                   = var.mcp_telemetry_disabled
+  mcp_telemetry_opt_out                    = var.mcp_telemetry_opt_out
+  mcp_telemetry_heartbeat_interval_minutes = var.mcp_telemetry_heartbeat_interval_minutes
+  telemetry_debug                          = var.telemetry_debug
 
   # Demo server configuration
   disable_ai_registry_tools_server = var.disable_ai_registry_tools_server

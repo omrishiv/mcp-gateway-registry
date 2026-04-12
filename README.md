@@ -720,16 +720,24 @@ echo 'ASOR_ACCESS_TOKEN=your_token' >> .env
 
 ## Telemetry
 
-The registry collects **anonymous, non-sensitive** usage telemetry to help us understand adoption patterns and improve the product. This is an **opt-out** feature -- by default, a single startup ping is sent containing only deployment metadata.
+The registry collects **anonymous, non-sensitive** usage telemetry to help us understand adoption patterns and improve the product. Both tiers are **opt-out** and **on by default**.
 
-**What is sent (Tier 1 -- default ON):** Registry version, Python version, OS, CPU architecture, cloud provider, storage backend, auth provider, and deployment mode. No IP addresses, hostnames, file paths, user data, or any PII.
+**What is sent (Tier 1 -- startup ping):** Registry version, Python version, OS, CPU architecture, cloud provider, storage backend, auth provider, and deployment mode. No IP addresses, hostnames, file paths, user data, or any PII.
 
-**What is NOT sent by default (Tier 2 -- opt-in):** Aggregate counts (number of servers, agents, skills, peers), search backend, embeddings provider, and uptime. Enable with `MCP_TELEMETRY_OPT_IN=1`.
+**Also sent by default (Tier 2 -- daily heartbeat):** Aggregate counts (number of servers, agents, skills, peers), search backend, embeddings provider, and uptime. Same privacy guarantees as Tier 1. Disable heartbeat only: `MCP_TELEMETRY_OPT_OUT=1`.
+
+> **Behavior change (post v1.0.18):** The daily heartbeat was previously opt-in (`MCP_TELEMETRY_OPT_IN=1`). It is now opt-out and sent by default. Since the heartbeat contains only aggregate counts (no PII), this aligns it with the startup ping behavior.
 
 **To opt out completely:**
 
 ```bash
-export MCP_TELEMETRY_DISABLED=1
+export MCP_TELEMETRY_DISABLED=1   # Disables both startup ping and heartbeat
+```
+
+**To disable heartbeat only (startup ping still sent):**
+
+```bash
+export MCP_TELEMETRY_OPT_OUT=1
 ```
 
 All requests are HMAC-signed, rate-limited, and schema-validated. Telemetry is fail-silent and never impacts registry operation. Full details in the [Telemetry Documentation](docs/TELEMETRY.md).

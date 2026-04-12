@@ -318,9 +318,13 @@ class Settings(BaseSettings):
         default=True,
         description="Enable anonymous telemetry (startup ping). Opt-out: MCP_TELEMETRY_DISABLED=1",
     )
-    telemetry_opt_in: bool = Field(
+    telemetry_opt_out: bool = Field(
         default=False,
-        description="Enable richer telemetry (daily heartbeat with counts). Opt-in: MCP_TELEMETRY_OPT_IN=1",
+        description="Disable daily heartbeat telemetry only. Opt-out: MCP_TELEMETRY_OPT_OUT=1",
+    )
+    telemetry_heartbeat_interval_minutes: int = Field(
+        default=1440,
+        description="Heartbeat telemetry interval in minutes (default: 1440 = 24 hours). MCP_TELEMETRY_HEARTBEAT_INTERVAL_MINUTES=1440",
     )
     telemetry_endpoint: str = Field(
         default="https://m3ijrhd020.execute-api.us-east-1.amazonaws.com/v1/collect",

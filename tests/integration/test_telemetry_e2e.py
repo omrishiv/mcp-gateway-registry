@@ -1,10 +1,10 @@
 """
-End-to-end integration tests for telemetry opt-in/opt-out and detailed information mode.
+End-to-end integration tests for telemetry opt-out behavior.
 
 Tests cover:
 - Opt-out: MCP_TELEMETRY_DISABLED=1 suppresses all telemetry
-- Default state: startup ping sent, heartbeat NOT started (opt-in off)
-- Opt-in (detailed mode): startup ping + heartbeat scheduler both active
+- Default state: startup ping + heartbeat both sent (heartbeat is opt-out, ON by default)
+- Heartbeat opt-out: MCP_TELEMETRY_OPT_OUT=1 disables heartbeat only
 - Debug mode: payloads logged, no network call made
 
 Live AWS tests (require deployed collector + AWS credentials) are marked
@@ -32,7 +32,8 @@ pytestmark = pytest.mark.asyncio
 def _mock_settings(
     storage_backend: str = "file",
     telemetry_enabled: bool = True,
-    telemetry_opt_in: bool = False,
+    telemetry_opt_out: bool = False,
+    telemetry_heartbeat_interval_minutes: int = 1440,
     telemetry_debug: bool = False,
     telemetry_endpoint: str = "https://telemetry.mcpgateway.io/v1/collect",
     embeddings_provider: str = "sentence-transformers",
@@ -45,7 +46,8 @@ def _mock_settings(
     mock = MagicMock()
     mock.storage_backend = storage_backend
     mock.telemetry_enabled = telemetry_enabled
-    mock.telemetry_opt_in = telemetry_opt_in
+    mock.telemetry_opt_out = telemetry_opt_out
+    mock.telemetry_heartbeat_interval_minutes = telemetry_heartbeat_interval_minutes
     mock.telemetry_debug = telemetry_debug
     mock.telemetry_endpoint = telemetry_endpoint
     mock.embeddings_provider = embeddings_provider
@@ -75,7 +77,7 @@ class TestOptOut:
     async def test_startup_ping_not_sent_when_disabled(self, monkeypatch):
         """No HTTP request made when telemetry is disabled."""
         monkeypatch.setenv("MCP_TELEMETRY_DISABLED", "1")
-        monkeypatch.delenv("MCP_TELEMETRY_OPT_IN", raising=False)
+        monkeypatch.delenv("MCP_TELEMETRY_OPT_OUT", raising=False)
 
         from registry.core.telemetry import _is_telemetry_enabled, send_startup_ping
 
@@ -89,11 +91,10 @@ class TestOptOut:
     async def test_heartbeat_not_started_when_disabled(self, monkeypatch):
         """Heartbeat scheduler does not start when telemetry is disabled."""
         monkeypatch.setenv("MCP_TELEMETRY_DISABLED", "1")
-        monkeypatch.setenv("MCP_TELEMETRY_OPT_IN", "1")
 
-        from registry.core.telemetry import _is_opt_in_enabled, start_heartbeat_scheduler
+        from registry.core.telemetry import _is_heartbeat_enabled, start_heartbeat_scheduler
 
-        assert _is_opt_in_enabled() is False
+        assert _is_heartbeat_enabled() is False
 
         with patch("registry.core.telemetry.settings", _mock_settings(telemetry_enabled=False)):
             with patch("registry.core.telemetry._send_telemetry") as mock_send:
@@ -129,12 +130,12 @@ class TestOptOut:
 
 
 class TestDefaultState:
-    """Without MCP_TELEMETRY_OPT_IN, only the startup ping fires."""
+    """By default, both startup ping and heartbeat are enabled (opt-out model)."""
 
     async def test_startup_ping_sent_by_default(self, monkeypatch):
         """Startup ping is sent when telemetry is enabled (default)."""
         monkeypatch.delenv("MCP_TELEMETRY_DISABLED", raising=False)
-        monkeypatch.delenv("MCP_TELEMETRY_OPT_IN", raising=False)
+        monkeypatch.delenv("MCP_TELEMETRY_OPT_OUT", raising=False)
 
         captured = []
 
@@ -160,25 +161,26 @@ class TestDefaultState:
         assert len(captured) == 1
         assert captured[0]["event"] == "startup"
 
-    async def test_opt_in_disabled_by_default(self, monkeypatch):
-        """opt-in is off unless MCP_TELEMETRY_OPT_IN=1 is set."""
-        monkeypatch.delenv("MCP_TELEMETRY_OPT_IN", raising=False)
-        with patch(
-            "registry.core.telemetry.settings",
-            _mock_settings(telemetry_opt_in=False),
-        ):
-            from registry.core.telemetry import _is_opt_in_enabled
-
-            assert _is_opt_in_enabled() is False
-
-    async def test_heartbeat_not_sent_without_opt_in(self, monkeypatch):
-        """Heartbeat scheduler exits immediately when opt-in is off."""
+    async def test_heartbeat_enabled_by_default(self, monkeypatch):
+        """Heartbeat is enabled by default (opt-out model)."""
+        monkeypatch.delenv("MCP_TELEMETRY_OPT_OUT", raising=False)
         monkeypatch.delenv("MCP_TELEMETRY_DISABLED", raising=False)
-        monkeypatch.delenv("MCP_TELEMETRY_OPT_IN", raising=False)
+        with patch(
+            "registry.core.telemetry.settings",
+            _mock_settings(telemetry_opt_out=False),
+        ):
+            from registry.core.telemetry import _is_heartbeat_enabled
+
+            assert _is_heartbeat_enabled() is True
+
+    async def test_heartbeat_disabled_via_opt_out(self, monkeypatch):
+        """Heartbeat scheduler exits immediately when MCP_TELEMETRY_OPT_OUT=1."""
+        monkeypatch.delenv("MCP_TELEMETRY_DISABLED", raising=False)
+        monkeypatch.setenv("MCP_TELEMETRY_OPT_OUT", "1")
 
         with patch(
             "registry.core.telemetry.settings",
-            _mock_settings(telemetry_opt_in=False),
+            _mock_settings(telemetry_opt_out=True),
         ):
             with patch("registry.core.telemetry._send_telemetry") as mock_send:
                 from registry.core.telemetry import start_heartbeat_scheduler
@@ -222,30 +224,42 @@ class TestDefaultState:
 
 
 # ---------------------------------------------------------------------------
-# Class 3: Opt-in / detailed information mode
+# Class 3: Heartbeat (opt-out, on by default)
 # ---------------------------------------------------------------------------
 
 
-class TestOptIn:
-    """MCP_TELEMETRY_OPT_IN=1 enables the daily heartbeat with aggregate counts."""
+class TestHeartbeat:
+    """Heartbeat is enabled by default (opt-out model) with aggregate counts."""
 
-    async def test_opt_in_enables_heartbeat(self, monkeypatch):
-        """opt-in flag enables the heartbeat path."""
+    async def test_heartbeat_enabled_when_not_opted_out(self, monkeypatch):
+        """Heartbeat is enabled when MCP_TELEMETRY_OPT_OUT is not set."""
         monkeypatch.delenv("MCP_TELEMETRY_DISABLED", raising=False)
-        monkeypatch.setenv("MCP_TELEMETRY_OPT_IN", "1")
+        monkeypatch.delenv("MCP_TELEMETRY_OPT_OUT", raising=False)
 
         with patch(
             "registry.core.telemetry.settings",
-            _mock_settings(telemetry_opt_in=True),
+            _mock_settings(telemetry_opt_out=False),
         ):
-            from registry.core.telemetry import _is_opt_in_enabled
+            from registry.core.telemetry import _is_heartbeat_enabled
 
-            assert _is_opt_in_enabled() is True
+            assert _is_heartbeat_enabled() is True
+
+    async def test_heartbeat_disabled_when_opted_out(self, monkeypatch):
+        """Heartbeat is disabled when MCP_TELEMETRY_OPT_OUT=1."""
+        monkeypatch.delenv("MCP_TELEMETRY_DISABLED", raising=False)
+        monkeypatch.setenv("MCP_TELEMETRY_OPT_OUT", "1")
+
+        with patch(
+            "registry.core.telemetry.settings",
+            _mock_settings(telemetry_opt_out=True),
+        ):
+            from registry.core.telemetry import _is_heartbeat_enabled
+
+            assert _is_heartbeat_enabled() is False
 
     async def test_heartbeat_payload_fields(self, monkeypatch):
-        """Heartbeat (detailed mode) payload contains all required schema fields."""
+        """Heartbeat payload contains all required schema fields."""
         monkeypatch.delenv("MCP_TELEMETRY_DISABLED", raising=False)
-        monkeypatch.setenv("MCP_TELEMETRY_OPT_IN", "1")
 
         repo = _mock_repo_factory()
 
@@ -347,10 +361,10 @@ class TestOptIn:
 
         assert payload["search_backend"] == "documentdb"
 
-    async def test_both_startup_and_heartbeat_sent_when_opted_in(self, monkeypatch):
-        """When opted in, startup ping fires AND heartbeat scheduler starts."""
+    async def test_both_startup_and_heartbeat_sent_by_default(self, monkeypatch):
+        """By default, startup ping fires AND heartbeat scheduler starts."""
         monkeypatch.delenv("MCP_TELEMETRY_DISABLED", raising=False)
-        monkeypatch.setenv("MCP_TELEMETRY_OPT_IN", "1")
+        monkeypatch.delenv("MCP_TELEMETRY_OPT_OUT", raising=False)
 
         events_sent = []
 
@@ -368,7 +382,7 @@ class TestOptIn:
         }
 
         with (
-            patch("registry.core.telemetry.settings", _mock_settings(telemetry_opt_in=True)),
+            patch("registry.core.telemetry.settings", _mock_settings(telemetry_opt_out=False)),
             patch("registry.core.telemetry._send_telemetry", side_effect=fake_send),
             patch(
                 "registry.core.telemetry._acquire_telemetry_lock",
@@ -415,9 +429,9 @@ class TestOptIn:
         assert "heartbeat" in events_sent
 
     async def test_heartbeat_not_sent_twice_within_lock_window(self, monkeypatch):
-        """Lock mechanism prevents sending heartbeat twice within the 24-hour window."""
+        """Lock mechanism prevents sending heartbeat twice within the lock window."""
         monkeypatch.delenv("MCP_TELEMETRY_DISABLED", raising=False)
-        monkeypatch.setenv("MCP_TELEMETRY_OPT_IN", "1")
+        monkeypatch.delenv("MCP_TELEMETRY_OPT_OUT", raising=False)
 
         events_sent = []
 
@@ -431,7 +445,7 @@ class TestOptIn:
             return next(lock_results)
 
         with (
-            patch("registry.core.telemetry.settings", _mock_settings(telemetry_opt_in=True)),
+            patch("registry.core.telemetry.settings", _mock_settings(telemetry_opt_out=False)),
             patch("registry.core.telemetry._send_telemetry", side_effect=fake_send),
             patch("registry.core.telemetry._acquire_telemetry_lock", side_effect=mock_lock),
             patch(

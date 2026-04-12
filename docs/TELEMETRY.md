@@ -29,9 +29,11 @@ Sent once at startup:
 | `search_queries_1h` | `3` | Search queries in the last hour |
 | `ts` | `2026-03-18T00:00:00Z` | ISO 8601 timestamp |
 
-### Tier 2: Daily Heartbeat (Opt-In, Default OFF)
+### Tier 2: Daily Heartbeat (Opt-Out, Default ON)
 
-Sent daily when explicitly enabled. Includes all Tier 1 fields plus:
+> **Behavior change (post v1.0.18):** The daily heartbeat was previously opt-in (`MCP_TELEMETRY_OPT_IN=1`). It is now opt-out and sent by default every 24 hours. Since the heartbeat contains only aggregate counts (no PII), this aligns it with the startup ping behavior.
+
+Sent at a configurable interval (default: every 24 hours). Includes all Tier 1 fields plus:
 
 | Field | Example | Description |
 |-------|---------|-------------|
@@ -109,10 +111,10 @@ When telemetry is enabled (the default), you will see this banner at startup:
 
 ```
 ==============================================================================
-[telemetry] Anonymous usage telemetry is ON
+[telemetry] Anonymous usage telemetry is ON (startup ping + daily heartbeat)
 [telemetry] No PII is collected (no IPs, hostnames, or user data)
 [telemetry] Endpoint: https://m3ijrhd020.execute-api.us-east-1.amazonaws.com/v1/collect
-[telemetry] To disable: set MCP_TELEMETRY_DISABLED=1
+[telemetry] To disable all: set MCP_TELEMETRY_DISABLED=1
 [telemetry] Details: https://github.com/agentic-community/mcp-gateway-registry/blob/main/docs/TELEMETRY.md
 ==============================================================================
 ```
@@ -121,8 +123,9 @@ When telemetry is enabled (the default), you will see this banner at startup:
 
 | Environment Variable | Purpose | Default |
 |---------------------|---------|---------|
-| `MCP_TELEMETRY_DISABLED` | Set to `1` to disable all telemetry | _(not set, telemetry ON)_ |
-| `MCP_TELEMETRY_OPT_IN` | Set to `1` to enable daily heartbeat with aggregate counts | _(not set, heartbeat OFF)_ |
+| `MCP_TELEMETRY_DISABLED` | Set to `1` to disable all telemetry (startup ping + heartbeat) | _(not set, telemetry ON)_ |
+| `MCP_TELEMETRY_OPT_OUT` | Set to `1` to disable daily heartbeat only (startup ping still sent) | _(not set, heartbeat ON)_ |
+| `MCP_TELEMETRY_HEARTBEAT_INTERVAL_MINUTES` | Heartbeat send frequency in minutes | `1440` (24 hours) |
 | `MCP_TELEMETRY_ENDPOINT` | HTTPS URL for a self-hosted telemetry collector | _(built-in endpoint)_ |
 | `MCP_TELEMETRY_DEBUG` | Set to `true` to log payloads instead of sending | `false` |
 
@@ -132,8 +135,9 @@ Add these to your `.env` file in the project root:
 
 ```bash
 # .env
-MCP_TELEMETRY_DISABLED=1          # Disable all telemetry
-MCP_TELEMETRY_OPT_IN=1            # Enable daily heartbeat (optional)
+MCP_TELEMETRY_DISABLED=1          # Disable all telemetry (startup ping + heartbeat)
+MCP_TELEMETRY_OPT_OUT=1           # Disable heartbeat only (startup ping still sent)
+MCP_TELEMETRY_HEARTBEAT_INTERVAL_MINUTES=1440  # Heartbeat interval in minutes (default: 1440 = 24h)
 MCP_TELEMETRY_ENDPOINT=https://your-collector.example.com/v1/collect  # Self-hosted (optional)
 MCP_TELEMETRY_DEBUG=true           # Debug mode (optional)
 ```
@@ -146,9 +150,10 @@ Add these to your `terraform.tfvars`:
 
 ```hcl
 # terraform.tfvars
-mcp_telemetry_disabled = "1"       # Disable all telemetry
-mcp_telemetry_opt_in   = "1"       # Enable daily heartbeat (optional)
-telemetry_debug        = "true"    # Debug mode (optional)
+mcp_telemetry_disabled                   = "1"     # Disable all telemetry
+mcp_telemetry_opt_out                    = "1"     # Disable heartbeat only (startup ping still sent)
+mcp_telemetry_heartbeat_interval_minutes = "1440"  # Heartbeat interval in minutes (default: 1440 = 24h)
+telemetry_debug                          = "true"  # Debug mode (optional)
 ```
 
 The corresponding Terraform variables are defined in `terraform/aws-ecs/variables.tf`.
@@ -161,7 +166,8 @@ Set these in your `values.yaml` or pass with `--set`:
 # values.yaml (standalone chart)
 app:
   mcpTelemetryDisabled: true       # Disable all telemetry
-  mcpTelemetryOptIn: true          # Enable daily heartbeat (optional)
+  mcpTelemetryOptOut: true         # Disable heartbeat only (startup ping still sent)
+  telemetryHeartbeatIntervalMinutes: "1440"  # Heartbeat interval in minutes (default: 1440 = 24h)
   telemetryDebug: true             # Debug mode (optional)
 
 # -- OR for the stack chart --
@@ -169,7 +175,8 @@ app:
 registry:
   app:
     mcpTelemetryDisabled: true
-    mcpTelemetryOptIn: true
+    mcpTelemetryOptOut: true
+    telemetryHeartbeatIntervalMinutes: "1440"
     telemetryDebug: true
 ```
 
@@ -178,7 +185,7 @@ Or with `helm install`/`helm upgrade`:
 ```bash
 helm upgrade my-release charts/registry \
   --set app.mcpTelemetryDisabled=true \
-  --set app.mcpTelemetryOptIn=true
+  --set app.mcpTelemetryOptOut=true
 ```
 
 These values are injected as environment variables via the `registry-otel-config` ConfigMap.
@@ -193,14 +200,16 @@ When telemetry is disabled, you'll see this message at startup:
 [telemetry] Telemetry is disabled.
 ```
 
-## How to Opt-In to Richer Data
+## How to Opt-Out of Heartbeat Only
 
-Set `MCP_TELEMETRY_OPT_IN=1` using the method for your deployment (see above).
+Both startup ping and daily heartbeat are enabled by default. To disable the heartbeat while keeping the startup ping:
 
-When opted in, you'll see:
+Set `MCP_TELEMETRY_OPT_OUT=1` using the method for your deployment (see above).
+
+When heartbeat is opted out, you'll see:
 
 ```
-[telemetry] Enhanced telemetry is ON (opted in)
+[telemetry] Heartbeat scheduler not started (opted out or telemetry disabled)
 ```
 
 ## Debug Mode
@@ -223,7 +232,7 @@ This logs the full JSON payload to stderr instead of sending it to the collector
 In multi-replica deployments (ECS, Kubernetes), telemetry uses MongoDB-based distributed locks to prevent duplicate sends. Only one replica will send telemetry within the configured interval:
 
 - **Startup ping**: At most once per 60 seconds
-- **Heartbeat**: At most once per 24 hours
+- **Heartbeat**: At most once per configured interval (default: 1440 minutes = 24 hours)
 
 ## Self-Hosted Telemetry Collector
 

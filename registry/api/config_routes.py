@@ -240,7 +240,8 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
         "order": 15,
         "fields": [
             ("telemetry_enabled", "Telemetry Enabled", False),
-            ("telemetry_opt_in", "Telemetry Opt-In (Daily Heartbeat)", False),
+            ("telemetry_opt_out", "Heartbeat Opt-Out", False),
+            ("telemetry_heartbeat_interval_minutes", "Heartbeat Interval (minutes)", False),
             ("telemetry_debug", "Debug Mode", False),
             ("telemetry_endpoint", "Collector Endpoint", False),
         ],

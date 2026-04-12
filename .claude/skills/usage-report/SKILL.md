@@ -98,6 +98,22 @@ This produces a PNG with two subplots:
 - **Cumulative Unique Registry Installs** -- running total of unique registry_ids per cloud provider
 - **Daily Active Registry Installs** -- unique registry_ids seen each day per cloud provider
 
+### Step 5c: Generate Instance Lifetime Chart
+
+Generate a density plot showing the distribution of instance lifetimes (age in days). This reads the metrics JSON produced by the analysis step, so it must run after Step 6. However, the SKILL.md lists it here for logical grouping with other charts:
+
+```bash
+/usr/bin/python3 .claude/skills/usage-report/generate_lifetime_chart.py \
+  --metrics OUTPUT_DIR/metrics-YYYY-MM-DD.json \
+  --output OUTPUT_DIR/instance-lifetime-YYYY-MM-DD.png
+```
+
+This produces a PNG with two panels:
+- **Age Distribution** -- histogram with KDE density overlay showing instance ages in days, with stats annotation (mean, max, multi-day vs single-day counts)
+- **Age Buckets** -- horizontal bar chart grouping instances into age ranges (0 days, 1-2 days, 3-5 days, etc.) with counts and percentages
+
+**Note**: Run this after Step 6 (telemetry analysis) since it reads the metrics JSON.
+
 ### Step 6: Run Telemetry Analysis
 
 Run the analysis script to compute all distributions, instance timelines, and metrics. This produces two files:
@@ -128,6 +144,7 @@ Or with an explicit previous metrics file:
 Read the generated `tables-YYYY-MM-DD.md` and include its tables directly in the report. Add narrative sections (Executive Summary, Architecture Patterns, Recommendations) around the data tables. The tables file contains:
 
 - Key Metrics table
+- Registry Instance Lifetime table (age in days, sorted descending)
 - Identified and Unidentified instance tables
 - Cloud, Compute, Architecture, Storage, Auth distribution tables
 - Version Adoption table
@@ -148,7 +165,7 @@ Read the generated `tables-YYYY-MM-DD.md` and include its tables directly in the
 
 ## Executive Summary
 
-2-line TL;DR paragraph: total unique installs since tracking began, dominant cloud/compute/IdP, average daily install rate, and notable growth trends. Follow immediately with the timeseries chart.
+Lead with the number of new registry installs since the last report (if available), then total unique installs since tracking began, dominant cloud/compute/IdP, average daily install rate, and notable growth trends. Follow immediately with the timeseries chart.
 
 ![Registry Installs Timeseries](registry-installs-timeseries-YYYY-MM-DD.png)
 
@@ -166,6 +183,11 @@ Read the generated `tables-YYYY-MM-DD.md` and include its tables directly in the
 | Total Events | N |
 | Unique Registry Instances | N |
 | ... | ... |
+
+## Registry Instance Lifetime
+Commentary on average/max lifetime, how many are multi-day vs single-day.
+Density chart showing age distribution (histogram + KDE) and age buckets.
+Table sorted by age (days) descending showing each instance with cloud, compute, auth, first seen, last seen, age in days, and event count.
 
 ## Deployment Landscape
 

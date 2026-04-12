@@ -8,18 +8,18 @@ import httpx
 import pytest
 
 from registry.core.telemetry import (
-    HEARTBEAT_INTERVAL_HOURS,
-    HEARTBEAT_LOCK_INTERVAL_SECONDS,
     STARTUP_LOCK_INTERVAL_SECONDS,
     TELEMETRY_TIMEOUT_SECONDS,
     TelemetryScheduler,
     _acquire_telemetry_lock,
     _build_heartbeat_payload,
     _build_startup_payload,
+    _get_heartbeat_interval_minutes,
+    _get_heartbeat_lock_interval_seconds,
     _get_or_create_instance_id,
     _get_registry_id,
     _initialize_telemetry_collection,
-    _is_opt_in_enabled,
+    _is_heartbeat_enabled,
     _is_telemetry_enabled,
     _send_telemetry,
     send_startup_ping,
@@ -52,27 +52,44 @@ class TestTelemetryEnabled:
         monkeypatch.setenv("MCP_TELEMETRY_DISABLED", "yes")
         assert _is_telemetry_enabled() is False
 
-    def test_opt_in_disabled_by_default(self, monkeypatch):
-        """Test opt-in is disabled by default."""
-        monkeypatch.delenv("MCP_TELEMETRY_OPT_IN", raising=False)
-        with patch("registry.core.telemetry.settings") as mock_settings:
-            mock_settings.telemetry_enabled = True
-            mock_settings.telemetry_opt_in = False
-            assert _is_opt_in_enabled() is False
-
-    def test_opt_in_enabled_via_env_var(self, monkeypatch):
-        """Test opt-in can be enabled via env var."""
+    def test_heartbeat_enabled_by_default(self, monkeypatch):
+        """Test heartbeat is enabled by default (opt-out model)."""
         monkeypatch.delenv("MCP_TELEMETRY_DISABLED", raising=False)
-        monkeypatch.setenv("MCP_TELEMETRY_OPT_IN", "1")
+        monkeypatch.delenv("MCP_TELEMETRY_OPT_OUT", raising=False)
         with patch("registry.core.telemetry.settings") as mock_settings:
             mock_settings.telemetry_enabled = True
-            assert _is_opt_in_enabled() is True
+            mock_settings.telemetry_opt_out = False
+            assert _is_heartbeat_enabled() is True
 
-    def test_opt_in_requires_base_telemetry(self, monkeypatch):
-        """Test opt-in requires base telemetry to be enabled."""
+    def test_heartbeat_disabled_via_opt_out_env_var(self, monkeypatch):
+        """Test heartbeat can be disabled via MCP_TELEMETRY_OPT_OUT=1."""
+        monkeypatch.delenv("MCP_TELEMETRY_DISABLED", raising=False)
+        monkeypatch.setenv("MCP_TELEMETRY_OPT_OUT", "1")
+        with patch("registry.core.telemetry.settings") as mock_settings:
+            mock_settings.telemetry_enabled = True
+            assert _is_heartbeat_enabled() is False
+
+    def test_heartbeat_disabled_via_opt_out_true(self, monkeypatch):
+        """Test heartbeat can be disabled via MCP_TELEMETRY_OPT_OUT=true."""
+        monkeypatch.delenv("MCP_TELEMETRY_DISABLED", raising=False)
+        monkeypatch.setenv("MCP_TELEMETRY_OPT_OUT", "true")
+        with patch("registry.core.telemetry.settings") as mock_settings:
+            mock_settings.telemetry_enabled = True
+            assert _is_heartbeat_enabled() is False
+
+    def test_heartbeat_disabled_via_opt_out_yes(self, monkeypatch):
+        """Test heartbeat can be disabled via MCP_TELEMETRY_OPT_OUT=yes."""
+        monkeypatch.delenv("MCP_TELEMETRY_DISABLED", raising=False)
+        monkeypatch.setenv("MCP_TELEMETRY_OPT_OUT", "yes")
+        with patch("registry.core.telemetry.settings") as mock_settings:
+            mock_settings.telemetry_enabled = True
+            assert _is_heartbeat_enabled() is False
+
+    def test_heartbeat_disabled_when_telemetry_disabled(self, monkeypatch):
+        """Test heartbeat is disabled when all telemetry is disabled."""
         monkeypatch.setenv("MCP_TELEMETRY_DISABLED", "1")
-        monkeypatch.setenv("MCP_TELEMETRY_OPT_IN", "1")
-        assert _is_opt_in_enabled() is False
+        monkeypatch.delenv("MCP_TELEMETRY_OPT_OUT", raising=False)
+        assert _is_heartbeat_enabled() is False
 
 
 class TestGetRegistryIdFallback:
@@ -635,17 +652,39 @@ class TestPublicAPI:
             assert "Telemetry is disabled" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_start_heartbeat_scheduler_requires_opt_in(self, monkeypatch):
-        """Test heartbeat scheduler requires opt-in."""
-        monkeypatch.delenv("MCP_TELEMETRY_OPT_IN", raising=False)
+    async def test_heartbeat_scheduler_starts_by_default(self, monkeypatch):
+        """Test heartbeat scheduler starts by default (opt-out model)."""
+        monkeypatch.delenv("MCP_TELEMETRY_DISABLED", raising=False)
+        monkeypatch.delenv("MCP_TELEMETRY_OPT_OUT", raising=False)
 
         with patch("registry.core.telemetry.settings") as mock_settings:
             mock_settings.telemetry_enabled = True
-            mock_settings.telemetry_opt_in = False
+            mock_settings.telemetry_opt_out = False
+            mock_settings.telemetry_heartbeat_interval_minutes = 1440
 
             await start_heartbeat_scheduler()
 
-            # Scheduler should not be started
+            from registry.core.telemetry import _telemetry_scheduler
+
+            # Scheduler should be started
+            assert _telemetry_scheduler is not None
+
+            # Clean up
+            from registry.core.telemetry import stop_heartbeat_scheduler
+
+            await stop_heartbeat_scheduler()
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_scheduler_not_started_when_opted_out(self, monkeypatch):
+        """Test heartbeat scheduler does not start when opted out."""
+        monkeypatch.delenv("MCP_TELEMETRY_DISABLED", raising=False)
+        monkeypatch.setenv("MCP_TELEMETRY_OPT_OUT", "1")
+
+        with patch("registry.core.telemetry.settings") as mock_settings:
+            mock_settings.telemetry_enabled = True
+
+            await start_heartbeat_scheduler()
+
             from registry.core.telemetry import _telemetry_scheduler
 
             assert _telemetry_scheduler is None
@@ -700,11 +739,28 @@ class TestRepositoryFailures:
 
 
 class TestConstants:
-    """Tests for telemetry constants."""
+    """Tests for telemetry constants and configurable intervals."""
 
     def test_telemetry_constants(self):
         """Test telemetry constants have expected values."""
         assert STARTUP_LOCK_INTERVAL_SECONDS == 60
-        assert HEARTBEAT_INTERVAL_HOURS == 24
-        assert HEARTBEAT_LOCK_INTERVAL_SECONDS == 24 * 3600
         assert TELEMETRY_TIMEOUT_SECONDS == 5
+
+    def test_heartbeat_interval_from_settings(self):
+        """Test heartbeat interval reads from settings."""
+        with patch("registry.core.telemetry.settings") as mock_settings:
+            mock_settings.telemetry_heartbeat_interval_minutes = 1440
+            assert _get_heartbeat_interval_minutes() == 1440
+
+    def test_heartbeat_lock_interval_matches(self):
+        """Test heartbeat lock interval = interval minutes * 60."""
+        with patch("registry.core.telemetry.settings") as mock_settings:
+            mock_settings.telemetry_heartbeat_interval_minutes = 1440
+            assert _get_heartbeat_lock_interval_seconds() == 1440 * 60
+
+    def test_custom_heartbeat_interval(self):
+        """Test custom heartbeat interval is respected."""
+        with patch("registry.core.telemetry.settings") as mock_settings:
+            mock_settings.telemetry_heartbeat_interval_minutes = 5
+            assert _get_heartbeat_interval_minutes() == 5
+            assert _get_heartbeat_lock_interval_seconds() == 300

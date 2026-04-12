@@ -592,10 +592,12 @@ grafana_admin_password = "CHANGE-ME-SET-STRONG-PASSWORD"
 # Set to "1" to opt out
 # mcp_telemetry_disabled = ""
 
-# Enable daily heartbeat telemetry (opt-in, default OFF)
-# Sends aggregate counts (servers, agents, skills, peers, uptime) once per day
-# Set to "1" to opt in
-# mcp_telemetry_opt_in = ""
+# Disable daily heartbeat telemetry only (startup ping still sent, default: heartbeat ON)
+# Set to "1" to opt out of heartbeat
+# mcp_telemetry_opt_out = ""
+
+# Heartbeat telemetry interval in minutes (default: 1440 = 24 hours)
+# mcp_telemetry_heartbeat_interval_minutes = "1440"
 
 # Debug mode: log telemetry payload to stdout instead of sending
 # Useful for verifying what data would be sent

@@ -866,10 +866,16 @@ variable "mcp_telemetry_disabled" {
   default     = ""
 }
 
-variable "mcp_telemetry_opt_in" {
-  description = "Enable opt-in daily heartbeat telemetry. Set to '1' to enable."
+variable "mcp_telemetry_opt_out" {
+  description = "Disable daily heartbeat telemetry only. Set to '1' to opt out (startup ping still sent)."
   type        = string
   default     = ""
+}
+
+variable "mcp_telemetry_heartbeat_interval_minutes" {
+  description = "Heartbeat telemetry interval in minutes. Default: 1440 (24 hours)."
+  type        = string
+  default     = "1440"
 }
 
 variable "telemetry_debug" {

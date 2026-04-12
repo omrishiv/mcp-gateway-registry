@@ -29,14 +29,11 @@ logger = logging.getLogger(__name__)
 
 # Telemetry constants
 STARTUP_LOCK_INTERVAL_SECONDS = 60  # Don't send startup ping more than once per minute
-HEARTBEAT_INTERVAL_HOURS = 24  # Send heartbeat once per day
-
 # HMAC signing key for telemetry requests.
 # This is NOT a secret — it's embedded in open-source code. Its purpose is to
 # raise the bar against casual abuse (random curl requests) by requiring
 # callers to compute a valid HMAC signature over the request body.
 TELEMETRY_SIGNING_KEY = "mcp-registry-telemetry-v1-a7f3b9c2e1d4"
-HEARTBEAT_LOCK_INTERVAL_SECONDS = HEARTBEAT_INTERVAL_HOURS * 3600
 TELEMETRY_TIMEOUT_SECONDS = 5  # HTTP request timeout
 
 
@@ -158,18 +155,32 @@ def _is_telemetry_enabled() -> bool:
     return settings.telemetry_enabled
 
 
-def _is_opt_in_enabled() -> bool:
-    """Check if opt-in telemetry (heartbeat) is enabled."""
-    # Must have base telemetry enabled
+def _is_heartbeat_enabled() -> bool:
+    """Check if heartbeat telemetry is enabled (on by default, opt-out)."""
     if not _is_telemetry_enabled():
         return False
 
-    # Check environment variable override
-    opt_in_env = os.getenv("MCP_TELEMETRY_OPT_IN", "").lower()
-    if opt_in_env in ("1", "true", "yes"):
-        return True
+    # Check environment variable override for heartbeat opt-out
+    opt_out_env = os.getenv("MCP_TELEMETRY_OPT_OUT", "").lower()
+    if opt_out_env in ("1", "true", "yes"):
+        return False
 
-    return settings.telemetry_opt_in
+    return not settings.telemetry_opt_out
+
+
+def _get_heartbeat_interval_minutes() -> int:
+    """Get heartbeat interval from settings (default 1440 minutes = 24 hours)."""
+    # Environment variable override takes precedence
+    env_val = os.getenv("MCP_TELEMETRY_HEARTBEAT_INTERVAL_MINUTES", "")
+    if env_val.isdigit() and int(env_val) > 0:
+        return int(env_val)
+
+    return settings.telemetry_heartbeat_interval_minutes
+
+
+def _get_heartbeat_lock_interval_seconds() -> int:
+    """Get heartbeat lock interval derived from heartbeat interval."""
+    return _get_heartbeat_interval_minutes() * 60
 
 
 async def _get_or_create_instance_id() -> str:
@@ -554,10 +565,10 @@ async def send_startup_ping() -> None:
 
     # Log conspicuous disclosure
     logger.info("=" * 78)
-    logger.info("[telemetry] Anonymous usage telemetry is ON")
+    logger.info("[telemetry] Anonymous usage telemetry is ON (startup ping + daily heartbeat)")
     logger.info("[telemetry] No PII is collected (no IPs, hostnames, or user data)")
     logger.info(f"[telemetry] Endpoint: {settings.telemetry_endpoint}")
-    logger.info("[telemetry] To disable: set MCP_TELEMETRY_DISABLED=1")
+    logger.info("[telemetry] To disable all: set MCP_TELEMETRY_DISABLED=1")
     logger.info(
         "[telemetry] Details: https://github.com/agentic-community/"
         "mcp-gateway-registry/blob/main/docs/TELEMETRY.md"
@@ -582,14 +593,14 @@ async def send_startup_ping() -> None:
 
 async def start_heartbeat_scheduler() -> None:
     """
-    Start the daily heartbeat scheduler (Tier 2 - Opt-In).
+    Start the heartbeat scheduler (Tier 2 - Opt-Out, default ON).
 
-    No-op if opt-in not enabled. Called during lifespan startup.
+    No-op if heartbeat is disabled. Called during lifespan startup.
     """
     global _telemetry_scheduler
 
-    if not _is_opt_in_enabled():
-        logger.info("[telemetry] Heartbeat scheduler not enabled (opt-in required)")
+    if not _is_heartbeat_enabled():
+        logger.info("[telemetry] Heartbeat scheduler not started (opted out or telemetry disabled)")
         return
 
     if _telemetry_scheduler is not None:
@@ -598,7 +609,8 @@ async def start_heartbeat_scheduler() -> None:
 
     _telemetry_scheduler = TelemetryScheduler()
     await _telemetry_scheduler.start()
-    logger.info("[telemetry] Enhanced telemetry is ON (opted in)")
+    interval = _get_heartbeat_interval_minutes()
+    logger.info(f"[telemetry] Daily heartbeat telemetry is ON ({interval}-minute interval)")
 
 
 async def stop_heartbeat_scheduler() -> None:
@@ -612,7 +624,7 @@ async def stop_heartbeat_scheduler() -> None:
 
 async def send_forced_heartbeat() -> dict:
     """
-    Force-send a heartbeat event immediately, bypassing the 24-hour lock.
+    Force-send a heartbeat event immediately, bypassing the interval lock.
 
     Called from admin API endpoint. Respects telemetry enabled/disabled setting
     but skips the distributed lock so the event is always sent.
@@ -703,8 +715,9 @@ class TelemetryScheduler:
         logger.info("[telemetry] Heartbeat scheduler stopped")
 
     async def _scheduler_loop(self) -> None:
-        """Main scheduler loop that sends heartbeat every 24 hours."""
-        logger.info("[telemetry] Heartbeat loop started (24-hour interval)")
+        """Main scheduler loop that sends heartbeat at configured interval."""
+        interval_minutes = _get_heartbeat_interval_minutes()
+        logger.info(f"[telemetry] Heartbeat loop started ({interval_minutes}-minute interval)")
 
         while self._running:
             try:
@@ -712,13 +725,13 @@ class TelemetryScheduler:
             except Exception as e:
                 logger.error(f"[telemetry] Error in heartbeat scheduler: {e}", exc_info=True)
 
-            # Wait 24 hours before next heartbeat
-            await asyncio.sleep(HEARTBEAT_INTERVAL_HOURS * 3600)
+            # Wait for configured interval before next heartbeat
+            await asyncio.sleep(interval_minutes * 60)
 
     async def _send_heartbeat(self) -> None:
         """Send heartbeat event if lock acquired."""
-        # Acquire lock (24-hour interval)
-        lock_acquired = await _acquire_telemetry_lock("heartbeat", HEARTBEAT_LOCK_INTERVAL_SECONDS)
+        # Acquire lock (interval matches heartbeat frequency)
+        lock_acquired = await _acquire_telemetry_lock("heartbeat", _get_heartbeat_lock_interval_seconds())
 
         if not lock_acquired:
             logger.info("[telemetry] Heartbeat already sent recently by another replica")

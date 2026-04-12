@@ -111,12 +111,14 @@ services:
       - REGISTRY_API_TOKEN=${REGISTRY_API_TOKEN:-}
       - MAX_TOKENS_PER_USER_PER_HOUR=${MAX_TOKENS_PER_USER_PER_HOUR:-100}
       # Telemetry Configuration
-      # Opt-out:  set MCP_TELEMETRY_DISABLED=1  to disable all telemetry
-      # Opt-in:   set MCP_TELEMETRY_OPT_IN=1    for daily heartbeat with aggregate counts
+      # Disable all:       set MCP_TELEMETRY_DISABLED=1  to disable all telemetry (startup ping + heartbeat)
+      # Heartbeat opt-out: set MCP_TELEMETRY_OPT_OUT=1   to disable daily heartbeat only
+      # Heartbeat interval: set MCP_TELEMETRY_HEARTBEAT_INTERVAL_MINUTES=1440  (default: 1440 = 24h)
       # Endpoint: set TELEMETRY_ENDPOINT=<url>   to use a self-hosted collector
       # Debug:    set TELEMETRY_DEBUG=true        to log payloads without sending
       - MCP_TELEMETRY_DISABLED=${MCP_TELEMETRY_DISABLED:-}
-      - MCP_TELEMETRY_OPT_IN=${MCP_TELEMETRY_OPT_IN:-}
+      - MCP_TELEMETRY_OPT_OUT=${MCP_TELEMETRY_OPT_OUT:-}
+      - MCP_TELEMETRY_HEARTBEAT_INTERVAL_MINUTES=${MCP_TELEMETRY_HEARTBEAT_INTERVAL_MINUTES:-1440}
       - TELEMETRY_DEBUG=${TELEMETRY_DEBUG:-false}
     ports:
       - "80:8080"   # Map host 80 to container 8080 (non-root nginx)

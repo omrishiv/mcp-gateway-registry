@@ -183,6 +183,42 @@ def _compute_per_cloud_unique_installs(
     return {cloud: len(ids) for cloud, ids in sorted(cloud_ids.items())}
 
 
+def _compute_instance_lifetime(
+    instances: list[dict],
+) -> list[dict]:
+    """Compute the lifetime (age in days) for each identified instance.
+
+    Lifetime is the number of days between the first event and the
+    last event for that instance. A single-day instance has age 0.
+
+    Returns a list sorted by age descending.
+    """
+    result = []
+    for inst in instances:
+        first = inst.get("first_seen", "")
+        latest = inst.get("latest_seen", "")
+        if not first or not latest:
+            continue
+
+        first_date = datetime.strptime(first, "%Y-%m-%d")
+        latest_date = datetime.strptime(latest, "%Y-%m-%d")
+        age_days = (latest_date - first_date).days
+
+        result.append({
+            "registry_id": inst["registry_id"],
+            "cloud": inst["cloud"],
+            "compute": inst["compute"],
+            "auth": inst["auth"],
+            "first_seen": first,
+            "latest_seen": latest,
+            "age_days": age_days,
+            "events": inst["events"],
+        })
+
+    result.sort(key=lambda x: x["age_days"], reverse=True)
+    return result
+
+
 def _build_exec_summary_md(
     current_metrics: dict,
     previous_metrics: dict | None,
@@ -195,11 +231,40 @@ def _build_exec_summary_md(
     lines.append("")
 
     curr = current_metrics
-    lines.append(
-        f"This report covers **{curr['total_events']} events** "
-        f"from **{curr['identified_instances']} unique identified registry instances** "
-        f"over the period {curr['earliest_ts'][:10]} to {curr['latest_ts'][:10]}."
-    )
+
+    # Lead with new installs if we have a previous report
+    if previous_metrics:
+        prev = previous_metrics.get("key_metrics", {})
+        prev_identified = prev.get("identified_instances", 0)
+        new_installs = curr["identified_instances"] - prev_identified
+        prev_date = previous_metrics.get("report_date", "unknown")
+        if new_installs > 0:
+            lines.append(
+                f"**{new_installs} new registry installs** since the last "
+                f"report ({prev_date}), bringing the total to "
+                f"**{curr['identified_instances']} unique identified "
+                f"registry instances** across "
+                f"**{curr['total_events']} events** "
+                f"over the period {curr['earliest_ts'][:10]} to "
+                f"{curr['latest_ts'][:10]}."
+            )
+        else:
+            lines.append(
+                f"This report covers **{curr['total_events']} events** "
+                f"from **{curr['identified_instances']} unique identified "
+                f"registry instances** "
+                f"over the period {curr['earliest_ts'][:10]} to "
+                f"{curr['latest_ts'][:10]}. No new installs since the "
+                f"last report ({prev_date})."
+            )
+    else:
+        lines.append(
+            f"This report covers **{curr['total_events']} events** "
+            f"from **{curr['identified_instances']} unique identified "
+            f"registry instances** "
+            f"over the period {curr['earliest_ts'][:10]} to "
+            f"{curr['latest_ts'][:10]}."
+        )
     lines.append("")
 
     if previous_metrics is None:
@@ -262,7 +327,6 @@ def _build_exec_summary_md(
 
     # Distribution shift highlights
     prev_dists = previous_metrics.get("distributions", {})
-    curr_cloud = current_cloud_installs
     prev_cloud_dist = prev_dists.get("cloud", {})
 
     # Highlight new cloud providers
@@ -630,12 +694,20 @@ def _compute_feature_adoption(
             "rate": _format_pct(reg_only, total),
         },
         {
-            "feature": "Heartbeat opt-in",
-            "enabled": sum(
+            "feature": "Heartbeat (opt-out, on by default)",
+            "enabled": len({
+                r.get("registry_id", "").strip()
+                for r in rows
+                if r.get("event") == "heartbeat"
+                and r.get("registry_id", "").strip()
+            }),
+            "disabled": total - sum(
                 1 for r in rows if r.get("event") == "heartbeat"
             ),
-            "disabled": total,
-            "rate": "0%",
+            "rate": _format_pct(
+                sum(1 for r in rows if r.get("event") == "heartbeat"),
+                total,
+            ),
         },
     ]
 
@@ -650,6 +722,7 @@ def _build_markdown_tables(
     features: list[dict],
     rows: list[dict[str, str]],
     exec_summary_md: str | None = None,
+    instance_lifetime: list[dict] | None = None,
 ) -> str:
     """Build all markdown tables as a single string."""
     total = metrics["total_events"]
@@ -682,6 +755,44 @@ def _build_markdown_tables(
         f"| {metrics['earliest_ts'][:10]} to {metrics['latest_ts'][:10]} |"
     )
     lines.append("")
+
+    # Instance Lifetime / Age table
+    if instance_lifetime:
+        ages = [inst["age_days"] for inst in instance_lifetime]
+        avg_age = sum(ages) / len(ages) if ages else 0
+        max_age = max(ages) if ages else 0
+        active_count = sum(1 for a in ages if a > 0)
+
+        lines.append("## Registry Instance Lifetime")
+        lines.append("")
+        lines.append(
+            f"Across {len(instance_lifetime)} identified instances, "
+            f"the average lifetime is **{avg_age:.1f} days** "
+            f"(max {max_age} days). "
+            f"{active_count} instances have been seen across multiple days, "
+            f"while {len(ages) - active_count} were only seen on a single day."
+        )
+        lines.append("")
+        lines.append(
+            "| Registry ID | Cloud | Compute | Auth "
+            "| First Seen | Last Seen | Age (days) | Events |"
+        )
+        lines.append(
+            "|-------------|-------|---------|------"
+            "|------------|-----------|------------|--------|"
+        )
+        for inst in instance_lifetime:
+            lines.append(
+                f"| `{inst['registry_id']}` "
+                f"| {inst['cloud']} "
+                f"| {inst['compute']} "
+                f"| {inst['auth']} "
+                f"| {inst['first_seen']} "
+                f"| {inst['latest_seen']} "
+                f"| {inst['age_days']} "
+                f"| {inst['events']} |"
+            )
+        lines.append("")
 
     # Identified Instances
     lines.append("## Deployment Landscape")
@@ -937,6 +1048,7 @@ def main() -> None:
     metrics = _compute_key_metrics(rows)
     distributions = _compute_distributions(rows)
     instances = _compute_instance_table(rows)
+    instance_lifetime = _compute_instance_lifetime(instances)
     unidentified = _compute_unidentified_profiles(rows)
     versions = _compute_version_table(rows)
     search = _compute_search_stats(rows)
@@ -969,6 +1081,7 @@ def main() -> None:
         metrics, distributions, instances, unidentified,
         versions, search, features, rows,
         exec_summary_md=exec_summary_md,
+        instance_lifetime=instance_lifetime,
     )
 
     # Build JSON with all computed data
@@ -976,6 +1089,7 @@ def main() -> None:
         "report_date": date_str,
         "key_metrics": metrics,
         "per_cloud_unique_installs": cloud_installs,
+        "instance_lifetime": instance_lifetime,
         "distributions": {
             k: dict(v.most_common()) for k, v in distributions.items()
         },

@@ -22,8 +22,11 @@ data:
   {{- if .Values.app.mcpTelemetryDisabled }}
   MCP_TELEMETRY_DISABLED: {{ .Values.app.mcpTelemetryDisabled | quote }}
   {{- end }}
-  {{- if .Values.app.mcpTelemetryOptIn }}
-  MCP_TELEMETRY_OPT_IN: {{ .Values.app.mcpTelemetryOptIn | quote }}
+  {{- if .Values.app.mcpTelemetryOptOut }}
+  MCP_TELEMETRY_OPT_OUT: {{ .Values.app.mcpTelemetryOptOut | quote }}
+  {{- end }}
+  {{- if .Values.app.telemetryHeartbeatIntervalMinutes }}
+  MCP_TELEMETRY_HEARTBEAT_INTERVAL_MINUTES: {{ .Values.app.telemetryHeartbeatIntervalMinutes | quote }}
   {{- end }}
   {{- if .Values.app.telemetryDebug }}
   MCP_TELEMETRY_DEBUG: {{ .Values.app.telemetryDebug | quote }}

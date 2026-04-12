@@ -851,8 +851,12 @@ module "ecs_service_registry" {
           value = var.mcp_telemetry_disabled
         },
         {
-          name  = "MCP_TELEMETRY_OPT_IN"
-          value = var.mcp_telemetry_opt_in
+          name  = "MCP_TELEMETRY_OPT_OUT"
+          value = var.mcp_telemetry_opt_out
+        },
+        {
+          name  = "MCP_TELEMETRY_HEARTBEAT_INTERVAL_MINUTES"
+          value = var.mcp_telemetry_heartbeat_interval_minutes
         },
         {
           name  = "TELEMETRY_DEBUG"
