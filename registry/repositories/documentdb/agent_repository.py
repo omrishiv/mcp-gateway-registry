@@ -77,6 +77,29 @@ class DocumentDBAgentRepository(AgentRepositoryBase):
             logger.error(f"Error listing agents from DocumentDB: {e}", exc_info=True)
             return []
 
+    async def list_paginated(
+        self,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> list[AgentCard]:
+        """List agents with DB-level skip/limit pagination."""
+        collection = await self._get_collection()
+
+        try:
+            cursor = collection.find({}).skip(skip).limit(limit)
+            agents = []
+            async for doc in cursor:
+                path = doc.pop("_id")
+                doc["path"] = path
+                try:
+                    agents.append(AgentCard(**doc))
+                except Exception as e:
+                    logger.warning(f"Skipping invalid agent document {path}: {e}")
+            return agents
+        except Exception as e:
+            logger.error(f"Error listing paginated agents from DocumentDB: {e}", exc_info=True)
+            return []
+
     async def create(
         self,
         agent: AgentCard,

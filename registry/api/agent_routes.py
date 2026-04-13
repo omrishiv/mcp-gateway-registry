@@ -565,22 +565,31 @@ async def list_agents(
     query: str | None = Query(None, description="Search query string"),
     enabled_only: bool = Query(False, description="Show only enabled agents"),
     visibility: str | None = Query(None, description="Filter by visibility"),
+    limit: int = Query(20, ge=1, le=100, description="Number of agents to return (max 100)"),
+    offset: int = Query(0, ge=0, description="Number of agents to skip"),
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
 ):
     """
-    List all agents filtered by user permissions.
+    List all agents filtered by user permissions with pagination.
 
     Args:
         query: Optional search query
         enabled_only: Only return enabled agents
         visibility: Filter by visibility level
+        limit: Number of agents to return (1-100, default 20)
+        offset: Number of agents to skip (default 0)
         user_context: Authenticated user context
 
     Returns:
-        List of agent info objects
+        Paginated list of agent info objects with metadata
     """
     # Set audit action for agent list
     set_audit_action(request, "list", "agent", description="List all agents")
+
+    logger.debug(
+        f"list_agents called: limit={limit}, offset={offset}, "
+        f"query={query!r}, enabled_only={enabled_only}, visibility={visibility}"
+    )
 
     # CRITICAL DIAGNOSTIC: Log that we reached this endpoint
     logger.info(f"[GET_AGENTS_ENTRY] GET /api/agents called from {get_client_ip(request)}")
@@ -599,9 +608,29 @@ async def list_agents(
             f"[GET_AGENTS_DEBUG] Accessible agents: {user_context.get('accessible_agents', 'NOT PRESENT')}"
         )
 
-    all_agents = await agent_service.get_all_agents()
+    # Determine if user has unrestricted access (no agents will be filtered out)
+    is_admin = user_context.get("is_admin", False) if user_context else False
+    accessible_agent_list = user_context.get("accessible_agents", []) if user_context else []
+    has_field_filters = bool(query or enabled_only or visibility)
+    is_unrestricted = is_admin or "all" in accessible_agent_list
 
-    accessible_agents = _filter_agents_by_access(all_agents, user_context)
+    # Dual-path pagination:
+    # - Fast path: DB-level skip/limit for unrestricted users without field filters
+    # - Fallback: full fetch + Python filter + slice for restricted users or when field filters active
+    if is_unrestricted and not has_field_filters:
+        # FAST PATH: DB-level pagination — correct because no agents are filtered out
+        # and no field filters need a full scan for accurate total_count
+        all_agents, db_total = await agent_service.get_agents_paginated(
+            skip=offset, limit=limit
+        )
+        accessible_agents = all_agents
+    else:
+        # FALLBACK PATH: full fetch needed
+        all_agents = await agent_service.get_all_agents()
+        if is_unrestricted:
+            accessible_agents = all_agents
+        else:
+            accessible_agents = _filter_agents_by_access(all_agents, user_context)
 
     filtered_agents = []
     search_query = query.lower() if query else ""
@@ -664,14 +693,29 @@ async def list_agents(
             )
             filtered_agents.append(agent_info)
 
+    # Compute pagination metadata
+    if is_unrestricted and not has_field_filters:
+        # Fast path: total from DB, agents already paginated
+        total_count = db_total
+        page_agents = filtered_agents
+    else:
+        # Fallback path: slice the fully-filtered list
+        total_count = len(filtered_agents)
+        page_agents = filtered_agents[offset : offset + limit]
+
+    has_next = (offset + limit) < total_count
+
     logger.info(
-        f"User {user_context['username']} listed {len(filtered_agents)} agents "
-        f"(out of {len(all_agents)} total)"
+        f"User {user_context['username']} listed {len(page_agents)} agents "
+        f"(total: {total_count}, offset: {offset}, limit: {limit})"
     )
 
     return {
-        "agents": [agent.model_dump() for agent in filtered_agents],
-        "total_count": len(filtered_agents),
+        "agents": [agent.model_dump() for agent in page_agents],
+        "total_count": total_count,
+        "limit": limit,
+        "offset": offset,
+        "has_next": has_next,
     }
 
 

@@ -138,6 +138,15 @@ class FileAgentRepository(AgentRepositoryBase):
         agents = await self.get_all()
         return list(agents.values())
 
+    async def list_paginated(
+        self,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> list[AgentCard]:
+        """List agents with in-memory pagination (file backend)."""
+        all_agents = await self.list_all()
+        return all_agents[skip : skip + limit]
+
     async def load_all(self) -> dict[str, AgentCard]:
         """Load all agents (alias for get_all)."""
         return await self.get_all()

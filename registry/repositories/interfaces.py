@@ -180,6 +180,23 @@ class AgentRepositoryBase(ABC):
         pass
 
     @abstractmethod
+    async def list_paginated(
+        self,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> list[AgentCard]:
+        """List agents with DB-level pagination.
+
+        Args:
+            skip: Number of documents to skip.
+            limit: Maximum number of documents to return.
+
+        Returns:
+            List of AgentCard objects for the requested page.
+        """
+        pass
+
+    @abstractmethod
     async def create(
         self,
         agent: AgentCard,

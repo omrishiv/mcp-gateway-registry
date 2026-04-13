@@ -678,7 +678,10 @@ class AgentListResponse(BaseModel):
     """Agent list response model."""
 
     agents: list[AgentListItem] = Field(..., description="List of agents")
-    total_count: int = Field(..., description="Total count of agents")
+    total_count: int = Field(..., description="Total count of matching agents (all pages)")
+    limit: int = Field(..., description="Page size applied")
+    offset: int = Field(..., description="Offset applied")
+    has_next: bool = Field(..., description="Whether more pages exist")
 
 
 class AgentToggleResponse(BaseModel):
@@ -1988,24 +1991,31 @@ class RegistryClient:
         query: str | None = None,
         enabled_only: bool = False,
         visibility: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
     ) -> AgentListResponse:
         """
-        List all agents with optional filtering.
+        List agents with optional filtering and pagination.
 
         Args:
             query: Search query string
             enabled_only: Show only enabled agents
             visibility: Filter by visibility level (public, private, internal)
+            limit: Number of agents to return (1-100, default 20)
+            offset: Number of agents to skip (default 0)
 
         Returns:
-            Agent list response
+            Agent list response with pagination metadata
 
         Raises:
             requests.HTTPError: If list operation fails
         """
-        logger.info("Listing agents")
+        logger.info(f"Listing agents (limit={limit}, offset={offset})")
 
-        params = {}
+        params: dict[str, str | int | bool] = {
+            "limit": limit,
+            "offset": offset,
+        }
         if query:
             params["query"] = query
         if enabled_only:
@@ -2016,7 +2026,10 @@ class RegistryClient:
         response = self._make_request(method="GET", endpoint="/api/agents", params=params)
 
         result = AgentListResponse(**response.json())
-        logger.info(f"Retrieved {len(result.agents)} agents")
+        logger.info(
+            f"Retrieved {len(result.agents)} agents "
+            f"(total: {result.total_count}, offset: {result.offset}, limit: {result.limit})"
+        )
         return result
 
     def get_agent(self, path: str) -> AgentDetail:
