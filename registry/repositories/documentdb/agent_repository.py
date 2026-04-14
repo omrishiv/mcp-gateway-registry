@@ -86,7 +86,7 @@ class DocumentDBAgentRepository(AgentRepositoryBase):
         collection = await self._get_collection()
 
         try:
-            cursor = collection.find({}).skip(skip).limit(limit)
+            cursor = collection.find({}).sort("_id", 1).skip(skip).limit(limit)
             agents = []
             async for doc in cursor:
                 path = doc.pop("_id")

@@ -489,6 +489,10 @@ class AgentService:
         Used for unrestricted users (admins) where DB-level pagination
         is correct because no agents are filtered out by access control.
 
+        Note: list_paginated and count are separate DB calls, so total_count
+        may be slightly inconsistent if agents are added/removed between calls.
+        This is standard for offset-based pagination.
+
         Args:
             skip: Number of agents to skip.
             limit: Maximum number of agents to return.

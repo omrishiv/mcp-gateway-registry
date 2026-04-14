@@ -1314,7 +1314,9 @@ class SkillCard(BaseModel):
     is_enabled: bool = Field(default=True, description="Whether skill is enabled")
     tags: list[str] = Field(default_factory=list, description="Tags")
     target_agents: list[str] = Field(default_factory=list, description="Target coding assistants")
-    metadata: dict[str, Any] | None = Field(None, description="Skill metadata (author, version, extra)")
+    metadata: dict[str, Any] | None = Field(
+        None, description="Skill metadata (author, version, extra)"
+    )
     owner: str | None = Field(None, description="Skill owner")
     registry_name: str | None = Field(None, description="Source registry")
     num_stars: float = Field(default=0, description="Average rating")
@@ -4022,7 +4024,6 @@ class RegistryClient:
         logger.info(f"Virtual server rating: {result.get('num_stars')} stars")
         return result
 
-
     def force_heartbeat(self) -> dict[str, Any]:
         """Force an immediate heartbeat telemetry event (admin only).
 
@@ -4044,7 +4045,6 @@ class RegistryClient:
         result = response.json()
         logger.info(f"Heartbeat result: {result.get('status')}")
         return result
-
 
     def force_startup_ping(self) -> dict[str, Any]:
         """Force an immediate startup telemetry event (admin only).

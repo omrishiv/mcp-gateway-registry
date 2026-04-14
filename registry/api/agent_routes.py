@@ -620,9 +620,7 @@ async def list_agents(
     if is_unrestricted and not has_field_filters:
         # FAST PATH: DB-level pagination — correct because no agents are filtered out
         # and no field filters need a full scan for accurate total_count
-        all_agents, db_total = await agent_service.get_agents_paginated(
-            skip=offset, limit=limit
-        )
+        all_agents, db_total = await agent_service.get_agents_paginated(skip=offset, limit=limit)
         accessible_agents = all_agents
     else:
         # FALLBACK PATH: full fetch needed
@@ -1277,7 +1275,9 @@ async def update_agent(
             is_enabled=existing_agent.is_enabled,
             num_stars=existing_agent.num_stars,
             metadata=request.metadata if request.metadata else existing_agent.metadata,
-            capabilities=request.capabilities if request.capabilities else existing_agent.capabilities,
+            capabilities=request.capabilities
+            if request.capabilities
+            else existing_agent.capabilities,
             ans_metadata=existing_agent.ans_metadata,
             health_status=existing_agent.health_status,
             last_health_check=existing_agent.last_health_check,

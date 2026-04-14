@@ -722,9 +722,7 @@ class TestListAgents:
         """Unrestricted user with limit/offset uses DB-level pagination."""
         agents = [AgentCardFactory(path=f"/agents/agent-{i}") for i in range(5)]
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
-            mock_agent_service.get_agents_paginated = AsyncMock(
-                return_value=(agents[2:4], 5)
-            )
+            mock_agent_service.get_agents_paginated = AsyncMock(return_value=(agents[2:4], 5))
             mock_agent_service.is_agent_enabled.return_value = True
 
             response = test_app.get("/agents?limit=2&offset=2")
@@ -743,9 +741,7 @@ class TestListAgents:
         """Fast path: has_next is false when all agents fit in one page."""
         agents = [AgentCardFactory(path=f"/agents/agent-{i}") for i in range(3)]
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
-            mock_agent_service.get_agents_paginated = AsyncMock(
-                return_value=(agents, 3)
-            )
+            mock_agent_service.get_agents_paginated = AsyncMock(return_value=(agents, 3))
             mock_agent_service.is_agent_enabled.return_value = True
 
             response = test_app.get("/agents?limit=20")
@@ -760,9 +756,7 @@ class TestListAgents:
     async def test_list_agents_fast_path_offset_beyond_total(self, test_app, mock_user_context):
         """Fast path: offset beyond total returns empty list."""
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
-            mock_agent_service.get_agents_paginated = AsyncMock(
-                return_value=([], 3)
-            )
+            mock_agent_service.get_agents_paginated = AsyncMock(return_value=([], 3))
             mock_agent_service.is_agent_enabled.return_value = True
 
             response = test_app.get("/agents?offset=100")
@@ -781,12 +775,18 @@ class TestListAgents:
         """Unrestricted user with query filter falls back to full fetch + slice."""
         agents = [
             AgentCardFactory(
-                name="data-agent", description="Processes data", path="/agents/data",
-                tags=["data"], visibility="public",
+                name="data-agent",
+                description="Processes data",
+                path="/agents/data",
+                tags=["data"],
+                visibility="public",
             ),
             AgentCardFactory(
-                name="image-agent", description="Processes images", path="/agents/image",
-                tags=["image"], visibility="public",
+                name="image-agent",
+                description="Processes images",
+                path="/agents/image",
+                tags=["image"],
+                visibility="public",
             ),
         ]
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
