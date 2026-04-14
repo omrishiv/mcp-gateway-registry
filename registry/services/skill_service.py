@@ -720,6 +720,32 @@ class SkillService:
 
         return filtered
 
+    async def get_skills_paginated(
+        self,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> tuple[list[SkillCard], int]:
+        """Get a page of skills with total count.
+
+        Used for unrestricted users (admins) where DB-level pagination
+        is correct because no skills are filtered out by access control.
+
+        Note: list_paginated and count are separate DB calls, so total_count
+        may be slightly inconsistent if skills are added/removed between calls.
+        This is standard for offset-based pagination.
+
+        Args:
+            skip: Number of skills to skip.
+            limit: Maximum number of skills to return.
+
+        Returns:
+            Tuple of (page of skills, total count of all skills).
+        """
+        repo = self._get_repo()
+        skills = await repo.list_paginated(skip=skip, limit=limit)
+        total = await repo.count()
+        return skills, total
+
     async def update_skill(
         self,
         path: str,

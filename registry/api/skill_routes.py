@@ -38,6 +38,7 @@ from ..exceptions import (
 from ..schemas.skill_models import (
     DiscoveryResponse,
     SkillCard,
+    SkillInfo,
     SkillMetadata,
     SkillRegistrationRequest,
     SkillTier1_Metadata,
@@ -142,20 +143,85 @@ async def list_skills(
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
     include_disabled: bool = Query(False, description="Include disabled skills"),
     tag: str | None = Query(None, description="Filter by tag"),
+    limit: int = Query(20, ge=1, le=100, description="Number of skills to return (max 100)"),
+    offset: int = Query(0, ge=0, description="Number of skills to skip"),
 ) -> dict:
-    """List all registered skills with visibility filtering."""
-    service = get_skill_service()
-    skills = await service.list_skills_for_user(
-        user_context=user_context,
-        include_disabled=include_disabled,
-        tag=tag,
+    """List all registered skills with visibility filtering and pagination."""
+    logger.debug(
+        f"list_skills called: limit={limit}, offset={offset}, "
+        f"tag={tag!r}, include_disabled={include_disabled}"
     )
+
+    service = get_skill_service()
+
+    # Determine if user has unrestricted access (no skills will be filtered out)
+    is_admin = user_context.get("is_admin", False) if user_context else False
+    accessible_agent_list = user_context.get("accessible_agents", []) if user_context else []
+    is_unrestricted = is_admin or "all" in accessible_agent_list
+    # include_disabled=False (default) means "exclude disabled" which IS a filter.
+    # Only include_disabled=True (show all) with no tag requires no filtering.
+    has_field_filters = bool(tag or not include_disabled)
+
+    # Dual-path pagination:
+    # - Fast path: DB-level skip/limit for unrestricted users without field filters
+    # - Fallback: full fetch + Python filter + slice for restricted users or field filters
+    if is_unrestricted and not has_field_filters:
+        # FAST PATH: DB-level pagination -- correct because no skills are filtered out
+        # and no field filters need a full scan for accurate total_count
+        skill_cards, db_total = await service.get_skills_paginated(
+            skip=offset,
+            limit=limit,
+        )
+        skills = [
+            SkillInfo(
+                id=s.id,
+                path=s.path,
+                name=s.name,
+                description=s.description,
+                skill_md_url=str(s.skill_md_url),
+                skill_md_raw_url=str(s.skill_md_raw_url) if s.skill_md_raw_url else None,
+                tags=s.tags,
+                author=s.metadata.author if s.metadata else None,
+                version=s.metadata.version if s.metadata else None,
+                metadata=s.metadata,
+                compatibility=s.compatibility,
+                target_agents=s.target_agents,
+                is_enabled=s.is_enabled,
+                visibility=s.visibility,
+                allowed_groups=s.allowed_groups,
+                registry_name=s.registry_name,
+                owner=s.owner,
+                num_stars=s.num_stars,
+                health_status=s.health_status,
+                last_checked_time=s.last_checked_time,
+            )
+            for s in skill_cards
+        ]
+        total_count = db_total
+        page_skills = skills
+    else:
+        # FALLBACK PATH: full fetch needed for filtering or restricted users
+        all_skills = await service.list_skills_for_user(
+            user_context=user_context,
+            include_disabled=include_disabled,
+            tag=tag,
+        )
+        total_count = len(all_skills)
+        page_skills = all_skills[offset : offset + limit]
+
+    has_next = (offset + limit) < total_count
+
     logger.info(
-        f"Returning {len(skills)} skills for user {user_context.get('username', 'unknown')}"
+        f"Returning {len(page_skills)} skills for user "
+        f"{user_context.get('username', 'unknown')} "
+        f"(total: {total_count}, offset: {offset}, limit: {limit})"
     )
     return {
-        "skills": [skill.model_dump(mode="json") for skill in skills],
-        "total_count": len(skills),
+        "skills": [skill.model_dump(mode="json") for skill in page_skills],
+        "total_count": total_count,
+        "limit": limit,
+        "offset": offset,
+        "has_next": has_next,
     }
 
 

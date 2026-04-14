@@ -401,18 +401,23 @@ class TestGetServersJSON:
     """Tests for GET /servers endpoint."""
 
     def test_admin_gets_all_servers(self, test_client_admin, mock_server_service):
-        """Test that admin user gets all servers via JSON API."""
-        # Arrange
-        mock_server_service.get_all_servers.return_value = {
-            "/server1": {
-                "server_name": "Server 1",
-                "description": "Test 1",
-                "tags": [],
-                "num_tools": 3,
-                "license": "MIT",
-                "proxy_pass_url": "http://localhost:8080",
-            }
-        }
+        """Test that admin user gets all servers via JSON API (fast path)."""
+        # Arrange - admin with no filters uses fast path (get_servers_paginated)
+        mock_server_service.get_servers_paginated = AsyncMock(
+            return_value=(
+                {
+                    "/server1": {
+                        "server_name": "Server 1",
+                        "description": "Test 1",
+                        "tags": [],
+                        "num_tools": 3,
+                        "license": "MIT",
+                        "proxy_pass_url": "http://localhost:8080",
+                    }
+                },
+                1,
+            )
+        )
 
         # Act
         response = test_client_admin.get("/api/servers")
@@ -422,7 +427,11 @@ class TestGetServersJSON:
         data = response.json()
         assert "servers" in data
         assert len(data["servers"]) == 1
-        mock_server_service.get_all_servers.assert_called_once()
+        assert data["total_count"] == 1
+        assert data["limit"] == 20
+        assert data["offset"] == 0
+        assert data["has_next"] is False
+        mock_server_service.get_servers_paginated.assert_called_once_with(skip=0, limit=20)
 
     def test_non_admin_gets_filtered_servers(
         self, test_client_regular, mock_server_service, regular_user_context
@@ -485,18 +494,23 @@ class TestGetServersJSON:
     def test_returns_health_status(
         self, test_client_admin, mock_server_service, mock_health_service
     ):
-        """Test that server list includes health status."""
-        # Arrange
-        mock_server_service.get_all_servers.return_value = {
-            "/server1": {
-                "server_name": "Server 1",
-                "description": "Test",
-                "tags": [],
-                "num_tools": 3,
-                "license": "MIT",
-                "proxy_pass_url": "http://localhost:8080",
-            }
-        }
+        """Test that server list includes health status (fast path)."""
+        # Arrange - admin with no filters uses fast path
+        mock_server_service.get_servers_paginated = AsyncMock(
+            return_value=(
+                {
+                    "/server1": {
+                        "server_name": "Server 1",
+                        "description": "Test",
+                        "tags": [],
+                        "num_tools": 3,
+                        "license": "MIT",
+                        "proxy_pass_url": "http://localhost:8080",
+                    }
+                },
+                1,
+            )
+        )
         mock_health_service._get_service_health_data.return_value = {
             "status": "healthy",
             "last_checked_iso": "2025-01-01T12:00:00Z",

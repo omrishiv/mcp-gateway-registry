@@ -160,6 +160,31 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
                 logger.error(f"Failed to parse skill document: {e}")
         return skills
 
+    async def list_paginated(
+        self,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> list[SkillCard]:
+        """List skills with DB-level pagination and deterministic ordering.
+
+        Args:
+            skip: Number of documents to skip.
+            limit: Maximum number of documents to return.
+
+        Returns:
+            List of SkillCard objects for the requested page.
+        """
+        await self.ensure_indexes()
+        collection = await self._get_collection()
+        skills = []
+        cursor = collection.find({}).sort("_id", 1).skip(skip).limit(limit)
+        async for doc in cursor:
+            try:
+                skills.append(_document_to_skill(doc))
+            except Exception as e:
+                logger.error(f"Failed to parse skill document: {e}")
+        return skills
+
     async def list_filtered(
         self,
         include_disabled: bool = False,

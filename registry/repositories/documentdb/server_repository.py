@@ -98,6 +98,42 @@ class DocumentDBServerRepository(ServerRepositoryBase):
             logger.error(f"Error listing servers from DocumentDB: {e}", exc_info=True)
             return {}
 
+    async def list_paginated(
+        self,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> dict[str, dict[str, Any]]:
+        """List servers with DB-level skip/limit pagination.
+
+        Args:
+            skip: Number of documents to skip.
+            limit: Maximum number of documents to return.
+
+        Returns:
+            Dictionary mapping server path to server info for the requested page.
+        """
+        logger.debug(
+            f"DocumentDB READ: Listing paginated servers (skip={skip}, limit={limit}) "
+            f"from collection '{self._collection_name}'"
+        )
+        collection = await self._get_collection()
+
+        try:
+            cursor = collection.find({}).sort("_id", 1).skip(skip).limit(limit)
+            servers = {}
+            async for doc in cursor:
+                path = doc.pop("_id")
+                doc["path"] = path
+                servers[path] = doc
+            logger.info(
+                f"DocumentDB READ: Retrieved {len(servers)} servers (skip={skip}, limit={limit}) "
+                f"from collection '{self._collection_name}'"
+            )
+            return servers
+        except Exception as e:
+            logger.error(f"Error listing paginated servers from DocumentDB: {e}", exc_info=True)
+            return {}
+
     async def list_by_source(
         self,
         source: str,

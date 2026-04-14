@@ -40,6 +40,23 @@ class ServerRepositoryBase(ABC):
         pass
 
     @abstractmethod
+    async def list_paginated(
+        self,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> dict[str, dict[str, Any]]:
+        """List servers with DB-level pagination.
+
+        Args:
+            skip: Number of documents to skip.
+            limit: Maximum number of documents to return.
+
+        Returns:
+            Dictionary mapping server path to server info for the requested page.
+        """
+        pass
+
+    @abstractmethod
     async def list_by_source(
         self,
         source: str,
@@ -177,6 +194,23 @@ class AgentRepositoryBase(ABC):
     @abstractmethod
     async def list_all(self) -> list[AgentCard]:
         """List all agents."""
+        pass
+
+    @abstractmethod
+    async def list_paginated(
+        self,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> list[AgentCard]:
+        """List agents with DB-level pagination.
+
+        Args:
+            skip: Number of documents to skip.
+            limit: Maximum number of documents to return.
+
+        Returns:
+            List of AgentCard objects for the requested page.
+        """
         pass
 
     @abstractmethod
@@ -1096,6 +1130,23 @@ class SkillRepositoryBase(ABC):
 
         Returns:
             List of SkillCard objects
+        """
+        pass
+
+    @abstractmethod
+    async def list_paginated(
+        self,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> list[SkillCard]:
+        """List skills with DB-level pagination and deterministic ordering.
+
+        Args:
+            skip: Number of documents to skip.
+            limit: Maximum number of documents to return.
+
+        Returns:
+            List of SkillCard objects for the requested page.
         """
         pass
 

@@ -242,6 +242,43 @@ class ServerService:
 
         return all_servers
 
+    async def get_servers_paginated(
+        self,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> tuple[dict[str, dict[str, Any]], int]:
+        """Get a page of servers with total count.
+
+        Used for unrestricted users (admins) where DB-level pagination
+        is correct because no servers are filtered out by access control.
+
+        Note: list_paginated and count are separate DB calls, so total_count
+        may be slightly inconsistent if servers are added/removed between calls.
+        This is standard for offset-based pagination.
+
+        Args:
+            skip: Number of servers to skip.
+            limit: Maximum number of servers to return.
+
+        Returns:
+            Tuple of (servers dict for the requested page, total count of all servers).
+        """
+        servers = await self._repo.list_paginated(skip=skip, limit=limit)
+        total = await self._repo.count()
+
+        # Apply read-time migration and credential stripping
+        for server_info in servers.values():
+            self._prepare_server_dict(server_info, include_credentials=False)
+
+        # Filter out inactive servers (non-default versions)
+        servers = {
+            path: server_info
+            for path, server_info in servers.items()
+            if server_info.get("is_active", True)
+        }
+
+        return servers, total
+
     async def get_filtered_servers(
         self,
         accessible_servers: list[str],

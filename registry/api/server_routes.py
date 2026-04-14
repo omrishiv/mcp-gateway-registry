@@ -5,7 +5,7 @@ import os
 from typing import Annotated
 
 import httpx
-from fastapi import APIRouter, Cookie, Depends, Form, HTTPException, Request, status
+from fastapi import APIRouter, Cookie, Depends, Form, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -68,8 +68,7 @@ def _build_scan_headers_from_credentials(
         header_name = server_info.get("auth_header_name", "Authorization")
         headers_dict = {"X-Authorization": f"Bearer {credential}"}
         logger.info(
-            f"Passing bearer token to security scanner for "
-            f"'{server_info.get('path', 'unknown')}'"
+            f"Passing bearer token to security scanner for '{server_info.get('path', 'unknown')}'"
         )
         return json.dumps(headers_dict)
     elif auth_scheme == "api_key":
@@ -321,9 +320,13 @@ async def read_root(
 async def get_servers_json(
     request: Request,
     query: str | None = None,
+    limit: int = Query(20, ge=1, le=100, description="Number of servers to return (max 100)"),
+    offset: int = Query(0, ge=0, description="Number of servers to skip"),
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
 ):
     """Get servers data as JSON for React frontend and external API (supports both session cookies and Bearer tokens)."""
+    logger.debug(f"get_servers_json called: limit={limit}, offset={offset}, query={query!r}")
+
     # Set audit action for server list
     set_audit_action(request, "list", "server", description="List all servers")
 
@@ -340,18 +343,31 @@ async def get_servers_json(
     service_data = []
     search_query = query.lower() if query else ""
 
-    # Get servers based on user permissions (same logic as root route)
-    if user_context["is_admin"]:
-        all_servers = await server_service.get_all_servers()
+    # Determine if user has unrestricted access (no servers will be filtered out)
+    is_admin = user_context.get("is_admin", False) if user_context else False
+    accessible_servers_list = user_context.get("accessible_servers", []) if user_context else []
+    accessible_services = user_context.get("accessible_services", []) if user_context else []
+    is_unrestricted = is_admin or "all" in accessible_servers_list or "all" in accessible_services
+    has_field_filters = bool(query)
+
+    # Dual-path pagination:
+    # - Fast path: DB-level skip/limit for unrestricted users without field filters
+    # - Fallback: full fetch + Python filter + slice for restricted users or when field filters active
+    if is_unrestricted and not has_field_filters:
+        # FAST PATH: DB-level pagination -- correct because no servers are filtered out
+        # and no field filters need a full scan for accurate total_count
+        all_servers, db_total = await server_service.get_servers_paginated(skip=offset, limit=limit)
     else:
-        all_servers = await server_service.get_all_servers_with_permissions(
-            user_context["accessible_servers"]
-        )
+        # FALLBACK PATH: full fetch needed
+        if is_admin:
+            all_servers = await server_service.get_all_servers()
+        else:
+            all_servers = await server_service.get_all_servers_with_permissions(
+                accessible_servers_list
+            )
 
     sorted_server_paths = sorted(all_servers.keys(), key=lambda p: all_servers[p]["server_name"])
 
-    # Filter services based on UI permissions (same logic as root route)
-    accessible_services = user_context.get("accessible_services", [])
     # Normalize accessible_services by stripping slashes for comparison
     normalized_accessible_services = [s.strip("/") for s in accessible_services]
 
@@ -363,7 +379,8 @@ async def get_servers_json(
 
         # Check if user can list this service using technical name
         if (
-            "all" not in accessible_services
+            not is_unrestricted
+            and "all" not in accessible_services
             and technical_name not in normalized_accessible_services
         ):
             continue
@@ -478,7 +495,25 @@ async def get_servers_json(
                 }
             )
 
-    return {"servers": service_data}
+    # Compute pagination metadata
+    if is_unrestricted and not has_field_filters:
+        # Fast path: total from DB, servers already paginated
+        total_count = db_total
+        page_services = service_data
+    else:
+        # Fallback path: slice the fully-filtered list
+        total_count = len(service_data)
+        page_services = service_data[offset : offset + limit]
+
+    has_next = (offset + limit) < total_count
+
+    return {
+        "servers": page_services,
+        "total_count": total_count,
+        "limit": limit,
+        "offset": offset,
+        "has_next": has_next,
+    }
 
 
 @router.post("/toggle/{service_path:path}")
@@ -948,7 +983,9 @@ async def internal_register_service(
         server_entry["auth_header_name"] = auth_header_name
     if metadata:
         try:
-            server_entry["metadata"] = json.loads(metadata) if isinstance(metadata, str) else metadata
+            server_entry["metadata"] = (
+                json.loads(metadata) if isinstance(metadata, str) else metadata
+            )
         except json.JSONDecodeError:
             return JSONResponse(
                 status_code=400,
@@ -2336,14 +2373,22 @@ async def generate_user_token(
                 # Add provider-specific metadata
                 auth_provider = getattr(settings, "auth_provider", "").lower()
                 if auth_provider == "keycloak":
-                    formatted_response["keycloak_url"] = getattr(settings, "keycloak_url", None) or "http://keycloak:8080"
-                    formatted_response["realm"] = getattr(settings, "keycloak_realm", None) or "mcp-gateway"
+                    formatted_response["keycloak_url"] = (
+                        getattr(settings, "keycloak_url", None) or "http://keycloak:8080"
+                    )
+                    formatted_response["realm"] = (
+                        getattr(settings, "keycloak_realm", None) or "mcp-gateway"
+                    )
                 elif auth_provider == "auth0":
                     formatted_response["auth0_domain"] = getattr(settings, "auth0_domain", None)
                 elif auth_provider == "cognito":
-                    formatted_response["cognito_user_pool_id"] = getattr(settings, "cognito_user_pool_id", None)
+                    formatted_response["cognito_user_pool_id"] = getattr(
+                        settings, "cognito_user_pool_id", None
+                    )
                 elif auth_provider == "entra":
-                    formatted_response["entra_tenant_id"] = getattr(settings, "entra_tenant_id", None)
+                    formatted_response["entra_tenant_id"] = getattr(
+                        settings, "entra_tenant_id", None
+                    )
 
                 return formatted_response
             else:
@@ -3909,9 +3954,7 @@ async def rescan_server(
         path = "/" + path
 
     # Check if server exists (include credentials for authenticated scans)
-    server_info = await server_service.get_server_info(
-        path, include_credentials=True
-    )
+    server_info = await server_service.get_server_info(path, include_credentials=True)
     if not server_info:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -4166,9 +4209,7 @@ async def get_server(
     # Access control — admin users bypass checks
     if not user_context.get("is_admin"):
         accessible_servers = user_context.get("accessible_servers", [])
-        has_access = await server_service.user_can_access_server_path(
-            path, accessible_servers
-        )
+        has_access = await server_service.user_can_access_server_path(path, accessible_servers)
         if not has_access:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

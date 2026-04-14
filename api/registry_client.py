@@ -156,6 +156,10 @@ class ServerListResponse(BaseModel):
     """Server list response model."""
 
     servers: list[Server] = Field(..., description="List of servers")
+    total_count: int = Field(..., description="Total count of matching servers (all pages)")
+    limit: int = Field(..., description="Page size applied")
+    offset: int = Field(..., description="Offset applied")
+    has_next: bool = Field(..., description="Whether more pages exist")
 
 
 class ServiceResponse(BaseModel):
@@ -678,7 +682,10 @@ class AgentListResponse(BaseModel):
     """Agent list response model."""
 
     agents: list[AgentListItem] = Field(..., description="List of agents")
-    total_count: int = Field(..., description="Total count of agents")
+    total_count: int = Field(..., description="Total count of matching agents (all pages)")
+    limit: int = Field(..., description="Page size applied")
+    offset: int = Field(..., description="Offset applied")
+    has_next: bool = Field(..., description="Whether more pages exist")
 
 
 class AgentToggleResponse(BaseModel):
@@ -1311,7 +1318,9 @@ class SkillCard(BaseModel):
     is_enabled: bool = Field(default=True, description="Whether skill is enabled")
     tags: list[str] = Field(default_factory=list, description="Tags")
     target_agents: list[str] = Field(default_factory=list, description="Target coding assistants")
-    metadata: dict[str, Any] | None = Field(None, description="Skill metadata (author, version, extra)")
+    metadata: dict[str, Any] | None = Field(
+        None, description="Skill metadata (author, version, extra)"
+    )
     owner: str | None = Field(None, description="Skill owner")
     registry_name: str | None = Field(None, description="Source registry")
     num_stars: float = Field(default=0, description="Average rating")
@@ -1325,6 +1334,9 @@ class SkillListResponse(BaseModel):
 
     skills: list[SkillCard] = Field(default_factory=list, description="List of skills")
     total_count: int = Field(0, description="Total number of skills")
+    limit: int = Field(..., description="Page size applied")
+    offset: int = Field(..., description="Offset applied")
+    has_next: bool = Field(..., description="Whether more pages exist")
 
 
 class SkillHealthResponse(BaseModel):
@@ -1591,9 +1603,17 @@ class RegistryClient:
         logger.info(f"Credential updated for {service_path}: scheme={result.get('auth_scheme')}")
         return result
 
-    def list_services(self) -> ServerListResponse:
+    def list_services(
+        self,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> ServerListResponse:
         """
         List all services in the registry.
+
+        Args:
+            limit: Maximum number of services to return per page
+            offset: Number of services to skip for pagination
 
         Returns:
             Server list response
@@ -1603,14 +1623,23 @@ class RegistryClient:
         """
         logger.info("Listing all services")
 
-        response = self._make_request(method="GET", endpoint="/api/servers")
+        params = {
+            "limit": limit,
+            "offset": offset,
+        }
+
+        response = self._make_request(method="GET", endpoint="/api/servers", params=params)
 
         response_data = response.json()
         logger.debug(f"Raw API response: {json.dumps(response_data, indent=2, default=str)}")
 
         try:
             result = ServerListResponse(**response_data)
-            logger.info(f"Retrieved {len(result.servers)} services")
+            logger.info(
+                f"Retrieved {len(result.servers)} services"
+                f" (total={result.total_count}, offset={result.offset},"
+                f" limit={result.limit}, has_next={result.has_next})"
+            )
             return result
         except Exception as e:
             logger.error(f"Failed to parse server list response: {e}")
@@ -1988,24 +2017,31 @@ class RegistryClient:
         query: str | None = None,
         enabled_only: bool = False,
         visibility: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
     ) -> AgentListResponse:
         """
-        List all agents with optional filtering.
+        List agents with optional filtering and pagination.
 
         Args:
             query: Search query string
             enabled_only: Show only enabled agents
             visibility: Filter by visibility level (public, private, internal)
+            limit: Number of agents to return (1-100, default 20)
+            offset: Number of agents to skip (default 0)
 
         Returns:
-            Agent list response
+            Agent list response with pagination metadata
 
         Raises:
             requests.HTTPError: If list operation fails
         """
-        logger.info("Listing agents")
+        logger.info(f"Listing agents (limit={limit}, offset={offset})")
 
-        params = {}
+        params: dict[str, str | int | bool] = {
+            "limit": limit,
+            "offset": offset,
+        }
         if query:
             params["query"] = query
         if enabled_only:
@@ -2016,7 +2052,10 @@ class RegistryClient:
         response = self._make_request(method="GET", endpoint="/api/agents", params=params)
 
         result = AgentListResponse(**response.json())
-        logger.info(f"Retrieved {len(result.agents)} agents")
+        logger.info(
+            f"Retrieved {len(result.agents)} agents "
+            f"(total: {result.total_count}, offset: {result.offset}, limit: {result.limit})"
+        )
         return result
 
     def get_agent(self, path: str) -> AgentDetail:
@@ -3500,7 +3539,11 @@ class RegistryClient:
         return SkillCard(**result)
 
     def list_skills(
-        self, include_disabled: bool = False, tag: str | None = None
+        self,
+        include_disabled: bool = False,
+        tag: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
     ) -> SkillListResponse:
         """
         List all Agent Skills.
@@ -3508,6 +3551,8 @@ class RegistryClient:
         Args:
             include_disabled: Include disabled skills
             tag: Filter by tag
+            limit: Maximum number of skills to return per page
+            offset: Number of skills to skip for pagination
 
         Returns:
             SkillListResponse with list of skills
@@ -3517,20 +3562,35 @@ class RegistryClient:
         """
         logger.info("Listing skills")
 
-        params = {}
+        params: dict[str, str | int] = {
+            "limit": limit,
+            "offset": offset,
+        }
         if include_disabled:
             params["include_disabled"] = "true"
         if tag:
             params["tag"] = tag
 
-        response = self._make_request(
-            method="GET", endpoint="/api/skills", params=params if params else None
-        )
+        response = self._make_request(method="GET", endpoint="/api/skills", params=params)
 
         result = response.json()
         skills = [SkillCard(**s) for s in result.get("skills", [])]
-        logger.info(f"Retrieved {len(skills)} skills")
-        return SkillListResponse(skills=skills, total_count=result.get("total_count", len(skills)))
+        total_count = result.get("total_count", len(skills))
+        resp_limit = result.get("limit", limit)
+        resp_offset = result.get("offset", offset)
+        has_next = result.get("has_next", False)
+        logger.info(
+            f"Retrieved {len(skills)} skills"
+            f" (total={total_count}, offset={resp_offset},"
+            f" limit={resp_limit}, has_next={has_next})"
+        )
+        return SkillListResponse(
+            skills=skills,
+            total_count=total_count,
+            limit=resp_limit,
+            offset=resp_offset,
+            has_next=has_next,
+        )
 
     def get_skill(self, path: str) -> SkillCard:
         """
@@ -4009,7 +4069,6 @@ class RegistryClient:
         logger.info(f"Virtual server rating: {result.get('num_stars')} stars")
         return result
 
-
     def force_heartbeat(self) -> dict[str, Any]:
         """Force an immediate heartbeat telemetry event (admin only).
 
@@ -4031,7 +4090,6 @@ class RegistryClient:
         result = response.json()
         logger.info(f"Heartbeat result: {result.get('status')}")
         return result
-
 
     def force_startup_ping(self) -> dict[str, Any]:
         """Force an immediate startup telemetry event (admin only).

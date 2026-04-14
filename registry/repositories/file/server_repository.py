@@ -158,6 +158,24 @@ class FileServerRepository(ServerRepositoryBase):
         """List all servers."""
         return self._servers.copy()
 
+    async def list_paginated(
+        self,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> dict[str, dict[str, Any]]:
+        """List servers with in-memory pagination (file backend).
+
+        Args:
+            skip: Number of servers to skip.
+            limit: Maximum number of servers to return.
+
+        Returns:
+            Dictionary mapping server path to server info for the requested page.
+        """
+        items = list(self._servers.items())
+        page_items = items[skip : skip + limit]
+        return dict(page_items)
+
     async def list_by_source(
         self,
         source: str,

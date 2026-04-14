@@ -589,10 +589,13 @@ class TestListAgents:
 
     @pytest.mark.asyncio
     async def test_list_agents_success(self, test_app, mock_user_context, sample_agent_card):
-        """Test successful agent listing."""
-        # Arrange - patch where agent_service is used
+        """Test successful agent listing (unrestricted user, no filters = fast path)."""
+        # Arrange - mock_user_context has accessible_agents=["all"] and no field filters,
+        # so the route uses the fast path (get_agents_paginated)
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
-            mock_agent_service.get_all_agents = AsyncMock(return_value=[sample_agent_card])
+            mock_agent_service.get_agents_paginated = AsyncMock(
+                return_value=([sample_agent_card], 1)
+            )
             mock_agent_service.is_agent_enabled.return_value = True
 
             # Act
@@ -605,6 +608,9 @@ class TestListAgents:
             assert "total_count" in data
             assert data["total_count"] == 1
             assert len(data["agents"]) == 1
+            assert data["limit"] == 20
+            assert data["offset"] == 0
+            assert data["has_next"] is False
 
     @pytest.mark.asyncio
     async def test_list_agents_enabled_only_filter(self, test_app, mock_user_context):
@@ -627,6 +633,9 @@ class TestListAgents:
             data = response.json()
             assert data["total_count"] == 1
             assert data["agents"][0]["path"] == "/agents/enabled"
+            assert data["limit"] == 20
+            assert data["offset"] == 0
+            assert data["has_next"] is False
 
     @pytest.mark.asyncio
     async def test_list_agents_visibility_filter(self, test_app, mock_admin_context):
@@ -649,6 +658,9 @@ class TestListAgents:
             data = response.json()
             assert data["total_count"] == 1
             assert data["agents"][0]["path"] == "/agents/public"
+            assert data["limit"] == 20
+            assert data["offset"] == 0
+            assert data["has_next"] is False
 
     @pytest.mark.asyncio
     async def test_list_agents_query_search(self, test_app, mock_user_context):
@@ -679,6 +691,167 @@ class TestListAgents:
             data = response.json()
             assert data["total_count"] == 1
             assert data["agents"][0]["name"] == "data-processor"
+            assert data["limit"] == 20
+            assert data["offset"] == 0
+            assert data["has_next"] is False
+
+    # --- Pagination: Validation tests ---
+
+    @pytest.mark.asyncio
+    async def test_list_agents_limit_exceeds_max_rejected(self, test_app, mock_user_context):
+        """limit=101 must be rejected with 422."""
+        response = test_app.get("/agents?limit=101")
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+    @pytest.mark.asyncio
+    async def test_list_agents_limit_zero_rejected(self, test_app, mock_user_context):
+        """limit=0 must be rejected with 422."""
+        response = test_app.get("/agents?limit=0")
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+    @pytest.mark.asyncio
+    async def test_list_agents_negative_offset_rejected(self, test_app, mock_user_context):
+        """offset=-1 must be rejected with 422."""
+        response = test_app.get("/agents?offset=-1")
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+    # --- Pagination: Fast path tests (unrestricted user, no field filters) ---
+
+    @pytest.mark.asyncio
+    async def test_list_agents_fast_path_with_limit_offset(self, test_app, mock_user_context):
+        """Unrestricted user with limit/offset uses DB-level pagination."""
+        agents = [AgentCardFactory(path=f"/agents/agent-{i}") for i in range(5)]
+        with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
+            mock_agent_service.get_agents_paginated = AsyncMock(return_value=(agents[2:4], 5))
+            mock_agent_service.is_agent_enabled.return_value = True
+
+            response = test_app.get("/agents?limit=2&offset=2")
+
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            assert len(data["agents"]) == 2
+            assert data["total_count"] == 5
+            assert data["limit"] == 2
+            assert data["offset"] == 2
+            assert data["has_next"] is True
+            mock_agent_service.get_agents_paginated.assert_called_once_with(skip=2, limit=2)
+
+    @pytest.mark.asyncio
+    async def test_list_agents_fast_path_has_next_false(self, test_app, mock_user_context):
+        """Fast path: has_next is false when all agents fit in one page."""
+        agents = [AgentCardFactory(path=f"/agents/agent-{i}") for i in range(3)]
+        with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
+            mock_agent_service.get_agents_paginated = AsyncMock(return_value=(agents, 3))
+            mock_agent_service.is_agent_enabled.return_value = True
+
+            response = test_app.get("/agents?limit=20")
+
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            assert len(data["agents"]) == 3
+            assert data["total_count"] == 3
+            assert data["has_next"] is False
+
+    @pytest.mark.asyncio
+    async def test_list_agents_fast_path_offset_beyond_total(self, test_app, mock_user_context):
+        """Fast path: offset beyond total returns empty list."""
+        with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
+            mock_agent_service.get_agents_paginated = AsyncMock(return_value=([], 3))
+            mock_agent_service.is_agent_enabled.return_value = True
+
+            response = test_app.get("/agents?offset=100")
+
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            assert data["agents"] == []
+            assert data["total_count"] == 3
+            assert data["offset"] == 100
+            assert data["has_next"] is False
+
+    # --- Pagination: Fallback path tests (unrestricted + field filters) ---
+
+    @pytest.mark.asyncio
+    async def test_list_agents_fallback_with_query_filter(self, test_app, mock_user_context):
+        """Unrestricted user with query filter falls back to full fetch + slice."""
+        agents = [
+            AgentCardFactory(
+                name="data-agent",
+                description="Processes data",
+                path="/agents/data",
+                tags=["data"],
+                visibility="public",
+            ),
+            AgentCardFactory(
+                name="image-agent",
+                description="Processes images",
+                path="/agents/image",
+                tags=["image"],
+                visibility="public",
+            ),
+        ]
+        with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
+            mock_agent_service.get_all_agents = AsyncMock(return_value=agents)
+            mock_agent_service.is_agent_enabled.return_value = True
+
+            response = test_app.get("/agents?query=data&limit=10")
+
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            assert data["total_count"] == 1
+            assert len(data["agents"]) == 1
+            assert data["agents"][0]["name"] == "data-agent"
+            assert data["limit"] == 10
+            assert data["offset"] == 0
+            # Fallback path used get_all_agents, not get_agents_paginated
+            mock_agent_service.get_all_agents.assert_called_once()
+
+    # --- Pagination: Fallback path tests (restricted user) ---
+
+    @pytest.mark.asyncio
+    async def test_list_agents_restricted_user_pagination(self, test_app_limited):
+        """Restricted user uses fallback path with full fetch + access filter + slice."""
+        agents = [
+            AgentCardFactory(path="/test-agent", visibility="public"),
+            AgentCardFactory(path="/other-agent", visibility="public"),
+            AgentCardFactory(path="/third-agent", visibility="public"),
+        ]
+        with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
+            mock_agent_service.get_all_agents = AsyncMock(return_value=agents)
+            mock_agent_service.is_agent_enabled.return_value = True
+
+            response = test_app_limited.get("/agents?limit=5")
+
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            # Limited user only has access to /test-agent
+            assert data["total_count"] == 1
+            assert len(data["agents"]) == 1
+            assert data["agents"][0]["path"] == "/test-agent"
+            assert data["limit"] == 5
+            assert data["offset"] == 0
+            assert data["has_next"] is False
+
+    @pytest.mark.asyncio
+    async def test_list_agents_restricted_user_offset_slicing(self, test_app_limited):
+        """Restricted user with offset correctly slices accessible agents."""
+        # Create multiple agents the limited user can access
+        agents = [
+            AgentCardFactory(path="/test-agent", visibility="public"),
+            AgentCardFactory(path="/other-agent", visibility="public"),
+        ]
+        with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
+            mock_agent_service.get_all_agents = AsyncMock(return_value=agents)
+            mock_agent_service.is_agent_enabled.return_value = True
+
+            # Limited user can only see /test-agent, offset=1 gives empty
+            response = test_app_limited.get("/agents?limit=5&offset=1")
+
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            assert data["total_count"] == 1
+            assert data["agents"] == []
+            assert data["offset"] == 1
+            assert data["has_next"] is False
 
 
 @pytest.mark.unit

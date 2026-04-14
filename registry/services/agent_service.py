@@ -478,6 +478,32 @@ class AgentService:
         # Query repository directly instead of using cache
         return await self._repo.list_all()
 
+    async def get_agents_paginated(
+        self,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> tuple[list[AgentCard], int]:
+        """
+        Get a page of agents with total count.
+
+        Used for unrestricted users (admins) where DB-level pagination
+        is correct because no agents are filtered out by access control.
+
+        Note: list_paginated and count are separate DB calls, so total_count
+        may be slightly inconsistent if agents are added/removed between calls.
+        This is standard for offset-based pagination.
+
+        Args:
+            skip: Number of agents to skip.
+            limit: Maximum number of agents to return.
+
+        Returns:
+            Tuple of (page of agents, total count of all agents).
+        """
+        agents = await self._repo.list_paginated(skip=skip, limit=limit)
+        total = await self._repo.count()
+        return agents, total
+
     async def remove_agent(
         self,
         path: str,

@@ -628,21 +628,36 @@ def cmd_list(args: argparse.Namespace) -> int:
     try:
         client = _create_client(args)
 
+        limit = args.limit if hasattr(args, "limit") else 20
+        offset = args.offset if hasattr(args, "offset") else 0
+        query = args.query if hasattr(args, "query") else None
+
         # Print raw JSON if requested - fetch directly from API to get all fields
         if hasattr(args, "json") and args.json:
             import json
 
-            raw_response = client._make_request(method="GET", endpoint="/api/servers")
+            params: dict[str, str | int] = {"limit": limit, "offset": offset}
+            if query:
+                params["query"] = query
+            raw_response = client._make_request(
+                method="GET", endpoint="/api/servers", params=params
+            )
             print(json.dumps(raw_response.json(), indent=2, default=str))
             return 0
 
-        response = client.list_services()
+        response = client.list_services(
+            limit=limit,
+            offset=offset,
+        )
 
         if not response.servers:
             logger.info("No servers registered")
             return 0
 
-        logger.info(f"Found {len(response.servers)} registered servers:\n")
+        logger.info(
+            f"Found {len(response.servers)} servers "
+            f"(total: {response.total_count}, offset: {response.offset}, limit: {response.limit}):\n"
+        )
 
         for server in response.servers:
             status_icon = "✓" if server.is_enabled else "✗"
@@ -1582,7 +1597,9 @@ def cmd_agent_register(args: argparse.Namespace) -> int:
         if "visibility" in config:
             # Normalize legacy aliases: "internal" -> "private", "group" -> "group-restricted"
             _visibility_aliases = {"internal": "private", "group": "group-restricted"}
-            normalized = _visibility_aliases.get(config["visibility"].lower(), config["visibility"].lower())
+            normalized = _visibility_aliases.get(
+                config["visibility"].lower(), config["visibility"].lower()
+            )
             try:
                 config["visibility"] = AgentVisibility(normalized)
             except ValueError:
@@ -1683,11 +1700,21 @@ def cmd_agent_list(args: argparse.Namespace) -> int:
     try:
         client = _create_client(args)
 
+        limit = args.limit if hasattr(args, "limit") else 20
+        offset = args.offset if hasattr(args, "offset") else 0
+
         # Print raw JSON if requested - fetch directly from API to get all fields
         if hasattr(args, "json") and args.json:
             import json
 
-            raw_response = client._make_request(method="GET", endpoint="/api/agents")
+            params: dict[str, str | int] = {"limit": limit, "offset": offset}
+            if hasattr(args, "query") and args.query:
+                params["query"] = args.query
+            if hasattr(args, "enabled_only") and args.enabled_only:
+                params["enabled_only"] = "true"
+            if hasattr(args, "visibility") and args.visibility:
+                params["visibility"] = args.visibility
+            raw_response = client._make_request(method="GET", endpoint="/api/agents", params=params)
             print(json.dumps(raw_response.json(), indent=2, default=str))
             return 0
 
@@ -1695,6 +1722,8 @@ def cmd_agent_list(args: argparse.Namespace) -> int:
             query=args.query if hasattr(args, "query") else None,
             enabled_only=args.enabled_only if hasattr(args, "enabled_only") else False,
             visibility=args.visibility if hasattr(args, "visibility") else None,
+            limit=limit,
+            offset=offset,
         )
 
         # Debug mode: print full JSON response
@@ -1707,7 +1736,10 @@ def cmd_agent_list(args: argparse.Namespace) -> int:
             logger.info("No agents found")
             return 0
 
-        logger.info(f"Found {len(response.agents)} agents:\n")
+        logger.info(
+            f"Found {len(response.agents)} agents "
+            f"(total: {response.total_count}, offset: {response.offset}, limit: {response.limit}):\n"
+        )
         for agent in response.agents:
             status = "✓" if agent.is_enabled else "✗"
             print(f"{status} {agent.name} ({agent.path})")
@@ -1822,7 +1854,9 @@ def cmd_agent_update(args: argparse.Namespace) -> int:
         if "visibility" in config:
             # Normalize legacy aliases: "internal" -> "private", "group" -> "group-restricted"
             _visibility_aliases = {"internal": "private", "group": "group-restricted"}
-            normalized = _visibility_aliases.get(config["visibility"].lower(), config["visibility"].lower())
+            normalized = _visibility_aliases.get(
+                config["visibility"].lower(), config["visibility"].lower()
+            )
             try:
                 config["visibility"] = AgentVisibility(normalized)
             except ValueError:
@@ -2315,9 +2349,14 @@ def cmd_skill_list(args: argparse.Namespace) -> int:
     """
     try:
         client = _create_client(args)
+        limit = args.limit if hasattr(args, "limit") else 20
+        offset = args.offset if hasattr(args, "offset") else 0
+
         response = client.list_skills(
             include_disabled=args.include_disabled if hasattr(args, "include_disabled") else False,
             tag=args.tag if hasattr(args, "tag") else None,
+            limit=limit,
+            offset=offset,
         )
 
         if hasattr(args, "json") and args.json:
@@ -2328,7 +2367,10 @@ def cmd_skill_list(args: argparse.Namespace) -> int:
             logger.info("No skills found")
             return 0
 
-        logger.info(f"Found {len(response.skills)} skills:\n")
+        logger.info(
+            f"Found {len(response.skills)} skills "
+            f"(total: {response.total_count}, offset: {response.offset}, limit: {response.limit}):\n"
+        )
         for skill in response.skills:
             status = "[+]" if skill.is_enabled else "[-]"
             health = f"({skill.health_status})" if skill.health_status else ""
@@ -4387,6 +4429,13 @@ Examples:
 
     # List command
     list_parser = subparsers.add_parser("list", help="List all servers")
+    list_parser.add_argument("--query", help="Search query string")
+    list_parser.add_argument(
+        "--limit", type=int, default=20, help="Number of servers to return (1-100, default 20)"
+    )
+    list_parser.add_argument(
+        "--offset", type=int, default=0, help="Number of servers to skip (default 0)"
+    )
     list_parser.add_argument("--json", action="store_true", help="Print raw JSON response")
 
     # Toggle command
@@ -4468,9 +4517,7 @@ Examples:
 
     # Server get command
     server_get_parser = subparsers.add_parser("server-get", help="Get details of a specific server")
-    server_get_parser.add_argument(
-        "--path", required=True, help="Server path (e.g., /my-server)"
-    )
+    server_get_parser.add_argument("--path", required=True, help="Server path (e.g., /my-server)")
 
     # Server rate command
     server_rate_parser = subparsers.add_parser("server-rate", help="Rate a server (1-5 stars)")
@@ -4594,7 +4641,15 @@ Examples:
         "--enabled-only", action="store_true", help="Show only enabled agents"
     )
     agent_list_parser.add_argument(
-        "--visibility", choices=["public", "private", "group-restricted"], help="Filter by visibility level"
+        "--visibility",
+        choices=["public", "private", "group-restricted"],
+        help="Filter by visibility level",
+    )
+    agent_list_parser.add_argument(
+        "--limit", type=int, default=20, help="Number of agents to return (1-100, default 20)"
+    )
+    agent_list_parser.add_argument(
+        "--offset", type=int, default=0, help="Number of agents to skip (default 0)"
     )
     agent_list_parser.add_argument("--json", action="store_true", help="Output raw JSON response")
 
@@ -4730,10 +4785,12 @@ Examples:
     skill_register_parser.add_argument("--version", help="Skill version (e.g., 1.0.0)")
     skill_register_parser.add_argument("--tags", help="Comma-separated tags")
     skill_register_parser.add_argument(
-        "--target-agents", help="Comma-separated target coding assistants (e.g., claude-code,cursor)"
+        "--target-agents",
+        help="Comma-separated target coding assistants (e.g., claude-code,cursor)",
     )
     skill_register_parser.add_argument(
-        "--metadata", help='Custom metadata as JSON string (e.g., \'{"category": "data-processing"}\')'
+        "--metadata",
+        help='Custom metadata as JSON string (e.g., \'{"category": "data-processing"}\')',
     )
     skill_register_parser.add_argument(
         "--visibility",
@@ -4748,6 +4805,12 @@ Examples:
         "--include-disabled", action="store_true", help="Include disabled skills"
     )
     skill_list_parser.add_argument("--tag", help="Filter by tag")
+    skill_list_parser.add_argument(
+        "--limit", type=int, default=20, help="Number of skills to return (1-100, default 20)"
+    )
+    skill_list_parser.add_argument(
+        "--offset", type=int, default=0, help="Number of skills to skip (default 0)"
+    )
     skill_list_parser.add_argument("--json", action="store_true", help="Output raw JSON response")
 
     # Skill get command
