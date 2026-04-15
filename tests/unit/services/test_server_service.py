@@ -813,6 +813,109 @@ class TestGetAllServersWithPermissions:
 
 
 # =============================================================================
+# TEST: Wildcard Server Scope Access
+# =============================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.servers
+class TestWildcardServerAccess:
+    """Test that server: '*' in scopes grants full server visibility for non-admin users."""
+
+    @pytest.mark.asyncio
+    async def test_get_filtered_servers_wildcard_returns_all(
+        self,
+        server_service: ServerService,
+        sample_server_dict: dict[str, Any],
+        sample_server_dict_2: dict[str, Any],
+        mock_server_repository,
+    ):
+        """Test get_filtered_servers with ['*'] returns all servers."""
+        mock_server_repository.list_all.return_value = {
+            sample_server_dict["path"]: sample_server_dict,
+            sample_server_dict_2["path"]: sample_server_dict_2,
+        }
+
+        result = await server_service.get_filtered_servers(["*"])
+
+        assert len(result) == 2
+        assert sample_server_dict["path"] in result
+        assert sample_server_dict_2["path"] in result
+
+    @pytest.mark.asyncio
+    async def test_get_filtered_servers_wildcard_respects_include_inactive(
+        self,
+        server_service: ServerService,
+        mock_server_repository,
+    ):
+        """Test get_filtered_servers with ['*'] and include_inactive=True returns inactive servers."""
+        active = {"path": "/active", "server_name": "active", "is_active": True}
+        inactive = {"path": "/inactive", "server_name": "inactive", "is_active": False}
+        mock_server_repository.list_all.return_value = {
+            "/active": active,
+            "/inactive": inactive,
+        }
+
+        result = await server_service.get_filtered_servers(["*"], include_inactive=True)
+        assert len(result) == 2
+
+        result_active_only = await server_service.get_filtered_servers(["*"], include_inactive=False)
+        assert len(result_active_only) == 1
+        assert "/active" in result_active_only
+
+    @pytest.mark.asyncio
+    async def test_get_all_servers_with_permissions_wildcard_returns_all(
+        self,
+        server_service: ServerService,
+        sample_server_dict: dict[str, Any],
+        sample_server_dict_2: dict[str, Any],
+        mock_server_repository,
+    ):
+        """Test get_all_servers_with_permissions with ['*'] returns all servers."""
+        mock_server_repository.list_all.return_value = {
+            sample_server_dict["path"]: sample_server_dict,
+            sample_server_dict_2["path"]: sample_server_dict_2,
+        }
+
+        result = await server_service.get_all_servers_with_permissions(
+            accessible_servers=["*"],
+        )
+
+        assert len(result) == 2
+        assert sample_server_dict["path"] in result
+        assert sample_server_dict_2["path"] in result
+
+    @pytest.mark.asyncio
+    async def test_user_can_access_server_path_wildcard_existing(
+        self,
+        server_service: ServerService,
+        sample_server_dict: dict[str, Any],
+        mock_server_repository,
+    ):
+        """Test user_can_access_server_path with ['*'] returns True for existing server."""
+        mock_server_repository.get.return_value = sample_server_dict
+
+        result = await server_service.user_can_access_server_path(
+            sample_server_dict["path"], ["*"]
+        )
+
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_user_can_access_server_path_wildcard_nonexistent(
+        self,
+        server_service: ServerService,
+        mock_server_repository,
+    ):
+        """Test user_can_access_server_path with ['*'] returns False for nonexistent server."""
+        mock_server_repository.get.return_value = None
+
+        result = await server_service.user_can_access_server_path("/nonexistent", ["*"])
+
+        assert result is False
+
+
+# =============================================================================
 # TEST: Service State Management
 # =============================================================================
 

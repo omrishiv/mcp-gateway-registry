@@ -298,6 +298,11 @@ class ServerService:
             logger.debug("User has no accessible servers, returning empty dict")
             return {}
 
+        # Wildcard access — return all servers (non-admin with server: '*')
+        if "*" in accessible_servers:
+            logger.debug("Wildcard access detected in accessible_servers, returning all servers")
+            return await self.get_all_servers(include_inactive=include_inactive)
+
         # Query repository directly instead of using cache
         all_servers = await self._repo.list_all()
 
@@ -358,6 +363,10 @@ class ServerService:
             # Admin access - return all servers
             logger.debug("Admin access - returning all servers")
             return await self.get_all_servers()
+        elif "*" in accessible_servers:
+            # Wildcard access — return all servers (non-admin with server: '*')
+            logger.debug("Wildcard access detected in accessible_servers, returning all servers")
+            return await self.get_all_servers()
         else:
             # Filtered access - return only accessible servers
             logger.debug(
@@ -413,6 +422,10 @@ class ServerService:
         server_info = await self.get_server_info(path)
         if not server_info:
             return False
+
+        # Wildcard access — grant access to any existing server (non-admin with server: '*')
+        if "*" in accessible_servers:
+            return True
 
         # Extract technical name from path (remove leading and trailing slashes)
         technical_name = path.strip("/")
