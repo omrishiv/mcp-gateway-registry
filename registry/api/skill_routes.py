@@ -46,13 +46,13 @@ from ..schemas.skill_models import (
     ToolValidationResult,
     VisibilityEnum,
 )
+from ..services.github_auth import github_auth_provider as _github_auth
 from ..services.skill_service import (
     _is_safe_url,
     get_skill_service,
 )
 from ..services.tool_validation_service import get_tool_validation_service
 from ..utils.path_utils import normalize_skill_path
-from ..services.github_auth import github_auth_provider as _github_auth
 
 # Configure logging
 logging.basicConfig(
