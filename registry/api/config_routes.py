@@ -254,6 +254,18 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("disable_ai_registry_tools_server", "Disable AI Registry Tools Server", False),
         ],
     },
+    "github_auth": {
+        "title": "GitHub Private Repo Auth",
+        "order": 17,
+        "fields": [
+            ("github_pat", "Personal Access Token", True),
+            ("github_app_id", "GitHub App ID", False),
+            ("github_app_installation_id", "GitHub App Installation ID", False),
+            ("github_app_private_key", "GitHub App Private Key", True),
+            ("github_extra_hosts", "Extra GitHub Hosts", False),
+            ("github_api_base_url", "API Base URL", False),
+        ],
+    },
 }
 
 

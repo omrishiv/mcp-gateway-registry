@@ -389,7 +389,7 @@ wheels = [
 [[package]]
 name = "cisco-ai-a2a-scanner"
 version = "1.0.1"
-source = { git = "https://github.com/cisco-ai-defense/a2a-scanner.git?rev=main#0557ac9e79add73eb21d764b4dca41477515b732" }
+source = { git = "https://github.com/cisco-ai-defense/a2a-scanner.git?rev=8f6e27f#8f6e27faef547c751dc744c0e35129a1bcbf3c48" }
 dependencies = [
     { name = "aiohttp" },
     { name = "click" },
@@ -2024,7 +2024,7 @@ requires-dist = [
     { name = "awscli", specifier = ">=1.36.0" },
     { name = "bandit", specifier = ">=1.8.3" },
     { name = "boto3", specifier = ">=1.42.87" },
-    { name = "cisco-ai-a2a-scanner", git = "https://github.com/cisco-ai-defense/a2a-scanner.git?rev=main" },
+    { name = "cisco-ai-a2a-scanner", git = "https://github.com/cisco-ai-defense/a2a-scanner.git?rev=8f6e27f" },
     { name = "cisco-ai-mcp-scanner", specifier = ">=3.0.1" },
     { name = "cisco-ai-skill-scanner", specifier = ">=1.0.0" },
     { name = "coverage", extras = ["toml"], marker = "extra == 'dev'", specifier = ">=7.4.0" },

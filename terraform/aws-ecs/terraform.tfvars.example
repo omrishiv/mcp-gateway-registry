@@ -622,3 +622,23 @@ aws_registry_federation_enabled = true
 # Note: this flag prevents new registrations only; it does not remove the server
 # if it was already registered in a previous run.
 # disable_ai_registry_tools_server = "false"
+
+# ============================================================================
+# GITHUB PRIVATE REPO AUTH (Issue #814)
+# ============================================================================
+# Authentication for fetching SKILL.md from private GitHub repositories.
+# Choose Option 1 (PAT) or Option 2 (GitHub App). Leave all blank to disable.
+
+# Option 1: Personal Access Token
+# Generate at https://github.com/settings/tokens with 'repo' scope
+# github_pat = "ghp_your_token_here"
+
+# Option 2: GitHub App authentication
+# Create at https://github.com/settings/apps with Contents (read-only) permission
+# github_app_id              = "123456"
+# github_app_installation_id = "78901234"
+# github_app_private_key     = "-----BEGIN RSA PRIVATE KEY-----\\n...\\n-----END RSA PRIVATE KEY-----"
+
+# GitHub Enterprise Server support
+# github_extra_hosts  = "github.mycompany.com,raw.github.mycompany.com"
+# github_api_base_url = "https://github.mycompany.com/api/v3"

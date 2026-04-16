@@ -32,6 +32,18 @@ app:
   embeddingsApiBase: ""
   embeddingsAwsRegion: us-east-1
 
+  # GitHub private repo auth (SKILL.md fetching)
+  githubPat: ""
+  githubPatExistingSecret: ""  # If set, read GITHUB_PAT from this K8s secret
+  githubPatExistingSecretKey: "GITHUB_PAT"
+  githubAppId: ""
+  githubAppInstallationId: ""
+  githubAppPrivateKey: ""
+  githubAppPrivateKeyExistingSecret: ""  # If set, read GITHUB_APP_PRIVATE_KEY from this K8s secret
+  githubAppPrivateKeyExistingSecretKey: "GITHUB_APP_PRIVATE_KEY"
+  githubExtraHosts: ""
+  githubApiBaseUrl: "https://api.github.com"
+
 # Service configuration
 service:
   type: ClusterIP
