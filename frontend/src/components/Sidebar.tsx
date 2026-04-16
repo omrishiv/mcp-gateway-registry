@@ -353,32 +353,23 @@ const fetchAdminTokens = async () => {
                   </div>
                 </button>
               ))}
-            </div>
 
-            {/* Lifecycle Status Filters */}
-            <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-              <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">Lifecycle Status</h4>
-              <div className="space-y-1">
-                {[
-                  { key: 'deprecated', label: 'Deprecated', color: 'text-orange-600 dark:text-orange-400' },
-                  { key: 'draft', label: 'Draft', color: 'text-gray-500 dark:text-gray-400' },
-                  { key: 'beta', label: 'Beta', color: 'text-blue-600 dark:text-blue-400' },
-                ].map((lf) => (
-                  <button
-                    key={lf.key}
-                    onClick={() => setActiveFilter(activeFilter === lf.key ? 'all' : lf.key)}
-                    className={`w-full text-left px-3 py-1.5 rounded-lg text-sm transition-colors focus:outline-none focus:ring-2 focus:ring-purple-500 ${
-                      activeFilter === lf.key
-                        ? 'bg-primary-100 dark:bg-primary-900 text-primary-700 dark:text-primary-300 border border-primary-200 dark:border-primary-800'
-                        : `${lf.color} hover:bg-gray-100 dark:hover:bg-gray-800`
-                    }`}
-                    tabIndex={0}
-                  >
-                    {lf.label}
-                  </button>
-                ))}
+              {/* Deprecated toggle - separate from main filters */}
+              <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
+                <button
+                  onClick={() => setActiveFilter(activeFilter === 'deprecated' ? 'all' : 'deprecated')}
+                  className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors focus:outline-none focus:ring-2 focus:ring-purple-500 ${
+                    activeFilter === 'deprecated'
+                      ? 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 border border-orange-200 dark:border-orange-800'
+                      : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
+                  }`}
+                  tabIndex={0}
+                >
+                  <span>{activeFilter === 'deprecated' ? 'Showing deprecated' : 'Also show deprecated'}</span>
+                </button>
               </div>
             </div>
+
           </div>
 
           {/* Tags Section */}

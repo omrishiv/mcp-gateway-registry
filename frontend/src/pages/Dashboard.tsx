@@ -139,10 +139,11 @@ const buildAgentAuthHeaders = (token?: string | null) =>
 
 interface DashboardProps {
   activeFilter?: string;
+  setActiveFilter?: (filter: string) => void;
   selectedTags?: string[];
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTags = [] }) => {
+const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFilter, selectedTags = [] }) => {
   const navigate = useNavigate();
   const { servers, agents: agentsFromStats, loading, error, refreshData, setServers, setAgents } = useServerStats();
   const { skills, setSkills, loading: skillsLoading, error: skillsError, refreshData: refreshSkills } = useSkills();
@@ -593,8 +594,10 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
     if (activeFilter === 'enabled') filtered = filtered.filter(s => s.enabled);
     else if (activeFilter === 'disabled') filtered = filtered.filter(s => !s.enabled);
     else if (activeFilter === 'unhealthy') filtered = filtered.filter(s => s.status === 'unhealthy');
-    else if (['deprecated', 'draft', 'beta'].includes(activeFilter)) {
-      filtered = filtered.filter(s => s.lifecycle_status === activeFilter);
+
+    // Hide deprecated by default; show all when deprecated toggle is active
+    if (activeFilter !== 'deprecated') {
+      filtered = filtered.filter(s => s.lifecycle_status !== 'deprecated');
     }
 
     // Apply sidebar tag filter
@@ -714,8 +717,10 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
     if (activeFilter === 'enabled') filtered = filtered.filter(a => a.enabled);
     else if (activeFilter === 'disabled') filtered = filtered.filter(a => !a.enabled);
     else if (activeFilter === 'unhealthy') filtered = filtered.filter(a => a.status === 'unhealthy');
-    else if (['deprecated', 'draft', 'beta'].includes(activeFilter)) {
-      filtered = filtered.filter(a => a.lifecycle_status === activeFilter);
+
+    // Hide deprecated by default; show all when deprecated toggle is active
+    if (activeFilter !== 'deprecated') {
+      filtered = filtered.filter(a => a.lifecycle_status !== 'deprecated');
     }
 
     // Apply sidebar tag filter
@@ -747,8 +752,10 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
     // Apply filter first
     if (activeFilter === 'enabled') filtered = filtered.filter(s => s.is_enabled);
     else if (activeFilter === 'disabled') filtered = filtered.filter(s => !s.is_enabled);
-    else if (['deprecated', 'draft', 'beta'].includes(activeFilter)) {
-      filtered = filtered.filter(s => s.status === activeFilter);
+
+    // Hide deprecated by default; show all when deprecated toggle is active
+    if (activeFilter !== 'deprecated') {
+      filtered = filtered.filter(s => s.status !== 'deprecated');
     }
 
     // Apply sidebar tag filter
@@ -2607,36 +2614,32 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', selectedTag
             </button>
           </div>
 
-          {/* Results count */}
+          {/* Results count and lifecycle filter chips */}
           <div className="flex items-center justify-between">
-            <p className="text-sm text-gray-500 dark:text-gray-300">
-              {semanticSectionVisible ? (
-                <>
-                  Showing {semanticServers.length} servers, {semanticAgents.length} agents
-                </>
-              ) : (
-                <>
-                  {/* Dynamic count display based on enabled features */}
-                  Showing{' '}
-                  {registryConfig?.features.mcp_servers !== false && (
-                    <>{filteredServers.length} servers</>
-                  )}
-                  {registryConfig?.features.mcp_servers !== false && registryConfig?.features.agents !== false && ', '}
-                  {registryConfig?.features.agents !== false && (
-                    <>{filteredAgents.length} agents</>
-                  )}
-                  {(registryConfig?.features.mcp_servers !== false || registryConfig?.features.agents !== false) && registryConfig?.features.skills !== false && ', '}
-                  {registryConfig?.features.skills !== false && (
-                    <>{filteredSkills.length} skills</>
-                  )}
-                </>
-              )}
-              {activeFilter !== 'all' && (
-                <span className="ml-2 px-2 py-1 text-xs bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-300 rounded-full">
-                  {activeFilter} filter active
-                </span>
-              )}
-            </p>
+            <div className="flex items-center gap-3">
+              <p className="text-sm text-gray-500 dark:text-gray-300">
+                {semanticSectionVisible ? (
+                  <>
+                    Showing {semanticServers.length} servers, {semanticAgents.length} agents
+                  </>
+                ) : (
+                  <>
+                    Showing{' '}
+                    {registryConfig?.features.mcp_servers !== false && (
+                      <>{filteredServers.length} servers</>
+                    )}
+                    {registryConfig?.features.mcp_servers !== false && registryConfig?.features.agents !== false && ', '}
+                    {registryConfig?.features.agents !== false && (
+                      <>{filteredAgents.length} agents</>
+                    )}
+                    {(registryConfig?.features.mcp_servers !== false || registryConfig?.features.agents !== false) && registryConfig?.features.skills !== false && ', '}
+                    {registryConfig?.features.skills !== false && (
+                      <>{filteredSkills.length} skills</>
+                    )}
+                  </>
+                )}
+              </p>
+            </div>
             <p className="text-xs text-gray-400 dark:text-gray-500">
               Press Enter to run semantic search; typing filters locally.
             </p>
