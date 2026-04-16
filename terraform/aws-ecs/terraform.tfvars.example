@@ -536,6 +536,14 @@ deployment_mode = "registry-only"
 # Default: "full" (uncomment to change)
 # registry_mode = "full"
 
+# Tab visibility overrides (AND-ed with registry_mode)
+# Controls which tabs are shown in the UI without affecting backend APIs.
+# All default to true (backward compatible). Set to false to hide a tab.
+# show_servers_tab         = true
+# show_virtual_servers_tab = true
+# show_skills_tab          = true
+# show_agents_tab          = true
+
 # ============================================================================
 # OBSERVABILITY CONFIGURATION (Metrics Pipeline)
 # ============================================================================

@@ -340,10 +340,10 @@ class Settings(BaseSettings):
     )
 
     # Tab visibility overrides (AND-ed with REGISTRY_MODE feature flags)
-    show_servers_tab: bool = True
-    show_virtual_servers_tab: bool = True
-    show_skills_tab: bool = True
-    show_agents_tab: bool = True
+    show_servers_tab: bool = Field(default=True, description="Show MCP Servers tab in UI")
+    show_virtual_servers_tab: bool = Field(default=True, description="Show Virtual MCP Servers tab in UI")
+    show_skills_tab: bool = Field(default=True, description="Show Skills tab in UI")
+    show_agents_tab: bool = Field(default=True, description="Show Agents tab in UI")
 
     # Telemetry settings (anonymous usage tracking)
     telemetry_enabled: bool = Field(
@@ -655,6 +655,11 @@ def log_tab_visibility_warnings(s: Settings) -> None:
             s.show_skills_tab,
             "SHOW_SKILLS_TAB",
             mode in (RegistryMode.FULL, RegistryMode.SKILLS_ONLY),
+        ),
+        (
+            s.show_virtual_servers_tab,
+            "SHOW_VIRTUAL_SERVERS_TAB",
+            mode in (RegistryMode.FULL, RegistryMode.MCP_SERVERS_ONLY),
         ),
     ]
     for show_tab, param_name, mode_enables in checks:

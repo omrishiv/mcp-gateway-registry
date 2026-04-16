@@ -932,6 +932,20 @@ class TestSettingsTabVisibilityFeatureFlags:
             result = await get_config()
             assert result["features"]["virtual_servers"] is False
 
+    @pytest.mark.asyncio
+    async def test_settings_tab_virtual_servers_hidden_by_mode(self, monkeypatch, tmp_path):
+        """REGISTRY_MODE=agents-only hides virtual servers even if SHOW_VIRTUAL_SERVERS_TAB=true."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("REGISTRY_MODE", "agents-only")
+        monkeypatch.setenv("SHOW_VIRTUAL_SERVERS_TAB", "true")
+
+        new_settings = Settings()
+        with patch("registry.api.config_routes.settings", new_settings):
+            from registry.api.config_routes import get_config
+            result = await get_config()
+            assert result["features"]["virtual_servers"] is False
+            assert result["features"]["agents"] is True
+
 
 # =============================================================================
 # TEST CLASS: Settings Tab Visibility Startup Warnings

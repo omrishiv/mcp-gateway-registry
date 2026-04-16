@@ -204,6 +204,22 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
   // View filter state
   const [viewFilter, setViewFilter] = useState<'discover' | 'servers' | 'agents' | 'skills' | 'virtual' | 'external'>('discover');
 
+  // Reset viewFilter to 'discover' when the active tab is hidden by config
+  useEffect(() => {
+    if (viewFilter === 'virtual' && registryConfig?.features.virtual_servers === false) {
+      setViewFilter('discover');
+    }
+    if (viewFilter === 'agents' && registryConfig?.features.agents === false) {
+      setViewFilter('discover');
+    }
+    if (viewFilter === 'skills' && registryConfig?.features.skills === false) {
+      setViewFilter('discover');
+    }
+    if (viewFilter === 'servers' && registryConfig?.features.mcp_servers === false) {
+      setViewFilter('discover');
+    }
+  }, [viewFilter, registryConfig]);
+
   // Collapsible state for registry groups (tracks which groups are expanded)
   // Key is registry name: 'local' or peer registry ID like 'peer-registry-lob-1'
   const [expandedRegistries, setExpandedRegistries] = useState<Record<string, boolean>>({

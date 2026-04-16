@@ -589,7 +589,10 @@ async def get_config() -> dict[str, Any]:
                 settings.registry_mode in (RegistryMode.FULL, RegistryMode.SKILLS_ONLY)
                 and settings.show_skills_tab
             ),
-            "virtual_servers": settings.show_virtual_servers_tab,
+            "virtual_servers": (
+                settings.registry_mode in (RegistryMode.FULL, RegistryMode.MCP_SERVERS_ONLY)
+                and settings.show_virtual_servers_tab
+            ),
             "federation": settings.registry_mode == RegistryMode.FULL,
             "gateway_proxy": settings.deployment_mode == DeploymentMode.WITH_GATEWAY,
         },

@@ -14,10 +14,10 @@ services:
       - DEPLOYMENT_MODE=${DEPLOYMENT_MODE:-with-gateway}
       - REGISTRY_MODE=${REGISTRY_MODE:-full}
       # Tab visibility overrides (AND-ed with REGISTRY_MODE)
-      # - SHOW_SERVERS_TAB=${SHOW_SERVERS_TAB:-true}
-      # - SHOW_VIRTUAL_SERVERS_TAB=${SHOW_VIRTUAL_SERVERS_TAB:-true}
-      # - SHOW_SKILLS_TAB=${SHOW_SKILLS_TAB:-true}
-      # - SHOW_AGENTS_TAB=${SHOW_AGENTS_TAB:-true}
+      - SHOW_SERVERS_TAB=${SHOW_SERVERS_TAB:-true}
+      - SHOW_VIRTUAL_SERVERS_TAB=${SHOW_VIRTUAL_SERVERS_TAB:-true}
+      - SHOW_SKILLS_TAB=${SHOW_SKILLS_TAB:-true}
+      - SHOW_AGENTS_TAB=${SHOW_AGENTS_TAB:-true}
       - GATEWAY_ADDITIONAL_SERVER_NAMES=${GATEWAY_ADDITIONAL_SERVER_NAMES:-}
       # Registry Card Configuration
       - REGISTRY_URL=${REGISTRY_URL:-http://localhost}
