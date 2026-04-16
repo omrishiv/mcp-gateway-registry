@@ -213,6 +213,14 @@ module "mcp_gateway" {
   # Demo server configuration
   disable_ai_registry_tools_server = var.disable_ai_registry_tools_server
 
+  # GitHub private repo auth
+  github_pat                 = var.github_pat
+  github_app_id              = var.github_app_id
+  github_app_installation_id = var.github_app_installation_id
+  github_app_private_key     = var.github_app_private_key
+  github_extra_hosts         = var.github_extra_hosts
+  github_api_base_url        = var.github_api_base_url
+
   # Wait for S3 bucket policy to propagate (30s delay)
   # This prevents "Access Denied" errors when ALB tests write permissions
   depends_on = [time_sleep.wait_for_bucket_policy]

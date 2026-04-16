@@ -879,7 +879,32 @@ module "ecs_service_registry" {
         {
           name  = "SERVICE_CONNECT_NAMESPACE"
           value = aws_service_discovery_private_dns_namespace.mcp.name
-        }
+        },
+        # GitHub private repo auth (SKILL.md fetching)
+        {
+          name  = "GITHUB_PAT"
+          value = var.github_pat
+        },
+        {
+          name  = "GITHUB_APP_ID"
+          value = var.github_app_id
+        },
+        {
+          name  = "GITHUB_APP_INSTALLATION_ID"
+          value = var.github_app_installation_id
+        },
+        {
+          name  = "GITHUB_APP_PRIVATE_KEY"
+          value = var.github_app_private_key
+        },
+        {
+          name  = "GITHUB_EXTRA_HOSTS"
+          value = var.github_extra_hosts
+        },
+        {
+          name  = "GITHUB_API_BASE_URL"
+          value = var.github_api_base_url
+        },
       ]
 
       secrets = concat(

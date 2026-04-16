@@ -58,6 +58,43 @@ spec:
                   name: {{ .Values.app.embeddingsApiKeyExistingSecret }}
                   key: {{ .Values.app.embeddingsApiKeyExistingSecretKey }}
             {{- end }}
+            {{- /* GitHub private repo auth (SKILL.md fetching) */}}
+            {{- if .Values.app.githubAppId }}
+            - name: GITHUB_APP_ID
+              value: {{ .Values.app.githubAppId | quote }}
+            {{- end }}
+            {{- if .Values.app.githubAppInstallationId }}
+            - name: GITHUB_APP_INSTALLATION_ID
+              value: {{ .Values.app.githubAppInstallationId | quote }}
+            {{- end }}
+            {{- if .Values.app.githubExtraHosts }}
+            - name: GITHUB_EXTRA_HOSTS
+              value: {{ .Values.app.githubExtraHosts | quote }}
+            {{- end }}
+            {{- if ne .Values.app.githubApiBaseUrl "https://api.github.com" }}
+            - name: GITHUB_API_BASE_URL
+              value: {{ .Values.app.githubApiBaseUrl | quote }}
+            {{- end }}
+            {{- if .Values.app.githubPatExistingSecret }}
+            - name: GITHUB_PAT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.app.githubPatExistingSecret }}
+                  key: {{ .Values.app.githubPatExistingSecretKey }}
+            {{- else if .Values.app.githubPat }}
+            - name: GITHUB_PAT
+              value: {{ .Values.app.githubPat | quote }}
+            {{- end }}
+            {{- if .Values.app.githubAppPrivateKeyExistingSecret }}
+            - name: GITHUB_APP_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.app.githubAppPrivateKeyExistingSecret }}
+                  key: {{ .Values.app.githubAppPrivateKeyExistingSecretKey }}
+            {{- else if .Values.app.githubAppPrivateKey }}
+            - name: GITHUB_APP_PRIVATE_KEY
+              value: {{ .Values.app.githubAppPrivateKey | quote }}
+            {{- end }}
           livenessProbe:
             tcpSocket:
               port: 8000

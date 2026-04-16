@@ -889,3 +889,45 @@ variable "disable_ai_registry_tools_server" {
   type        = string
   default     = "false"
 }
+
+# =============================================================================
+# GITHUB PRIVATE REPO AUTH (Issue #814)
+# =============================================================================
+
+variable "github_pat" {
+  description = "GitHub Personal Access Token for private repo SKILL.md access."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "github_app_id" {
+  description = "GitHub App ID for installation-based auth."
+  type        = string
+  default     = ""
+}
+
+variable "github_app_installation_id" {
+  description = "GitHub App Installation ID."
+  type        = string
+  default     = ""
+}
+
+variable "github_app_private_key" {
+  description = "GitHub App private key (PEM format)."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "github_extra_hosts" {
+  description = "Comma-separated extra GitHub hosts for enterprise instances."
+  type        = string
+  default     = ""
+}
+
+variable "github_api_base_url" {
+  description = "GitHub API base URL. For GitHub Enterprise Server use https://<hostname>/api/v3."
+  type        = string
+  default     = "https://api.github.com"
+}
