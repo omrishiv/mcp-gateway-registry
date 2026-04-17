@@ -16,7 +16,7 @@ This utility extracts the essential token generation functionality from the main
 
 ## Prerequisites
 
-- Python 3.11+
+- Python 3.14+
 - AWS credentials configured (if using Cognito)
 - Access to the OAuth provider (Cognito User Pool or Auth0)
 - Client ID and Client Secret for your OAuth application

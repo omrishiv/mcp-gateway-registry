@@ -1,7 +1,7 @@
 # Generic MCP Server Dockerfile - CPU-only PyTorch variant for smaller image size
 # For servers that need sentence-transformers (like mcpgw)
 # Using ECR Public Gallery to avoid Docker Hub rate limits
-FROM public.ecr.aws/docker/library/python:3.12-slim
+FROM public.ecr.aws/docker/library/python:3.14-slim
 
 # Build arg for server directory (when building from repo root)
 ARG SERVER_DIR
@@ -35,7 +35,7 @@ USER appuser
 
 # Setup Python environment as appuser
 # Install CPU-only PyTorch FIRST from the CPU wheel index
-RUN uv venv .venv --python 3.12 && \
+RUN uv venv .venv --python 3.14 && \
     . .venv/bin/activate && \
     uv pip install torch --index-url https://download.pytorch.org/whl/cpu
 

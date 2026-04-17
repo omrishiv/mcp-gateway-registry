@@ -385,7 +385,7 @@ volumes:
 
 ```dockerfile
 # Dockerfile
-FROM python:3.11-slim as base
+FROM python:3.14-slim as base
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \

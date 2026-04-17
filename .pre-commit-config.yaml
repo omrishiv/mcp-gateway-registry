@@ -141,7 +141,7 @@ default_stages: [commit]
 
 # Default language version
 default_language_version:
-  python: python3.11
+  python: python3.14
 
 # Fail fast - stop on first error
 fail_fast: false

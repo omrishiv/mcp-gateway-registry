@@ -40,7 +40,7 @@ The service integrates with:
 
 ### Prerequisites
 
-- Python 3.11+ with `uv` package manager
+- Python 3.14+ with `uv` package manager
 - Valid OAuth tokens in `.oauth-tokens/` directory
 - MCP server configurations in `registry/servers/`
 
@@ -368,7 +368,7 @@ sudo systemctl status token-refresher
 ### Docker Deployment
 
 ```dockerfile
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 WORKDIR /app
 COPY . .

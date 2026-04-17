@@ -1,7 +1,7 @@
 # Auth Dockerfile - multi-stage build for smaller image and better caching
 
 # ===== BUILD STAGE =====
-FROM python:3.12-slim AS builder
+FROM python:3.14-slim AS builder
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
@@ -16,7 +16,7 @@ WORKDIR /app
 
 # Install uv and create venv (rarely changes)
 RUN pip install --no-cache-dir uv && \
-    uv venv .venv --python 3.12
+    uv venv .venv --python 3.14
 
 # Copy ONLY the dependency manifest first to leverage Docker layer caching.
 # Dependencies are reinstalled only when pyproject.toml changes, not on every code change.
@@ -26,7 +26,7 @@ RUN . .venv/bin/activate && \
     uv pip install --requirement pyproject.toml
 
 # ===== RUNTIME STAGE =====
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1

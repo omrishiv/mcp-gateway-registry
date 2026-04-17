@@ -147,7 +147,7 @@ For any failed check, display the install instructions:
 | Check | Install command |
 |-------|----------------|
 | DOCKER_FAIL | "Install Docker Desktop from https://www.docker.com/products/docker-desktop/ then start it and wait for the whale icon in the menu bar" |
-| PYTHON_FAIL | `brew install python@3.12` |
+| PYTHON_FAIL | `brew install python@3.14` |
 | UV_FAIL | `curl -LsSf https://astral.sh/uv/install.sh \| sh` — then restart your terminal |
 | NODE_FAIL | `brew install node@20` or download from https://nodejs.org/ |
 | GIT_FAIL | `xcode-select --install` |

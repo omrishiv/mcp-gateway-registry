@@ -488,7 +488,7 @@ services:
 
   # MongoDB initialization (creates replica set, indexes, and loads admin scope)
   mongodb-init:
-    image: python:3.11-slim
+    image: python:3.14-slim
     container_name: mcp-mongodb-init
     depends_on:
       mongodb:

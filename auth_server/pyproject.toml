@@ -9,7 +9,7 @@ packages = ["auth_server"]
 name = "auth_server"
 version = "0.1.0"
 description = "Authentication server for validating JWT tokens against Amazon Cognito"
-requires-python = ">=3.9"
+requires-python = ">=3.14"
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.34.0",

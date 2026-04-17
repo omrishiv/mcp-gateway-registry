@@ -232,7 +232,7 @@ uv run python api/registry_management.py --token-file <token> \
 
 ## Requirements
 
-- Python 3.11+ with `uv` package manager
+- Python 3.14+ with `uv` package manager
 - For production: AWS credentials with access to SSM Parameter Store
 - For localhost: Running `docker-compose` stack with Keycloak
 
