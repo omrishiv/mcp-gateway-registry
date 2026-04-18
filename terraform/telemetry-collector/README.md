@@ -93,7 +93,7 @@ Privacy-first serverless telemetry collector that receives anonymous usage data 
 
 - AWS CLI v2 configured with credentials
 - Terraform >= 1.0
-- Python 3.12+ and pip (for Lambda packaging)
+- Python 3.14+ and pip (for Lambda packaging)
 - mongosh (optional, for DocumentDB index setup)
 
 ```bash

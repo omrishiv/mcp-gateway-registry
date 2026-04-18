@@ -1184,7 +1184,7 @@ Always specify Python version in `pyproject.toml` to avoid warnings:
 name = "project-name"
 version = "0.1.0"
 description = "Project description"
-requires-python = ">=3.11"  # Always specify this!
+requires-python = ">=3.14"  # Always specify this!
 dependencies = [
     # ... dependencies
 ]
@@ -1436,7 +1436,7 @@ A well-structured README should include:
 1. **Prerequisites Section**: List external dependencies and setup requirements
    ```markdown
    ## Prerequisites
-   - Python 3.11+
+   - Python 3.14+
    - AWS credentials configured
    - Amazon Bedrock Guardrail with sensitive information filters
    ```

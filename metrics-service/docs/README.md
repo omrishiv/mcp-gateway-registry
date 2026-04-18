@@ -89,7 +89,7 @@ The metrics service serves as the central hub for collecting, validating, and st
 
 ### Prerequisites
 
-- Python 3.11+
+- Python 3.14+
 - Docker and Docker Compose
 - uv package manager (recommended)
 

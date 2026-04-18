@@ -1,5 +1,5 @@
 ARG TARGETPLATFORM
-FROM --platform=${TARGETPLATFORM} public.ecr.aws/docker/library/python:3.12-slim
+FROM --platform=${TARGETPLATFORM} public.ecr.aws/docker/library/python:3.14-slim
 
 WORKDIR /app
 

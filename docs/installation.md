@@ -258,7 +258,7 @@ open http://localhost:8080  # macOS
    # Install uv (Python package manager)
    curl -LsSf https://astral.sh/uv/install.sh | sh
    source $HOME/.local/bin/env
-   uv venv --python 3.12 && source .venv/bin/activate
+   uv venv --python 3.14 && source .venv/bin/activate
    
    # Install Docker
    sudo apt-get update

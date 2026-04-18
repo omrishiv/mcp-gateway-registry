@@ -235,7 +235,7 @@ make push-agents
 [+] Building 480.2s (20/20) FINISHED
  => [internal] load build definition
  => [internal] load .dockerignore
- => [internal] load metadata for docker.io/library/python:3.12-slim
+ => [internal] load metadata for docker.io/library/python:3.14-slim
  ...
 [INFO] Successfully built registry
 [INFO] Pushing registry to ECR...

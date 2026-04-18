@@ -146,8 +146,8 @@ npm --version   # Should show 10.x.x
 ### Install Python and UV (Python Package Manager)
 
 ```bash
-# Install Python 3.12
-sudo apt-get install -y python3.12 python3.12-venv python3-pip
+# Install Python 3.14
+sudo apt-get install -y python3.14 python3.14-venv python3-pip
 
 # Install UV package manager
 curl -LsSf https://astral.sh/uv/install.sh | sh

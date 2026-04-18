@@ -153,7 +153,7 @@ The initialization script creates the following collections with indexes:
 
 ### Prerequisites
 
-- Python 3.11+ with motor and boto3 installed
+- Python 3.14+ with motor and boto3 installed
 - AWS credentials configured (for IAM authentication or DocumentDB access)
 - Network access to DocumentDB cluster
 - DocumentDB cluster provisioned via Terraform (see terraform/aws-ecs/documentdb-elastic.tf)

@@ -211,8 +211,8 @@ phases:
       - echo "Image tag - $IMAGE_TAG"
       - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
       - echo "Pre-pulling base images for layer caching..."
-      - docker pull public.ecr.aws/docker/library/python:3.12-slim || true
-      - docker tag public.ecr.aws/docker/library/python:3.12-slim python:3.12-slim
+      - docker pull public.ecr.aws/docker/library/python:3.14-slim || true
+      - docker tag public.ecr.aws/docker/library/python:3.14-slim python:3.14-slim
       - docker pull quay.io/keycloak/keycloak:23.0 || true
       - docker pull grafana/grafana:12.3.1 || true
       - echo "Pulling existing images for cache..."

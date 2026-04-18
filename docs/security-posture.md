@@ -339,7 +339,7 @@ USER appuser
 - ✅ Health checks configured (CIS 4.6)
 - ✅ Multi-stage builds (minimal attack surface)
 - ✅ No build tools in runtime images
-- ✅ Minimal base images (python:3.12-slim)
+- ✅ Minimal base images (python:3.14-slim)
 
 ### Container Runtime Security
 
