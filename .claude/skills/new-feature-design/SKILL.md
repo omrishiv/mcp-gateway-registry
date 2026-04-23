@@ -646,6 +646,54 @@ Add to `registry/core/config.py`:
 
 {Any validation rules for configuration values}
 
+### Deployment Surface Checklist
+
+**CRITICAL:** Every new configuration parameter must be propagated to all three deployment surfaces. Use the checklist below and fill in the file-level details for each new parameter.
+
+#### Docker Deployment (5 files)
+
+| File | What to Add | Done? |
+|------|-------------|-------|
+| `.env.example` | Variable with description and default value | [ ] |
+| `.env` | Variable with the actual deployment value | [ ] |
+| `docker-compose.yml` | Pass variable to the correct service(s) environment block | [ ] |
+| `docker-compose.podman.yml` | Same as above (Podman variant) | [ ] |
+| `docker-compose.prebuilt.yml` | Same as above (prebuilt-image variant) | [ ] |
+
+#### Terraform / ECS Deployment (5+ files)
+
+| File | What to Add | Done? |
+|------|-------------|-------|
+| `terraform/aws-ecs/variables.tf` | Root variable definition with description and default | [ ] |
+| `terraform/aws-ecs/main.tf` | Pass the variable into the module call | [ ] |
+| `terraform/aws-ecs/modules/mcp-gateway/variables.tf` | Module-level variable definition | [ ] |
+| `terraform/aws-ecs/modules/mcp-gateway/ecs-services.tf` | Map variable to container environment in ECS task definition | [ ] |
+| `terraform/aws-ecs/terraform.tfvars.example` | Documented example value | [ ] |
+
+Sensitive values (tokens, private keys) must use AWS Secrets Manager references.
+
+#### Helm / EKS Deployment (4 files)
+
+| File | What to Add | Done? |
+|------|-------------|-------|
+| `charts/registry/values.yaml` | Default value under the appropriate section | [ ] |
+| `charts/mcp-gateway-registry-stack/values.yaml` | Default value (stack-level chart) | [ ] |
+| `charts/registry/templates/secret.yaml` | Add variable if sensitive (base64-encoded) | [ ] |
+| `charts/registry/templates/deployment.yaml` | Map value to container env var (plain or secretKeyRef) | [ ] |
+
+Sensitive values must support `secretKeyRef` for Kubernetes secrets.
+
+#### System Config Page (Backend API + Frontend UI)
+
+New config params must appear on the System Config page in the UI. This requires backend and possibly frontend changes.
+
+| File | What to Add | Done? |
+|------|-------------|-------|
+| `registry/api/config_routes.py` | Add field to `CONFIG_GROUPS` dict with `(field_name, display_label, is_sensitive)`. Sensitive fields must have `is_sensitive=True` so they are masked via `_mask_sensitive_value()`. | [ ] |
+| Frontend (`ConfigPanel.tsx`) | Auto-renders fields from `/api/config/full`. Update only if the new parameters need special UI treatment (toggles, grouped display, color-coded status, etc.). | [ ] |
+
+Verify after deployment: navigate to the System Config page and confirm the new parameter(s) appear with correct values and labels. Sensitive values should be masked.
+
 ## New Dependencies
 
 **IMPORTANT:** List all new Python packages or libraries required by this feature.
@@ -1271,7 +1319,7 @@ Include a category only when it is relevant to the feature. Mark a category "Not
 | Functional Tests (registry_management.py) | Feature adds/modifies anything exposed via the management CLI |
 | Backwards Compatibility Tests | Feature changes an existing endpoint, schema, CLI command, config default, or data model |
 | UX Tests | Feature adds/changes any UI surface (web UI, CLI output formatting, error messages shown to users) |
-| ECS / Terraform Deployment Tests | Feature adds or modifies **any** config parameter (env var, setting, Terraform variable, secret) that must flow through the ECS/terraform deployment in `terraform/aws-ecs/` |
+| Deployment Surface Tests (Docker, ECS, Helm) | Feature adds or modifies **any** config parameter (env var, setting, Terraform variable, Helm value, secret) across Docker, ECS/Terraform, or Helm/EKS deployments |
 | E2E API Tests | Feature adds a new user-visible workflow that spans multiple endpoints or services |
 
 ### Testing Plan Template
@@ -1485,20 +1533,44 @@ uv run python registry_management.py {command} --invalid-flag bad-value
 
 ---
 
-## 4. ECS / Terraform Deployment Tests
+## 4. Deployment Surface Tests (Docker, ECS, Helm)
 
-*Include this section whenever the feature adds or modifies ANY config parameter (env var, setting, Terraform variable, secret). Otherwise replace with: "**Not Applicable** - feature introduces no new config parameters. Verified by reviewing diff of `registry/core/config.py` and `terraform/aws-ecs/`."*
+*Include this section whenever the feature adds or modifies ANY config parameter (env var, setting, Terraform variable, Helm value, secret). Otherwise replace with: "**Not Applicable** - feature introduces no new config parameters. Verified by reviewing diff of `registry/core/config.py`."*
 
-### 4.1 Terraform Variable Wiring
+### 4.1 Docker Deployment Wiring
+
+For each new config parameter, confirm it is present in all Docker deployment files.
+
+| Config Parameter | Env Var Name | Verification Command |
+|------------------|--------------|----------------------|
+| `feature_enabled` | `FEATURE_ENABLED` | `grep FEATURE_ENABLED .env.example docker-compose*.yml` |
+| `feature_interval_seconds` | `FEATURE_INTERVAL_SECONDS` | `grep FEATURE_INTERVAL_SECONDS .env.example docker-compose*.yml` |
+
+**Assertions:**
+- [ ] Variable documented in `.env.example` with description and default
+- [ ] Variable present in `.env` with deployment value
+- [ ] Variable passed in `docker-compose.yml` environment block for the correct service(s)
+- [ ] Variable passed in `docker-compose.podman.yml` environment block
+- [ ] Variable passed in `docker-compose.prebuilt.yml` environment block
+- [ ] `docker-compose up -d` starts successfully with the new variable
+
+### 4.2 Terraform / ECS Variable Wiring
 
 For each new config parameter, confirm it is plumbed through the ECS deployment.
 
 | Config Parameter | Env Var Name | Added To | Verification Command |
 |------------------|--------------|----------|----------------------|
-| `feature_enabled` | `FEATURE_ENABLED` | `terraform/aws-ecs/ecs.tf` (task definition env block) | `grep FEATURE_ENABLED terraform/aws-ecs/*.tf` |
-| `feature_interval_seconds` | `FEATURE_INTERVAL_SECONDS` | `terraform/aws-ecs/variables.tf` + `ecs.tf` | `grep -n FEATURE_INTERVAL_SECONDS terraform/aws-ecs/` |
+| `feature_enabled` | `FEATURE_ENABLED` | `terraform/aws-ecs/variables.tf` + `ecs-services.tf` | `grep -rn FEATURE_ENABLED terraform/aws-ecs/` |
+| `feature_interval_seconds` | `FEATURE_INTERVAL_SECONDS` | `terraform/aws-ecs/variables.tf` + `ecs-services.tf` | `grep -rn FEATURE_INTERVAL_SECONDS terraform/aws-ecs/` |
 
-### 4.2 Terraform Plan/Apply Verification
+**Assertions:**
+- [ ] Root variable defined in `terraform/aws-ecs/variables.tf` with description and default
+- [ ] Variable passed to module in `terraform/aws-ecs/main.tf`
+- [ ] Module variable defined in `terraform/aws-ecs/modules/mcp-gateway/variables.tf`
+- [ ] Variable mapped to container env in `terraform/aws-ecs/modules/mcp-gateway/ecs-services.tf`
+- [ ] Example value in `terraform/aws-ecs/terraform.tfvars.example`
+
+### 4.3 Terraform Plan/Apply Verification
 
 ```bash
 cd terraform/aws-ecs
@@ -1512,7 +1584,23 @@ terraform plan -var 'feature_enabled=true' -var 'feature_interval_seconds=60'
 - [ ] `terraform plan` shows the new variable in the ECS task definition env block
 - [ ] No unintended changes to unrelated resources
 
-### 4.3 Deploy and Verify on ECS
+### 4.4 Helm / EKS Variable Wiring
+
+For each new config parameter, confirm it is plumbed through the Helm charts.
+
+| Config Parameter | Helm Value Path | Verification Command |
+|------------------|-----------------|----------------------|
+| `feature_enabled` | `registry.featureEnabled` | `grep -rn FEATURE_ENABLED charts/` |
+| `feature_interval_seconds` | `registry.featureIntervalSeconds` | `grep -rn FEATURE_INTERVAL_SECONDS charts/` |
+
+**Assertions:**
+- [ ] Default value in `charts/registry/values.yaml`
+- [ ] Default value in `charts/mcp-gateway-registry-stack/values.yaml`
+- [ ] Sensitive values added to `charts/registry/templates/secret.yaml` (base64-encoded)
+- [ ] Variable mapped to container env in `charts/registry/templates/deployment.yaml`
+- [ ] `helm template charts/registry` renders the new env var correctly
+
+### 4.5 Deploy and Verify on ECS
 
 ```bash
 cd terraform/aws-ecs
@@ -1525,7 +1613,7 @@ terraform apply -var 'feature_enabled=true' -var 'feature_interval_seconds=60'
 - [ ] Health check endpoint returns `200` against the deployed ALB/CloudFront URL
 - [ ] Re-run the Functional Tests from section 1 against the deployed `$REGISTRY_URL`
 
-### 4.4 Rollback Verification
+### 4.6 Rollback Verification
 
 - [ ] `terraform apply` with `feature_enabled=false` disables the feature cleanly
 - [ ] Reverting to the previous task definition restores prior behavior (backwards compat holds in deployed env)
@@ -1600,7 +1688,7 @@ Copy this checklist into the PR description when implementing the feature:
 - [ ] Section 1 (Functional) - all `registry_management.py` commands succeed
 - [ ] Section 2 (Backwards Compat) - verified or marked Not Applicable with justification
 - [ ] Section 3 (UX) - verified or marked Not Applicable with justification
-- [ ] Section 4 (ECS/Terraform) - verified or marked Not Applicable with justification
+- [ ] Section 4 (Deployment Surfaces: Docker, ECS, Helm) - verified or marked Not Applicable with justification
 - [ ] Section 5 (E2E) - verified or marked Not Applicable with justification
 - [ ] Unit tests added in `tests/unit/`
 - [ ] Integration tests added in `tests/integration/`

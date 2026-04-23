@@ -214,12 +214,21 @@ The main body focuses on insights and charts. Detailed event-count distribution 
 ## Executive Summary
 Lead with new installs since last report, total unique installs, dominant cloud/compute/IdP, growth trends. Also include the current GitHub star count (with delta vs previous report) as a top-line community signal. Include timeseries chart.
 
+Include an **instance stickiness** line: "N instances have been running for 3+ days (up/down from M in the previous report). The longest-running non-internal instance is `REGISTRY_ID` at D days (previously P days)." This signals real adoption beyond one-time trials.
+
+To compute these numbers:
+1. Count instances from the `instance_lifetime` list in `metrics-YYYY-MM-DD.json` where `age_days >= 3`, excluding known internal instance IDs.
+2. Find the max `age_days` among non-internal instances for the "longest-running customer" value.
+3. Compare both numbers against the same counts from the previous report's `metrics-*.json`.
+
 ![Registry Installs Timeseries](registry-installs-timeseries-YYYY-MM-DD.png)
 
 ### Comparison with Previous Report
 - Deltas for total events, unique instances, heartbeat events, null registry_id count
 - Per-cloud-provider unique registry installs comparison table
 - GitHub stars delta (and forks/contributors if notable)
+- Customer instances running 3+ days: current vs previous count
+- Longest-running non-internal instance: current age vs previous age
 
 ## Deployment Distribution (by Unique Instances)
 ![Instance Distribution](instance-distribution-YYYY-MM-DD.png)

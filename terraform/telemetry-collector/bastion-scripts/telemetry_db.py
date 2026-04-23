@@ -17,6 +17,8 @@ Usage:
     python3 telemetry_db.py purge --confirm
 """
 
+from __future__ import annotations
+
 import argparse
 import csv
 import json
