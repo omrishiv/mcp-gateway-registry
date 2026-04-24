@@ -264,6 +264,13 @@ Total queries (deduplicated), average per instance, max from single instance.
 ## Heartbeat Metrics
 Server/agent/skill counts, uptime, search backend, embeddings provider.
 
+## Most Active Instances (by Feature Usage)
+Top 10 instances ranked by cumulative feature usage: max registered servers + max registered agents + max registered skills + lifetime search queries. This shows which deployments use the registry most actively, beyond raw event counts.
+
+To compute: for each identified instance, take the maximum `servers_count`, `agents_count`, `skills_count` observed across all its heartbeat events, plus the maximum `search_queries_total` (lifetime, deduplicated). Sum these four values as the "total" activity score, sort descending, and show the top 10.
+
+Include columns: Rank, Registry ID, Cloud/Compute/Auth, Servers, Agents, Skills, Search, Total, Age (days), Notes. Mark internal instances. Add a short narrative highlighting distinct usage patterns among the top customer instances (e.g., full-featured vs search-only vs skills-catalog).
+
 ## GitHub Repository
 Community-growth signals for `agentic-community/mcp-gateway-registry` pulled via the `gh` CLI in Step 5d. Include a table with current values and deltas vs the previous report:
 
