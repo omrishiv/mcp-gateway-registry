@@ -47,6 +47,8 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           envFrom:
+            - configMapRef:
+                name: auth-server-app-log-config
             - secretRef:
                 name: {{ .Values.app.existingSecret | default .Values.app.envSecretName }}
             {{- if eq $authProviderType "keycloak" }}
