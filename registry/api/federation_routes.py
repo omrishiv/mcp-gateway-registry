@@ -1049,7 +1049,7 @@ async def sync_federation(
                         registered_at=datetime.now(UTC),
                     )
 
-                    if agent_path not in agent_service.registered_agents:
+                    if await agent_service.get_agent_info(agent_path) is None:
                         await agent_service.register_agent(agent_card)
                         logger.info(f"Synced ASOR agent: {agent_name}")
                         results["asor"]["agents"].append(agent_name)

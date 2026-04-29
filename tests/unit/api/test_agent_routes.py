@@ -484,7 +484,7 @@ class TestRegisterAgent:
         ):
             mock_agent_service.get_agent_info = AsyncMock(return_value=None)
             mock_agent_service.register_agent = AsyncMock(return_value=True)
-            mock_agent_service.is_agent_enabled.return_value = True
+            mock_agent_service.is_agent_enabled = AsyncMock(return_value=True)
 
             mock_validation_result = MagicMock()
             mock_validation_result.is_valid = True
@@ -596,7 +596,7 @@ class TestListAgents:
             mock_agent_service.get_agents_paginated = AsyncMock(
                 return_value=([sample_agent_card], 1)
             )
-            mock_agent_service.is_agent_enabled.return_value = True
+            mock_agent_service.is_agent_enabled = AsyncMock(return_value=True)
 
             # Act
             response = test_app.get("/agents")
@@ -623,7 +623,7 @@ class TestListAgents:
             mock_agent_service.get_all_agents = AsyncMock(
                 return_value=[enabled_agent, disabled_agent]
             )
-            mock_agent_service.is_agent_enabled.side_effect = lambda path: path == "/agents/enabled"
+            mock_agent_service.is_agent_enabled = AsyncMock(side_effect=lambda path: path == "/agents/enabled")
 
             # Act
             response = test_app.get("/agents?enabled_only=true")
@@ -648,7 +648,7 @@ class TestListAgents:
             mock_agent_service.get_all_agents = AsyncMock(
                 return_value=[public_agent, internal_agent]
             )
-            mock_agent_service.is_agent_enabled.return_value = True
+            mock_agent_service.is_agent_enabled = AsyncMock(return_value=True)
 
             # Act
             response = test_app.get("/agents?visibility=public")
@@ -681,7 +681,7 @@ class TestListAgents:
 
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
             mock_agent_service.get_all_agents = AsyncMock(return_value=[data_agent, image_agent])
-            mock_agent_service.is_agent_enabled.return_value = True
+            mock_agent_service.is_agent_enabled = AsyncMock(return_value=True)
 
             # Act
             response = test_app.get("/agents?query=data")
@@ -719,7 +719,7 @@ class TestListAgents:
             mock_agent_service.get_all_agents = AsyncMock(
                 return_value=[agent_with_meta, agent_without_meta]
             )
-            mock_agent_service.is_agent_enabled.return_value = True
+            mock_agent_service.is_agent_enabled = AsyncMock(return_value=True)
 
             response = test_app.get("/agents?query=finance")
 
@@ -741,7 +741,7 @@ class TestListAgents:
 
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
             mock_agent_service.get_all_agents = AsyncMock(return_value=[agent])
-            mock_agent_service.is_agent_enabled.return_value = True
+            mock_agent_service.is_agent_enabled = AsyncMock(return_value=True)
 
             response = test_app.get("/agents?query=department")
 
@@ -762,7 +762,7 @@ class TestListAgents:
 
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
             mock_agent_service.get_all_agents = AsyncMock(return_value=[agent])
-            mock_agent_service.is_agent_enabled.return_value = True
+            mock_agent_service.is_agent_enabled = AsyncMock(return_value=True)
 
             response = test_app.get("/agents?query=golang")
 
@@ -783,7 +783,7 @@ class TestListAgents:
 
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
             mock_agent_service.get_all_agents = AsyncMock(return_value=[agent])
-            mock_agent_service.is_agent_enabled.return_value = True
+            mock_agent_service.is_agent_enabled = AsyncMock(return_value=True)
 
             response = test_app.get("/agents?query=nonexistent")
 
@@ -804,7 +804,7 @@ class TestListAgents:
 
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
             mock_agent_service.get_all_agents = AsyncMock(return_value=[agent])
-            mock_agent_service.is_agent_enabled.return_value = True
+            mock_agent_service.is_agent_enabled = AsyncMock(return_value=True)
 
             response = test_app.get("/agents?query=minimal")
 
@@ -840,7 +840,7 @@ class TestListAgents:
         agents = [AgentCardFactory(path=f"/agents/agent-{i}") for i in range(5)]
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
             mock_agent_service.get_agents_paginated = AsyncMock(return_value=(agents[2:4], 5))
-            mock_agent_service.is_agent_enabled.return_value = True
+            mock_agent_service.is_agent_enabled = AsyncMock(return_value=True)
 
             response = test_app.get("/agents?limit=2&offset=2")
 
@@ -859,7 +859,7 @@ class TestListAgents:
         agents = [AgentCardFactory(path=f"/agents/agent-{i}") for i in range(3)]
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
             mock_agent_service.get_agents_paginated = AsyncMock(return_value=(agents, 3))
-            mock_agent_service.is_agent_enabled.return_value = True
+            mock_agent_service.is_agent_enabled = AsyncMock(return_value=True)
 
             response = test_app.get("/agents?limit=20")
 
@@ -874,7 +874,7 @@ class TestListAgents:
         """Fast path: offset beyond total returns empty list."""
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
             mock_agent_service.get_agents_paginated = AsyncMock(return_value=([], 3))
-            mock_agent_service.is_agent_enabled.return_value = True
+            mock_agent_service.is_agent_enabled = AsyncMock(return_value=True)
 
             response = test_app.get("/agents?offset=100")
 
@@ -908,7 +908,7 @@ class TestListAgents:
         ]
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
             mock_agent_service.get_all_agents = AsyncMock(return_value=agents)
-            mock_agent_service.is_agent_enabled.return_value = True
+            mock_agent_service.is_agent_enabled = AsyncMock(return_value=True)
 
             response = test_app.get("/agents?query=data&limit=10")
 
@@ -934,7 +934,7 @@ class TestListAgents:
         ]
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
             mock_agent_service.get_all_agents = AsyncMock(return_value=agents)
-            mock_agent_service.is_agent_enabled.return_value = True
+            mock_agent_service.is_agent_enabled = AsyncMock(return_value=True)
 
             response = test_app_limited.get("/agents?limit=5")
 
@@ -958,7 +958,7 @@ class TestListAgents:
         ]
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
             mock_agent_service.get_all_agents = AsyncMock(return_value=agents)
-            mock_agent_service.is_agent_enabled.return_value = True
+            mock_agent_service.is_agent_enabled = AsyncMock(return_value=True)
 
             # Limited user can only see /test-agent, offset=1 gives empty
             response = test_app_limited.get("/agents?limit=5&offset=1")
@@ -986,7 +986,7 @@ class TestCheckAgentHealth:
             patch("httpx.AsyncClient") as mock_httpx_client,
         ):
             mock_agent_service.get_agent_info = AsyncMock(return_value=sample_agent_card)
-            mock_agent_service.is_agent_enabled.return_value = True
+            mock_agent_service.is_agent_enabled = AsyncMock(return_value=True)
 
             # Mock httpx response
             mock_response = MagicMock()
@@ -1019,7 +1019,7 @@ class TestCheckAgentHealth:
             patch("httpx.AsyncClient") as mock_httpx_client,
         ):
             mock_agent_service.get_agent_info = AsyncMock(return_value=sample_agent_card)
-            mock_agent_service.is_agent_enabled.return_value = True
+            mock_agent_service.is_agent_enabled = AsyncMock(return_value=True)
 
             # Mock httpx timeout for both GET (health URLs) and HEAD (fallback)
             mock_client_instance = AsyncMock()
@@ -1061,7 +1061,7 @@ class TestCheckAgentHealth:
         # Arrange
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
             mock_agent_service.get_agent_info = AsyncMock(return_value=sample_agent_card)
-            mock_agent_service.is_agent_enabled.return_value = False
+            mock_agent_service.is_agent_enabled = AsyncMock(return_value=False)
 
             # Act
             response = test_app.post("/agents/test-agent/health")
@@ -1334,7 +1334,7 @@ class TestUpdateAgent:
         ):
             mock_agent_service.get_agent_info = AsyncMock(return_value=sample_agent_card)
             mock_agent_service.update_agent = AsyncMock(return_value=True)
-            mock_agent_service.is_agent_enabled.return_value = True
+            mock_agent_service.is_agent_enabled = AsyncMock(return_value=True)
 
             mock_validation_result = MagicMock()
             mock_validation_result.is_valid = True
@@ -1501,7 +1501,7 @@ class TestDiscoverAgentsBySkills:
 
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
             mock_agent_service.get_all_agents = AsyncMock(return_value=[agent_with_skill])
-            mock_agent_service.is_agent_enabled.return_value = True
+            mock_agent_service.is_agent_enabled = AsyncMock(return_value=True)
 
             # Act - skills sent as body object, max_results as query param
             response = test_app.post("/agents/discover?max_results=10", json=request_body)
@@ -1564,7 +1564,7 @@ class TestDiscoverAgentsBySkills:
             mock_agent_service.get_all_agents = AsyncMock(
                 return_value=[agent_with_tags, agent_without_tags]
             )
-            mock_agent_service.is_agent_enabled.return_value = True
+            mock_agent_service.is_agent_enabled = AsyncMock(return_value=True)
 
             # Act
             response = test_app.post("/agents/discover?max_results=10", json=request_body)

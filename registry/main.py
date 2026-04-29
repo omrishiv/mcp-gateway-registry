@@ -431,9 +431,9 @@ async def lifespan(app: FastAPI):
         await agent_service.load_agents_and_state()
 
         logger.info(f"📊 Updating {backend_name} index with all registered agents...")
-        all_agents = agent_service.list_agents()
+        all_agents = await agent_service.list_agents()
         for agent_card in all_agents:
-            is_enabled = agent_service.is_agent_enabled(agent_card.path)
+            is_enabled = await agent_service.is_agent_enabled(agent_card.path)
             try:
                 await search_repo.index_agent(agent_card.path, agent_card, is_enabled)
                 logger.debug(f"Updated {backend_name} index for agent: {agent_card.path}")

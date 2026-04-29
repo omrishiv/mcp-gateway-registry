@@ -522,7 +522,7 @@ async def register_agent(
 
     from ..search.service import faiss_service
 
-    is_enabled = agent_service.is_agent_enabled(path)
+    is_enabled = await agent_service.is_agent_enabled(path)
     await faiss_service.add_or_update_entity(
         path,
         agent_card.model_dump(),
@@ -672,7 +672,7 @@ async def list_agents(
     search_query = query.lower() if query else ""
 
     for agent in accessible_agents:
-        if enabled_only and not agent_service.is_agent_enabled(agent.path):
+        if enabled_only and not await agent_service.is_agent_enabled(agent.path):
             continue
 
         if visibility and agent.visibility != visibility:
@@ -701,7 +701,7 @@ async def list_agents(
                 skills=[s.name for s in agent.skills],
                 num_skills=len(agent.skills),
                 num_stars=agent.num_stars,
-                is_enabled=agent_service.is_agent_enabled(agent.path),
+                is_enabled=await agent_service.is_agent_enabled(agent.path),
                 provider=provider_name,
                 streaming=streaming,
                 trust_level=agent.trust_level,
@@ -790,7 +790,7 @@ async def check_agent_health(
             detail="You do not have access to this agent",
         )
 
-    if not agent_service.is_agent_enabled(path):
+    if not await agent_service.is_agent_enabled(path):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Cannot perform health check on a disabled agent",
@@ -1375,7 +1375,7 @@ async def update_agent(
 
     from ..search.service import faiss_service
 
-    is_enabled = agent_service.is_agent_enabled(path)
+    is_enabled = await agent_service.is_agent_enabled(path)
     await faiss_service.add_or_update_entity(
         path,
         updated_agent.model_dump(),
@@ -1521,7 +1521,7 @@ async def discover_agents_by_skills(
     required_tags = set(t.lower() for t in tags) if tags else set()
 
     for agent in accessible_agents:
-        if not agent_service.is_agent_enabled(agent.path):
+        if not await agent_service.is_agent_enabled(agent.path):
             continue
 
         agent_skills = set(skill.id.lower() for skill in agent.skills) | set(
