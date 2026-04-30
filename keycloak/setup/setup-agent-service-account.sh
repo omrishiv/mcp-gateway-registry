@@ -5,10 +5,12 @@
 set -e
 
 # Configuration
-ADMIN_URL="http://localhost:8080"
-REALM="mcp-gateway"
-ADMIN_USER="admin"
+ADMIN_URL="${KEYCLOAK_ADMIN_URL:-http://localhost:8080}"
+REALM="${KEYCLOAK_REALM:-mcp-gateway}"
+ADMIN_USER="${KEYCLOAK_ADMIN:-admin}"
 ADMIN_PASS="${KEYCLOAK_ADMIN_PASSWORD}"
+
+echo "Using Keycloak admin URL: $ADMIN_URL (realm: $REALM, user: $ADMIN_USER)"
 
 # Check required environment variables
 if [ -z "$ADMIN_PASS" ]; then
