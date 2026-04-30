@@ -79,8 +79,8 @@ class FileAgentRepository(AgentRepositoryBase):
             return True
         return False
 
-    async def get_state(self) -> dict[str, list[str]]:
-        """Load agent state from disk."""
+    async def _load_state_file(self) -> dict[str, list[str]]:
+        """Load raw state dict from disk."""
         if self.state_file.exists():
             try:
                 with open(self.state_file) as f:
@@ -95,6 +95,18 @@ class FileAgentRepository(AgentRepositoryBase):
 
         return {"enabled": [], "disabled": []}
 
+    async def get_state(self, path: str | None = None) -> bool | dict[str, list[str]]:
+        """Get agent enabled state.
+
+        Args:
+            path: If provided, return True/False for that agent. If None,
+                return the full {"enabled": [...], "disabled": [...]} dict.
+        """
+        state = await self._load_state_file()
+        if path is None:
+            return state
+        return path in state["enabled"]
+
     async def save_state(self, state: dict[str, list[str]]) -> None:
         """Save agent state to disk."""
         with open(self.state_file, "w") as f:
@@ -102,12 +114,12 @@ class FileAgentRepository(AgentRepositoryBase):
 
     async def is_enabled(self, path: str) -> bool:
         """Check if agent is enabled."""
-        state = await self.get_state()
+        state = await self._load_state_file()
         return path in state["enabled"]
 
     async def set_enabled(self, path: str, enabled: bool) -> None:
         """Set agent enabled state."""
-        state = await self.get_state()
+        state = await self._load_state_file()
 
         if enabled:
             if path in state["disabled"]:

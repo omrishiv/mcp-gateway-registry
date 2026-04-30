@@ -1280,7 +1280,7 @@ class PeerFederationService:
         """
         try:
             search_repo = get_search_repository()
-            is_enabled = agent_service.is_agent_enabled(path)
+            is_enabled = await agent_service.is_agent_enabled(path)
             await search_repo.index_agent(path, agent_card, is_enabled)
             logger.debug(f"Indexed synced agent for search: {path}")
         except Exception as e:
