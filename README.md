@@ -828,8 +828,8 @@ Our development roadmap is organized into release milestones with clear delivera
 | Milestone | Progress | Status | Key Issues |
 |-----------|----------|--------|------------|
 | **v1.0.20** | 100% (11/11) | Complete | [#871 - Unified Auth](https://github.com/agentic-community/mcp-gateway-registry/issues/871), [#851 - M2M Registration](https://github.com/agentic-community/mcp-gateway-registry/issues/851), [#824 - Python 3.14](https://github.com/agentic-community/mcp-gateway-registry/issues/824), [#809 - Registration Gate](https://github.com/agentic-community/mcp-gateway-registry/issues/809), [#779 - Multi API Keys](https://github.com/agentic-community/mcp-gateway-registry/issues/779), [#742 - Webhooks](https://github.com/agentic-community/mcp-gateway-registry/issues/742) and 5 more |
-| **v1.0.21** | 100% (6/6) | Complete | [#906 - Admin Data Export](https://github.com/agentic-community/mcp-gateway-registry/issues/906), [#897 - Per-skill Auth Credentials UI](https://github.com/agentic-community/mcp-gateway-registry/issues/897), [#891 - CSRF Toggle Fix](https://github.com/agentic-community/mcp-gateway-registry/issues/891), [#886 - Centralized Log Rotation](https://github.com/agentic-community/mcp-gateway-registry/issues/886), [#856 - ARM64 Images](https://github.com/agentic-community/mcp-gateway-registry/issues/856), [#677 - Tool Call Integrity](https://github.com/agentic-community/mcp-gateway-registry/issues/677) |
-| **v1.0.22** | 0% (0/5) | Planned | [#867 - Prometheus Metrics Endpoint](https://github.com/agentic-community/mcp-gateway-registry/issues/867), [#847 - A2A Reverse Proxy Gateway](https://github.com/agentic-community/mcp-gateway-registry/issues/847), [#844 - Dependency Management](https://github.com/agentic-community/mcp-gateway-registry/issues/844), [#744 - Registry Copilot](https://github.com/agentic-community/mcp-gateway-registry/issues/744), [#500 - Logout Routing Fix](https://github.com/agentic-community/mcp-gateway-registry/issues/500) |
+| **v1.0.21** | 100% (5/5) | Complete | [#906 - Admin Data Export](https://github.com/agentic-community/mcp-gateway-registry/issues/906), [#897 - Per-skill Auth Credentials UI](https://github.com/agentic-community/mcp-gateway-registry/issues/897), [#891 - CSRF Toggle Fix](https://github.com/agentic-community/mcp-gateway-registry/issues/891), [#886 - Centralized Log Rotation](https://github.com/agentic-community/mcp-gateway-registry/issues/886), [#856 - ARM64 Images](https://github.com/agentic-community/mcp-gateway-registry/issues/856) |
+| **v1.0.22** | 0% (0/5) | Planned | [#867 - Prometheus Metrics Endpoint](https://github.com/agentic-community/mcp-gateway-registry/issues/867), [#847 - A2A Reverse Proxy Gateway](https://github.com/agentic-community/mcp-gateway-registry/issues/847), [#844 - Dependency Management](https://github.com/agentic-community/mcp-gateway-registry/issues/844), [#744 - AI Chat Assistant](https://github.com/agentic-community/mcp-gateway-registry/issues/744), [#500 - Logout Routing Fix](https://github.com/agentic-community/mcp-gateway-registry/issues/500) |
 | **Parking Lot** | Backlog | Backlog | 23 open issues awaiting prioritization |
 
 **Status Legend:** Complete, Planned, Backlog
@@ -846,7 +846,7 @@ The following major features span multiple milestones and represent significant 
 - **[#847 - A2A Reverse Proxy Gateway](https://github.com/agentic-community/mcp-gateway-registry/issues/847)** **PLANNED** (v1.0.22)
   Add reverse proxy gateway support for A2A agents.
 
-- **[#744 - Registry Copilot](https://github.com/agentic-community/mcp-gateway-registry/issues/744)** **PLANNED** (v1.0.22)
+- **[#744 - AI Chat Assistant](https://github.com/agentic-community/mcp-gateway-registry/issues/744)** **PLANNED** (v1.0.22)
   Embedded AI chat assistant for registry operations, discovery, and agent design.
 
 - **[#665 - Agent-to-Agent Knowledge Sharing](https://github.com/agentic-community/mcp-gateway-registry/issues/665)** **BACKLOG**
@@ -903,9 +903,6 @@ The following major features span multiple milestones and represent significant 
 
 - **[#856 - ARM64 Docker Images](https://github.com/agentic-community/mcp-gateway-registry/issues/856)** **COMPLETED** (April 2026)
   Multi-architecture Docker images with ARM64 support.
-
-- **[#677 - Tool Call Integrity Verification](https://github.com/agentic-community/mcp-gateway-registry/issues/677)** **COMPLETED** (April 2026)
-  Gateway now verifies tool call integrity for authenticated agents.
 
 - **[#738 - Normalize Visibility Values](https://github.com/agentic-community/mcp-gateway-registry/issues/738)** **COMPLETED** (April 2026)
   Accept both 'private' and 'internal' visibility values, canonicalize to 'private' across agents, servers, and skills.
