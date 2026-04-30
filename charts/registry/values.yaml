@@ -96,6 +96,12 @@ app:
   showSkillsTab: true
   showAgentsTab: true
 
+  # Coding assistants allowlist for Server Configuration modal (IDE selector).
+  # Comma-separated string. Empty means show all supported assistants.
+  # Supported values: cursor, roo-code, claude-code, kiro
+  # Example: "cursor,claude-code"
+  codingAssistants: ""
+
   # Application Log Configuration (centralized log rotation and retrieval)
   appLogMaxBytes: "52428800"       # Max size per log file before rotation (default 50 MB)
   appLogBackupCount: "5"           # Number of rotated backup log files to keep

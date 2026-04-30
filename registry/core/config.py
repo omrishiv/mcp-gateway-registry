@@ -432,6 +432,25 @@ class Settings(BaseSettings):
         default=RegistryMode.FULL, description="Registry operating mode"
     )
 
+    # Coding assistant selection for the Server Configuration modal.
+    # Empty (default) means all supported assistants are shown.
+    # Comma-separated list from the CODING_ASSISTANTS env var, e.g.
+    # CODING_ASSISTANTS=cursor,claude-code
+    coding_assistants: str = Field(
+        default="",
+        description=(
+            "Comma-separated allowlist of coding assistants shown in the UI config modal. "
+            "Empty means show all. Supported values: cursor, roo-code, claude-code, kiro."
+        ),
+    )
+
+    @property
+    def coding_assistants_list(self) -> list[str]:
+        """Parse coding_assistants CSV into a list, stripping whitespace."""
+        if not self.coding_assistants:
+            return []
+        return [item.strip() for item in self.coding_assistants.split(",") if item.strip()]
+
     # Tab visibility overrides (AND-ed with REGISTRY_MODE feature flags)
     show_servers_tab: bool = Field(default=True, description="Show MCP Servers tab in UI")
     show_virtual_servers_tab: bool = Field(

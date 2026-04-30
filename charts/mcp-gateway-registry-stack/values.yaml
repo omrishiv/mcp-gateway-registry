@@ -199,6 +199,12 @@ registry:
     showSkillsTab: true
     showAgentsTab: true
 
+    # Coding assistants allowlist for Server Configuration modal (IDE selector).
+    # Comma-separated string. Empty means show all supported assistants.
+    # Supported values: cursor, roo-code, claude-code, kiro
+    # Example: "cursor,claude-code"
+    codingAssistants: ""
+
     # Federation OAuth2 authentication (alternative to static token)
     federationTokenEndpoint: ""
     federationClientId: ""

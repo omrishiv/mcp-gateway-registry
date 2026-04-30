@@ -5,6 +5,7 @@ interface RegistryConfig {
   deployment_mode: 'with-gateway' | 'registry-only';
   registry_mode: 'full' | 'skills-only' | 'mcp-servers-only' | 'agents-only';
   nginx_updates_enabled: boolean;
+  coding_assistants: string[];
   features: {
     mcp_servers: boolean;
     agents: boolean;
@@ -19,6 +20,7 @@ const DEFAULT_CONFIG: RegistryConfig = {
   deployment_mode: 'with-gateway',
   registry_mode: 'full',
   nginx_updates_enabled: true,
+  coding_assistants: [],
   features: {
     mcp_servers: true,
     agents: true,

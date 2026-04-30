@@ -606,6 +606,7 @@ async def get_config() -> dict[str, Any]:
         "nginx_updates_enabled": settings.nginx_updates_enabled,
         "registration_gate_enabled": settings.registration_gate_enabled,
         "asset_lifecycle_statuses": [s.value for s in LifecycleStatus],
+        "coding_assistants": settings.coding_assistants_list,
         "features": {
             "mcp_servers": (
                 settings.registry_mode in (RegistryMode.FULL, RegistryMode.MCP_SERVERS_ONLY)

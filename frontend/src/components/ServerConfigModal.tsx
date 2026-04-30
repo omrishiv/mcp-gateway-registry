@@ -7,6 +7,15 @@ import useEscapeKey from '../hooks/useEscapeKey';
 
 type IDE = 'cursor' | 'roo-code' | 'claude-code' | 'kiro';
 
+const ALL_IDES: IDE[] = ['cursor', 'roo-code', 'claude-code', 'kiro'];
+
+const IDE_LABELS: Record<IDE, string> = {
+  'cursor': 'Cursor',
+  'roo-code': 'Roo Code',
+  'claude-code': 'Claude Code',
+  'kiro': 'Kiro',
+};
+
 interface ServerConfigModalProps {
   server: Server;
   isOpen: boolean;
@@ -20,12 +29,26 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
   onClose,
   onShowToast,
 }) => {
-  const [selectedIDE, setSelectedIDE] = useState<IDE>('cursor');
   const [jwtToken, setJwtToken] = useState<string | null>(null);
   const [tokenLoading, setTokenLoading] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const { config: registryConfig, loading: configLoading } = useRegistryConfig();
+
+  const enabledIDEs: IDE[] = React.useMemo(() => {
+    const allowlist = registryConfig?.coding_assistants ?? [];
+    if (allowlist.length === 0) return ALL_IDES;
+    const filtered = ALL_IDES.filter((ide) => allowlist.includes(ide));
+    return filtered.length > 0 ? filtered : ALL_IDES;
+  }, [registryConfig?.coding_assistants]);
+
+  const [selectedIDE, setSelectedIDE] = useState<IDE>(enabledIDEs[0] ?? 'cursor');
+
+  useEffect(() => {
+    if (!enabledIDEs.includes(selectedIDE)) {
+      setSelectedIDE(enabledIDEs[0]);
+    }
+  }, [enabledIDEs, selectedIDE]);
 
   useEscapeKey(onClose, isOpen);
 
@@ -389,7 +412,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
           <div className="bg-gray-50 dark:bg-gray-900 border dark:border-gray-700 rounded-lg p-4">
             <h4 className="font-medium text-gray-900 dark:text-white mb-3">Select your IDE/Tool:</h4>
             <div className="flex flex-wrap gap-2">
-              {(['cursor', 'roo-code', 'claude-code', 'kiro'] as IDE[]).map((ide) => (
+              {enabledIDEs.map((ide) => (
                 <button
                   key={ide}
                   onClick={() => setSelectedIDE(ide)}
@@ -399,26 +422,12 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                       : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
                   }`}
                 >
-                  {ide === 'cursor'
-                    ? 'Cursor'
-                    : ide === 'roo-code'
-                    ? 'Roo Code'
-                    : ide === 'claude-code'
-                    ? 'Claude Code'
-                    : 'Kiro'}
+                  {IDE_LABELS[ide]}
                 </button>
               ))}
             </div>
             <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
-              Configuration format optimized for{' '}
-              {selectedIDE === 'cursor'
-                ? 'Cursor'
-                : selectedIDE === 'roo-code'
-                ? 'Roo Code'
-                : selectedIDE === 'claude-code'
-                ? 'Claude Code'
-                : 'Kiro'}{' '}
-              integration
+              Configuration format optimized for {IDE_LABELS[selectedIDE]} integration
             </p>
           </div>
 

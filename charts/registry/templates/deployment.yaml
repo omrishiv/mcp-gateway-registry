@@ -79,6 +79,8 @@ spec:
               value: {{ .Values.app.showSkillsTab | default true | quote }}
             - name: SHOW_AGENTS_TAB
               value: {{ .Values.app.showAgentsTab | default true | quote }}
+            - name: CODING_ASSISTANTS
+              value: {{ .Values.app.codingAssistants | default "" | quote }}
             {{- if .Values.awsRegistry.federationEnabled }}
             - name: AWS_REGISTRY_FEDERATION_ENABLED
               value: "true"
