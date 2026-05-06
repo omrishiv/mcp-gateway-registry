@@ -47,26 +47,45 @@ data:
   wait.py: |
     import pymongo
     import os
+    import re
     import time
-    import sys
+    from urllib.parse import urlsplit
 
+    OVERRIDE = os.getenv("MONGODB_CONNECTION_STRING", "")
     MONGO_HOST = os.getenv("DOCUMENTDB_HOST", "mongodb")
     MONGO_PORT = os.getenv("DOCUMENTDB_PORT", "27017")
     REPLICA_SET = os.getenv("DOCUMENTDB_REPLICA_SET", "rs0")
     USERNAME = os.getenv("DOCUMENTDB_USERNAME", "")
     PASSWORD = os.getenv("DOCUMENTDB_PASSWORD", "")
 
+    def _redact(msg):
+        return re.sub(r"mongodb(?:\+srv)?://[^\s]*", "<redacted-uri>", str(msg))
+
     def wait_for_mongodb():
+        if OVERRIDE:
+            uri = OVERRIDE
+            display_host = urlsplit(uri).hostname or "(override)"
+            skip_replset_check = True
+        else:
+            uri = f"mongodb://{USERNAME}:{PASSWORD}@{MONGO_HOST}:{MONGO_PORT}/?authMechanism=SCRAM-SHA-256&authSource=admin"
+            display_host = f"{MONGO_HOST}:{MONGO_PORT}"
+            skip_replset_check = False
+
+        client = None
         while True:
             try:
-                # First check basic connectivity
-                client = pymongo.MongoClient(f"mongodb://{USERNAME}:{PASSWORD}@{MONGO_HOST}:{MONGO_PORT}/?authMechanism=SCRAM-SHA-256&authSource=admin",
-                                             serverSelectionTimeoutMS=5000,
-                                             connectTimeoutMS=5000)
+                client = pymongo.MongoClient(
+                    uri,
+                    serverSelectionTimeoutMS=5000,
+                    connectTimeoutMS=5000,
+                )
                 client.admin.command('ping')
-                print("MongoDB is accepting connections. Checking replica set status...")
 
-                # Check replica set status
+                if skip_replset_check:
+                    print(f"MongoDB is ready ({display_host})")
+                    break
+
+                print("MongoDB is accepting connections. Checking replica set status...")
                 status = client.admin.command('replSetGetStatus')
 
                 if status['ok'] != 1:
@@ -74,7 +93,7 @@ data:
                     time.sleep(10)
                     continue
 
-                ready_members = [m for m in status['members'] if m['state'] in [1, 2]]  # PRIMARY or SECONDARY
+                ready_members = [m for m in status['members'] if m['state'] in [1, 2]]
                 total_members = len(status['members'])
 
                 if len(ready_members) == total_members:
@@ -85,16 +104,17 @@ data:
                     time.sleep(10)
 
             except Exception as e:
-                print(f"MongoDB not ready yet: {e}")
+                print(f"MongoDB not ready yet: {_redact(e)}")
                 time.sleep(5)
             finally:
                 try:
-                    client.close()
-                except:
+                    if client is not None:
+                        client.close()
+                except Exception:
                     pass
 
     wait_for_mongodb()
-    print("MongoDB replica set is fully ready!")
+    print("MongoDB is fully ready!")
 
   mcp-registry-admin.json: |
     {
@@ -207,8 +227,14 @@ data:
 
 
     def _get_config_from_env() -> dict:
-        """Get MongoDB CE configuration from environment variables."""
+        """Get MongoDB CE configuration from environment variables.
+
+        When MONGODB_CONNECTION_STRING is set, the caller owns the full URI
+        (Atlas, externally-managed replica set, etc.) and the discrete
+        host/port/user/password values are ignored.
+        """
         return {
+            "connection_string": os.getenv("MONGODB_CONNECTION_STRING", ""),
             "host": os.getenv("DOCUMENTDB_HOST", "mongodb"),
             "port": int(os.getenv("DOCUMENTDB_PORT", "27017")),
             "database": os.getenv("DOCUMENTDB_DATABASE", "mcp_registry"),
@@ -405,11 +431,16 @@ data:
     async def _initialize_mongodb_ce() -> None:
         """Main initialization function."""
         config = _get_config_from_env()
+        override = config["connection_string"]
 
         logger.info("=" * 60)
         logger.info("MongoDB CE Initialization for MCP Gateway")
         logger.info("=" * 60)
-        logger.info(f"Host: {config['host']}:{config['port']}")
+        if override:
+            from urllib.parse import urlsplit
+            logger.info(f"Host: {urlsplit(override).hostname or '(override)'} (connection string override)")
+        else:
+            logger.info(f"Host: {config['host']}:{config['port']}")
         logger.info(f"Database: {config['database']}")
         logger.info(f"Namespace: {config['namespace']}")
         logger.info("")
@@ -418,11 +449,18 @@ data:
         logger.info("Waiting for MongoDB to be ready...")
         time.sleep(10)
 
-        # Initialize replica set (synchronous)
-        _initialize_replica_set(config["host"], config["port"], config["username"], config["password"])
+        if override:
+            # Caller owns the topology (Atlas, externally-managed replica set, etc.).
+            # Skip replSetInitiate — we lack admin rights and the replica set is
+            # already configured by the provider.
+            logger.info("Skipping replica-set initialization (connection string override in use)")
+            connection_string = override
+        else:
+            # Initialize replica set (synchronous)
+            _initialize_replica_set(config["host"], config["port"], config["username"], config["password"])
 
-        # Connect with motor for async operations
-        connection_string = f"mongodb://{config['username']}:{config['password']}@{config['host']}:{config['port']}/{config['database']}?replicaSet={config['replicaset']}&authMechanism=SCRAM-SHA-256&authSource=admin"
+            # Connect with motor for async operations
+            connection_string = f"mongodb://{config['username']}:{config['password']}@{config['host']}:{config['port']}/{config['database']}?replicaSet={config['replicaset']}&authMechanism=SCRAM-SHA-256&authSource=admin"
         try:
             client = AsyncIOMotorClient(
                 connection_string,
