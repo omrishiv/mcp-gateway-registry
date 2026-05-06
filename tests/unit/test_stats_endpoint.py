@@ -254,6 +254,7 @@ class TestGetDatabaseStatus:
             mock_settings.storage_backend = "documentdb"
             mock_settings.documentdb_host = "localhost"
             mock_settings.documentdb_port = 27017
+            mock_settings.mongodb_connection_string = None
 
             with patch(
                 "registry.repositories.documentdb.client.get_documentdb_client",
@@ -277,6 +278,7 @@ class TestGetDatabaseStatus:
             mock_settings.storage_backend = "documentdb"
             mock_settings.documentdb_host = "localhost"
             mock_settings.documentdb_port = 27017
+            mock_settings.mongodb_connection_string = None
 
             with patch(
                 "registry.repositories.documentdb.client.get_documentdb_client",
