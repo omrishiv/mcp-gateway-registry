@@ -40,7 +40,15 @@ async def _get_documentdb_connection_string(
 
     Args:
         storage_backend: Either 'documentdb' (uses SCRAM-SHA-1) or 'mongodb-ce' (uses SCRAM-SHA-256)
+
+    If MONGODB_CONNECTION_STRING is set in the environment, it is returned
+    verbatim and all host/port/auth construction is skipped.
     """
+    override = os.getenv("MONGODB_CONNECTION_STRING", "")
+    if override:
+        logger.info("Using MONGODB_CONNECTION_STRING override")
+        return override
+
     if use_iam:
         import boto3
 

@@ -141,11 +141,17 @@ async def _migrate_documentdb(args: argparse.Namespace, dry_run: bool) -> dict[s
     port = args.port
     database = args.database
 
-    if not host:
-        logger.error("DocumentDB host required. Set via --host or DOCUMENTDB_HOST env var")
+    override = os.getenv("MONGODB_CONNECTION_STRING", "")
+    if override:
+        logger.info("Using MONGODB_CONNECTION_STRING override")
+        connection_string = override
+    elif not host:
+        logger.error(
+            "DocumentDB host required. Set via --host, DOCUMENTDB_HOST, "
+            "or MONGODB_CONNECTION_STRING env var"
+        )
         return {"error": "host required"}
-
-    if args.use_iam:
+    elif args.use_iam:
         try:
             import boto3
 
@@ -166,11 +172,20 @@ async def _migrate_documentdb(args: argparse.Namespace, dry_run: bool) -> dict[s
         else:
             connection_string = f"mongodb://{host}:{port}/"
 
-    # Handle MongoDB CE with directConnection
-    if args.storage == "mongodb-ce":
+    # Handle MongoDB CE with directConnection (only for discrete-var path —
+    # override URI owns topology)
+    if args.storage == "mongodb-ce" and not override:
         connection_string += "?directConnection=true"
 
-    logger.info(f"Connecting to {args.storage} at {host}:{port}")
+    if override:
+        from urllib.parse import urlsplit
+
+        logger.info(
+            f"Connecting to {args.storage} at "
+            f"{urlsplit(connection_string).hostname or '(override)'}"
+        )
+    else:
+        logger.info(f"Connecting to {args.storage} at {host}:{port}")
 
     client = AsyncIOMotorClient(connection_string)
     db = client[database]

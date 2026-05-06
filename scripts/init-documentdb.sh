@@ -24,14 +24,17 @@ echo "DocumentDB Initialization Script"
 echo "================================="
 echo ""
 
-# Check if DocumentDB host is set
-if [ -z "$DOCUMENTDB_HOST" ]; then
+# Check if DocumentDB host is set (not required when MONGODB_CONNECTION_STRING is provided)
+if [ -z "$DOCUMENTDB_HOST" ] && [ -z "${MONGODB_CONNECTION_STRING:-}" ]; then
     echo "${RED}Error: DOCUMENTDB_HOST environment variable is not set${NC}"
     echo ""
     echo "Please set the required environment variables:"
     echo "  export DOCUMENTDB_HOST=your-cluster.docdb.amazonaws.com"
     echo "  export DOCUMENTDB_USERNAME=admin"
     echo "  export DOCUMENTDB_PASSWORD=yourpassword"
+    echo ""
+    echo "Or provide a full connection URI:"
+    echo "  export MONGODB_CONNECTION_STRING='mongodb+srv://user:pass@cluster.mongodb.net/db'"
     echo ""
     echo "Or use command-line arguments:"
     echo "  $0 --host your-cluster.docdb.amazonaws.com --username admin --password yourpassword"
@@ -79,16 +82,19 @@ fi
 export DOCUMENTDB_TLS_CA_FILE="$CA_BUNDLE_PATH"
 
 echo "Environment Configuration:"
-echo "  DOCUMENTDB_HOST: ${DOCUMENTDB_HOST}"
-echo "  DOCUMENTDB_PORT: ${DOCUMENTDB_PORT:-27017}"
+if [ -n "${MONGODB_CONNECTION_STRING:-}" ]; then
+    echo "  MONGODB_CONNECTION_STRING: (override set, host/port/auth derived from URI)"
+else
+    echo "  DOCUMENTDB_HOST: ${DOCUMENTDB_HOST}"
+    echo "  DOCUMENTDB_PORT: ${DOCUMENTDB_PORT:-27017}"
+    echo "  DOCUMENTDB_USE_IAM: ${DOCUMENTDB_USE_IAM:-false}"
+    if [ -n "$DOCUMENTDB_USERNAME" ]; then
+        echo "  DOCUMENTDB_USERNAME: ${DOCUMENTDB_USERNAME}"
+    fi
+fi
 echo "  DOCUMENTDB_DATABASE: ${DOCUMENTDB_DATABASE:-mcp_registry}"
 echo "  DOCUMENTDB_NAMESPACE: ${DOCUMENTDB_NAMESPACE:-default}"
 echo "  DOCUMENTDB_USE_TLS: ${USE_TLS}"
-echo "  DOCUMENTDB_USE_IAM: ${DOCUMENTDB_USE_IAM:-false}"
-
-if [ -n "$DOCUMENTDB_USERNAME" ]; then
-    echo "  DOCUMENTDB_USERNAME: ${DOCUMENTDB_USERNAME}"
-fi
 
 echo ""
 echo "Step 1: Creating collections and indexes..."
