@@ -1,9 +1,15 @@
 # Global configuration - these values are passed to all subcharts
 global:
-  # Image tag for all services (auth-server, registry, mcpgw)
-  # This value is passed down to all subcharts via Helm's global scope
+  # Image defaults for all services (auth-server, registry, mcpgw).
+  # These values are passed down to all subcharts via Helm's global scope and
+  # used as the fallback for any per-subchart image.* field left empty.
+  # Per-subchart overrides live under `<subchart>.image` (see auth-server.image,
+  # registry.image, mcpgw.image below) and take precedence when set.
   image:
+    # Container registry (host + optional namespace), e.g. "public.ecr.aws/p3v1o3c6"
+    registry: public.ecr.aws/p3v1o3c6
     tag: 1.0.21
+    pullPolicy: IfNotPresent
 
   # When installing chart from repository, add --set global.chartVersion=$(git rev-parse HEAD) to add the git hash to a configmap for debugging
   chartVersion:
