@@ -270,6 +270,34 @@ class TestGetDatabaseStatus:
                 assert status["host"] == "localhost:27017"
 
     @pytest.mark.asyncio
+    async def test_database_status_documentdb_with_connection_string_override(
+        self, mock_documentdb_client
+    ):
+        """Test database status masks credentials when a connection string override is set."""
+        from registry.api.system_routes import _get_database_status
+
+        connection_string = "mongodb+srv://user:pass@cluster.example.net/db"
+
+        with patch("registry.api.system_routes.settings") as mock_settings:
+            mock_settings.storage_backend = "documentdb"
+            mock_settings.documentdb_host = "should-not-be-used"
+            mock_settings.documentdb_port = 12345
+            mock_settings.mongodb_connection_string = connection_string
+
+            with patch(
+                "registry.repositories.documentdb.client.get_documentdb_client",
+                new_callable=AsyncMock,
+                return_value=mock_documentdb_client,
+            ):
+                status = await _get_database_status()
+
+                assert status["backend"] == "documentdb"
+                assert status["status"] == "Healthy"
+                assert status["host"] == "cluster.example.net"
+                assert "user:pass" not in status["host"]
+                assert "mongodb+srv://" not in status["host"]
+
+    @pytest.mark.asyncio
     async def test_database_status_documentdb_unhealthy(self):
         """Test database status with unhealthy DocumentDB."""
         from registry.api.system_routes import _get_database_status
