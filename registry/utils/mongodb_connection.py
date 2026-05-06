@@ -11,12 +11,16 @@ from typing import Any
 def build_connection_string() -> str:
     """Build a MongoDB/DocumentDB connection string from registry settings.
 
-    Handles three authentication modes:
+    If ``mongodb_connection_string`` is set, it is returned verbatim and all
+    other auth/host branches are skipped. Otherwise, handles three modes:
     - IAM (MONGODB-AWS) for DocumentDB with AWS credentials
     - Username/password (SCRAM-SHA-256 for MongoDB CE, SCRAM-SHA-1 for DocumentDB)
     - No authentication (local development)
     """
     from ..core.config import settings
+
+    if settings.mongodb_connection_string:
+        return settings.mongodb_connection_string
 
     if settings.documentdb_use_iam:
         import boto3
@@ -50,8 +54,16 @@ def build_connection_string() -> str:
 
 
 def build_tls_kwargs() -> dict[str, Any]:
-    """Build TLS keyword arguments for MongoDB client."""
+    """Build TLS keyword arguments for MongoDB client.
+
+    When ``mongodb_connection_string`` is set, the URI owns TLS configuration
+    (e.g. ``mongodb+srv://`` implies TLS automatically), so we return an
+    empty dict.
+    """
     from ..core.config import settings
+
+    if settings.mongodb_connection_string:
+        return {}
 
     kwargs: dict[str, Any] = {}
     if settings.documentdb_use_tls:
@@ -62,8 +74,16 @@ def build_tls_kwargs() -> dict[str, Any]:
 
 
 def build_client_options() -> dict[str, Any]:
-    """Build common client options for MongoDB connections."""
+    """Build common client options for MongoDB connections.
+
+    When ``mongodb_connection_string`` is set, the URI owns all options
+    (retryWrites, directConnection, replicaSet, etc.), so we return an
+    empty dict and let the caller-supplied URI decide.
+    """
     from ..core.config import settings
+
+    if settings.mongodb_connection_string:
+        return {}
 
     options: dict[str, Any] = {"retryWrites": False}
     if settings.documentdb_direct_connection:
