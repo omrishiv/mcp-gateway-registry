@@ -144,43 +144,23 @@ Connected to DocumentDB/MongoDB 8.x.x
 
 ## Deployment Type 3: Kubernetes / EKS via Helm
 
-The [Helm chart](../../charts/mcp-gateway-registry-stack/) exposes the connection string through its values file. Create (or append to) a values override file, for example `values-atlas.yaml`:
+The [Helm chart](../../charts/mcp-gateway-registry-stack/) exposes the connection string through its values file. If using the [`mcp-gateway-registry-stack` chart](https://github.com/agentic-community/mcp-gateway-registry/tree/main/charts/mcp-gateway-registry-stack), set the [mongodb.connectionString](https://github.com/agentic-community/mcp-gateway-registry/blob/c0c41b182323bbabc26d37d6d6610a5009dd85eb/charts/mcp-gateway-registry-stack/values.yaml#L95) variable (fill in the `"`s). 
 
-```yaml
-registry:
-  env:
-    # Your Atlas URI here. For production, load it from a Kubernetes Secret
-    # via envFrom (see below) instead of putting it directly in values.
-    MONGODB_CONNECTION_STRING: "mongodb+srv://mcp_user:<urlencoded-password>@cluster0.abc123.mongodb.net/mcp_registry?retryWrites=true&w=majority"
-```
+This will set the connection string in the [`mongo-credentials` secret](https://github.com/agentic-community/mcp-gateway-registry/blob/c0c41b182323bbabc26d37d6d6610a5009dd85eb/charts/mongodb-configure/templates/secret.yaml#L17) , which will be used by both the mongodb configuration job and the registry to access MongoDB Atlas.
 
-### Recommended: pull the URI from a Kubernetes Secret
-
-Plain values files get committed to git. For any URI that contains credentials, store the URI in a Kubernetes Secret and reference it from the pod's env:
+You can also add the key to the mongodb-credentials secret manually (make sure to replace MYNAMESPACE with where you have deployed the registry:
 
 ```bash
-kubectl create secret generic mcp-registry-mongodb \
-  --from-literal=MONGODB_CONNECTION_STRING='mongodb+srv://mcp_user:<urlencoded-password>@cluster0.abc123.mongodb.net/mcp_registry?retryWrites=true&w=majority' \
-  -n mcp-registry
+kubectl patch secret mongo-credentials -n MYNAMESPACE \                                                                                                                                                                                                                                                      
+  --patch '{"stringData":{"MONGODB_CONNECTION_STRING":"mongodb+srv://mcp_user:<urlencoded-password>@cluster0.abc123.mongodb.net/mcp_registry?retryWrites=true&w=majority"}}'    
 ```
 
-Then in your `values-atlas.yaml`:
+### Restart the registry
 
-```yaml
-registry:
-  envFrom:
-    - secretRef:
-        name: mcp-registry-mongodb
-```
-
-(The exact key under `registry:` depends on the chart version — check the chart's default `values.yaml` for the `env` / `envFrom` keys. If your chart version predates the envFrom wiring, use `env:` with a `valueFrom.secretKeyRef`.)
-
-### Upgrade the release
+The registry will need to be restarted to pick up the new connection string
 
 ```bash
-helm upgrade mcp-registry charts/mcp-gateway-registry-stack/ \
-  -n mcp-registry \
-  -f values-atlas.yaml
+kubectl -n mcp-registry rollout restart deployment/registry
 ```
 
 ### Verifying on Kubernetes
