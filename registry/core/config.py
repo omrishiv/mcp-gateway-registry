@@ -494,7 +494,7 @@ class Settings(BaseSettings):
     # Storage Backend Configuration
     storage_backend: str = "file"  # Options: "file", "documentdb"
 
-    # DocumentDB Configuration (only used when storage_backend="documentdb")
+    # DocumentDB Configuration (only used when storage_backend="documentdb" or "mongodb-ce")
     documentdb_host: str = "localhost"
     documentdb_port: int = 27017
     documentdb_database: str = "mcp_registry"
@@ -506,6 +506,12 @@ class Settings(BaseSettings):
     documentdb_replica_set: str | None = None
     documentdb_read_preference: str = "secondaryPreferred"
     documentdb_direct_connection: bool = False  # Set to True only for single-node MongoDB (tests)
+
+    # Full MongoDB connection URI override. When set, bypasses host/port/user/password
+    # assembly and is passed verbatim to the MongoDB client. Required for MongoDB Atlas
+    # (mongodb+srv://...) and any externally-managed MongoDB where the caller wants to
+    # own the full URI (replica sets, TLS params, retryWrites, etc.).
+    mongodb_connection_string: str | None = None
 
     # DocumentDB Namespace (for multi-tenancy support)
     documentdb_namespace: str = "default"

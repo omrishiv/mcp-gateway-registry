@@ -177,6 +177,7 @@ async def _get_database_status() -> dict:
         }
 
     # DocumentDB/MongoDB backend - check connection
+    host_str = _describe_mongo_host()
     try:
         from registry.repositories.documentdb.client import get_documentdb_client
 
@@ -185,9 +186,6 @@ async def _get_database_status() -> dict:
         # Try to ping the database (db is AsyncIOMotorDatabase, not client)
         await db.command("ping")
 
-        # Get host information
-        host_str = f"{settings.documentdb_host}:{settings.documentdb_port}"
-
         return {
             "backend": backend,
             "status": "Healthy",
@@ -195,12 +193,32 @@ async def _get_database_status() -> dict:
         }
     except Exception as e:
         logger.error(f"Database health check failed: {e}")
-        host_str = f"{settings.documentdb_host}:{settings.documentdb_port}"
         return {
             "backend": backend,
             "status": "Unhealthy",
             "host": host_str,
         }
+
+
+def _describe_mongo_host() -> str:
+    """Describe the MongoDB host for the health endpoint without leaking creds.
+
+    When a full connection-string override is in use, parse the URI with
+    ``urllib.parse.urlsplit`` to extract the hostname only — stdlib parsing
+    strips the userinfo and triggers no DNS (unlike pymongo.uri_parser.parse_uri,
+    which resolves mongodb+srv:// records live).
+    """
+    if settings.mongodb_connection_string:
+        from urllib.parse import urlsplit
+
+        try:
+            host = urlsplit(settings.mongodb_connection_string).hostname
+            if host:
+                return host
+        except ValueError:
+            pass
+        return "(connection string override)"
+    return f"{settings.documentdb_host}:{settings.documentdb_port}"
 
 
 async def _get_registry_card_status() -> dict:

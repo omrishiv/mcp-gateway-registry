@@ -88,6 +88,11 @@ mongodb:
   password: &mongoPassword CHANGEME # Set the password for the MongoDB user
   database: &mongoDatabase mcp_registry
   existingPasswordSecret: "" # If set, skip creating my-user-password secret and use this name instead
+  # connectionString: Full MongoDB URI override (MongoDB Atlas, externally-
+  # managed replica sets, etc.). When set, takes precedence over user/
+  # password/host-based assembly throughout the stack. For production,
+  # prefer providing the URI via global.existingMongoCredentialsSecret.
+  connectionString: &mongoConnectionString ""
 
 # Keycloak configuration
 # Set create: true to deploy Keycloak as part of this stack
@@ -188,6 +193,7 @@ mongodb-configure:
     username: *mongoUser
     password: *mongoPassword
     database: *mongoDatabase
+    connectionString: *mongoConnectionString
 
 # Registry service configuration
 registry:

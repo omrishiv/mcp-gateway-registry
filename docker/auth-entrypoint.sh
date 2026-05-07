@@ -26,33 +26,55 @@ else
     echo "No DocumentDB host detected or DOCUMENTDB_HOST is empty - skipping CA bundle download"
 fi
 
-# --- Wait for MongoDB Replica Set ---
-if [ -n "$DOCUMENTDB_HOST" ]; then
-    echo "Waiting for MongoDB replica set at ${DOCUMENTDB_HOST}:${DOCUMENTDB_PORT:-27017}..."
+# --- Wait for MongoDB ---
+if [ -n "$MONGODB_CONNECTION_STRING" ] || [ -n "$DOCUMENTDB_HOST" ]; then
+    if [ -n "$MONGODB_CONNECTION_STRING" ]; then
+        echo "Waiting for MongoDB via connection string override..."
+    else
+        echo "Waiting for MongoDB replica set at ${DOCUMENTDB_HOST}:${DOCUMENTDB_PORT:-27017}..."
+    fi
     source /app/.venv/bin/activate
     python3 -c "
-import pymongo, os, time, sys
-host = os.getenv('DOCUMENTDB_HOST', 'mongodb')
-port = int(os.getenv('DOCUMENTDB_PORT', '27017'))
-user = os.getenv('DOCUMENTDB_USERNAME', '')
-pwd = os.getenv('DOCUMENTDB_PASSWORD', '')
-backend = os.getenv('STORAGE_BACKEND', 'mongodb-ce')
-use_tls = os.getenv('DOCUMENTDB_USE_TLS', 'true').lower() == 'true'
-ca_file = os.getenv('DOCUMENTDB_TLS_CA_FILE', '/app/certs/global-bundle.pem')
-auth = 'SCRAM-SHA-256' if backend == 'mongodb-ce' else 'SCRAM-SHA-1'
-if user and pwd:
-    uri = f'mongodb://{user}:{pwd}@{host}:{port}/?authMechanism={auth}&authSource=admin'
+import pymongo, os, re, time
+from urllib.parse import urlsplit
+
+override = os.getenv('MONGODB_CONNECTION_STRING', '')
+if override:
+    uri = override
+    tls_options = {}
+    skip_replset_check = True
+    display_host = urlsplit(uri).hostname or '(override)'
 else:
-    uri = f'mongodb://{host}:{port}/'
-# Prepare TLS options
-tls_options = {}
-if use_tls:
-    tls_options['tls'] = True
-    tls_options['tlsCAFile'] = ca_file
+    host = os.getenv('DOCUMENTDB_HOST', 'mongodb')
+    port = int(os.getenv('DOCUMENTDB_PORT', '27017'))
+    user = os.getenv('DOCUMENTDB_USERNAME', '')
+    pwd = os.getenv('DOCUMENTDB_PASSWORD', '')
+    backend = os.getenv('STORAGE_BACKEND', 'mongodb-ce')
+    use_tls = os.getenv('DOCUMENTDB_USE_TLS', 'true').lower() == 'true'
+    ca_file = os.getenv('DOCUMENTDB_TLS_CA_FILE', '/app/certs/global-bundle.pem')
+    auth = 'SCRAM-SHA-256' if backend == 'mongodb-ce' else 'SCRAM-SHA-1'
+    if user and pwd:
+        uri = f'mongodb://{user}:{pwd}@{host}:{port}/?authMechanism={auth}&authSource=admin'
+    else:
+        uri = f'mongodb://{host}:{port}/'
+    tls_options = {}
+    if use_tls:
+        tls_options['tls'] = True
+        tls_options['tlsCAFile'] = ca_file
+    skip_replset_check = False
+    display_host = f'{host}:{port}'
+
+def _redact(msg):
+    return re.sub(r'mongodb(?:\+srv)?://[^\s]*', '<redacted-uri>', str(msg))
+
 while True:
     try:
         c = pymongo.MongoClient(uri, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000, **tls_options)
         c.admin.command('ping')
+        if skip_replset_check:
+            print(f'MongoDB is ready ({display_host})')
+            c.close()
+            break
         try:
             st = c.admin.command('replSetGetStatus')
             ready = [m for m in st['members'] if m['state'] in [1, 2]]
@@ -68,7 +90,7 @@ while True:
             c.close()
             break
     except Exception as e:
-        print(f'MongoDB not ready yet: {e}')
+        print(f'MongoDB not ready yet: {_redact(e)}')
     time.sleep(5)
 "
     deactivate

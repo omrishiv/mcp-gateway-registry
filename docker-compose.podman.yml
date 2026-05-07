@@ -85,6 +85,10 @@ services:
       # Storage Backend Configuration
       - STORAGE_BACKEND=${STORAGE_BACKEND:-file}
       # DocumentDB/MongoDB Configuration (when STORAGE_BACKEND=documentdb)
+      # MONGODB_CONNECTION_STRING: Optional full URI override (e.g. for MongoDB
+      # Atlas, mongodb+srv://...). When set, takes precedence over the discrete
+      # DOCUMENTDB_* values below.
+      - MONGODB_CONNECTION_STRING=${MONGODB_CONNECTION_STRING:-}
       - DOCUMENTDB_HOST=${DOCUMENTDB_HOST:-mongodb}
       - DOCUMENTDB_PORT=${DOCUMENTDB_PORT:-27017}
       - DOCUMENTDB_USERNAME=${DOCUMENTDB_USERNAME}
@@ -274,6 +278,10 @@ services:
       # Storage Backend Configuration
       - STORAGE_BACKEND=${STORAGE_BACKEND:-file}
       # DocumentDB/MongoDB Configuration (when STORAGE_BACKEND=documentdb or mongodb-ce)
+      # MONGODB_CONNECTION_STRING: Optional full URI override (e.g. for MongoDB
+      # Atlas, mongodb+srv://...). When set, takes precedence over the discrete
+      # DOCUMENTDB_* values below.
+      - MONGODB_CONNECTION_STRING=${MONGODB_CONNECTION_STRING:-}
       - DOCUMENTDB_HOST=${DOCUMENTDB_HOST:-mongodb}
       - DOCUMENTDB_PORT=${DOCUMENTDB_PORT:-27017}
       - DOCUMENTDB_USERNAME=${DOCUMENTDB_USERNAME}

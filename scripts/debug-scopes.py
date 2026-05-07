@@ -11,6 +11,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 async def debug_scopes():
     """Inspect DocumentDB scopes collection."""
     # Get connection details from environment
+    override = os.getenv("MONGODB_CONNECTION_STRING", "")
     host = os.getenv("DOCUMENTDB_HOST", "localhost")
     port = int(os.getenv("DOCUMENTDB_PORT", "27017"))
     username = os.getenv("DOCUMENTDB_USERNAME")
@@ -23,40 +24,52 @@ async def debug_scopes():
     print("=" * 80)
     print("DocumentDB Scopes Debug")
     print("=" * 80)
-    print(f"Host: {host}:{port}")
+    if override:
+        from urllib.parse import urlsplit
+
+        print(f"Host: {urlsplit(override).hostname or '(override)'} (connection string override)")
+    else:
+        print(f"Host: {host}:{port}")
     print(f"Database: {database}")
     print(f"Namespace: {namespace}")
     print(f"TLS: {use_tls}")
     print("=" * 80)
     print()
 
-    # Build connection string with appropriate auth mechanism
-    # Choose auth mechanism based on storage backend from environment
-    storage_backend = os.getenv("STORAGE_BACKEND", "documentdb")
-    if storage_backend == "mongodb-ce":
-        auth_mechanism = "SCRAM-SHA-256"
+    if override:
+        # URI owns all options: auth, TLS, retryWrites, replica set.
+        connection_string = override
+        client_kwargs: dict = {}
     else:
-        auth_mechanism = "SCRAM-SHA-1"
-
-    if username and password:
-        connection_string = f"mongodb://{username}:{password}@{host}:{port}/{database}?authMechanism={auth_mechanism}&authSource=admin"
-    else:
-        connection_string = f"mongodb://{host}:{port}/{database}"
-
-    # TLS options
-    tls_options = {}
-    if use_tls:
-        tls_options["tls"] = True
-        if ca_file and os.path.exists(ca_file):
-            tls_options["tlsCAFile"] = ca_file
-            print(f"Using CA file: {ca_file}")
+        # Build connection string with appropriate auth mechanism
+        # Choose auth mechanism based on storage backend from environment
+        storage_backend = os.getenv("STORAGE_BACKEND", "documentdb")
+        if storage_backend == "mongodb-ce":
+            auth_mechanism = "SCRAM-SHA-256"
         else:
-            print(f"WARNING: CA file not found: {ca_file}")
+            auth_mechanism = "SCRAM-SHA-1"
+
+        if username and password:
+            connection_string = f"mongodb://{username}:{password}@{host}:{port}/{database}?authMechanism={auth_mechanism}&authSource=admin"
+        else:
+            connection_string = f"mongodb://{host}:{port}/{database}"
+
+        # TLS options
+        tls_options: dict = {}
+        if use_tls:
+            tls_options["tls"] = True
+            if ca_file and os.path.exists(ca_file):
+                tls_options["tlsCAFile"] = ca_file
+                print(f"Using CA file: {ca_file}")
+            else:
+                print(f"WARNING: CA file not found: {ca_file}")
+
+        # DocumentDB does not support retryable writes
+        client_kwargs = {"retryWrites": False, **tls_options}
 
     # Connect to DocumentDB
     print("Connecting to DocumentDB...")
-    # IMPORTANT: DocumentDB does not support retryable writes
-    client = AsyncIOMotorClient(connection_string, retryWrites=False, **tls_options)
+    client = AsyncIOMotorClient(connection_string, **client_kwargs)
     db = client[database]
 
     try:

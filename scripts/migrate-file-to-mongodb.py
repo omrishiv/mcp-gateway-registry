@@ -66,7 +66,20 @@ async def _get_mongodb_client(
     Args:
         config: MongoDB connection configuration
         direct_connection: Use directConnection=true for single-node replica sets
+
+    If MONGODB_CONNECTION_STRING is set in the environment, it is used
+    verbatim and direct_connection is ignored (URI owns topology).
     """
+    override = os.getenv("MONGODB_CONNECTION_STRING", "")
+    if override:
+        logger.info("Using MONGODB_CONNECTION_STRING override")
+        client = AsyncIOMotorClient(override, serverSelectionTimeoutMS=10000)
+        await client.admin.command("ping")
+        from urllib.parse import urlsplit
+
+        logger.info(f"Connected to MongoDB at {urlsplit(override).hostname or '(override)'}")
+        return client
+
     if config["username"] and config["password"]:
         connection_string = (
             f"mongodb://{config['username']}:{config['password']}@"

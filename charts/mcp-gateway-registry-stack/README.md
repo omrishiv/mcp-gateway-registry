@@ -590,7 +590,7 @@ can reference pre-existing secrets instead.
 |-------|---------------------|-------------|
 | `global.existingSharedSecret` | `shared-secret` | SECRET_KEY and federation tokens shared by auth-server and registry |
 | `global.existingOauthProviderSecret` | `oauth-provider-secret` | Auth provider credentials (Keycloak/Entra/Okta/Auth0/Cognito) |
-| `global.existingMongoCredentialsSecret` | `mongo-credentials` | MongoDB connection credentials used by auth-server and registry |
+| `global.existingMongoCredentialsSecret` | `mongo-credentials` | MongoDB connection credentials used by auth-server and registry. When set, `mongodb.connectionString` has no effect — deployment pods read their connection values directly from this existing secret. |
 | `mongodb.existingPasswordSecret` | `my-user-password` | MongoDB operator user password |
 
 ### Per-Service Existing Secrets

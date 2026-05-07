@@ -11,10 +11,25 @@ DOCUMENTDB_PASSWORD="${DOCUMENTDB_PASSWORD:-admin}"
 DOCUMENTDB_DATABASE="${DOCUMENTDB_DATABASE:-mcp_registry}"
 DOCUMENTDB_NAMESPACE="${DOCUMENTDB_NAMESPACE:-default}"
 
+# MONGODB_CONNECTION_STRING override: when set, use the URI verbatim and skip
+# replSetInitiate (caller's cluster is assumed to already be configured, e.g.
+# MongoDB Atlas or any externally-managed replica set).
+if [ -n "${MONGODB_CONNECTION_STRING:-}" ]; then
+  MONGO_URL="$MONGODB_CONNECTION_STRING"
+  SKIP_REPLSET_INIT=1
+else
+  MONGO_URL=""
+  SKIP_REPLSET_INIT=0
+fi
+
 echo "=========================================="
 echo "MongoDB Initialization for MCP Gateway"
 echo "=========================================="
-echo "Host: $DOCUMENTDB_HOST:$DOCUMENTDB_PORT"
+if [ "$SKIP_REPLSET_INIT" = "1" ]; then
+  echo "Host: (connection string override)"
+else
+  echo "Host: $DOCUMENTDB_HOST:$DOCUMENTDB_PORT"
+fi
 echo "Database: $DOCUMENTDB_DATABASE"
 echo "Namespace: $DOCUMENTDB_NAMESPACE"
 echo ""
@@ -22,14 +37,17 @@ echo ""
 echo "Waiting for MongoDB to be ready..."
 sleep 10
 
-echo "Initializing MongoDB replica set..."
-# Check if authentication is configured
-if [ -n "$DOCUMENTDB_USERNAME" ] && [ -n "$DOCUMENTDB_PASSWORD" ] && [ "$DOCUMENTDB_USERNAME" != "admin" ] || [ "$DOCUMENTDB_PASSWORD" != "admin" ]; then
-  MONGO_URL="mongodb://$DOCUMENTDB_USERNAME:$DOCUMENTDB_PASSWORD@$DOCUMENTDB_HOST:$DOCUMENTDB_PORT/admin"
+if [ "$SKIP_REPLSET_INIT" = "1" ]; then
+  echo "Skipping replica-set initialization (connection string override in use)"
 else
-  MONGO_URL="mongodb://$DOCUMENTDB_HOST:$DOCUMENTDB_PORT"
-fi
-mongosh "$MONGO_URL" <<EOF
+  echo "Initializing MongoDB replica set..."
+  # Check if authentication is configured
+  if [ -n "$DOCUMENTDB_USERNAME" ] && [ -n "$DOCUMENTDB_PASSWORD" ] && [ "$DOCUMENTDB_USERNAME" != "admin" ] || [ "$DOCUMENTDB_PASSWORD" != "admin" ]; then
+    MONGO_URL="mongodb://$DOCUMENTDB_USERNAME:$DOCUMENTDB_PASSWORD@$DOCUMENTDB_HOST:$DOCUMENTDB_PORT/admin"
+  else
+    MONGO_URL="mongodb://$DOCUMENTDB_HOST:$DOCUMENTDB_PORT"
+  fi
+  mongosh "$MONGO_URL" <<EOF
 // Initialize replica set (required for transactions and vector search)
 try {
   rs.initiate({
@@ -38,18 +56,19 @@ try {
       { _id: 0, host: "$DOCUMENTDB_HOST:$DOCUMENTDB_PORT" }
     ]
   });
-  print("✓ Replica set initialized");
+  print("Replica set initialized");
 } catch (e) {
   if (e.codeName === 'AlreadyInitialized') {
-    print("✓ Replica set already initialized");
+    print("Replica set already initialized");
   } else {
     throw e;
   }
 }
 EOF
 
-echo "Waiting for replica set to elect primary..."
-sleep 10
+  echo "Waiting for replica set to elect primary..."
+  sleep 10
+fi
 
 echo "Creating database and collections with indexes..."
 mongosh "$MONGO_URL" <<EOF
