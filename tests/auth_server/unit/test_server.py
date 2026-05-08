@@ -960,10 +960,25 @@ class TestInternalRouterGate:
             response = client.request(method, path, json={})
             if response.status_code != 401:
                 failures.append(
-                    f"{method} {path} returned {response.status_code} "
+                    f"  {method} {path} returned {response.status_code} "
                     f"(expected 401); body={response.text[:200]}"
                 )
-        assert not failures, "Unauthenticated /internal/* routes:\n" + "\n".join(failures)
+        if failures:
+            raise AssertionError(
+                "One or more /internal/* routes accept requests without the "
+                "internal-JWT gate. This is almost always because a handler "
+                "was registered directly on ``app`` (e.g. "
+                "``@app.post('/internal/foo')``) instead of on the "
+                "``internal_router`` defined in auth_server/server.py.\n"
+                "\n"
+                "Fix: decorate the handler with ``@internal_router.post(...)`` "
+                "(and drop the ``/internal`` prefix from the path, since the "
+                "router already provides it). This inherits the router-level "
+                "``Depends(validate_internal_auth)`` so the handler cannot "
+                "ship without the signed-Bearer check.\n"
+                "\n"
+                "Offending routes:\n" + "\n".join(failures)
+            )
 
 
 class TestGenerateTokenEndpointInternalAuth:
