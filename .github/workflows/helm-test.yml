@@ -26,12 +26,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Set up Helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2
         with:
-          version: '3.14.0'
+          version: '3.20.2'
 
       - name: Add Helm repositories
         run: |
@@ -69,12 +69,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Set up Helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2
         with:
-          version: '3.14.0'
+          version: '3.20.2'
 
       - name: Template validation
         run: |
@@ -97,12 +97,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Set up Helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2
         with:
-          version: '3.14.0'
+          version: '3.20.2'
 
       - name: Install kubeconform
         run: |
@@ -125,12 +125,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Set up Helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2
         with:
-          version: '3.14.0'
+          version: '3.20.2'
 
       - name: Add Helm repositories
         run: |
@@ -144,11 +144,55 @@ jobs:
             helm dependency build charts/mcp-gateway-registry-stack || true
           fi
 
+  unittest:
+    name: "Helm Unit Tests"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Set up Helm
+        uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2
+        with:
+          version: '3.20.2'
+
+      - name: Install helm-unittest plugin
+        run: helm plugin install https://github.com/helm-unittest/helm-unittest
+
+      - name: Add Helm repositories
+        run: |
+          helm repo add bitnami https://charts.bitnami.com/bitnami || true
+          helm repo update
+
+      - name: Build dependencies for umbrella chart
+        run: |
+          if [ -f "charts/mcp-gateway-registry-stack/Chart.yaml" ]; then
+            helm dependency build charts/mcp-gateway-registry-stack
+          fi
+
+      - name: Run helm unit tests
+        run: |
+          echo "## Helm Unit Test Results" >> $GITHUB_STEP_SUMMARY
+          failed=0
+          for chart in charts/*/; do
+            if [ -d "${chart}tests" ] && [ -n "$(ls -A ${chart}tests/*_test.yaml 2>/dev/null)" ]; then
+              echo "Running unit tests for ${chart}..."
+              if helm unittest "$chart"; then
+                echo "- ${chart}: PASSED" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "- ${chart}: FAILED" >> $GITHUB_STEP_SUMMARY
+                failed=1
+              fi
+            fi
+          done
+          exit $failed
+
   summary:
     name: "Helm Test Summary"
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [lint, template, kubeconform, dependency-check]
+    needs: [lint, template, kubeconform, dependency-check, unittest]
     if: always()
 
     steps:
@@ -162,3 +206,4 @@ jobs:
           echo "| Template | ${{ needs.template.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Kubeconform | ${{ needs.kubeconform.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Dependencies | ${{ needs.dependency-check.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Unit Tests | ${{ needs.unittest.result }} |" >> $GITHUB_STEP_SUMMARY
