@@ -1,6 +1,7 @@
 import React from 'react';
 import { ClipboardDocumentIcon } from '@heroicons/react/24/outline';
 import DetailsModal from './DetailsModal';
+import ResourceBoundTokenButton from './ResourceBoundTokenButton';
 
 interface ServerDetailsModalProps {
   server: any;
@@ -63,6 +64,14 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
             metadata, tools, authentication configuration, and runtime details.
           </p>
         </div>
+
+        {server?.path && (
+          <ResourceBoundTokenButton
+            resourceType="server"
+            resourceId={server.path}
+            resourceName={server?.name}
+          />
+        )}
 
         <div className="space-y-2">
           <div className="flex items-center justify-between">

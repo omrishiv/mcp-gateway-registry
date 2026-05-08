@@ -736,16 +736,33 @@ This section implements the official [Anthropic MCP Registry API specification](
 
 **Endpoint:** `POST /api/tokens/generate`
 
-**Purpose:** Generate JWT token for authenticated user
+**Purpose:** Generate a JWT token for the authenticated user. Supports two modes:
+
+- **User token**: When `resource` is omitted, mints an unrestricted JWT scoped to the user's current OAuth scopes.
+- **Resource-bound token**: When `resource` is included, mints a JWT scoped to a single resource. The token will be rejected at the nginx edge if used against any other resource, and cannot reach privilege-escalation endpoints (token minting, admin, search, federation, config, peers, registry, auth — except `/api/auth/me` for introspection).
 
 **Request Body:**
 ```json
 {
   "requested_scopes": ["optional", "scopes"],
   "expires_in_hours": 8,
-  "description": "Token description"
+  "description": "Token description",
+  "resource": {
+    "type": "server | virtual_server | agent | skill",
+    "id": "resource-path-or-slug"
+  }
 }
 ```
+
+Fields:
+- `requested_scopes` (optional): Subset of the user's current scopes. Defaults to all of them.
+- `expires_in_hours` (optional): 1–24. Defaults to 8.
+- `description` (optional): Human-readable label recorded in logs.
+- `resource` (optional): Binds the token to a single resource.
+  - `type`: One of `server`, `virtual_server`, `agent`, `skill`.
+  - `id`: Path or slug. Must not contain `..`, percent-encoding, or control characters. Leading/trailing slashes are normalized.
+
+Minting a resource-bound token fails with `403` if the user does not currently have access to the requested resource — a bound token can never grant more than the user already had.
 
 **Response:** `200 OK`
 ```json
@@ -757,6 +774,14 @@ This section implements the official [Anthropic MCP Registry API specification](
   "scope": "space separated scopes"
 }
 ```
+
+The issued JWT carries `token_kind: "user"` for an unrestricted token, or `token_kind: "resource"` plus `resource_type` and `resource_id` claims for a bound token. Self-signed tokens minted before this feature lack `token_kind` and will be rejected by the edge guard — affected users must re-mint their tokens through the current gateway.
+
+**Error Codes:**
+- `400 Bad Request` — malformed body, missing resource fields, invalid resource id (traversal, percent-encoding, control chars)
+- `403 Forbidden` — requested scopes exceed user's current scopes, or resource-binding requests a resource the user cannot access
+- `422 Unprocessable Entity` — Pydantic validation failure (e.g., non-string `resource.id`, invalid `resource.type`)
+- `429 Too Many Requests` — rate limit exceeded
 
 ---
 

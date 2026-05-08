@@ -1,6 +1,7 @@
 import React from 'react';
 import { ClipboardDocumentIcon } from '@heroicons/react/24/outline';
 import DetailsModal from './DetailsModal';
+import ResourceBoundTokenButton from './ResourceBoundTokenButton';
 
 interface AgentLike {
   name: string;
@@ -78,6 +79,14 @@ const AgentDetailsModal: React.FC<AgentDetailsModalProps> = ({
             security schemes, and configuration details.
           </p>
         </div>
+
+        {agent?.path && (
+          <ResourceBoundTokenButton
+            resourceType="agent"
+            resourceId={agent.path}
+            resourceName={agent.name}
+          />
+        )}
 
         {/* A2A Agent Card URL for A2A agents */}
         {fullDetails?.supported_protocol === 'a2a' && fullDetails?.url && (() => {

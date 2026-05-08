@@ -2385,6 +2385,7 @@ async def generate_user_token(
         requested_scopes = body.get("requested_scopes", [])
         expires_in_hours = body.get("expires_in_hours", 8)
         description = body.get("description", "")
+        resource = body.get("resource")
 
         # Validate expires_in_hours
         if not isinstance(expires_in_hours, int) or expires_in_hours <= 0 or expires_in_hours > 24:
@@ -2397,6 +2398,97 @@ async def generate_user_token(
         if requested_scopes and not isinstance(requested_scopes, list):
             raise HTTPException(
                 status_code=400, detail="requested_scopes must be a list of strings"
+            )
+
+        # Validate resource-bound token request.
+        # If ``resource`` is present, verify the user can actually reach that
+        # resource today. Refuse to mint a binding the user could not use,
+        # so a bound token never grants more than the user already has.
+        if resource is not None:
+            if not isinstance(resource, dict):
+                raise HTTPException(
+                    status_code=400,
+                    detail="resource must be an object with 'type' and 'id' fields",
+                )
+            resource_type = resource.get("type")
+            resource_id = resource.get("id")
+            if not resource_type or not resource_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="resource must include both 'type' and 'id' fields",
+                )
+
+            from ..auth.resource_binding import (
+                RESOURCE_TYPES,
+                validate_user_can_bind_resource,
+            )
+
+            if resource_type not in RESOURCE_TYPES:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Invalid resource type '{resource_type}'. "
+                        f"Must be one of: {', '.join(RESOURCE_TYPES)}"
+                    ),
+                )
+
+            # Reject path traversal, URL-encoded payloads, and control
+            # characters at the registry boundary, before calling the auth
+            # server. Mirrors the Pydantic validator in
+            # auth_server.server::ResourceBinding.
+            if ".." in resource_id or "%" in resource_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "resource.id must not contain '..' or "
+                        "percent-encoded characters"
+                    ),
+                )
+            if any(ord(c) < 0x20 or ord(c) == 0x7F for c in resource_id):
+                raise HTTPException(
+                    status_code=400,
+                    detail="resource.id must not contain control characters",
+                )
+
+            allowed = await validate_user_can_bind_resource(
+                resource_type=resource_type,
+                resource_id=resource_id,
+                user_context=user_context,
+            )
+            if not allowed:
+                logger.warning(
+                    f"User '{user_context['username']}' attempted to bind token to "
+                    f"inaccessible resource {resource_type}:{resource_id}"
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        f"Cannot bind token to {resource_type}:{resource_id}: "
+                        "user does not have access to this resource"
+                    ),
+                )
+
+        # Record the mint in the audit trail. Distinguish bound tokens
+        # (with their resource binding) from user tokens so reviewers can
+        # tell which mints were scoped to a single resource vs. issued
+        # with full user scope.
+        if resource is not None:
+            set_audit_action(
+                request,
+                "create",
+                "resource_bound_token",
+                resource_id=f"{resource_type}:{resource_id}",
+                description=(
+                    f"Mint resource-bound token for {resource_type}:{resource_id}"
+                ),
+            )
+        else:
+            set_audit_action(
+                request,
+                "create",
+                "user_token",
+                resource_id=user_context["username"],
+                description="Mint user token (unrestricted within scopes)",
             )
 
         # Get full session data to include stored OAuth tokens
@@ -2431,6 +2523,13 @@ async def generate_user_token(
             "description": description,
         }
 
+        # Forward optional resource binding.
+        if resource is not None:
+            auth_request["resource"] = {
+                "type": resource["type"],
+                "id": resource["id"],
+            }
+
         # Call auth server internal API (no authentication needed since both are trusted internal services)
         async with httpx.AsyncClient() as client:
             headers = {"Content-Type": "application/json"}
@@ -2446,6 +2545,57 @@ async def generate_user_token(
             if response.status_code == 200:
                 token_data = response.json()
                 logger.info(f"Successfully generated token for user '{user_context['username']}'")
+
+                # Guard against a silent downgrade on a mixed-version deploy. Refuse
+                # to hand the user a token they believed was bound when it
+                # actually isn't. The auth-server is a trusted internal
+                # service, so we decode without signature verification —
+                # the check is against accidental downgrade, not forgery.
+                if resource is not None:
+                    access_token = token_data.get("access_token")
+                    try:
+                        import jwt as _pyjwt
+
+                        unverified_claims = _pyjwt.decode(
+                            access_token or "",
+                            options={"verify_signature": False},
+                        )
+                    except _pyjwt.InvalidTokenError:
+                        # ``InvalidTokenError`` is the base class for all
+                        # pyjwt decode/validation errors — narrower than a
+                        # blanket ``Exception`` so an unexpected failure
+                        # mode (network layer, etc.) still bubbles up.
+                        logger.error(
+                            "Could not decode token returned by auth-server; "
+                            "treating as downgrade for resource-bound mint"
+                        )
+                        raise HTTPException(
+                            status_code=500,
+                            detail=(
+                                "Auth server returned an unparseable token. "
+                                "Resource binding could not be confirmed."
+                            ),
+                            headers={"Connection": "close"},
+                        )
+                    from ..auth.resource_binding import TOKEN_KIND_CLAIM, TokenKind
+
+                    returned_kind = unverified_claims.get(TOKEN_KIND_CLAIM)
+                    if returned_kind != TokenKind.RESOURCE:
+                        logger.error(
+                            "Resource-bound mint request but auth-server returned "
+                            f"token_kind={returned_kind!r}; likely a mixed-version "
+                            "deploy where auth-server is older than registry. "
+                            "Refusing to hand back an unbound token."
+                        )
+                        raise HTTPException(
+                            status_code=500,
+                            detail=(
+                                "Auth server did not apply the requested resource "
+                                "binding. Check that the auth-server has been "
+                                "upgraded to the current version."
+                            ),
+                            headers={"Connection": "close"},
+                        )
 
                 # Format response to match expected structure (including refresh token)
                 formatted_response = {

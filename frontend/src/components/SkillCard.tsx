@@ -26,6 +26,7 @@ import StatusBadge from './StatusBadge';
 import StarRatingWidget from './StarRatingWidget';
 import SecurityScanModal from './SecurityScanModal';
 import useEscapeKey from '../hooks/useEscapeKey';
+import ResourceBoundTokenButton from './ResourceBoundTokenButton';
 
 /**
  * Props for the SkillCard component.
@@ -656,6 +657,16 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
                 </svg>
               </button>
             </div>
+
+            {skill.path && (
+              <div className="mb-4">
+                <ResourceBoundTokenButton
+                  resourceType="skill"
+                  resourceId={skill.path}
+                  resourceName={skill.name}
+                />
+              </div>
+            )}
 
             {/* Action buttons */}
             <div className="flex items-center gap-4 mb-4 pb-4 border-b border-gray-200 dark:border-gray-700">
