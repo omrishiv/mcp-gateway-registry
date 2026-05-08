@@ -729,6 +729,23 @@ class TestConfigEndpoint:
         assert data["auth_type"] == "keycloak"
 
 
+def _internal_auth_headers(auth_env_vars: dict) -> dict:
+    """Build an Authorization header carrying a valid internal JWT.
+
+    ``/internal/tokens`` and ``/internal/reload-scopes`` both require a
+    Bearer JWT signed with the shared SECRET_KEY (see
+    ``registry.auth.internal.generate_internal_token``). Tests that POST
+    to either endpoint must attach this header.
+    """
+    from registry.auth.internal import generate_internal_token
+
+    token = generate_internal_token(
+        subject="test-suite",
+        purpose="unit-test",
+    )
+    return {"Authorization": f"Bearer {token}"}
+
+
 class TestGenerateTokenEndpoint:
     """Tests for /internal/tokens endpoint."""
 
@@ -761,7 +778,11 @@ class TestGenerateTokenEndpoint:
         }
 
         # Act
-        response = client.post("/internal/tokens", json=request_data)
+        response = client.post(
+            "/internal/tokens",
+            json=request_data,
+            headers=_internal_auth_headers(auth_env_vars),
+        )
 
         # Assert
         assert response.status_code == 200
@@ -789,7 +810,11 @@ class TestGenerateTokenEndpoint:
         }
 
         # Act
-        response = client.post("/internal/tokens", json=request_data)
+        response = client.post(
+            "/internal/tokens",
+            json=request_data,
+            headers=_internal_auth_headers(auth_env_vars),
+        )
 
         # Assert
         assert response.status_code == 400
@@ -810,7 +835,11 @@ class TestGenerateTokenEndpoint:
         }
 
         # Act
-        response = client.post("/internal/tokens", json=request_data)
+        response = client.post(
+            "/internal/tokens",
+            json=request_data,
+            headers=_internal_auth_headers(auth_env_vars),
+        )
 
         # Assert
         assert response.status_code == 403
@@ -849,15 +878,202 @@ class TestGenerateTokenEndpoint:
 
         # Act - generate tokens up to limit
         for _ in range(2):
-            response = client.post("/internal/tokens", json=request_data)
+            response = client.post(
+                "/internal/tokens",
+                json=request_data,
+                headers=_internal_auth_headers(auth_env_vars),
+            )
             assert response.status_code == 200
 
         # Try one more - should fail
-        response = client.post("/internal/tokens", json=request_data)
+        response = client.post(
+            "/internal/tokens",
+            json=request_data,
+            headers=_internal_auth_headers(auth_env_vars),
+        )
 
         # Assert
         assert response.status_code == 429
         assert "Rate limit exceeded" in response.json()["detail"]
+
+
+class TestInternalRouterGate:
+    """Meta-test: every route under the ``/internal/`` prefix on the
+    auth-server must require the signed-Bearer internal-JWT gate.
+
+    The router-level dependency in ``auth_server.server.internal_router``
+    is the mechanism that provides this guarantee. This test enumerates
+    the routes at runtime and asserts each one returns 401 when called
+    without an ``Authorization`` header — so a future developer who
+    adds a new ``/internal/*`` handler by accident on ``@app.post`` or
+    without the router dependency will get a failing build instead of
+    an unauthenticated privileged endpoint.
+    """
+
+    def _internal_routes(self, server_module) -> list:
+        """Return every (path, method) on app.routes whose path starts
+        with ``/internal/``. Filters out non-HTTP things like
+        ``Mount``/``WebSocketRoute`` which don't have a ``methods``
+        attribute.
+        """
+        collected: list[tuple[str, str]] = []
+        for route in server_module.app.routes:
+            path = getattr(route, "path", None)
+            methods = getattr(route, "methods", None)
+            if not path or not methods:
+                continue
+            if not path.startswith("/internal/"):
+                continue
+            for method in methods:
+                # HEAD/OPTIONS are auto-added and not interesting.
+                if method in ("HEAD", "OPTIONS"):
+                    continue
+                collected.append((path, method))
+        return collected
+
+    def test_at_least_the_known_endpoints_are_present(self, auth_env_vars):
+        """Guard against the meta-test trivially passing when the
+        router is empty. If someone deletes both endpoints this catches it."""
+        import auth_server.server as server_module
+
+        paths = {path for path, _ in self._internal_routes(server_module)}
+        assert "/internal/tokens" in paths
+        assert "/internal/reload-scopes" in paths
+
+    def test_every_internal_route_rejects_unauthenticated_request(
+        self, auth_env_vars
+    ):
+        """For every /internal/* route, a request without Authorization
+        must return 401. A future /internal/foo endpoint registered on
+        ``@app.post`` (bypassing the router) will fail here because the
+        handler runs without the gate and returns something other than
+        401.
+        """
+        import auth_server.server as server_module
+
+        client = TestClient(server_module.app)
+        routes = self._internal_routes(server_module)
+        assert routes, "expected at least one /internal/* route"
+
+        failures: list[str] = []
+        for path, method in routes:
+            response = client.request(method, path, json={})
+            if response.status_code != 401:
+                failures.append(
+                    f"{method} {path} returned {response.status_code} "
+                    f"(expected 401); body={response.text[:200]}"
+                )
+        assert not failures, "Unauthenticated /internal/* routes:\n" + "\n".join(failures)
+
+
+class TestGenerateTokenEndpointInternalAuth:
+    """Regression coverage for the internal-JWT gate on /internal/tokens.
+
+    The endpoint mints JWTs — any caller that can reach it can issue a
+    token for any user. We require the caller to prove knowledge of the
+    shared ``SECRET_KEY`` via a short-lived internal JWT signed the same
+    way the existing ``/internal/reload-scopes`` handler does it.
+    """
+
+    def test_rejects_missing_authorization(self, auth_env_vars):
+        import auth_server.server as server_module
+
+        client = TestClient(server_module.app)
+        response = client.post(
+            "/internal/tokens",
+            json={
+                "user_context": {"username": "alice", "scopes": []},
+                "requested_scopes": [],
+                "expires_in_hours": 8,
+            },
+        )
+        assert response.status_code == 401
+        assert "Missing authorization header" in response.json()["detail"]
+
+    def test_rejects_non_bearer_scheme(self, auth_env_vars):
+        import auth_server.server as server_module
+
+        client = TestClient(server_module.app)
+        response = client.post(
+            "/internal/tokens",
+            json={
+                "user_context": {"username": "alice", "scopes": []},
+                "requested_scopes": [],
+                "expires_in_hours": 8,
+            },
+            headers={"Authorization": "Basic YWxpY2U6cGFzcw=="},
+        )
+        assert response.status_code == 401
+
+    def test_rejects_bearer_signed_with_wrong_key(self, auth_env_vars):
+        import auth_server.server as server_module
+
+        # Sign a JWT with a DIFFERENT secret — identical shape, wrong key.
+        # Models the realistic threat: an attacker on the internal network
+        # who does not possess SECRET_KEY.
+        import time as _time
+
+        wrong_key_token = jwt.encode(
+            {
+                "iss": "mcp-auth-server",
+                "aud": "mcp-registry",
+                "sub": "attacker",
+                "purpose": "forged",
+                "token_use": "access",
+                "iat": int(_time.time()),
+                "exp": int(_time.time()) + 60,
+            },
+            "not-the-real-secret",
+            algorithm="HS256",
+        )
+        client = TestClient(server_module.app)
+        response = client.post(
+            "/internal/tokens",
+            json={
+                "user_context": {"username": "alice", "scopes": []},
+                "requested_scopes": [],
+                "expires_in_hours": 8,
+            },
+            headers={"Authorization": f"Bearer {wrong_key_token}"},
+        )
+        assert response.status_code == 401
+
+    def test_rejects_expired_bearer(self, auth_env_vars):
+        # A token correctly signed with SECRET_KEY but whose ``exp`` is in
+        # the past must be rejected. Models the realistic threat of an
+        # attacker who captured a valid internal JWT from an earlier
+        # request and tries to replay it after the short TTL.
+        import time as _time
+
+        import auth_server.server as server_module
+
+        secret = auth_env_vars["SECRET_KEY"]
+        now = int(_time.time())
+        expired_token = jwt.encode(
+            {
+                "iss": "mcp-auth-server",
+                "aud": "mcp-registry",
+                "sub": "registry-service",
+                "purpose": "generate-token",
+                "token_use": "access",
+                # ``leeway=30`` on validation, so push exp well past that.
+                "iat": now - 600,
+                "exp": now - 120,
+            },
+            secret,
+            algorithm="HS256",
+        )
+        client = TestClient(server_module.app)
+        response = client.post(
+            "/internal/tokens",
+            json={
+                "user_context": {"username": "alice", "scopes": []},
+                "requested_scopes": [],
+                "expires_in_hours": 8,
+            },
+            headers={"Authorization": f"Bearer {expired_token}"},
+        )
+        assert response.status_code == 401
 
 
 class TestReloadScopesEndpoint:
