@@ -32,6 +32,7 @@ Create chart name and version as used by the chart label.
 Common labels
 */}}
 {{- define "mcp-gateway-registry-stack.labels" -}}
+{{- include "mcp-gateway-registry-stack.validate" . -}}
 helm.sh/chart: {{ include "mcp-gateway-registry-stack.chart" . }}
 {{ include "mcp-gateway-registry-stack.selectorLabels" . }}
 {{- if .Chart.AppVersion }}

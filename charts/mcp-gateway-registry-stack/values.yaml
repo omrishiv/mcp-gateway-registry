@@ -72,7 +72,12 @@ global:
       authServer: /auth-server
       registry: /registry
       mcpgw: /mcpgw
-      keycloak: /keycloak # make sure to update keycloak.httpRelativePath (/keycloak/)
+      keycloak: /keycloak  # Path the browser uses to reach Keycloak.
+                           # The registry pod's nginx proxy rewrites this
+                           # away before forwarding, so Keycloak itself
+                           # still serves from its own root path — do NOT
+                           # set keycloak.httpRelativePath to match this
+                           # value. Leave keycloak.httpRelativePath: /.
 
 mongodb-kubernetes:
   operator:
@@ -181,10 +186,16 @@ keycloak-configure:
     adminUser: *keycloakAdmin
   # authServer.externalUrl will be templated in the subchart using global.domain
 
-# Keycloak ingress for mcp-gateway-registry
-# Whether to create an ingress for Keycloak with this Chart (only applicable when keycloak.create: true)
+# Keycloak ingress for mcp-gateway-registry.
+# Disabled by default: the registry pod's in-cluster nginx reverse
+# proxy fronts Keycloak at /keycloak, /realms, and /resources (see
+# docker/nginx_rev_proxy_http_and_https.conf). Keycloak stays on its
+# ClusterIP Service, reachable only from in-cluster services.
+# Enable this only if Keycloak needs its own public hostname
+# (e.g. for external applications that need to hit Keycloak directly
+# without going through the registry).
 keycloakIngress:
-  enabled: true
+  enabled: false
 
 # Mongodb configuration job
 mongodb-configure:
@@ -394,8 +405,23 @@ auth-server:
     domain: ""  # Optional: custom Cognito domain
     region: "us-east-1"
 
+  # auth-server ingress disabled by default. The registry pod's
+  # in-cluster nginx reverse proxy fronts auth-server for browser
+  # traffic (/oauth2/login/*, /oauth2/callback/*, /oauth2/logout/)
+  # — see docker/nginx_rev_proxy_http_and_https.conf. auth-server
+  # stays on its ClusterIP Service. Enable this only if auth-server
+  # needs its own public hostname (rare — consider the security
+  # implications of exposing /internal/* and /admin/* before doing so).
+  #
+  # Note: flipping this back to true creates the Ingress but does NOT
+  # redirect the chart-computed external URLs to use it. AUTH_SERVER_
+  # EXTERNAL_URL keeps pointing at the registry host. If you actually
+  # want browsers to hit auth-server directly, you must also override
+  # the URL in your own values (or set app.existingSecret and manage
+  # the secret contents yourself). The stack does not ship a switch
+  # for this — it's a rarely-needed escape hatch.
   ingress:
-    enabled: true
+    enabled: false
     ingressClassName: alb
 
   nodeSelector: {}
