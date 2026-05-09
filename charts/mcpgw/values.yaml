@@ -22,8 +22,11 @@ app:
   existingSecret: ""  # If set, use this existing secret instead of creating one
   port: 8000
 
-  # Registry connection
-  registryUrl: http://registry:8080
+  # Registry connection — default is the standalone fallback. When this
+  # subchart is deployed as part of mcp-gateway-registry-stack, the
+  # template overrides this with the full ClusterIP DNS and the
+  # registry Service's correct port (8000, see charts/registry/values.yaml).
+  registryUrl: http://registry:8000
 
   # Security settings
   # secretKey: Required for standalone deployment (not needed when deployed via stack).

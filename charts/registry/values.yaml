@@ -21,14 +21,16 @@ app:
   envSecretName: registry-secret
   existingSecret: ""  # If set, use this existing secret instead of creating one
 
-  # External URLs
-  authServerUrl: http://localhost:8888
-
   # Security settings
   # secretKey: If not provided, a random 64-character key is auto-generated.
   # When deployed via mcp-gateway-registry-stack, the key is shared with auth-server.
   # Uncomment to use a specific key:
   # secretKey: "your-secure-key-here"
+
+  # Session cookie Domain attribute. Leave empty to default to
+  # ".<global.domain>". See charts/auth-server/values.yaml for a longer
+  # note on when to override.
+  sessionCookieDomain: ""
 
   # Federation configuration
   federationStaticTokenAuthEnabled: false #If not provided, defaults to false
