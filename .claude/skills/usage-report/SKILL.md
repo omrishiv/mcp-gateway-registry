@@ -106,6 +106,22 @@ This produces a PNG with two subplots:
 - **Cumulative Unique Registry Installs** -- running total of unique registry_ids per cloud provider
 - **Daily Active Registry Installs** -- unique registry_ids seen each day per cloud provider
 
+### Step 5b2: Generate Compute Platform Timeseries Chart
+
+Generate a second timeseries chart, parallel to the cloud-provider one, showing unique registry installs per **compute platform** (docker, kubernetes, ecs, ec2, etc.) over time. Same data-sourcing behavior (scans all CSV files across dated subdirectories):
+
+```bash
+/usr/bin/python3 .claude/skills/usage-report/generate_compute_timeseries_chart.py \
+  --csv-dir OUTPUT_DIR \
+  --output $DATE_DIR/compute-installs-timeseries-YYYY-MM-DD.png
+```
+
+This produces a PNG with two subplots:
+- **Cumulative Unique Registry Installs per Compute Platform** -- running total of unique registry_ids per platform
+- **Daily Active Registry Installs per Compute Platform** -- unique registry_ids seen each day per platform
+
+Embed this chart in the report's "Deployment Distribution" section (or a dedicated "Compute Platform Growth" section) with a short narrative on which platforms are growing fastest in absolute and percentage terms.
+
 ### Step 5c: Generate Instance Lifetime Chart
 
 Generate a density plot showing the distribution of instance lifetimes (age in days). This reads the metrics JSON produced by the analysis step, so it must run after Step 6. However, the SKILL.md lists it here for logical grouping with other charts:
@@ -402,6 +418,7 @@ HTML report: .scratchpad/usage-reports/2026-04-18/ai-registry-usage-report-2026-
 Charts:
   - .scratchpad/usage-reports/2026-04-18/instance-distribution-2026-04-18.png
   - .scratchpad/usage-reports/2026-04-18/registry-installs-timeseries-2026-04-18.png
+  - .scratchpad/usage-reports/2026-04-18/compute-installs-timeseries-2026-04-18.png
   - .scratchpad/usage-reports/2026-04-18/instance-lifetime-2026-04-18.png
 CSV data: .scratchpad/usage-reports/2026-04-18/registry_metrics.csv
 ```
@@ -421,6 +438,7 @@ Output saved to `/tmp/reports/2026-04-18/`.
     ai-registry-usage-report-2026-04-16.html
     instance-distribution-2026-04-16.png
     registry-installs-timeseries-2026-04-16.png
+    compute-installs-timeseries-2026-04-16.png
     instance-lifetime-2026-04-16.png
     tables-2026-04-16.md
     metrics-2026-04-16.json
