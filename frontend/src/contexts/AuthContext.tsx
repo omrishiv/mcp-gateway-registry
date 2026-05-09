@@ -5,6 +5,14 @@ import { getBaseURL } from '../utils/basePath';
 // Configure axios to include credentials (cookies) with all requests
 axios.defaults.withCredentials = true;
 
+// Configure axios to prepend the registry's ROOT_PATH (e.g. "/registry"
+// in path routing mode, "" in subdomain mode) to every request. This
+// runs synchronously at module-import time so bare `axios.get('/api/...')`
+// calls anywhere in the app resolve correctly — without this, calls
+// that fire before AuthProvider's first useEffect run would hit
+// origin/api/... and 404 in path mode.
+axios.defaults.baseURL = getBaseURL();
+
 // UIPermissions keys match exactly what scopes.yml defines.
 // These control server/agent access
 interface UIPermissions {
@@ -59,10 +67,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [csrfToken, setCsrfToken] = useState<string | null>(null);
 
   useEffect(() => {
-    // Set axios baseURL from <base> tag when component mounts
-    axios.defaults.baseURL = getBaseURL();
-
     // Setup axios interceptor to include CSRF token in requests
+    // (baseURL is already set at module-import time above)
     const interceptor = axios.interceptors.request.use((config) => {
       if (csrfToken && config.method && ['post', 'put', 'delete', 'patch'].includes(config.method.toLowerCase())) {
         config.headers['X-CSRF-Token'] = csrfToken;
