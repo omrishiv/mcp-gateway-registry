@@ -106,6 +106,22 @@ This produces a PNG with two subplots:
 - **Cumulative Unique Registry Installs** -- running total of unique registry_ids per cloud provider
 - **Daily Active Registry Installs** -- unique registry_ids seen each day per cloud provider
 
+### Step 5b2: Generate Compute Platform Timeseries Chart
+
+Generate a second timeseries chart, parallel to the cloud-provider one, showing unique registry installs per **compute platform** (docker, kubernetes, ecs, ec2, etc.) over time. Same data-sourcing behavior (scans all CSV files across dated subdirectories):
+
+```bash
+/usr/bin/python3 .claude/skills/usage-report/generate_compute_timeseries_chart.py \
+  --csv-dir OUTPUT_DIR \
+  --output $DATE_DIR/compute-installs-timeseries-YYYY-MM-DD.png
+```
+
+This produces a PNG with two subplots:
+- **Cumulative Unique Registry Installs per Compute Platform** -- running total of unique registry_ids per platform
+- **Daily Active Registry Installs per Compute Platform** -- unique registry_ids seen each day per platform
+
+Embed this chart in the report's "Deployment Distribution" section (or a dedicated "Compute Platform Growth" section) with a short narrative on which platforms are growing fastest in absolute and percentage terms.
+
 ### Step 5c: Generate Instance Lifetime Chart
 
 Generate a density plot showing the distribution of instance lifetimes (age in days). This reads the metrics JSON produced by the analysis step, so it must run after Step 6. However, the SKILL.md lists it here for logical grouping with other charts:
@@ -199,6 +215,35 @@ When writing the report:
 
 The known internal instances are typically the longest-running, highest-activity instances since they are always-on development environments.
 
+### Step 6c: Run Liveness Analysis
+
+Classify customer (non-internal) instances into liveness tiers based on recent heartbeat activity. Registry heartbeats are emitted once per 24 hours by default (`MCP_TELEMETRY_HEARTBEAT_INTERVAL_MINUTES=1440`, see [registry/core/telemetry.py](../../../registry/core/telemetry.py) and [registry/core/config.py](../../../registry/core/config.py)), which makes heartbeat counts a direct proxy for "is this deployment still running".
+
+The script produces two files:
+- `liveness-YYYY-MM-DD.md` -- a pre-formatted markdown section (tier summary table, confirmed-alive instance list, cloud/compute/auth breakdowns) ready to embed in the report
+- `liveness-YYYY-MM-DD.json` -- raw counts and instance ID lists, used for delta tracking in future reports
+
+```bash
+/usr/bin/python3 .claude/skills/usage-report/analyze_liveness.py \
+  --csv $DATE_DIR/registry_metrics.csv \
+  --metrics-json $DATE_DIR/metrics-YYYY-MM-DD.json \
+  --output-dir $DATE_DIR \
+  --search-dir OUTPUT_DIR \
+  --date YYYY-MM-DD \
+  $INTERNAL_FLAG
+```
+
+**Tiers defined:**
+- **Confirmed Alive** (leading, revenue-countable): ≥ 5 heartbeats in the last 7 days -- a registry that has phoned home almost every day for a week
+- **Stronger Alive** (trailing): ≥ 10 heartbeats in the last 14 days -- durable two-week signal
+- **Likely Alive**: any event (startup or heartbeat) in the last 7 days
+- **Silent-but-recent**: event in last 7 days but < 5 heartbeats (new installs or heartbeat-disabled)
+- **Dormant**: no event in the last 14 days (probably deprovisioned)
+
+If a previous `liveness-*.json` file is found in `--search-dir`, the "vs Previous" column in the tier summary table is populated with deltas. On first run, it shows "baseline".
+
+**Note:** Run this after Step 6 since it reads `metrics-YYYY-MM-DD.json` for per-instance cloud/compute/auth metadata.
+
 ### Step 7: Generate the Usage Report
 
 Read the generated `tables-YYYY-MM-DD.md` and include its tables directly in the report. Add narrative sections (Executive Summary, Architecture Patterns, Recommendations) around the data tables. The tables file contains:
@@ -207,12 +252,14 @@ Read the generated `tables-YYYY-MM-DD.md` and include its tables directly in the
 - Registry Instance Lifetime table (age in days, sorted descending, internal instances labeled)
 - Identified and Unidentified instance tables (internal instances labeled)
 - Cloud, Compute, Architecture, Storage, Auth distribution tables
-- Version Adoption table
+- Version Adoption table (with Events, % Events, unique Instances, and % Instances columns)
 - Feature Adoption table
 - Search Usage table
 - Sticky Instance Breakdown table (one row per cloud/compute/storage/auth profile, with count, percentage, and change vs previous)
 - Most Active Instances table (top 10 non-internal instances by activity score, with Version and Embeddings columns)
 - Per-instance daily timelines (with servers, agents, skills, search queries)
+
+Also read the generated `liveness-YYYY-MM-DD.md` (from Step 6c) and include its tier summary, confirmed-alive instance list, and cloud/compute/auth breakdowns as a dedicated **Liveness** section in the report (placed after "Registry Instance Lifetime" and before "Version Adoption"). The Executive Summary should mention the Confirmed-Alive and Stronger-Alive counts as the revenue-countable leading and trailing indicators.
 
 #### Report Structure
 
@@ -247,6 +294,7 @@ Compare both numbers against the same `stickiness` values from the previous repo
 - GitHub stars delta (and forks/contributors if notable)
 - Customer instances running 3+ days: current vs previous count
 - Longest-running non-internal instance: current age vs previous age
+- Confirmed-Alive and Stronger-Alive counts (from `liveness-*.json`): current vs previous
 
 ## Deployment Distribution (by Unique Instances)
 ![Instance Distribution](instance-distribution-YYYY-MM-DD.png)
@@ -270,8 +318,16 @@ Flag any unusual spikes (e.g., restart storms, heavy search bursts) with context
 Commentary on average/max lifetime, multi-day vs single-day.
 Density chart and top-10 table by age. Mark internal instances.
 
+## Liveness (Currently Active Instances)
+This section is pre-generated by `analyze_liveness.py` in `liveness-YYYY-MM-DD.md`. Include it verbatim, plus a short narrative below the tables explaining:
+- How the confirmed-alive count correlates with cloud/compute/auth distributions
+- Any notable shifts vs the previous report (the tier summary table has a "vs Previous" column pre-filled)
+- Which confirmed-alive instances overlap with "Most Active Instances" (signaling strong customer intent)
+
+The `liveness-YYYY-MM-DD.json` file persists counts and instance ID lists so future reports can compute deltas.
+
 ## Version Adoption
-Table of version strings with event counts. Notes on release vs dev versions.
+Table of version strings with event counts AND unique-instance counts. Columns: Version, Type, Events, % Events, Instances, % Instances. The Instances column is the count of distinct `registry_id` values reporting that version; % Instances is computed against the total identified-instance count. Notes on release vs dev versions, and commentary on versions with high events-per-instance (few long-running deployments) vs low events-per-instance (spreading across more distinct deployments).
 
 ## Feature Adoption
 Federation, gateway mode, heartbeat rates.
@@ -362,6 +418,7 @@ HTML report: .scratchpad/usage-reports/2026-04-18/ai-registry-usage-report-2026-
 Charts:
   - .scratchpad/usage-reports/2026-04-18/instance-distribution-2026-04-18.png
   - .scratchpad/usage-reports/2026-04-18/registry-installs-timeseries-2026-04-18.png
+  - .scratchpad/usage-reports/2026-04-18/compute-installs-timeseries-2026-04-18.png
   - .scratchpad/usage-reports/2026-04-18/instance-lifetime-2026-04-18.png
 CSV data: .scratchpad/usage-reports/2026-04-18/registry_metrics.csv
 ```
@@ -381,9 +438,12 @@ Output saved to `/tmp/reports/2026-04-18/`.
     ai-registry-usage-report-2026-04-16.html
     instance-distribution-2026-04-16.png
     registry-installs-timeseries-2026-04-16.png
+    compute-installs-timeseries-2026-04-16.png
     instance-lifetime-2026-04-16.png
     tables-2026-04-16.md
     metrics-2026-04-16.json
+    liveness-2026-04-16.md
+    liveness-2026-04-16.json
     registry_metrics.csv
   2026-04-18/
     ai-registry-usage-report-2026-04-18.md

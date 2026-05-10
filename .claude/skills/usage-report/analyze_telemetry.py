@@ -1043,23 +1043,35 @@ def _compute_instance_timeline(
 def _compute_version_table(
     rows: list[dict[str, str]],
 ) -> list[dict]:
-    """Compute version adoption table."""
-    total = len(rows)
-    version_counts = Counter()
+    """Compute version adoption table with event counts and unique-instance counts."""
+    total_events = len(rows)
+    version_events: Counter = Counter()
+    version_instances: dict[str, set[str]] = {}
+    all_instances: set[str] = set()
     for row in rows:
-        version_counts[row.get("v") or "unknown"] += 1
+        version = row.get("v") or "unknown"
+        version_events[version] += 1
+        rid = (row.get("registry_id") or "").strip()
+        if rid:
+            version_instances.setdefault(version, set()).add(rid)
+            all_instances.add(rid)
+
+    total_instances = len(all_instances)
 
     result = []
-    for version, count in version_counts.most_common():
+    for version, count in version_events.most_common():
         vtype = _classify_version(version)
         branch = _extract_version_branch(version) if vtype == "dev" else "--"
+        instance_count = len(version_instances.get(version, set()))
 
         result.append(
             {
                 "version": version,
                 "type": "**Release**" if vtype == "release" else f"Dev ({branch})",
                 "events": count,
-                "percentage": _format_pct(count, total),
+                "percentage": _format_pct(count, total_events),
+                "instances": instance_count,
+                "instance_percentage": _format_pct(instance_count, total_instances),
             }
         )
 
@@ -1348,10 +1360,13 @@ def _build_markdown_tables(
     # Version Adoption
     lines.append("## Version Adoption")
     lines.append("")
-    lines.append("| Version | Type | Events | Percentage |")
-    lines.append("|---------|------|--------|------------|")
+    lines.append("| Version | Type | Events | % Events | Instances | % Instances |")
+    lines.append("|---------|------|--------|----------|-----------|-------------|")
     for v in versions:
-        lines.append(f"| `{v['version']}` | {v['type']} | {v['events']} | {v['percentage']} |")
+        lines.append(
+            f"| `{v['version']}` | {v['type']} | {v['events']} | {v['percentage']} | "
+            f"{v['instances']} | {v['instance_percentage']} |"
+        )
     lines.append("")
 
     # Feature Adoption
