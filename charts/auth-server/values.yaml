@@ -21,16 +21,18 @@ app:
   envSecretName: auth-server-secret
   existingSecret: ""  # If set, use this existing secret instead of creating one
 
-  # External URLs
-  externalUrl: http://localhost:8888
-
   # Security settings
   # secretKey: If not provided, a random 64-character key is auto-generated.
   # When deployed via mcp-gateway-registry-stack, the key is shared with registry.
   # Uncomment to use a specific key:
   # secretKey: "your-secure-key-here"
-  sessionCookieDomain: ""  # Auto-inferred from Host header if empty
   sessionCookieSecure: true
+  # Session cookie Domain attribute. Leave empty to default to
+  # ".<global.domain>" (valid for all subdomains of the deployment
+  # domain). Set to a specific hostname (e.g. "mcpregistry.example.com")
+  # to scope the cookie tighter, or to a different parent
+  # (".team.example.com") if this stack lives under a subdomain.
+  sessionCookieDomain: ""
   oauthStoreTokensInSession: false  # Store OAuth tokens in session (default: false)
 
   # Internal JWT configuration for service-to-service tokens
@@ -72,7 +74,6 @@ authProvider:
 # Keycloak integration (used when authProvider.type = "keycloak")
 keycloak:
   enabled: true
-  externalUrl: http://localhost:8080
   realm: mcp-gateway
   m2mClientId: ""  # Optional: M2M client ID for machine-to-machine authentication
   m2mClientSecret: ""  # Optional: M2M client secret
@@ -141,20 +142,6 @@ resources:
   limits:
     cpu: 2
     memory: 2Gi
-
-# Ingress configuration
-ingress:
-  enabled: false
-  className: alb
-  hostname: ""
-  annotations: { }
-  tls: false
-  # Routing mode: "subdomain" or "path"
-  # - subdomain: auth-server.domain.com
-  # - path: domain.com/auth-server (configurable via path setting)
-  routingMode: subdomain
-  # Path prefix when using path-based routing (default: /auth-server)
-  path: /auth-server
 
 # Extra environment variables appended to the container's `env:` list.
 # Uses the native Kubernetes EnvVar schema, so `valueFrom` is supported.
