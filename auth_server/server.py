@@ -30,7 +30,7 @@ import requests
 import uvicorn
 import yaml
 from botocore.exceptions import ClientError
-from fastapi import Cookie, FastAPI, Header, HTTPException, Request
+from fastapi import APIRouter, Cookie, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from jwt.api_jwk import PyJWK
@@ -73,6 +73,7 @@ from registry.auth.internal import (
 from registry.auth.internal import (
     _INTERNAL_JWT_ISSUER as JWT_ISSUER,
 )
+from registry.auth.internal import validate_internal_auth
 
 MAX_TOKEN_LIFETIME_HOURS = 24
 DEFAULT_TOKEN_LIFETIME_HOURS = 8
@@ -964,6 +965,26 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
     root_path=ROOT_PATH,
+)
+
+
+# Router for service-to-service /internal/* endpoints.
+#
+# Every route registered on this router inherits the
+# ``validate_internal_auth`` dependency, so no /internal/* handler can
+# accidentally ship without the internal-JWT gate — a new handler just
+# needs ``@internal_router.post("/foo")`` and the signed-Bearer check
+# is already in place before the handler body runs.
+#
+# Individual handlers additionally declare ``caller: str = Depends(
+# validate_internal_auth)`` so (a) the caller identity is available for
+# audit logging and (b) the Authorization header shows up in OpenAPI.
+# The dependency is cached per-request by FastAPI, so declaring it
+# twice (router-level gate + handler-level injection) does not
+# re-validate the JWT.
+internal_router = APIRouter(
+    prefix="/internal",
+    dependencies=[Depends(validate_internal_auth)],
 )
 
 
@@ -2176,8 +2197,11 @@ async def manage_federation_token(request: Request):
         }
 
 
-@app.post("/internal/tokens", response_model=GenerateTokenResponse)
-async def generate_user_token(request: GenerateTokenRequest):
+@internal_router.post("/tokens", response_model=GenerateTokenResponse)
+async def generate_user_token(
+    body: GenerateTokenRequest,
+    caller: str = Depends(validate_internal_auth),
+):
     """
     Generate or refresh a JWT token for a user.
 
@@ -2188,15 +2212,29 @@ async def generate_user_token(request: GenerateTokenRequest):
     This is an internal API endpoint meant to be called only by the registry service.
     The generated token will have the same or fewer privileges than the user currently has.
 
+    Authentication is enforced at the router level: every route on
+    ``internal_router`` requires a Bearer JWT signed with the shared
+    ``SECRET_KEY`` (see ``registry.auth.internal.generate_internal_token``).
+    The ``caller`` parameter re-declares the same dependency so the
+    identity is available for audit logging and the Authorization
+    header appears in OpenAPI. FastAPI caches per-request dependencies,
+    so the JWT is validated exactly once.
+
     Args:
-        request: Token generation request containing user context and requested scopes
+        body: Token generation request containing user context and requested scopes
+        caller: Identity of the trusted internal service that signed the request
 
     Returns:
         JWT token with expiration info (either refreshed user token or M2M token)
 
     Raises:
-        HTTPException: If request is invalid or user doesn't have required permissions
+        HTTPException: 401 if internal auth is missing/invalid; 400/403/429 for
+            request validation / permission / rate-limit failures.
     """
+    logger.info(f"/internal/tokens call from '{caller}'")
+
+    request = body  # keep the existing variable name used throughout the body
+
     try:
         # Extract user context
         user_context = request.user_context
@@ -2356,56 +2394,18 @@ async def generate_user_token(request: GenerateTokenRequest):
         )
 
 
-@app.post("/internal/reload-scopes")
-async def reload_scopes(request: Request, authorization: str | None = Header(None)):
+@internal_router.post("/reload-scopes")
+async def reload_scopes(caller_identity: str = Depends(validate_internal_auth)):
     """
     Reload the scopes configuration.
 
-    Accepts internal service authentication via self-signed JWT (Bearer token)
-    signed with the shared SECRET_KEY.
+    Authentication is enforced at the router level (see
+    ``internal_router``): the caller must present a Bearer JWT signed
+    with the shared ``SECRET_KEY``. Re-declaring the dependency here
+    surfaces the caller identity for audit logging without re-validating
+    the JWT (FastAPI caches per-request dependencies).
     """
-    if not authorization:
-        logger.warning("No Authorization header found for reload-scopes request")
-        raise HTTPException(
-            status_code=401,
-            detail="Authentication required",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    caller_identity = "unknown"
-
-    if authorization.startswith("Bearer "):
-        # Validate self-signed JWT using shared SECRET_KEY
-        token = authorization.split(" ", 1)[1]
-        try:
-            claims = jwt.decode(
-                token,
-                SECRET_KEY,
-                algorithms=["HS256"],
-                issuer=JWT_ISSUER,
-                audience=JWT_AUDIENCE,
-                options={
-                    "verify_exp": True,
-                    "verify_iat": True,
-                    "verify_iss": True,
-                    "verify_aud": True,
-                },
-                leeway=30,
-            )
-            token_use = claims.get("token_use")
-            if token_use != "access":  # nosec B105 - OAuth2 token type validation per RFC 6749, not a password
-                raise ValueError(f"Invalid token_use: {token_use}")
-            caller_identity = claims.get("sub", "service")
-            logger.info(f"Reload-scopes authorized via JWT for: {caller_identity}")
-        except jwt.ExpiredSignatureError:
-            logger.warning("Expired JWT token for reload-scopes request")
-            raise HTTPException(status_code=401, detail="Token has expired")
-        except (jwt.InvalidTokenError, ValueError) as e:
-            logger.warning(f"JWT validation failed for reload-scopes: {e}")
-            raise HTTPException(status_code=401, detail="Invalid token")
-
-    else:
-        raise HTTPException(status_code=401, detail="Unsupported authentication scheme")
+    logger.info(f"Reload-scopes authorized via JWT for: {caller_identity}")
 
     # Reload the scopes configuration
     global SCOPES_CONFIG
@@ -2428,6 +2428,13 @@ async def reload_scopes(request: Request, authorization: str | None = Header(Non
     except Exception as e:
         logger.error(f"Failed to reload scopes configuration: {e}")
         raise HTTPException(status_code=500, detail="Failed to reload scopes configuration")
+
+
+# Mount the /internal/* router. All routes registered on
+# ``internal_router`` inherit the signed-Bearer authentication
+# requirement via its router-level dependency; mounting it here keeps
+# the gate co-located with the handlers it protects.
+app.include_router(internal_router)
 
 
 def parse_arguments():

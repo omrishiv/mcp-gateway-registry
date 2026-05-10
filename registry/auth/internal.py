@@ -67,7 +67,9 @@ async def validate_internal_auth(request: Request) -> str:
     """
     FastAPI dependency that validates internal service authentication.
 
-    Accepts Bearer JWT signed with the shared SECRET_KEY.
+    Accepts Bearer JWT signed with the shared ``SECRET_KEY``. Used as
+    the router-level gate on ``/internal/*`` routes in both the
+    registry and auth-server FastAPI apps.
 
     Args:
         request: The FastAPI request object
@@ -76,19 +78,26 @@ async def validate_internal_auth(request: Request) -> str:
         Caller identity string (e.g., 'registry-service')
 
     Raises:
-        HTTPException: If authentication fails
+        HTTPException: 401 if authentication fails
     """
-    auth_header = request.headers.get("Authorization")
+    return _validate_authorization_header(request.headers.get("Authorization"))
 
-    if not auth_header:
+
+def _validate_authorization_header(authorization: str | None) -> str:
+    """Implementation detail of :func:`validate_internal_auth`.
+
+    Takes the raw ``Authorization`` header value so the public
+    dependency can be a thin shim over ``request.headers.get(...)``.
+    """
+    if not authorization:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing authorization header",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    if auth_header.startswith("Bearer "):
-        return _validate_bearer_token(auth_header)
+    if authorization.startswith("Bearer "):
+        return _validate_bearer_token(authorization)
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,

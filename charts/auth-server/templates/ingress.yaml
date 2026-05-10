@@ -1,7 +1,11 @@
 {{- if .Values.ingress.enabled }}
 {{- $routingMode := .Values.global.ingress.routingMode | default "subdomain" }}
 {{- $domain := .Values.global.domain | default .Values.ingress.hostname }}
-{{- $pathPrefix := .Values.global.ingress.paths.authServer | default .Values.ingress.path | default "/auth-server" }}
+{{- $globalPaths := .Values.global.ingress.paths | default dict }}
+{{- $pathPrefix := (get $globalPaths "authServer") | default .Values.ingress.path | default "/auth-server" }}
+{{- $exposedPaths := list
+  (dict "path" "/oauth2" "pathType" "Prefix")
+}}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -28,23 +32,27 @@ spec:
     - host: {{ $domain | quote }}
       http:
         paths:
-          - path: {{ $pathPrefix }}
-            pathType: Prefix
+          {{- range $exposedPaths }}
+          - path: {{ printf "%s%s" $pathPrefix .path }}
+            pathType: {{ .pathType }}
             backend:
               service:
-                name: {{ .Values.app.name }}
+                name: {{ $.Values.app.name }}
                 port:
                   name: http
+          {{- end }}
     {{- else }}
     - host: {{ printf "auth-server.%s" $domain | quote }}
       http:
         paths:
-          - path: /
-            pathType: Prefix
+          {{- range $exposedPaths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
             backend:
               service:
-                name: {{ .Values.app.name }}
+                name: {{ $.Values.app.name }}
                 port:
                   name: http
+          {{- end }}
     {{- end }}
 {{- end }}
