@@ -123,6 +123,11 @@ keycloak:
   # IMPORTANT: This must have a trailing "/"
   httpRelativePath: /
 
+  # NOTE: Keycloak uses Bitnami's `extraEnvVars` convention. Our own
+  # subcharts (auth-server, registry, mcpgw) use `extraEnv` instead —
+  # see the `<subchart>.extraEnv` sections later in this file. Both
+  # accept the Kubernetes EnvVar schema (name + value/valueFrom); only
+  # the key name differs.
   extraEnvVars:
     - name: KC_PROXY
       value: edge
@@ -320,6 +325,13 @@ registry:
 
   nodeSelector: {}
 
+  # Extra env vars / envFrom sources appended to the registry container.
+  # See charts/registry/values.yaml for validation rules, reserved names,
+  # and footgun warnings. These values are forwarded to the registry
+  # subchart unchanged.
+  extraEnv: []
+  extraEnvFrom: []
+
 # MCPGW MCP server configuration
 mcpgw:
   enabled: true # Set to true to deploy the MCPGW MCP server
@@ -336,6 +348,13 @@ mcpgw:
     ingressClassName: alb
 
   nodeSelector: {}
+
+  # Extra env vars / envFrom sources appended to the mcpgw container.
+  # See charts/mcpgw/values.yaml for validation rules, reserved names,
+  # and footgun warnings. These values are forwarded to the mcpgw
+  # subchart unchanged.
+  extraEnv: []
+  extraEnvFrom: []
 
 # Auth server configuration
 auth-server:
@@ -402,3 +421,10 @@ auth-server:
     ingressClassName: alb
 
   nodeSelector: {}
+
+  # Extra env vars / envFrom sources appended to the auth-server container.
+  # See charts/auth-server/values.yaml for validation rules, reserved names,
+  # and footgun warnings. These values are forwarded to the auth-server
+  # subchart unchanged.
+  extraEnv: []
+  extraEnvFrom: []
