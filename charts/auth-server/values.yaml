@@ -143,4 +143,57 @@ resources:
     cpu: 2
     memory: 2Gi
 
+# Extra environment variables appended to the container's `env:` list.
+# Uses the native Kubernetes EnvVar schema, so `valueFrom` is supported.
+#
+# Validation (template render fails if violated):
+#   - Names must be unique within this list.
+#   - Names must not collide with chart-managed variables; use the
+#     corresponding values.yaml field instead (e.g. set app.jwtIssuer
+#     rather than JWT_ISSUER here). See the reserved list in
+#     templates/_helpers.tpl.
+#
+# User entries are appended last, so they win over chart `envFrom:`
+# sources on name collision — which is why the reserved list guards
+# catastrophic envFrom-sourced keys like SECRET_KEY, AUTH_PROVIDER,
+# and DOCUMENTDB_PASSWORD.
+#
+# Example:
+# extraEnv:
+#   - name: MY_FEATURE_FLAG
+#     value: "true"
+#   - name: MY_SECRET_VAR
+#     valueFrom:
+#       secretKeyRef:
+#         name: my-secret
+#         key: my-key
+extraEnv: []
+
+# Extra `envFrom:` sources appended to the container. Use this to inject
+# all keys from an external ConfigMap or Secret you manage (e.g. via
+# External Secrets Operator, SealedSecrets, or Vault CSI).
+#
+# NOT validated at template time — Helm cannot introspect external
+# ConfigMap/Secret contents. Consequences:
+#   - Keys in your source will SILENTLY OVERRIDE chart-managed envFrom
+#     entries (within envFrom, last source wins). Do NOT include keys
+#     like SECRET_KEY, AUTH_PROVIDER, DOCUMENTDB_PASSWORD,
+#     MONGODB_CONNECTION_STRING, KEYCLOAK_URL — shadowing these breaks
+#     cross-service auth or data access with no error.
+#   - Chart-managed `env:` entries (e.g. ENTRA_CLIENT_SECRET via
+#     valueFrom) always win over anything in extraEnvFrom — K8s rules:
+#     explicit env: beats envFrom regardless of order.
+#   - Referenced resources must exist when the pod starts (the default
+#     is optional: false). Set `optional: true` if the resource may be
+#     absent.
+#
+# Example:
+# extraEnvFrom:
+#   - secretRef:
+#       name: my-external-secrets
+#   - configMapRef:
+#       name: my-external-config
+#       optional: true
+extraEnvFrom: []
+
 nodeSelector: {}

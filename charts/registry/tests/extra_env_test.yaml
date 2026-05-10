@@ -1,0 +1,187 @@
+suite: extraEnv and extraEnvFrom
+templates:
+  - deployment.yaml
+release:
+  name: test
+  namespace: default
+set:
+  global:
+    authProvider:
+      type: keycloak
+tests:
+  - it: renders without extraEnv by default
+    asserts:
+      - isKind:
+          of: Deployment
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DEPLOYMENT_MODE
+            value: "with-gateway"
+
+  - it: appends extraEnv entries after chart-managed env vars
+    set:
+      extraEnv:
+        - name: MY_FLAG
+          value: "on"
+        - name: MY_SECRET_VAR
+          valueFrom:
+            secretKeyRef:
+              name: my-secret
+              key: my-key
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MY_FLAG
+            value: "on"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MY_SECRET_VAR
+            valueFrom:
+              secretKeyRef:
+                name: my-secret
+                key: my-key
+      # Order: chart-managed feature flags come first (DEPLOYMENT_MODE is
+      # env[0]); KEYCLOAK_ADMIN_PASSWORD (conditional on keycloak provider)
+      # is env[6]; user extraEnv entries are appended at the end.
+      #
+      # NOTE: The indices below assume global.authProvider.type=keycloak
+      # (set at the suite level) and awsRegistry.federationEnabled=false.
+      # Enabling federation or changing the auth provider shifts these
+      # indices. If you add a new conditional env block between the
+      # SHOW_*_TAB entries and KEYCLOAK_ADMIN_PASSWORD, update the
+      # expected index below.
+      - equal:
+          path: spec.template.spec.containers[0].env[0].name
+          value: DEPLOYMENT_MODE
+      - equal:
+          path: spec.template.spec.containers[0].env[1].name
+          value: REGISTRY_MODE
+      - equal:
+          path: spec.template.spec.containers[0].env[6].name
+          value: KEYCLOAK_ADMIN_PASSWORD
+      - equal:
+          path: spec.template.spec.containers[0].env[7].name
+          value: MY_FLAG
+      - equal:
+          path: spec.template.spec.containers[0].env[8].name
+          value: MY_SECRET_VAR
+
+  - it: appends extraEnvFrom entries after chart-managed envFrom sources
+    set:
+      extraEnvFrom:
+        - secretRef:
+            name: my-external-secrets
+        - configMapRef:
+            name: my-external-config
+            optional: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: my-external-secrets
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            configMapRef:
+              name: my-external-config
+              optional: true
+      # Order: chart-managed configmaps/secrets come first; user entries last.
+      # NOTE: These indices assume the stack-level secrets (shared-secret,
+      # oauth-provider-secret) are NOT set — those would append before the
+      # extraEnvFrom entries. When running standalone (no parent stack),
+      # envFrom[0..2] are otel-config, app-log-config, registry-secret.
+      - equal:
+          path: spec.template.spec.containers[0].envFrom[0].configMapRef.name
+          value: registry-otel-config
+      - equal:
+          path: spec.template.spec.containers[0].envFrom[1].configMapRef.name
+          value: registry-app-log-config
+      - equal:
+          path: spec.template.spec.containers[0].envFrom[2].secretRef.name
+          value: registry-secret
+
+  - it: fails when extraEnv contains an env-block reserved name (DEPLOYMENT_MODE)
+    set:
+      extraEnv:
+        - name: DEPLOYMENT_MODE
+          value: "registry-only"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"DEPLOYMENT_MODE\" is a reserved variable"
+
+  - it: fails when extraEnv contains an env-block reserved name (SHOW_SKILLS_TAB)
+    set:
+      extraEnv:
+        - name: SHOW_SKILLS_TAB
+          value: "false"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"SHOW_SKILLS_TAB\" is a reserved variable"
+
+  - it: fails when extraEnv contains a reserved envFrom-sourced name (SECRET_KEY)
+    set:
+      extraEnv:
+        - name: SECRET_KEY
+          value: "oops"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"SECRET_KEY\" is a reserved variable"
+
+  - it: fails when extraEnv contains DOCUMENTDB_PASSWORD
+    set:
+      extraEnv:
+        - name: DOCUMENTDB_PASSWORD
+          value: "oops"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"DOCUMENTDB_PASSWORD\" is a reserved variable"
+
+  - it: fails when extraEnv contains REGISTRY_API_KEYS
+    set:
+      extraEnv:
+        - name: REGISTRY_API_KEYS
+          value: "oops"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"REGISTRY_API_KEYS\" is a reserved variable"
+
+  - it: fails when extraEnv contains M2M_DIRECT_REGISTRATION_ENABLED
+    set:
+      extraEnv:
+        - name: M2M_DIRECT_REGISTRATION_ENABLED
+          value: "false"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"M2M_DIRECT_REGISTRATION_ENABLED\" is a reserved variable"
+
+  - it: fails when extraEnv contains REGISTRATION_GATE_OAUTH2_CLIENT_SECRET
+    set:
+      extraEnv:
+        - name: REGISTRATION_GATE_OAUTH2_CLIENT_SECRET
+          value: "oops"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"REGISTRATION_GATE_OAUTH2_CLIENT_SECRET\" is a reserved variable"
+
+  - it: fails on duplicate names within extraEnv
+    set:
+      extraEnv:
+        - name: MY_VAR
+          value: "a"
+        - name: MY_VAR
+          value: "b"
+    asserts:
+      - failedTemplate:
+          errorPattern: "duplicate name \"MY_VAR\""
+
+  - it: fails when an extraEnv entry is missing the name field
+    set:
+      extraEnv:
+        - value: "just-a-value"
+    asserts:
+      - failedTemplate:
+          errorPattern: "missing required 'name' field"
