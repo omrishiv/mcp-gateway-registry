@@ -21,6 +21,22 @@ import pytest
 pytestmark = [pytest.mark.unit, pytest.mark.auth]
 
 
+def _internal_auth_headers() -> dict:
+    """Build an Authorization header carrying a valid internal JWT.
+
+    ``/internal/tokens`` requires a Bearer JWT signed with the shared
+    SECRET_KEY (see ``registry.auth.internal.generate_internal_token``).
+    Tests that POST to the endpoint must attach this header.
+    """
+    from registry.auth.internal import generate_internal_token
+
+    token = generate_internal_token(
+        subject="test-suite",
+        purpose="unit-test",
+    )
+    return {"Authorization": f"Bearer {token}"}
+
+
 def _mint_self_signed(
     secret_key: str,
     *,
@@ -107,7 +123,9 @@ class TestMintResourceBoundToken:
         }
         if resource is not None:
             body["resource"] = resource
-        response = client.post("/internal/tokens", json=body)
+        response = client.post(
+            "/internal/tokens", json=body, headers=_internal_auth_headers()
+        )
         return response, server_module.SECRET_KEY
 
     def test_user_token_has_token_kind_user(self, auth_env_vars):
@@ -674,7 +692,9 @@ class TestValidateEdgeEnforcement:
             "expires_in_hours": 1,
             "resource": {"type": "server", "id": "../admin"},
         }
-        response = client.post("/internal/tokens", json=body)
+        response = client.post(
+            "/internal/tokens", json=body, headers=_internal_auth_headers()
+        )
         assert response.status_code == 422, response.text
 
     def test_non_string_resource_id_rejected_at_mint(self, auth_env_vars):
@@ -701,7 +721,9 @@ class TestValidateEdgeEnforcement:
         }
         for bad in (123, True, ["foo"], {"nested": "foo"}):
             body = {**base_body, "resource": {"type": "server", "id": bad}}
-            response = client.post("/internal/tokens", json=body)
+            response = client.post(
+                "/internal/tokens", json=body, headers=_internal_auth_headers()
+            )
             assert response.status_code == 422, (bad, response.text)
 
     @pytest.mark.parametrize(
@@ -737,5 +759,7 @@ class TestValidateEdgeEnforcement:
             "expires_in_hours": 1,
             "resource": {"type": "server", "id": bad_id},
         }
-        response = client.post("/internal/tokens", json=body)
+        response = client.post(
+            "/internal/tokens", json=body, headers=_internal_auth_headers()
+        )
         assert response.status_code == 422, response.text
