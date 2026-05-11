@@ -37,14 +37,18 @@ jobs:
 
       - name: Update image tags in Helm charts
         id: update
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
+          # Only update global.image.tag (4-space indent under `global.image:`).
+          # The per-service image.tag (2-space indent) is intentionally left
+          # empty so it falls back to global.image.tag — do not overwrite it.
           for VALUES_FILE in \
             charts/mcp-gateway-registry-stack/values.yaml \
             charts/auth-server/values.yaml \
             charts/registry/values.yaml \
             charts/mcpgw/values.yaml; do
-            sed -i "s/^\(\s*tag:\s*\).*/\1${VERSION}/" "$VALUES_FILE"
+            sed -i "s/^\(    tag:\s*\).*/\1${VERSION}/" "$VALUES_FILE"
             echo "Updated $VALUES_FILE"
           done
 
