@@ -1,0 +1,223 @@
+suite: stack forwards extraEnv and extraEnvFrom to each subchart
+release:
+  name: test
+  namespace: default
+tests:
+  # registry forwarding
+  - it: forwards registry.extraEnv to the registry deployment
+    templates:
+      - charts/registry/templates/deployment.yaml
+    set:
+      registry:
+        extraEnv:
+          - name: FROM_STACK_REGISTRY
+            value: "1"
+    asserts:
+      - isKind:
+          of: Deployment
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: FROM_STACK_REGISTRY
+            value: "1"
+
+  - it: forwards registry.extraEnvFrom to the registry deployment
+    templates:
+      - charts/registry/templates/deployment.yaml
+    set:
+      registry:
+        extraEnvFrom:
+          - secretRef:
+              name: stack-registry-externals
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: stack-registry-externals
+
+  - it: stack-forwarded registry.extraEnv with reserved name fails
+    templates:
+      - charts/registry/templates/deployment.yaml
+    set:
+      registry:
+        extraEnv:
+          - name: SECRET_KEY
+            value: "oops"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"SECRET_KEY\" is a reserved variable"
+
+  # auth-server forwarding
+  - it: forwards auth-server.extraEnv to the auth-server deployment
+    templates:
+      - charts/auth-server/templates/deployment.yaml
+    set:
+      auth-server:
+        extraEnv:
+          - name: FROM_STACK_AUTH
+            value: "1"
+    asserts:
+      - isKind:
+          of: Deployment
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: FROM_STACK_AUTH
+            value: "1"
+
+  - it: forwards auth-server.extraEnvFrom to the auth-server deployment
+    templates:
+      - charts/auth-server/templates/deployment.yaml
+    set:
+      auth-server:
+        extraEnvFrom:
+          - configMapRef:
+              name: stack-auth-config
+              optional: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            configMapRef:
+              name: stack-auth-config
+              optional: true
+
+  - it: stack-forwarded auth-server.extraEnv with reserved name fails
+    templates:
+      - charts/auth-server/templates/deployment.yaml
+    set:
+      auth-server:
+        extraEnv:
+          - name: AUTH_PROVIDER
+            value: "oops"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"AUTH_PROVIDER\" is a reserved variable"
+
+  # mcpgw forwarding
+  - it: forwards mcpgw.extraEnv to the mcpgw deployment
+    templates:
+      - charts/mcpgw/templates/deployment.yaml
+    set:
+      mcpgw:
+        extraEnv:
+          - name: FROM_STACK_MCPGW
+            value: "1"
+    asserts:
+      - isKind:
+          of: Deployment
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: FROM_STACK_MCPGW
+            value: "1"
+
+  - it: forwards mcpgw.extraEnvFrom to the mcpgw deployment
+    templates:
+      - charts/mcpgw/templates/deployment.yaml
+    set:
+      mcpgw:
+        extraEnvFrom:
+          - secretRef:
+              name: stack-mcpgw-externals
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: stack-mcpgw-externals
+
+  - it: stack-forwarded mcpgw.extraEnv with reserved name fails
+    templates:
+      - charts/mcpgw/templates/deployment.yaml
+    set:
+      mcpgw:
+        extraEnv:
+          - name: PORT
+            value: "9999"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"PORT\" is a reserved variable"
+
+  # extraEnv and extraEnvFrom for different services are independent.
+  # Setting registry.extraEnv must NOT leak into auth-server. We assert
+  # this by giving auth-server its own extraEnv (so env: is a non-empty
+  # array and the notContains check runs) and confirming the
+  # registry-scoped entry isn't present.
+  - it: registry extraEnv is not forwarded to auth-server
+    templates:
+      - charts/auth-server/templates/deployment.yaml
+    set:
+      registry:
+        extraEnv:
+          - name: ONLY_ON_REGISTRY
+            value: "1"
+      auth-server:
+        extraEnv:
+          - name: AUTH_ANCHOR
+            value: "1"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AUTH_ANCHOR
+            value: "1"
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ONLY_ON_REGISTRY
+            value: "1"
+
+  - it: mcpgw extraEnvFrom is not forwarded to registry
+    templates:
+      - charts/registry/templates/deployment.yaml
+    set:
+      mcpgw:
+        extraEnvFrom:
+          - secretRef:
+              name: mcpgw-only-source
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: mcpgw-only-source
+
+  - it: auth-server extraEnv is not forwarded to mcpgw
+    templates:
+      - charts/mcpgw/templates/deployment.yaml
+    set:
+      auth-server:
+        extraEnv:
+          - name: ONLY_ON_AUTH_SERVER
+            value: "1"
+      mcpgw:
+        extraEnv:
+          - name: MCPGW_ANCHOR
+            value: "1"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MCPGW_ANCHOR
+            value: "1"
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ONLY_ON_AUTH_SERVER
+            value: "1"
+
+  - it: stack-forwarded extraEnv with duplicate names fails validation in the subchart
+    templates:
+      - charts/registry/templates/deployment.yaml
+    set:
+      registry:
+        extraEnv:
+          - name: MY_VAR
+            value: "a"
+          - name: MY_VAR
+            value: "b"
+    asserts:
+      - failedTemplate:
+          errorPattern: "duplicate name \"MY_VAR\""

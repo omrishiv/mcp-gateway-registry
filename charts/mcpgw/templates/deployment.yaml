@@ -3,6 +3,8 @@
 {{- $imgRepository := required "image.repository must be set" .Values.image.repository }}
 {{- $imgTag := default .Values.global.image.tag .Values.image.tag }}
 {{- $imgPullPolicy := default .Values.global.image.pullPolicy .Values.image.pullPolicy }}
+{{- /* Fail-fast validation of user-supplied extraEnv */ -}}
+{{- include "mcpgw.validateExtraEnv" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -53,6 +55,9 @@ spec:
             - secretRef:
                 name: {{ .Values.global.existingSharedSecret | default .Values.global.sharedSecretName }}
             {{- end }}
+            {{- with .Values.extraEnvFrom }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           env:
             - name: HOST
               value: 0.0.0.0
@@ -99,6 +104,9 @@ spec:
             {{- else if .Values.app.githubAppPrivateKey }}
             - name: GITHUB_APP_PRIVATE_KEY
               value: {{ .Values.app.githubAppPrivateKey | quote }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
             {{- end }}
           livenessProbe:
             tcpSocket:

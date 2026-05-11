@@ -62,8 +62,12 @@ jobs:
         run: |
           TAG="$TAG"
 
-          # Find the previous release tag
-          PREV_TAG=$(git tag --list 'v*.*.*' --sort=-v:refname | grep -v "^${TAG}$" | head -n 1)
+          # Find the previous release tag. Include both v-prefixed historical
+          # tags (<= v1.0.22-p1) and bare-semver tags (>= 1.23.0).
+          PREV_TAG=$( (git tag --list 'v*.*.*'; git tag --list '[0-9]*.[0-9]*.[0-9]*') \
+            | sort -V -r \
+            | grep -v "^${TAG}$" \
+            | head -n 1)
           if [ -z "$PREV_TAG" ]; then
             echo "No previous tag found, skipping env var check"
             echo "comment=" >> "$GITHUB_OUTPUT"

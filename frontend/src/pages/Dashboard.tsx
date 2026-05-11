@@ -20,6 +20,7 @@ import {
 import VirtualServerForm from '../components/VirtualServerForm';
 import DiscoverTab from '../components/DiscoverTab';
 import axios from 'axios';
+import { getBaseURL } from '../utils/basePath';
 
 
 interface SyncMetadata {
@@ -265,9 +266,11 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     fetchPeerEndpoints();
   }, []);
 
-  // Get the local registry URL
+  // Get the local registry URL. Includes the ROOT_PATH prefix
+  // (e.g. "/registry" in path routing mode) so the displayed URL
+  // matches what clients actually hit.
   const localRegistryUrl = useMemo(() => {
-    return window.location.origin;
+    return `${window.location.origin}${getBaseURL()}`;
   }, []);
 
   const [editAgentForm, setEditAgentForm] = useState({
@@ -409,6 +412,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
       sync_metadata: a.sync_metadata,
       ans_metadata: a.ans_metadata,
       registered_by: a.registered_by,
+      lifecycle_status: a.lifecycle_status,
     }));
   }, [agentsFromStats]);
 

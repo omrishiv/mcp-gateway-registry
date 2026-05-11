@@ -129,6 +129,8 @@ Interactive terminal interface for chatting with AI models and discovering MCP t
 
 ## What's New
 
+- **Unified Cross-Surface Configuration Parameter Reference** - A single index at [`docs/unified-parameter-reference.md`](docs/unified-parameter-reference.md) maps every configuration parameter across the three deployment surfaces (Docker `.env`, Terraform `.tfvars`, Helm `values.yaml`), so operators and reviewers can find the right variable name for their deployment without grepping across three repos' worth of config files. Parameters are grouped logically (registry identity, deployment mode, auth providers, storage, federation, observability, and more), with secrets flagged and verification paths documented for each surface. Linked from [`docs/configuration.md`](docs/configuration.md). The new-feature-design and pr-review skills now require this index to be updated whenever a parameter is added, renamed, or removed, so the three surfaces stay in sync over time. ([#1002](https://github.com/agentic-community/mcp-gateway-registry/issues/1002))
+
 - **MongoDB Atlas and Replica-Set Support via Connection String Override** - The storage layer now accepts a full MongoDB connection string via the new `MONGODB_CONNECTION_STRING` environment variable, enabling MongoDB Atlas (`mongodb+srv://...`), replica sets, and any URI-level tuning not expressible through the discrete `DOCUMENTDB_*` variables. When set, the URI takes precedence over `DOCUMENTDB_HOST`/`PORT`/`USERNAME`/`PASSWORD`/`DATABASE`; when empty, the registry falls back to the existing variables so all current deployments keep working unchanged. Wired through Docker Compose, Helm/EKS, and the ECS Terraform module (with a Secrets Manager variant preferred for URIs containing credentials to keep them out of Terraform state). In addition to MongoDB CE and Amazon DocumentDB, MongoDB Atlas is now a supported backend. See [`.env.example`](.env.example) and [`terraform/aws-ecs/terraform.tfvars.example`](terraform/aws-ecs/terraform.tfvars.example) for the new parameter. [FAQ: How do I configure MongoDB Atlas instead of MongoDB CE?](docs/faq/configuring-mongodb-atlas-backend.md)
 
 - **Group-Restricted Agent Visibility** - Agent publishers can now restrict which IdP groups can see their agent by setting `visibility: "group-restricted"` and specifying `allowedGroups` at registration time, without needing an admin to change IAM scopes. Works as a second filter on top of the existing IAM group scope layer: users must pass both the IAM scope check and the allowed_groups check. Nginx forwards JWT group claims via X-Groups header, the list endpoint enforces group filtering for all non-admin users, and the CLI supports `--allowed-groups` for both registration and filtering. Frontend registration and edit forms include a Visibility dropdown and Allowed Groups input. Compatible with all supported IdPs (Keycloak, Entra ID, Cognito, Okta, Auth0). ([#883](https://github.com/agentic-community/mcp-gateway-registry/issues/883), [#922](https://github.com/agentic-community/mcp-gateway-registry/issues/922)) [Full Guide](docs/agent-visibility-and-group-access.md) | [FAQ](docs/faq/group-restricted-agent-visibility.md)
@@ -671,6 +673,8 @@ Transform how both autonomous AI agents and development teams access enterprise 
 
 Comprehensive real-time metrics and monitoring through Grafana dashboards with dual-path storage: SQLite for detailed historical analysis and OpenTelemetry (OTEL) export for integration with Prometheus, CloudWatch, Datadog, and other monitoring platforms. Track authentication events, tool executions, discovery queries, and system performance metrics. [Learn more](docs/OBSERVABILITY.md)
 
+**Log files**: registry, auth-server, and mcpgw write JSONL-formatted log files to `/var/log/containers/ai-registry/` on the Docker host, making them easy to ingest with Splunk Universal Forwarders or similar log shippers. See the [Logging Standard](docs/logging-standard.md) for the schema and Splunk props.conf recipe.
+
 <img src="docs/img/dashboard.png" alt="Grafana Metrics Dashboard" />
 <p><em>Real-time metrics and observability dashboard tracking server health, tool usage, and authentication events</em></p>
 </td>
@@ -740,11 +744,13 @@ echo 'ASOR_ACCESS_TOKEN=your_token' >> .env
 
 The registry collects **anonymous, non-sensitive** usage telemetry to help us understand adoption patterns and improve the product. Both tiers are **opt-out** and **on by default**.
 
-**What is sent (Tier 1 -- startup ping):** Registry version, Python version, OS, CPU architecture, cloud provider, storage backend, auth provider, deployment mode, embeddings provider (`sentence-transformers` or `litellm`), and embeddings backend kind (a derived coarse category: `sentence-transformers`, `bedrock`, `openai`, `azure-openai`, `voyage`, `cohere`, `other`, or `unknown`). No IP addresses, hostnames, file paths, user data, or any PII.
+**What is sent (Tier 1 -- startup ping):** Registry version, Python version, OS, CPU architecture, cloud provider, cloud detection method (added in schema v3, see below), storage backend, auth provider, deployment mode, embeddings provider (`sentence-transformers` or `litellm`), and embeddings backend kind (a derived coarse category: `sentence-transformers`, `bedrock`, `openai`, `azure-openai`, `voyage`, `cohere`, `other`, or `unknown`). No IP addresses, hostnames, file paths, user data, or any PII.
 
-**Also sent by default (Tier 2 -- daily heartbeat):** Aggregate counts (number of servers, agents, skills, peers), search backend, embeddings provider, embeddings backend kind, and uptime. Same privacy guarantees as Tier 1. Disable heartbeat only: `MCP_TELEMETRY_OPT_OUT=1`.
+**Also sent by default (Tier 2 -- daily heartbeat):** Aggregate counts (number of servers, agents, skills, peers), search backend, embeddings provider, embeddings backend kind, cloud detection method, and uptime. Same privacy guarantees as Tier 1. Disable heartbeat only: `MCP_TELEMETRY_OPT_OUT=1`.
 
 **What is never sent:** The raw `EMBEDDINGS_MODEL_NAME`, `EMBEDDINGS_MODEL_DIMENSIONS`, credentials (API keys, AWS secrets), endpoints (`EMBEDDINGS_API_BASE`), and regions (`EMBEDDINGS_AWS_REGION`). Only the derived backend-kind category is reported. See [docs/TELEMETRY.md](docs/TELEMETRY.md) for the complete schema and privacy guarantees.
+
+**Cloud detection method (schema v3, issue [#986](https://github.com/agentic-community/mcp-gateway-registry/issues/986)):** Cloud classification cascades through env vars -> DMI files -> `ECS_CONTAINER_METADATA_URI` -> Kubernetes node-name heuristics (`*.compute.internal`, `gke-*`, `aks-*`) -> live IMDS probe at 169.254.169.254 (AWS IMDSv2, Azure) and `metadata.google.internal` (GCP), with a 300 ms per-provider timeout and fail-silent behavior. First match wins. The `cloud_detection_method` field in the payload reports which tier fired (`env`, `dmi`, `ecs_meta`, `k8s_heuristic`, `imds`, or `unknown`) so rollups can diagnose why any instance classifies as `unknown`. IMDSv2 tokens have a 1-second TTL and are never logged; response bodies are discarded immediately. `httpx.Client(trust_env=False)` bypasses `HTTP_PROXY`/`HTTPS_PROXY` so link-local probes never route through a corporate proxy. Operators can see how their instance was classified via the System Health hover panel or `GET /api/system/telemetry-detection`. Disable IMDS probing while keeping env/DMI/ECS/k8s tiers with `MCP_TELEMETRY_IMDS_PROBE_DISABLED=1`. See [Cloud Provider Detection](docs/TELEMETRY.md#cloud-provider-detection) for the full cascade, the **EKS IMDS hop-limit gotcha** (the #1 operator trap), and zero-cost opt-in env vars.
 
 > **Behavior change (post v1.0.18):** The daily heartbeat was previously opt-in (`MCP_TELEMETRY_OPT_IN=1`). It is now opt-out and sent by default. Since the heartbeat contains only aggregate counts (no PII), this aligns it with the startup ping behavior.
 
@@ -758,6 +764,12 @@ export MCP_TELEMETRY_DISABLED=1   # Disables both startup ping and heartbeat
 
 ```bash
 export MCP_TELEMETRY_OPT_OUT=1
+```
+
+**To disable IMDS probes only (keep env/DMI/ECS/k8s detection tiers):**
+
+```bash
+export MCP_TELEMETRY_IMDS_PROBE_DISABLED=1
 ```
 
 All requests are HMAC-signed, rate-limited, and schema-validated. Telemetry is fail-silent and never impacts registry operation. Full details in the [Telemetry Documentation](docs/TELEMETRY.md).

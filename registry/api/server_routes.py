@@ -2523,16 +2523,27 @@ async def generate_user_token(
             "description": description,
         }
 
-        # Forward optional resource binding.
         if resource is not None:
             auth_request["resource"] = {
                 "type": resource["type"],
                 "id": resource["id"],
             }
 
-        # Call auth server internal API (no authentication needed since both are trusted internal services)
+        # Call auth server internal API. The /internal/tokens endpoint is
+        # only reachable to callers by signing a short-lived internal JWT (see
+        # registry/auth/internal.py for the token contract).
+        from ..auth.internal import generate_internal_token
+
+        internal_token = generate_internal_token(
+            subject="registry-service",
+            purpose="generate-token",
+        )
+
         async with httpx.AsyncClient() as client:
-            headers = {"Content-Type": "application/json"}
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {internal_token}",
+            }
 
             auth_server_url = settings.auth_server_url
             response = await client.post(

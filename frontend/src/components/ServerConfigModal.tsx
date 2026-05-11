@@ -4,6 +4,7 @@ import axios from 'axios';
 import type { Server } from './ServerCard';
 import { useRegistryConfig } from '../hooks/useRegistryConfig';
 import useEscapeKey from '../hooks/useEscapeKey';
+import { getBaseURL } from '../utils/basePath';
 
 type IDE = 'cursor' | 'roo-code' | 'claude-code' | 'kiro';
 
@@ -111,8 +112,11 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     } else if (isRegistryOnly && server.proxy_pass_url) {
       url = server.proxy_pass_url;
     } else {
-      const currentUrl = new URL(window.location.origin);
-      const baseUrl = `${currentUrl.protocol}//${currentUrl.hostname}`;
+      // Gateway URL = origin + ROOT_PATH + server.path + "/mcp".
+      // getBaseURL() returns the registry's ROOT_PATH (e.g. "/registry"
+      // in path routing mode, "" in subdomain mode), read from the
+      // <base> tag the server injected into index.html.
+      const baseUrl = `${window.location.origin}${getBaseURL()}`;
       const cleanPath = server.path.replace(/\/+$/, '').replace(/^\/+/, '/');
       url = `${baseUrl}${cleanPath}/mcp`;
     }
@@ -217,8 +221,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     } else if (isRegistryOnly && server.proxy_pass_url) {
       url = server.proxy_pass_url;
     } else {
-      const currentUrl = new URL(window.location.origin);
-      const baseUrl = `${currentUrl.protocol}//${currentUrl.hostname}`;
+      const baseUrl = `${window.location.origin}${getBaseURL()}`;
       const cleanPath = server.path.replace(/\/+$/, '').replace(/^\/+/, '/');
       url = `${baseUrl}${cleanPath}/mcp`;
     }

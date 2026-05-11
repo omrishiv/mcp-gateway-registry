@@ -249,6 +249,7 @@ services:
       - MCP_TELEMETRY_OPT_OUT=${MCP_TELEMETRY_OPT_OUT:-}
       - MCP_TELEMETRY_HEARTBEAT_INTERVAL_MINUTES=${MCP_TELEMETRY_HEARTBEAT_INTERVAL_MINUTES:-1440}
       - TELEMETRY_DEBUG=${TELEMETRY_DEBUG:-false}
+      - MCP_TELEMETRY_IMDS_PROBE_DISABLED=${MCP_TELEMETRY_IMDS_PROBE_DISABLED:-}
       - DISABLE_AI_REGISTRY_TOOLS_SERVER=${DISABLE_AI_REGISTRY_TOOLS_SERVER:-false}
       # Application Log Configuration (Issue #886)
       - APP_LOG_MAX_BYTES=${APP_LOG_MAX_BYTES:-52428800}
@@ -259,6 +260,9 @@ services:
       - APP_LOG_MONGODB_FLUSH_INTERVAL_SECONDS=${APP_LOG_MONGODB_FLUSH_INTERVAL_SECONDS:-5.0}
       - APP_LOG_LEVEL=${APP_LOG_LEVEL:-INFO}
       - APP_LOG_EXCLUDED_LOGGERS=${APP_LOG_EXCLUDED_LOGGERS:-uvicorn.access,httpx,pymongo,motor}
+      # Application file-log location (Issue #987) + format (json|text)
+      - APP_LOG_DIR=${APP_LOG_DIR:-/var/log/containers/ai-registry}
+      - APP_LOG_FILE_FORMAT=${APP_LOG_FILE_FORMAT:-json}
     ports:
       - "80:8080"   # Map host 80 to container 8080 (non-root nginx)
       - "443:8443"  # Map host 443 to container 8443 (non-root nginx)
@@ -276,7 +280,9 @@ services:
       - ${HOME}/mcp-gateway/federation.json:/app/config/federation.json
       - ${HOME}/mcp-gateway/ssl:/etc/ssl:ro
       - ${HOME}/.aws:/root/.aws:ro
-      # Application-managed (named volumes with proper permissions)
+      # Application log files (bind mount to host for Splunk ingestion, Issue #987)
+      - /var/log/containers/ai-registry:/var/log/containers/ai-registry
+      # Audit logs + security scans (named volumes, unchanged)
       - registry-logs:/app/logs
       - registry-scans:/app/security_scans
     depends_on:
@@ -293,6 +299,8 @@ services:
     build:
       context: metrics-service
       dockerfile: Dockerfile
+      args:
+        BUILD_VERSION: ${BUILD_VERSION:-1.0.0}
     environment:
       - METRICS_SERVICE_PORT=8890
       - METRICS_SERVICE_HOST=0.0.0.0
@@ -334,6 +342,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.auth
+      args:
+        BUILD_VERSION: ${BUILD_VERSION:-1.0.0}
     environment:
       # Registry Configuration
       - REGISTRY_URL=${REGISTRY_URL:-http://localhost}
@@ -426,6 +436,9 @@ services:
       - APP_LOG_MONGODB_FLUSH_INTERVAL_SECONDS=${APP_LOG_MONGODB_FLUSH_INTERVAL_SECONDS:-5.0}
       - APP_LOG_LEVEL=${APP_LOG_LEVEL:-INFO}
       - APP_LOG_EXCLUDED_LOGGERS=${APP_LOG_EXCLUDED_LOGGERS:-uvicorn.access,httpx,pymongo,motor}
+      # Application file-log location (Issue #987) + format (json|text)
+      - APP_LOG_DIR=${APP_LOG_DIR:-/var/log/containers/ai-registry}
+      - APP_LOG_FILE_FORMAT=${APP_LOG_FILE_FORMAT:-json}
     ports:
       - "8888:8888"
     security_opt:
@@ -433,7 +446,9 @@ services:
     cap_drop:
       - ALL
     volumes:
-      # Application-managed (named volume with proper permissions)
+      # Application log files (bind mount to host for Splunk ingestion, Issue #987)
+      - /var/log/containers/ai-registry:/var/log/containers/ai-registry
+      # Audit logs (named volume, unchanged)
       - auth-logs:/app/logs
       # - ${HOME}/mcp-gateway/auth_server/scopes.yml:/app/scopes.yml
     depends_on:
@@ -450,6 +465,7 @@ services:
       dockerfile: docker/Dockerfile.mcp-server-light
       args:
         SERVER_DIR: servers/currenttime
+        BUILD_VERSION: ${BUILD_VERSION:-1.0.0}
     environment:
       - HOST=0.0.0.0
       - PORT=8000
@@ -465,6 +481,7 @@ services:
       dockerfile: docker/Dockerfile.mcp-server-light
       args:
         SERVER_DIR: servers/fininfo
+        BUILD_VERSION: ${BUILD_VERSION:-1.0.0}
     environment:
       - PORT=8001
       - SECRET_KEY=${SECRET_KEY}
@@ -481,14 +498,23 @@ services:
       dockerfile: docker/Dockerfile.mcp-server
       args:
         SERVER_DIR: servers/mcpgw
+        BUILD_VERSION: ${BUILD_VERSION:-1.0.0}
     environment:
       - HOST=0.0.0.0
       - PORT=8003
       - REGISTRY_BASE_URL=http://registry:8080
+      # Application file-log location (Issue #987) + format (json|text)
+      - APP_LOG_DIR=${APP_LOG_DIR:-/var/log/containers/ai-registry}
+      - APP_LOG_FILE_FORMAT=${APP_LOG_FILE_FORMAT:-json}
+      - APP_LOG_LEVEL=${APP_LOG_LEVEL:-INFO}
+      - APP_LOG_MAX_BYTES=${APP_LOG_MAX_BYTES:-52428800}
+      - APP_LOG_BACKUP_COUNT=${APP_LOG_BACKUP_COUNT:-5}
     volumes:
       - ${HOME}/mcp-gateway/servers:/app/registry/servers
       - ${HOME}/mcp-gateway/models:/app/registry/models
       - ${HOME}/mcp-gateway/auth_server/scopes.yml:/app/auth_server/scopes.yml
+      # Application log file (bind mount to host for Splunk ingestion, Issue #987)
+      - /var/log/containers/ai-registry:/var/log/containers/ai-registry
     ports:
       - "8003:8003"
     depends_on:
@@ -502,6 +528,7 @@ services:
       dockerfile: docker/Dockerfile.mcp-server-light
       args:
         SERVER_DIR: servers/realserverfaketools
+        BUILD_VERSION: ${BUILD_VERSION:-1.0.0}
     environment:
       - PORT=8002
     ports:

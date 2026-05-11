@@ -82,6 +82,12 @@ HEALTHCHECK --interval=500s --timeout=10s --start-period=30s --retries=3 \
 # Switch to root to create entrypoint script
 USER root
 
+# Create /var/log/containers/ai-registry for file logging (issue #987).
+# Only mcpgw writes to this path; other MCP servers ignore it. Creating
+# the directory unconditionally keeps the image simple and costs nothing.
+RUN mkdir -p /var/log/containers/ai-registry && \
+    chown -R appuser:appuser /var/log/containers/ai-registry
+
 # Create entrypoint script that handles environment setup and runs server.py
 RUN echo '#!/bin/bash\n\
 set -e\n\
@@ -104,7 +110,12 @@ exec python server.py --port $SERVER_PORT' > /entrypoint.sh && \
     chmod +x /entrypoint.sh && \
     chown appuser:appuser /entrypoint.sh
 
+# Bake the build version into the image (issue #919). Requires
+# `docker build --build-arg BUILD_VERSION=$VERSION`; defaults to "1.0.0".
+ARG BUILD_VERSION="1.0.0"
+ENV BUILD_VERSION=$BUILD_VERSION
+
 # Switch to non-root user for runtime (no chown needed - files already owned by appuser)
 USER appuser
 
-ENTRYPOINT ["/entrypoint.sh"] 
+ENTRYPOINT ["/entrypoint.sh"]

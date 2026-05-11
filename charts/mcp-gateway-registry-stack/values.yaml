@@ -8,7 +8,7 @@ global:
   image:
     # Container registry (host + optional namespace), e.g. "public.ecr.aws/p3v1o3c6"
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.0.22
+    tag: 1.23.0
     pullPolicy: IfNotPresent
 
   # When installing chart from repository, add --set global.chartVersion=$(git rev-parse HEAD) to add the git hash to a configmap for debugging
@@ -58,21 +58,23 @@ global:
     entra:
       adminGroupId: # UUID of Entra admin group
 
-  # Common ingress settings
+  # Common ingress settings. Only the registry and mcpgw expose a
+  # public ingress.
   ingress:
     inboundCidrs: # optional comma separated list of allowed inbound CIDR ranges
     className: alb
     tls: true
     # Routing mode: "subdomain" or "path"
-    # - subdomain: auth-server.domain.com, mcpregistry.domain.com, keycloak.domain.com
-    # - path: domain.com/auth-server, domain.com/registry, domain.com/keycloak
+    # - subdomain: mcpregistry.domain.com, mcpgw.domain.com
+    # - path:      domain.com/registry,    domain.com/mcpgw
     routingMode: subdomain
-    # Path configuration (only used when routingMode: path)
+    # Path prefixes used when routingMode: path. Keycloak's browser path
+    # (/keycloak) is not configurable here — it's pinned by the registry
+    # pod's nginx config and the stack templates that emit
+    # KEYCLOAK_EXTERNAL_URL.
     paths:
-      authServer: /auth-server
       registry: /registry
       mcpgw: /mcpgw
-      keycloak: /keycloak # make sure to update keycloak.httpRelativePath (/keycloak/)
 
 mongodb-kubernetes:
   operator:
@@ -117,12 +119,18 @@ keycloak:
     image:
       registry: public.ecr.aws
 
-  # HTTP relative path for path-based routing
-  # IMPORTANT: This must match global.ingress.paths.keycloak when routingMode is "path"
-  # For subdomain routing, set to "/"
-  # IMPORTANT: This must have a trailing "/"
-  httpRelativePath: /
+  # Keycloak always serves from its own root (httpRelativePath defaults
+  # to "/" in the Bitnami chart). The registry pod's nginx rewrites
+  # browser traffic under /keycloak before forwarding, so Keycloak
+  # itself doesn't need to know about any URL prefix. DO NOT set
+  # keycloak.httpRelativePath to /keycloak/ — it breaks the /realms
+  # and /resources proxy locations in the registry's nginx config.
 
+  # NOTE: Keycloak uses Bitnami's `extraEnvVars` convention. Our own
+  # subcharts (auth-server, registry, mcpgw) use `extraEnv` instead —
+  # see the `<subchart>.extraEnv` sections later in this file. Both
+  # accept the Kubernetes EnvVar schema (name + value/valueFrom); only
+  # the key name differs.
   extraEnvVars:
     - name: KC_PROXY
       value: edge
@@ -130,7 +138,7 @@ keycloak:
       value: xforwarded
 
   ingress:
-    enabled: false  # We use a custom ingress template that supports global.domain
+    enabled: false
 
   nodeSelector: {}
 
@@ -179,12 +187,6 @@ keycloak-configure:
   keycloak:
     realm: *keycloakRealm
     adminUser: *keycloakAdmin
-  # authServer.externalUrl will be templated in the subchart using global.domain
-
-# Keycloak ingress for mcp-gateway-registry
-# Whether to create an ingress for Keycloak with this Chart (only applicable when keycloak.create: true)
-keycloakIngress:
-  enabled: true
 
 # Mongodb configuration job
 mongodb-configure:
@@ -199,6 +201,14 @@ mongodb-configure:
 registry:
   app:
     replicas: 2 # set to > 1 replica for high availability
+    # Session cookie Domain attribute. Leave empty to default to
+    # ".<global.domain>" (cookie valid across all subdomains of the
+    # deployment domain). Override to a specific hostname (e.g.
+    # "mcpregistry.example.com") to scope tighter, or to a different
+    # parent (e.g. ".team.example.com") if this stack lives under a
+    # subdomain. Keep this in sync with auth-server.app.sessionCookieDomain
+    # below — both services read the same cookie.
+    sessionCookieDomain: ""
     # Deployment mode: with-gateway (nginx integration) or registry-only (catalog only)
     deploymentMode: with-gateway
 
@@ -265,6 +275,7 @@ registry:
     mcpTelemetryOptOut: false  # Set to true to disable daily heartbeat only (startup ping still sent)
     telemetryHeartbeatIntervalMinutes: "1440"  # Heartbeat interval in minutes (default: 1440 = 24 hours)
     telemetryDebug: false  # Set to true to log payloads instead of sending
+    mcpTelemetryImdsProbeDisabled: false  # Set to true to disable IMDS probing in cloud detection (issue #986)
 
     # Application Log Configuration (centralized log rotation and retrieval)
     # NOTE: Centralized logging is ON by default (appLogCentralizedEnabled: "true").
@@ -279,6 +290,9 @@ registry:
       appLogMongodbFlushIntervalSeconds: "5.0"  # Seconds between periodic flushes
       appLogLevel: "INFO"              # Application log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
       appLogExcludedLoggers: "uvicorn.access,httpx,pymongo,motor"  # Comma-separated logger names to exclude from MongoDB
+      # Log file path and format (issue #987). Propagated to auth-server via YAML anchor.
+      appLogDir: ""                    # Empty uses backend default: /var/log/containers/ai-registry
+      appLogFileFormat: "json"         # "json" (default, Splunk-friendly) or "text" (legacy comma-separated)
 
     # Demo server configuration
     disableAiRegistryToolsServer: false  # Set to true to disable auto-registration of the built-in airegistry-tools server
@@ -317,6 +331,13 @@ registry:
 
   nodeSelector: {}
 
+  # Extra env vars / envFrom sources appended to the registry container.
+  # See charts/registry/values.yaml for validation rules, reserved names,
+  # and footgun warnings. These values are forwarded to the registry
+  # subchart unchanged.
+  extraEnv: []
+  extraEnvFrom: []
+
 # MCPGW MCP server configuration
 mcpgw:
   enabled: true # Set to true to deploy the MCPGW MCP server
@@ -334,10 +355,20 @@ mcpgw:
 
   nodeSelector: {}
 
+  # Extra env vars / envFrom sources appended to the mcpgw container.
+  # See charts/mcpgw/values.yaml for validation rules, reserved names,
+  # and footgun warnings. These values are forwarded to the mcpgw
+  # subchart unchanged.
+  extraEnv: []
+  extraEnvFrom: []
+
 # Auth server configuration
 auth-server:
   app:
     replicas: 2 # set to > 1 replica for high availability
+    # Session cookie Domain attribute. See registry.app.sessionCookieDomain
+    # above for guidance — keep these two in sync.
+    sessionCookieDomain: ""
     oauthStoreTokensInSession: false  # Store OAuth tokens in session (default: false)
     # Internal JWT configuration
     jwtIssuer: "mcp-auth-server"  # Issuer claim for internal JWT tokens
@@ -394,8 +425,11 @@ auth-server:
     domain: ""  # Optional: custom Cognito domain
     region: "us-east-1"
 
-  ingress:
-    enabled: true
-    ingressClassName: alb
-
   nodeSelector: {}
+
+  # Extra env vars / envFrom sources appended to the auth-server container.
+  # See charts/auth-server/values.yaml for validation rules, reserved names,
+  # and footgun warnings. These values are forwarded to the auth-server
+  # subchart unchanged.
+  extraEnv: []
+  extraEnvFrom: []

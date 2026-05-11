@@ -3,6 +3,8 @@
 {{- $imgRepository := required "image.repository must be set" .Values.image.repository }}
 {{- $imgTag := default .Values.global.image.tag .Values.image.tag }}
 {{- $imgPullPolicy := default .Values.global.image.pullPolicy .Values.image.pullPolicy }}
+{{- /* Fail-fast validation of user-supplied extraEnv */ -}}
+{{- include "registry.validateExtraEnv" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -70,6 +72,9 @@ spec:
             {{- if .Values.global.oauthProviderSecretName }}
             - secretRef:
                 name: {{ .Values.global.existingOauthProviderSecret | default .Values.global.oauthProviderSecretName }}
+            {{- end }}
+            {{- with .Values.extraEnvFrom }}
+            {{- toYaml . | nindent 12 }}
             {{- end }}
           env:
             - name: DEPLOYMENT_MODE
@@ -164,6 +169,9 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.ans.apiSecretExistingSecret }}
                   key: {{ .Values.ans.apiSecretExistingSecretKey }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
             {{- end }}
           livenessProbe:
             httpGet:

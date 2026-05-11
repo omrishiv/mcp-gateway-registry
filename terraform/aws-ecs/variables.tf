@@ -316,13 +316,32 @@ variable "documentdb_replica_count" {
 
 # Storage Backend Configuration
 variable "storage_backend" {
-  description = "Storage backend to use: 'file' or 'documentdb'"
+  description = <<-DESC
+    Storage backend selection. Must match the Python-side allowlist in
+    registry/core/config.py ALLOWED_STORAGE_BACKENDS (issue #954). Accepted
+    values:
+      "file"          - JSON files only. No AWS DocumentDB provisioned.
+      "documentdb"    - Provision AWS DocumentDB cluster in this Terraform
+                        state and use SCRAM-SHA-1 auth.
+      "mongodb-ce"    - Connect to an externally-provisioned MongoDB CE via
+                        mongodb_connection_string / _secret_arn. No AWS
+                        DocumentDB provisioned.
+      "mongodb"       - Alias for mongodb-ce.
+      "mongodb-atlas" - Alias for mongodb-ce (intended for MongoDB Atlas).
+
+    For non-"documentdb" MongoDB backends, mongodb_connection_string or
+    mongodb_connection_string_secret_arn must be set. Enforced at
+    `terraform plan` time via a precondition on the mcp_gateway module.
+  DESC
   type        = string
   default     = "file"
 
   validation {
-    condition     = contains(["file", "documentdb"], var.storage_backend)
-    error_message = "Storage backend must be either 'file' or 'documentdb'."
+    condition = contains(
+      ["file", "documentdb", "mongodb-ce", "mongodb", "mongodb-atlas"],
+      var.storage_backend,
+    )
+    error_message = "Storage backend must be one of: file, documentdb, mongodb-ce, mongodb, mongodb-atlas."
   }
 }
 
@@ -874,6 +893,28 @@ variable "app_log_excluded_loggers" {
   default     = "uvicorn.access,httpx,pymongo,motor"
 }
 
+variable "app_log_dir" {
+  description = "Directory where service log files are written. Defaults to /var/log/containers/ai-registry when empty. Must be an absolute path; '..' segments are rejected by the backend (issue #987). ECS tasks write to task-ephemeral storage, so this is mainly a code-path toggle on ECS."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.app_log_dir == "" || (startswith(var.app_log_dir, "/") && !strcontains(var.app_log_dir, ".."))
+    error_message = "app_log_dir must be empty (use default) or an absolute path without '..' segments"
+  }
+}
+
+variable "app_log_file_format" {
+  description = "On-disk format for service .log files: 'json' (default, JSON Lines per docs/logging-standard.md) or 'text' (legacy comma-separated). Console/stdout format is unaffected (issue #987)."
+  type        = string
+  default     = "json"
+
+  validation {
+    condition     = contains(["json", "text"], var.app_log_file_format)
+    error_message = "app_log_file_format must be one of: 'json', 'text'"
+  }
+}
+
 # =============================================================================
 # REGISTRY CARD CONFIGURATION (Federation Metadata)
 # =============================================================================
@@ -1056,6 +1097,12 @@ variable "telemetry_debug" {
   description = "Enable telemetry debug mode (logs payload instead of sending). Set to 'true' to enable."
   type        = string
   default     = "false"
+}
+
+variable "mcp_telemetry_imds_probe_disabled" {
+  description = "Disable IMDS probing in cloud detection (issue #986). Set to '1' to opt out. Env-var, DMI, ECS-metadata, and k8s heuristics still run."
+  type        = string
+  default     = ""
 }
 
 variable "disable_ai_registry_tools_server" {

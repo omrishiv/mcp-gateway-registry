@@ -406,12 +406,20 @@ variable "security_add_pending_tag" {
 # =============================================================================
 
 variable "storage_backend" {
-  description = "Storage backend to use: 'file' or 'documentdb'"
+  description = <<-DESC
+    Storage backend. Accepted values (mirrors root variables.tf and
+    registry/core/config.py ALLOWED_STORAGE_BACKENDS): file, documentdb,
+    mongodb-ce, mongodb, mongodb-atlas. mongodb and mongodb-atlas are
+    aliases for mongodb-ce at the Python repository layer.
+  DESC
   type        = string
   default     = "file"
   validation {
-    condition     = contains(["file", "documentdb"], var.storage_backend)
-    error_message = "Storage backend must be either 'file' or 'documentdb'."
+    condition = contains(
+      ["file", "documentdb", "mongodb-ce", "mongodb", "mongodb-atlas"],
+      var.storage_backend,
+    )
+    error_message = "Storage backend must be one of: file, documentdb, mongodb-ce, mongodb, mongodb-atlas."
   }
 }
 
@@ -943,6 +951,18 @@ variable "app_log_excluded_loggers" {
   default     = "uvicorn.access,httpx,pymongo,motor"
 }
 
+variable "app_log_dir" {
+  description = "Directory where service log files are written (issue #987). Empty string means use the backend default (/var/log/containers/ai-registry)."
+  type        = string
+  default     = ""
+}
+
+variable "app_log_file_format" {
+  description = "On-disk format for service .log files: 'json' (default) or 'text' (legacy). Console format is unaffected (issue #987)."
+  type        = string
+  default     = "json"
+}
+
 # =============================================================================
 # DEPLOYMENT MODE CONFIGURATION
 # =============================================================================
@@ -1060,6 +1080,12 @@ variable "telemetry_debug" {
   description = "Enable telemetry debug mode (logs payload instead of sending). Set to 'true' to enable."
   type        = string
   default     = "false"
+}
+
+variable "mcp_telemetry_imds_probe_disabled" {
+  description = "Disable IMDS probing in cloud detection (issue #986). Set to '1' to opt out. Env-var, DMI, ECS-metadata, and k8s heuristics still run."
+  type        = string
+  default     = ""
 }
 
 variable "disable_ai_registry_tools_server" {

@@ -1,0 +1,133 @@
+suite: extraEnv and extraEnvFrom
+templates:
+  - deployment.yaml
+release:
+  name: test
+  namespace: default
+tests:
+  - it: renders without extraEnv by default
+    asserts:
+      - isKind:
+          of: Deployment
+
+  - it: appends extraEnv entries after chart-managed env vars
+    set:
+      entra:
+        clientSecretExistingSecret: my-entra
+        clientSecretExistingSecretKey: ENTRA_CLIENT_SECRET
+      extraEnv:
+        - name: MY_FLAG
+          value: "on"
+        - name: MY_SECRET_VAR
+          valueFrom:
+            secretKeyRef:
+              name: my-secret
+              key: my-key
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MY_FLAG
+            value: "on"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MY_SECRET_VAR
+            valueFrom:
+              secretKeyRef:
+                name: my-secret
+                key: my-key
+      # Order: chart-managed ENTRA_CLIENT_SECRET comes first (conditional
+      # valueFrom block), then user extraEnv entries.
+      - equal:
+          path: spec.template.spec.containers[0].env[0].name
+          value: ENTRA_CLIENT_SECRET
+      - equal:
+          path: spec.template.spec.containers[0].env[1].name
+          value: MY_FLAG
+      - equal:
+          path: spec.template.spec.containers[0].env[2].name
+          value: MY_SECRET_VAR
+
+  - it: appends extraEnvFrom entries after chart-managed envFrom sources
+    set:
+      extraEnvFrom:
+        - secretRef:
+            name: my-external-secrets
+        - configMapRef:
+            name: my-external-config
+            optional: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: my-external-secrets
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            configMapRef:
+              name: my-external-config
+              optional: true
+      # Order: chart-managed configmap/secrets come first; user entries last.
+      - equal:
+          path: spec.template.spec.containers[0].envFrom[0].configMapRef.name
+          value: auth-server-app-log-config
+      - equal:
+          path: spec.template.spec.containers[0].envFrom[1].secretRef.name
+          value: auth-server-secret
+
+  - it: fails when extraEnv contains an env-block reserved name (ENTRA_CLIENT_SECRET)
+    set:
+      extraEnv:
+        - name: ENTRA_CLIENT_SECRET
+          value: "oops"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"ENTRA_CLIENT_SECRET\" is a reserved variable"
+
+  - it: fails when extraEnv contains a reserved envFrom-sourced name (SECRET_KEY)
+    set:
+      extraEnv:
+        - name: SECRET_KEY
+          value: "oops"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"SECRET_KEY\" is a reserved variable"
+
+  - it: fails when extraEnv contains a reserved envFrom-sourced name (AUTH_PROVIDER)
+    set:
+      extraEnv:
+        - name: AUTH_PROVIDER
+          value: "entra"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"AUTH_PROVIDER\" is a reserved variable"
+
+  - it: fails when extraEnv contains an envFrom-sourced name (DOCUMENTDB_PASSWORD)
+    set:
+      extraEnv:
+        - name: DOCUMENTDB_PASSWORD
+          value: "oops"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"DOCUMENTDB_PASSWORD\" is a reserved variable"
+
+  - it: fails on duplicate names within extraEnv
+    set:
+      extraEnv:
+        - name: MY_VAR
+          value: "a"
+        - name: MY_VAR
+          value: "b"
+    asserts:
+      - failedTemplate:
+          errorPattern: "duplicate name \"MY_VAR\""
+
+  - it: fails when an extraEnv entry is missing the name field
+    set:
+      extraEnv:
+        - value: "just-a-value"
+    asserts:
+      - failedTemplate:
+          errorPattern: "missing required 'name' field"

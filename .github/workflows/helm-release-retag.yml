@@ -27,7 +27,21 @@ jobs:
         run: |
           BRANCH="${{ github.event.pull_request.head.ref }}"
           VERSION="${BRANCH#helm-update-}"
-          TAG="v${VERSION}"
+
+          # Pre-1.23.0 releases used a `v` prefix (e.g. v1.0.22). From 1.23.0
+          # onward tags are bare semver (1.23.0, 1.24.0, ...). Probe both
+          # forms and move whichever one actually exists.
+          V_TAG="v${VERSION}"
+          BARE_TAG="${VERSION}"
+
+          if git rev-parse --verify "refs/tags/${BARE_TAG}" >/dev/null 2>&1; then
+            TAG="${BARE_TAG}"
+          elif git rev-parse --verify "refs/tags/${V_TAG}" >/dev/null 2>&1; then
+            TAG="${V_TAG}"
+          else
+            echo "No tag found for version ${VERSION} (tried ${BARE_TAG} and ${V_TAG})"
+            exit 1
+          fi
 
           echo "Moving tag $TAG to current main HEAD"
 

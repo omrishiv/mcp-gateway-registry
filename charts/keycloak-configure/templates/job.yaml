@@ -3,6 +3,15 @@ kind: Job
 metadata:
   name: setup-keycloak
   namespace: {{ .Release.Namespace | quote }}
+  annotations:
+    # Re-run on every install and upgrade so the realm's client redirect
+    # URIs stay in sync with the computed AUTH_SERVER_EXTERNAL_URL /
+    # REGISTRY_URL. Without this, Jobs are immutable and a chart upgrade
+    # that changes those URLs would leave the realm pointing at the old
+    # addresses until an operator manually deleted and recreated the Job.
+    "helm.sh/hook": "post-install,post-upgrade"
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": "before-hook-creation"
 spec:
   template:
     spec:

@@ -583,7 +583,15 @@ data:
         echo "This will save all credentials to .oauth-tokens/"
         echo "=============================================="
 
-        kubectl create secret generic keycloak-client-secret --from-literal=KEYCLOAK_CLIENT_ID=mcp-gateway-web --from-literal=KEYCLOAK_CLIENT_SECRET=$web_secret --from-literal=KEYCLOAK_M2M_CLIENT_ID=mcp-gateway-m2m --from-literal=KEYCLOAK_M2M_CLIENT_SECRET=$m2m_secret
+        # Use --dry-run=client | apply so this is idempotent on helm upgrades
+        # (this Job runs as a post-install + post-upgrade hook; kubectl create
+        # by itself fails with AlreadyExists on re-run).
+        kubectl create secret generic keycloak-client-secret \
+          --from-literal=KEYCLOAK_CLIENT_ID=mcp-gateway-web \
+          --from-literal=KEYCLOAK_CLIENT_SECRET=$web_secret \
+          --from-literal=KEYCLOAK_M2M_CLIENT_ID=mcp-gateway-m2m \
+          --from-literal=KEYCLOAK_M2M_CLIENT_SECRET=$m2m_secret \
+          --dry-run=client -o yaml | kubectl apply -f -
     }
 
     # Function to setup groups mapper for OAuth2 clients
@@ -743,8 +751,19 @@ data:
             exit 1
         fi
 
-        # Save generated passwords to a Kubernetes secret
-        kubectl create secret generic registry-login-credentials --from-literal=REGISTRY_ADMIN_NAME=admin --from-literal=REGISTRY_ADMIN_PASSWORD=$INITIAL_ADMIN_PASSWORD --from-literal=REGISTRY_USER_NAME=testuser --from-literal=REGISTRY_USER_PASSWORD=$INITIAL_USER_PASSWORD
+        # Save generated passwords to a Kubernetes secret. Uses
+        # `apply` rather than plain `create` so the Job can be re-run
+        # by the post-install/post-upgrade Helm hook without failing
+        # with AlreadyExists. Note: INITIAL_ADMIN_PASSWORD /
+        # INITIAL_USER_PASSWORD are re-generated on every Job run and
+        # the realm user passwords are PUT-updated earlier in this
+        # script, so the secret stays in sync with the realm.
+        kubectl create secret generic registry-login-credentials \
+          --from-literal=REGISTRY_ADMIN_NAME=admin \
+          --from-literal=REGISTRY_ADMIN_PASSWORD=$INITIAL_ADMIN_PASSWORD \
+          --from-literal=REGISTRY_USER_NAME=testuser \
+          --from-literal=REGISTRY_USER_PASSWORD=$INITIAL_USER_PASSWORD \
+          --dry-run=client -o yaml | kubectl apply -f -
 
         echo ""
         echo -e "${GREEN}Keycloak initialization complete!${NC}"
