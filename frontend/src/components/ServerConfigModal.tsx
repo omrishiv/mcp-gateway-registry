@@ -6,7 +6,15 @@ import { useRegistryConfig } from '../hooks/useRegistryConfig';
 import useEscapeKey from '../hooks/useEscapeKey';
 import { getBaseURL } from '../utils/basePath';
 
-type IDE = 'cursor' | 'roo-code' | 'claude-code' | 'kiro' | 'goose';
+const IDE_LABELS = {
+  'cursor': 'Cursor',
+  'roo-code': 'Roo Code',
+  'claude-code': 'Claude Code',
+  'kiro': 'Kiro',
+  'goose': 'Goose',
+} as const;
+
+type IDE = keyof typeof IDE_LABELS;
 
 interface ServerConfigModalProps {
   server: Server;
@@ -29,12 +37,27 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
   onShowToast,
   resourceType = 'server',
 }) => {
-  const [selectedIDE, setSelectedIDE] = useState<IDE>('cursor');
   const [jwtToken, setJwtToken] = useState<string | null>(null);
   const [tokenLoading, setTokenLoading] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const { config: registryConfig, loading: configLoading } = useRegistryConfig();
+
+  const enabledIDEs: IDE[] = React.useMemo(() => {
+    const allIDEs = Object.keys(IDE_LABELS) as IDE[];
+    const allowlist = registryConfig?.coding_assistants ?? [];
+    if (allowlist.length === 0) return allIDEs;
+    const filtered = allIDEs.filter((ide) => allowlist.includes(ide));
+    return filtered.length > 0 ? filtered : allIDEs;
+  }, [registryConfig?.coding_assistants]);
+
+  const [selectedIDE, setSelectedIDE] = useState<IDE>(enabledIDEs[0] ?? 'cursor');
+
+  useEffect(() => {
+    if (!enabledIDEs.includes(selectedIDE)) {
+      setSelectedIDE(enabledIDEs[0]);
+    }
+  }, [enabledIDEs, selectedIDE]);
 
   useEscapeKey(onClose, isOpen);
 
@@ -257,7 +280,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     lines.push('    timeout: 300');
 
     return lines.join('\n');
-  }, [server.name, server.path, server.proxy_pass_url, server.mcp_endpoint, server.auth_scheme, server.auth_header_name, isRegistryOnly, jwtToken]);
+  }, [server.name, server.mcp_endpoint, server.proxy_pass_url, server.auth_scheme, server.description, server.path, server.auth_header_name, isRegistryOnly, jwtToken]);
 
   const generateClaudeCodeCommand = useCallback(() => {
     const serverName = server.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
@@ -467,7 +490,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
           <div className="bg-gray-50 dark:bg-gray-900 border dark:border-gray-700 rounded-lg p-4">
             <h4 className="font-medium text-gray-900 dark:text-white mb-3">Select your IDE/Tool:</h4>
             <div className="flex flex-wrap gap-2">
-              {(['cursor', 'roo-code', 'claude-code', 'kiro', 'goose'] as IDE[]).map((ide) => (
+              {enabledIDEs.map((ide) => (
                 <button
                   key={ide}
                   onClick={() => setSelectedIDE(ide)}
@@ -477,30 +500,12 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                       : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
                   }`}
                 >
-                  {ide === 'cursor'
-                    ? 'Cursor'
-                    : ide === 'roo-code'
-                    ? 'Roo Code'
-                    : ide === 'claude-code'
-                    ? 'Claude Code'
-                    : ide === 'kiro'
-                    ? 'Kiro'
-                    : 'Goose'}
+                  {IDE_LABELS[ide]}
                 </button>
               ))}
             </div>
             <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
-              Configuration format optimized for{' '}
-              {selectedIDE === 'cursor'
-                ? 'Cursor'
-                : selectedIDE === 'roo-code'
-                ? 'Roo Code'
-                : selectedIDE === 'claude-code'
-                ? 'Claude Code'
-                : selectedIDE === 'kiro'
-                ? 'Kiro'
-                : 'Goose'}{' '}
-              integration
+              Configuration format optimized for {IDE_LABELS[selectedIDE]} integration
             </p>
           </div>
 
