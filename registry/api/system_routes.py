@@ -7,9 +7,11 @@ These endpoints provide system-level information for monitoring and display.
 import logging
 import os
 from datetime import UTC, datetime
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from ..auth.dependencies import nginx_proxied_auth
 from ..core.config import settings
 from ..version import __version__
 
@@ -319,7 +321,12 @@ async def get_version():
 
 
 @router.get("/api/system/telemetry-detection")
-async def get_telemetry_detection_info() -> dict:
+async def get_telemetry_detection_info(
+    # Declared for its side effects: rejects unauthenticated callers with 401
+    # and populates request.state.user_context so the audit middleware logs
+    # the caller's real username instead of "anonymous".
+    _: Annotated[dict, Depends(nginx_proxied_auth)],
+) -> dict:
     """Return the telemetry cloud-detection result for the current process.
 
     Reads from the cached result in the telemetry module; no additional probes
@@ -338,7 +345,12 @@ async def get_telemetry_detection_info() -> dict:
 
 
 @router.get("/api/stats")
-async def get_system_stats():
+async def get_system_stats(
+    # Declared for its side effects: rejects unauthenticated callers with 401
+    # and populates request.state.user_context so the audit middleware logs
+    # the caller's real username instead of "anonymous".
+    _: Annotated[dict, Depends(nginx_proxied_auth)],
+):
     """Get system statistics including uptime, deployment info, and registry metrics.
 
     This endpoint provides operational information for monitoring and display:

@@ -38,7 +38,16 @@
     "extends": [
       "react-app",
       "react-app/jest"
-    ]
+    ],
+    "rules": {
+      "no-restricted-syntax": [
+        "error",
+        {
+          "selector": "CallExpression[callee.name='fetch'][arguments.0.callee.name='apiUrl']",
+          "message": "Use the configured axios client instead of bare fetch(apiUrl(...)) so requests inherit withCredentials and identity is recorded in the audit log. Rule is intentionally narrow: it catches the fetch(apiUrl(...)) pattern that caused audit-anonymous regressions. A blanket fetch ban would false-positive on non-API fetches (external URLs, SKILL.md content)."
+        }
+      ]
+    }
   },
   "browserslist": {
     "production": [
