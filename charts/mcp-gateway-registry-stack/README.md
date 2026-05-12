@@ -223,17 +223,16 @@ global:
   ingress:
     routingMode: path
     paths:
-      authServer: /auth-server    # Customize as needed (e.g., /api/auth)
-      registry: /registry          # Customize as needed (e.g., /api)
-      keycloak: /keycloak         # Customize as needed (e.g., /auth/keycloak)
+      registry: /registry   # Customize as needed (e.g., /api)
 ```
 
-**Important:** If you customize the Keycloak path, update the helm variable:
-
-```yaml
-keycloak:
-  httpRelativePath: /keycloak/
-```
+Only the registry service exposes a public ingress. auth-server,
+Keycloak, and mcpgw stay on their ClusterIP Services and are fronted by
+the registry pod's in-cluster nginx reverse proxy — mcpgw's MCP tools
+are reachable at `/airegistry-tools/*`, seeded into the registry at
+startup. The Keycloak path (`/keycloak`) is pinned by the nginx config
+— do NOT set `keycloak.httpRelativePath`; leave it at the Bitnami
+default (`/`).
 
 **DNS Requirements:** Configure a single A/CNAME record for your domain pointing to your ingress load balancer.
 
@@ -358,7 +357,6 @@ repo (if cloned) to aid in debugging.
 helm install mcp-gateway-registry -n mcp-gateway-registry --create-namespace . \
 --set global.domain=agents.domain.example \
 --set global.ingress.routingMode=path \
---set keycloak.httpRelativePath=/keycloak/ \
 --set global.chartVersion=$(git rev-parse --short HEAD)
 ```
 
@@ -372,7 +370,6 @@ listing, the connecting registry IP needs to be part of the allowed CIDR range.
 helm install mcp-gateway-registry -n mcp-gateway-registry --create-namespace . \
  --set global.domain=agents.domain.example \
  --set global.ingress.routingMode=path \
- --set keycloak.httpRelativePath=/keycloak/ \
  --set global.federation.staticTokenAuthEnabled=true
 ```
 
@@ -590,7 +587,7 @@ can reference pre-existing secrets instead.
 |-------|---------------------|-------------|
 | `global.existingSharedSecret` | `shared-secret` | SECRET_KEY and federation tokens shared by auth-server and registry |
 | `global.existingOauthProviderSecret` | `oauth-provider-secret` | Auth provider credentials (Keycloak/Entra/Okta/Auth0/Cognito) |
-| `global.existingMongoCredentialsSecret` | `mongo-credentials` | MongoDB connection credentials used by auth-server and registry |
+| `global.existingMongoCredentialsSecret` | `mongo-credentials` | MongoDB connection credentials used by auth-server and registry. When set, `mongodb.connectionString` has no effect — deployment pods read their connection values directly from this existing secret. |
 | `mongodb.existingPasswordSecret` | `my-user-password` | MongoDB operator user password |
 
 ### Per-Service Existing Secrets

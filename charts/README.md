@@ -223,16 +223,16 @@ global:
   ingress:
     routingMode: path
     paths:
-      authServer: /auth-server    # Customize as needed
-      registry: /registry          # Customize as needed
-      keycloak: /keycloak         # Customize as needed
+      registry: /registry   # Customize as needed
 ```
 
-**Important:** If you change the Keycloak path, you must also update the `keycloak.httpRelativePath` environment variable:
-```yaml
-keycloak:
-  httpRelativePath: /keycloak/
-```
+Only the registry service is exposed through a public ingress.
+auth-server, Keycloak, and mcpgw stay on their ClusterIP Services;
+the registry pod's in-cluster nginx reverse proxy fronts them at
+`/oauth2/*`, `/keycloak/*`, `/realms/*`, `/resources/*`, and
+`/airegistry-tools/*` (mcpgw's MCP tools). The `/keycloak` path is
+pinned by the nginx config — do NOT set `keycloak.httpRelativePath`;
+leave it at the Bitnami default (`/`).
 
 **How it works:**
 

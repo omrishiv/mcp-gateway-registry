@@ -121,6 +121,46 @@ data:
         fi
     }
 
+    # Upsert a Keycloak client: create if missing, otherwise PUT the full
+    # representation to apply any attribute changes (e.g. post.logout.redirect.uris)
+    # to existing deployments.
+    upsert_client() {
+        local token=$1
+        local client_id=$2
+        local client_json=$3
+
+        local existing_id=$(curl -s \
+            -H "Authorization: Bearer ${token}" \
+            "${KEYCLOAK_URL}/admin/realms/${REALM}/clients?clientId=${client_id}" \
+            | grep -o '"id":"[^"]*' | head -1 | cut -d'"' -f4)
+
+        if [ -z "$existing_id" ]; then
+            local status=$(curl -s -o /dev/null -w "%{http_code}" \
+                -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/clients" \
+                -H "Authorization: Bearer ${token}" \
+                -H "Content-Type: application/json" \
+                -d "$client_json")
+            if [ "$status" = "201" ] || [ "$status" = "409" ]; then
+                echo -e "${GREEN}Client ${client_id} created${NC}"
+            else
+                echo -e "${RED}Failed to create client ${client_id} (HTTP ${status})${NC}"
+                return 1
+            fi
+        else
+            local status=$(curl -s -o /dev/null -w "%{http_code}" \
+                -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${existing_id}" \
+                -H "Authorization: Bearer ${token}" \
+                -H "Content-Type: application/json" \
+                -d "$client_json")
+            if [ "$status" = "204" ]; then
+                echo -e "${GREEN}Client ${client_id} updated${NC}"
+            else
+                echo -e "${RED}Failed to update client ${client_id} (HTTP ${status})${NC}"
+                return 1
+            fi
+        fi
+    }
+
     # Function to create clients
     create_clients() {
         local token=$1
@@ -144,6 +184,9 @@ data:
                 "http://localhost:7860",
                 "+"
             ],
+            "attributes": {
+                "post.logout.redirect.uris": "'${REGISTRY_URL:-http://localhost:7860}'/*##http://localhost:7860/*##http://localhost:8888/*"
+            },
             "protocol": "openid-connect",
             "standardFlowEnabled": true,
             "implicitFlowEnabled": false,
@@ -152,10 +195,7 @@ data:
             "publicClient": false
         }'
 
-        curl -s -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/clients" \
-            -H "Authorization: Bearer ${token}" \
-            -H "Content-Type: application/json" \
-            -d "$web_client_json" > /dev/null
+        upsert_client "$token" "mcp-gateway-web" "$web_client_json"
 
         # Create M2M client
         local m2m_client_json='{
@@ -171,10 +211,7 @@ data:
             "publicClient": false
         }'
 
-        curl -s -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/clients" \
-            -H "Authorization: Bearer ${token}" \
-            -H "Content-Type: application/json" \
-            -d "$m2m_client_json" > /dev/null
+        upsert_client "$token" "mcp-gateway-m2m" "$m2m_client_json"
 
         echo -e "${GREEN}Clients created successfully!${NC}"
     }
@@ -546,7 +583,15 @@ data:
         echo "This will save all credentials to .oauth-tokens/"
         echo "=============================================="
 
-        kubectl create secret generic keycloak-client-secret --from-literal=KEYCLOAK_CLIENT_ID=mcp-gateway-web --from-literal=KEYCLOAK_CLIENT_SECRET=$web_secret --from-literal=KEYCLOAK_M2M_CLIENT_ID=mcp-gateway-m2m --from-literal=KEYCLOAK_M2M_CLIENT_SECRET=$m2m_secret
+        # Use --dry-run=client | apply so this is idempotent on helm upgrades
+        # (this Job runs as a post-install + post-upgrade hook; kubectl create
+        # by itself fails with AlreadyExists on re-run).
+        kubectl create secret generic keycloak-client-secret \
+          --from-literal=KEYCLOAK_CLIENT_ID=mcp-gateway-web \
+          --from-literal=KEYCLOAK_CLIENT_SECRET=$web_secret \
+          --from-literal=KEYCLOAK_M2M_CLIENT_ID=mcp-gateway-m2m \
+          --from-literal=KEYCLOAK_M2M_CLIENT_SECRET=$m2m_secret \
+          --dry-run=client -o yaml | kubectl apply -f -
     }
 
     # Function to setup groups mapper for OAuth2 clients
@@ -706,8 +751,19 @@ data:
             exit 1
         fi
 
-        # Save generated passwords to a Kubernetes secret
-        kubectl create secret generic registry-login-credentials --from-literal=REGISTRY_ADMIN_NAME=admin --from-literal=REGISTRY_ADMIN_PASSWORD=$INITIAL_ADMIN_PASSWORD --from-literal=REGISTRY_USER_NAME=testuser --from-literal=REGISTRY_USER_PASSWORD=$INITIAL_USER_PASSWORD
+        # Save generated passwords to a Kubernetes secret. Uses
+        # `apply` rather than plain `create` so the Job can be re-run
+        # by the post-install/post-upgrade Helm hook without failing
+        # with AlreadyExists. Note: INITIAL_ADMIN_PASSWORD /
+        # INITIAL_USER_PASSWORD are re-generated on every Job run and
+        # the realm user passwords are PUT-updated earlier in this
+        # script, so the secret stays in sync with the realm.
+        kubectl create secret generic registry-login-credentials \
+          --from-literal=REGISTRY_ADMIN_NAME=admin \
+          --from-literal=REGISTRY_ADMIN_PASSWORD=$INITIAL_ADMIN_PASSWORD \
+          --from-literal=REGISTRY_USER_NAME=testuser \
+          --from-literal=REGISTRY_USER_PASSWORD=$INITIAL_USER_PASSWORD \
+          --dry-run=client -o yaml | kubectl apply -f -
 
         echo ""
         echo -e "${GREEN}Keycloak initialization complete!${NC}"

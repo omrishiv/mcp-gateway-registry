@@ -1,6 +1,7 @@
 """One-time backfill: normalize supported_protocol, trust_level, and visibility on existing agents and servers."""
 
 import logging
+import os
 
 from pymongo import MongoClient
 
@@ -10,8 +11,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-MONGODB_URI = "mongodb://localhost:27017"
-DB_NAME = "mcp_registry"
+# Allow override via MONGODB_CONNECTION_STRING (Atlas, externally-managed, etc.)
+MONGODB_URI = os.getenv("MONGODB_CONNECTION_STRING") or "mongodb://localhost:27017"
+DB_NAME = os.getenv("DOCUMENTDB_DATABASE", "mcp_registry")
 AGENTS_COLLECTION = "mcp_agents_default"
 SERVERS_COLLECTION = "mcp_servers_default"
 
@@ -58,7 +60,12 @@ def _backfill_visibility(
 
 def backfill_agent_fields() -> None:
     """Run all backfill operations on agents and servers."""
-    client = MongoClient(MONGODB_URI, directConnection=True)
+    # Only force directConnection=True for the local default; if the caller
+    # provided their own URI, it owns topology (replica sets, SRV, etc.).
+    if os.getenv("MONGODB_CONNECTION_STRING"):
+        client = MongoClient(MONGODB_URI)
+    else:
+        client = MongoClient(MONGODB_URI, directConnection=True)
     db = client[DB_NAME]
 
     # Backfill agents collection

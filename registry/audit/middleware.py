@@ -164,12 +164,50 @@ class AuditMiddleware(BaseHTTPMiddleware):
 
         return None
 
+    def _best_effort_session_identity(self, request: Request) -> dict | None:
+        """Decode the session cookie to recover the caller's username.
+
+        Used only when no auth dependency has populated request.state.user_context
+        (e.g. endpoints declared without Depends(...) such as /api/version). The
+        cookie is validated with the same URLSafeTimedSerializer + max_age check
+        as get_user_session_data — a forged or expired cookie yields None. This
+        is strictly read-only: the method must not mutate request.state, extend
+        the session, or issue any cookie.
+
+        Returns None on missing, tampered, or expired cookies so callers can
+        stamp anonymous identity.
+        """
+        from ..auth.dependencies import signer
+        from ..core.config import settings
+
+        session = request.cookies.get(settings.session_cookie_name)
+        if not session:
+            return None
+
+        try:
+            data = signer.loads(session, max_age=settings.session_max_age_seconds)
+        except Exception:
+            return None
+
+        if not isinstance(data, dict):
+            return None
+        username = data.get("username")
+        if not username:
+            return None
+
+        return {
+            "username": username,
+            "auth_method": "session-cookie-fallback",
+            "provider": data.get("provider"),
+        }
+
     def _extract_identity(self, request: Request) -> Identity:
         """
         Extract identity information from the request.
 
-        Looks for user context in request.state (set by auth dependency)
-        or falls back to anonymous identity.
+        Looks for user context in request.state (set by auth dependency),
+        then falls back to a best-effort session-cookie decode for endpoints
+        declared without an auth dependency, and finally to anonymous.
 
         Args:
             request: The FastAPI request object
@@ -192,7 +230,19 @@ class AuditMiddleware(BaseHTTPMiddleware):
                 credential_hint=self._get_credential_hint(request),
             )
 
-        # Fallback to anonymous identity
+        # Fallback 1: decode session cookie ourselves (read-only) so audit
+        # logs tell the truth on endpoints without an auth dependency.
+        fallback = self._best_effort_session_identity(request)
+        if fallback:
+            return Identity(
+                username=fallback["username"],
+                auth_method=fallback["auth_method"],
+                provider=fallback.get("provider"),
+                credential_type=self._get_credential_type(request),
+                credential_hint=self._get_credential_hint(request),
+            )
+
+        # Fallback 2: anonymous identity
         return Identity(
             username="anonymous",
             auth_method="anonymous",
@@ -221,6 +271,7 @@ class AuditMiddleware(BaseHTTPMiddleware):
                 resource_type=audit_action.get("resource_type", "unknown"),
                 resource_id=audit_action.get("resource_id"),
                 description=audit_action.get("description"),
+                idp_skip_reason=audit_action.get("idp_skip_reason"),
             )
 
         return None

@@ -101,7 +101,9 @@ def _parse_internal_instances(
     ids = set()
     with open(path) as f:
         for line in f:
-            match = re.search(r"`([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})`", line)
+            match = re.search(
+                r"`([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})`", line
+            )
             if match:
                 ids.add(match.group(1))
 
@@ -129,8 +131,7 @@ def _compute_stickiness(
 ) -> dict:
     """Compute stickiness metrics: 3+ day non-internal instances and longest-running."""
     non_internal = [
-        inst for inst in instance_lifetime
-        if not _is_internal(inst["registry_id"], internal_ids)
+        inst for inst in instance_lifetime if not _is_internal(inst["registry_id"], internal_ids)
     ]
     sticky = [inst for inst in non_internal if inst["age_days"] >= 3]
     longest = max(non_internal, key=lambda x: x["age_days"]) if non_internal else None
@@ -151,6 +152,24 @@ def _display_id(
     if _is_internal(registry_id, internal_ids):
         return f"{registry_id} (internal)"
     return registry_id
+
+
+def _latest_nonempty(
+    events: list[dict],
+    field: str,
+) -> str:
+    """Return the most recent non-empty value for a field across events.
+
+    Events must be sorted by timestamp ascending. Heartbeat events populate
+    fields like search_backend and embeddings_provider while startup events
+    leave them empty, so the latest non-empty value reflects the current
+    runtime configuration.
+    """
+    for event in reversed(events):
+        value = (event.get(field) or "").strip()
+        if value:
+            return value
+    return "unknown"
 
 
 def _score_instances(
@@ -183,12 +202,169 @@ def _score_instances(
                 "skills": skills,
                 "search": search,
                 "total": total,
+                "embeddings_provider": inst.get("embeddings_provider", "unknown"),
+                "embeddings_backend_kind": inst.get("embeddings_backend_kind", "unknown"),
                 "is_internal": _is_internal(inst["registry_id"], internal_ids),
             }
         )
 
     scored.sort(key=lambda x: x["total"], reverse=True)
     return scored
+
+
+def _compute_embeddings_backend_breakdown(
+    instances: list[dict],
+) -> list[dict]:
+    """Group unique instances by embeddings_backend_kind.
+
+    Each instance contributes its latest non-empty backend_kind value. If an
+    instance was observed only on schema v1 events (which did not carry the
+    field), it lands in the "unknown" bucket. That bucket will shrink as
+    operators upgrade to v1.0.22+.
+
+    Returns:
+        List of {"kind": str, "instances": int, "percentage": str} rows,
+        sorted by instance count descending.
+    """
+    total = len(instances)
+    if total == 0:
+        return []
+
+    counts: dict[str, int] = defaultdict(int)
+    for inst in instances:
+        kind = inst.get("embeddings_backend_kind") or "unknown"
+        counts[kind] += 1
+
+    rows = [
+        {
+            "kind": kind,
+            "instances": count,
+            "percentage": _format_pct(count, total),
+        }
+        for kind, count in counts.items()
+    ]
+    rows.sort(key=lambda r: r["instances"], reverse=True)
+    return rows
+
+
+def _build_embeddings_backend_breakdown_table(
+    instances: list[dict],
+) -> tuple[str, list[dict]]:
+    """Build the Embeddings Backend Breakdown markdown section.
+
+    Returns:
+        Tuple of (markdown string, list of row dicts for JSON output).
+    """
+    rows = _compute_embeddings_backend_breakdown(instances)
+    if not rows:
+        return "", []
+
+    total = sum(r["instances"] for r in rows)
+    lines = []
+    lines.append("## Embeddings Backend Breakdown")
+    lines.append("")
+    lines.append(
+        f"Unique instances grouped by derived `embeddings_backend_kind`. Total instances: {total}."
+    )
+    lines.append("")
+    lines.append("| Backend Kind | Unique Instances | % of Fleet |")
+    lines.append("|--------------|------------------|------------|")
+    for row in rows:
+        lines.append(f"| `{row['kind']}` | {row['instances']} | {row['percentage']} |")
+    lines.append("")
+
+    # Reviewer D2: when "unknown" dominates, explain why. Pre-v1.0.22
+    # registries did not emit the field, so they all bucket as unknown
+    # during the rollout window.
+    top_kind = rows[0]["kind"]
+    top_count = rows[0]["instances"]
+    if top_kind == "unknown" and top_count / total >= 0.5:
+        lines.append(
+            f"> **Note:** The `unknown` bucket dominates ({top_count}/{total} "
+            f"instances) because the `embeddings_backend_kind` field was added "
+            f"in schema v2 (registry v1.0.22+). Pre-v1.0.22 registries do not "
+            f"emit this field. The bucket will shrink as operators upgrade."
+        )
+        lines.append("")
+
+    return "\n".join(lines), rows
+
+
+def _compute_cloud_detection_method_breakdown(
+    instances: list[dict],
+) -> list[dict]:
+    """Group unique instances by cloud_detection_method.
+
+    Each instance contributes its latest non-empty cloud_detection_method
+    value. Pre-v3 events (before issue #986 shipped) did not carry the
+    field, so those instances land in the "unknown" bucket until they
+    emit a new event.
+
+    Returns:
+        List of {"method": str, "instances": int, "percentage": str} rows,
+        sorted by instance count descending.
+    """
+    total = len(instances)
+    if total == 0:
+        return []
+
+    counts: dict[str, int] = defaultdict(int)
+    for inst in instances:
+        method = inst.get("cloud_detection_method") or "unknown"
+        counts[method] += 1
+
+    rows = [
+        {
+            "method": method,
+            "instances": count,
+            "percentage": _format_pct(count, total),
+        }
+        for method, count in counts.items()
+    ]
+    rows.sort(key=lambda r: r["instances"], reverse=True)
+    return rows
+
+
+def _build_cloud_detection_method_breakdown_table(
+    instances: list[dict],
+) -> tuple[str, list[dict]]:
+    """Build the Cloud Detection Method section markdown.
+
+    Returns:
+        Tuple of (markdown string, list of row dicts for JSON output).
+    """
+    rows = _compute_cloud_detection_method_breakdown(instances)
+    if not rows:
+        return "", []
+
+    total = sum(r["instances"] for r in rows)
+    lines = []
+    lines.append("## Cloud Detection Method")
+    lines.append("")
+    lines.append(
+        f"Unique instances grouped by `cloud_detection_method`. Total instances: {total}."
+    )
+    lines.append("")
+    lines.append("| Detection Method | Unique Instances | % of Fleet |")
+    lines.append("|------------------|------------------|------------|")
+    for row in rows:
+        lines.append(f"| `{row['method']}` | {row['instances']} | {row['percentage']} |")
+    lines.append("")
+
+    # Pre-v1.23 registries did not emit the field, so they all bucket as
+    # unknown during the rollout window.
+    top_method = rows[0]["method"]
+    top_count = rows[0]["instances"]
+    if top_method == "unknown" and top_count / total >= 0.5:
+        lines.append(
+            f"> **Note:** The `unknown` bucket dominates ({top_count}/{total} "
+            f"instances) because the `cloud_detection_method` field was added "
+            f"in schema v3 (registry v1.23.0+). Pre-v3 registries do not emit "
+            f"this field. The bucket will shrink as operators upgrade."
+        )
+        lines.append("")
+
+    return "\n".join(lines), rows
 
 
 def _build_most_active_table(
@@ -206,19 +382,28 @@ def _build_most_active_table(
     lines.append("")
     lines.append(
         "| Rank | Registry ID | Cloud/Compute/Auth "
-        "| Version | Servers | Agents | Skills | Search | Total |"
+        "| Version | Embeddings | Servers | Agents | Skills | Search | Total |"
     )
     lines.append(
         "|------|-------------|-------------------"
-        "|---------|---------|--------|--------|--------|-------|"
+        "|---------|------------|---------|--------|--------|--------|-------|"
     )
     for i, inst in enumerate(top, 1):
         label = f"{inst['cloud']}/{inst['compute']}/{inst['auth']}"
+        # Prefer the derived backend_kind when available (schema v2+). Fall
+        # back to the raw provider string for pre-v1.0.22 instances so the
+        # column still says something useful during the rollout window.
+        backend_kind = inst.get("embeddings_backend_kind", "unknown")
+        if backend_kind == "unknown":
+            embeddings_label = inst.get("embeddings_provider", "unknown")
+        else:
+            embeddings_label = backend_kind
         lines.append(
             f"| {i} "
             f"| `{inst['registry_id']}` "
             f"| {label} "
             f"| `{inst['version']}` "
+            f"| {embeddings_label} "
             f"| {inst['servers']} "
             f"| {inst['agents']} "
             f"| {inst['skills']} "
@@ -280,8 +465,7 @@ def _build_sticky_breakdown_table(
     profile_counts = _compute_sticky_profile_counts(sticky)
 
     profile_counts_for_json = {
-        f"{c}/{co}/{s}/{a}": count
-        for (c, co, s, a), count in profile_counts.items()
+        f"{c}/{co}/{s}/{a}": count for (c, co, s, a), count in profile_counts.items()
     }
 
     if total_sticky == 0:
@@ -302,14 +486,8 @@ def _build_sticky_breakdown_table(
         f"grouped by deployment profile."
     )
     lines.append("")
-    lines.append(
-        "| Cloud | Compute | Storage | Auth "
-        "| Instances | Percentage | Change |"
-    )
-    lines.append(
-        "|-------|---------|---------|------"
-        "|-----------|------------|--------|"
-    )
+    lines.append("| Cloud | Compute | Storage | Auth | Instances | Percentage | Change |")
+    lines.append("|-------|---------|---------|------|-----------|------------|--------|")
     for (cloud, compute, storage, auth), count in sorted_profiles:
         pct = _format_pct(count, total_sticky)
         profile_key = f"{cloud}/{compute}/{storage}/{auth}"
@@ -322,10 +500,7 @@ def _build_sticky_breakdown_table(
             delta = count - prev_count
             sign = "+" if delta > 0 else ""
             change = f"{sign}{delta}"
-        lines.append(
-            f"| {cloud} | {compute} | {storage} | {auth} "
-            f"| {count} | {pct} | {change} |"
-        )
+        lines.append(f"| {cloud} | {compute} | {storage} | {auth} | {count} | {pct} | {change} |")
     lines.append("")
 
     return "\n".join(lines), profile_counts_for_json
@@ -350,10 +525,7 @@ def _build_sticky_cloud_compute_table(
         key = (inst["cloud"], inst["compute"])
         counter[key] = counter.get(key, 0) + 1
 
-    counts_for_json = {
-        f"{cloud}/{compute}": count
-        for (cloud, compute), count in counter.items()
-    }
+    counts_for_json = {f"{cloud}/{compute}": count for (cloud, compute), count in counter.items()}
 
     if total_sticky == 0:
         return "", counts_for_json
@@ -382,10 +554,7 @@ def _build_sticky_cloud_compute_table(
             delta = count - prev_count
             sign = "+" if delta > 0 else ""
             change = f"{sign}{delta}"
-        lines.append(
-            f"| {cloud} | {compute} "
-            f"| {count} | {pct} | {change} |"
-        )
+        lines.append(f"| {cloud} | {compute} | {count} | {pct} | {change} |")
     lines.append("")
 
     return "\n".join(lines), counts_for_json
@@ -798,6 +967,15 @@ def _compute_instance_table(
         # in each event, so take the max (latest value) not the sum
         total_search = max(_safe_int(e.get("search_queries_total", "")) for e in events)
 
+        # Track search backend, embeddings provider, and backend kind
+        # (most recent non-empty value across heartbeat + startup events).
+        search_backend = _latest_nonempty(events, "search_backend")
+        embeddings_provider = _latest_nonempty(events, "embeddings_provider")
+        embeddings_backend_kind = _latest_nonempty(events, "embeddings_backend_kind")
+        # cloud_detection_method added in schema v3 (issue #986). Pre-v3
+        # instances produce empty values and land in the "unknown" bucket.
+        cloud_detection_method = _latest_nonempty(events, "cloud_detection_method")
+
         first_ts = events[0].get("ts", "")[:10]
         latest_ts = events[-1].get("ts", "")[:10]
 
@@ -806,6 +984,7 @@ def _compute_instance_table(
                 "registry_id": rid[:12] + "...",
                 "registry_id_full": rid,
                 "cloud": latest.get("cloud") or "unknown",
+                "cloud_detection_method": cloud_detection_method,
                 "compute": latest.get("compute") or "unknown",
                 "storage": latest.get("storage") or "unknown",
                 "auth": latest.get("auth") or "none",
@@ -819,6 +998,9 @@ def _compute_instance_table(
                 "max_skills": max_skills,
                 "max_search_queries": max_search,
                 "total_search_queries": total_search,
+                "search_backend": search_backend,
+                "embeddings_provider": embeddings_provider,
+                "embeddings_backend_kind": embeddings_backend_kind,
                 "first_seen": first_ts,
                 "latest_seen": latest_ts,
             }
@@ -942,23 +1124,35 @@ def _compute_instance_timeline(
 def _compute_version_table(
     rows: list[dict[str, str]],
 ) -> list[dict]:
-    """Compute version adoption table."""
-    total = len(rows)
-    version_counts = Counter()
+    """Compute version adoption table with event counts and unique-instance counts."""
+    total_events = len(rows)
+    version_events: Counter = Counter()
+    version_instances: dict[str, set[str]] = {}
+    all_instances: set[str] = set()
     for row in rows:
-        version_counts[row.get("v") or "unknown"] += 1
+        version = row.get("v") or "unknown"
+        version_events[version] += 1
+        rid = (row.get("registry_id") or "").strip()
+        if rid:
+            version_instances.setdefault(version, set()).add(rid)
+            all_instances.add(rid)
+
+    total_instances = len(all_instances)
 
     result = []
-    for version, count in version_counts.most_common():
+    for version, count in version_events.most_common():
         vtype = _classify_version(version)
         branch = _extract_version_branch(version) if vtype == "dev" else "--"
+        instance_count = len(version_instances.get(version, set()))
 
         result.append(
             {
                 "version": version,
                 "type": "**Release**" if vtype == "release" else f"Dev ({branch})",
                 "events": count,
-                "percentage": _format_pct(count, total),
+                "percentage": _format_pct(count, total_events),
+                "instances": instance_count,
+                "instance_percentage": _format_pct(instance_count, total_instances),
             }
         )
 
@@ -1081,11 +1275,16 @@ def _build_markdown_tables(
     internal_ids: set[str] | None = None,
     previous_sticky_profiles: dict[str, int] | None = None,
     previous_sticky_cloud_compute: dict[str, int] | None = None,
-) -> tuple[str, dict[str, int], dict[str, int]]:
+) -> tuple[str, dict[str, int], dict[str, int], list[dict]]:
     """Build all markdown tables as a single string.
 
     Returns:
-        Tuple of (markdown_content, sticky_profile_counts, sticky_cloud_compute_counts).
+        Tuple of (
+            markdown_content,
+            sticky_profile_counts,
+            sticky_cloud_compute_counts,
+            embeddings_backend_rows,
+        ).
     """
     total = metrics["total_events"]
     lines = []
@@ -1242,10 +1441,13 @@ def _build_markdown_tables(
     # Version Adoption
     lines.append("## Version Adoption")
     lines.append("")
-    lines.append("| Version | Type | Events | Percentage |")
-    lines.append("|---------|------|--------|------------|")
+    lines.append("| Version | Type | Events | % Events | Instances | % Instances |")
+    lines.append("|---------|------|--------|----------|-----------|-------------|")
     for v in versions:
-        lines.append(f"| `{v['version']}` | {v['type']} | {v['events']} | {v['percentage']} |")
+        lines.append(
+            f"| `{v['version']}` | {v['type']} | {v['events']} | {v['percentage']} | "
+            f"{v['instances']} | {v['instance_percentage']} |"
+        )
     lines.append("")
 
     # Feature Adoption
@@ -1258,6 +1460,18 @@ def _build_markdown_tables(
             f"| {feat['feature']} | {feat['enabled']} | {feat['disabled']} | {feat['rate']} |"
         )
     lines.append("")
+
+    # Embeddings Backend Breakdown (schema v2+)
+    embeddings_md, embeddings_backend_rows = _build_embeddings_backend_breakdown_table(instances)
+    if embeddings_md:
+        lines.append(embeddings_md)
+
+    # Cloud Detection Method Breakdown (schema v3+, issue #986)
+    cloud_detection_md, cloud_detection_rows = _build_cloud_detection_method_breakdown_table(
+        instances
+    )
+    if cloud_detection_md:
+        lines.append(cloud_detection_md)
 
     # Search Usage
     lines.append("## Search Usage")
@@ -1355,7 +1569,12 @@ def _build_markdown_tables(
                 )
             lines.append("")
 
-    return "\n".join(lines), sticky_profile_counts, sticky_cloud_compute_counts
+    return (
+        "\n".join(lines),
+        sticky_profile_counts,
+        sticky_cloud_compute_counts,
+        embeddings_backend_rows,
+    )
 
 
 def _write_outputs(
@@ -1477,11 +1696,14 @@ def main() -> None:
     previous_sticky_cloud_compute = None
     if previous_metrics:
         previous_sticky_profiles = previous_metrics.get("sticky_profiles", None)
-        previous_sticky_cloud_compute = previous_metrics.get(
-            "sticky_cloud_compute", None
-        )
+        previous_sticky_cloud_compute = previous_metrics.get("sticky_cloud_compute", None)
 
-    md_content, sticky_profile_counts, sticky_cc_counts = _build_markdown_tables(
+    (
+        md_content,
+        sticky_profile_counts,
+        sticky_cc_counts,
+        embeddings_backend_breakdown,
+    ) = _build_markdown_tables(
         metrics,
         distributions,
         instances,
@@ -1506,6 +1728,7 @@ def main() -> None:
         "stickiness": stickiness,
         "sticky_profiles": sticky_profile_counts,
         "sticky_cloud_compute": sticky_cc_counts,
+        "embeddings_backend_breakdown": embeddings_backend_breakdown,
         "internal_instance_ids": sorted(internal_ids),
         "distributions": {k: dict(v.most_common()) for k, v in distributions.items()},
         "identified_instances": instances,

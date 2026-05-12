@@ -40,6 +40,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("deployment_mode", "Deployment Mode", False),
             ("registry_mode", "Registry Mode", False),
             ("nginx_updates_enabled", "Nginx Updates Enabled", False),
+            ("bind_host", "Bind Host", False),
             ("show_servers_tab", "Show MCP Servers Tab", False),
             ("show_virtual_servers_tab", "Show Virtual MCP Servers Tab", False),
             ("show_skills_tab", "Show Skills Tab", False),
@@ -251,6 +252,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("telemetry_heartbeat_interval_minutes", "Heartbeat Interval (minutes)", False),
             ("telemetry_debug", "Debug Mode", False),
             ("telemetry_endpoint", "Collector Endpoint", False),
+            ("telemetry_imds_probe_disabled", "Telemetry: Disable IMDS Probe", False),
         ],
     },
     "demo_server": {
@@ -260,9 +262,19 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("disable_ai_registry_tools_server", "Disable AI Registry Tools Server", False),
         ],
     },
+    "registration_webhook": {
+        "title": "Registration Webhook (Notifications)",
+        "order": 17,
+        "fields": [
+            ("registration_webhook_url", "Webhook URL", False),
+            ("registration_webhook_auth_header", "Auth Header Name", False),
+            ("registration_webhook_auth_token", "Auth Token", True),
+            ("registration_webhook_timeout_seconds", "Timeout (s)", False),
+        ],
+    },
     "registration_gate": {
         "title": "Registration Gate (Admission Control)",
-        "order": 17,
+        "order": 18,
         "fields": [
             ("registration_gate_enabled", "Gate Enabled", False),
             ("registration_gate_url", "Gate URL", False),
@@ -271,21 +283,29 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("registration_gate_auth_header_name", "Auth Header Name", False),
             ("registration_gate_timeout_seconds", "Timeout (s)", False),
             ("registration_gate_max_retries", "Max Retries", False),
+            ("registration_gate_oauth2_token_url", "OAuth2 Token URL", False),
+            ("registration_gate_oauth2_client_id", "OAuth2 Client ID", False),
+            ("registration_gate_oauth2_client_secret", "OAuth2 Client Secret", True),
+            ("registration_gate_oauth2_scope", "OAuth2 Scope", False),
         ],
     },
     "app_log": {
         "title": "Application Logging",
-        "order": 18,
+        "order": 19,
         "fields": [
+            ("app_log_dir", "Log File Directory", False),
+            ("app_log_file_format", "Log File Format (json|text)", False),
             ("app_log_centralized_enabled", "Centralized Enabled", False),
             ("app_log_centralized_ttl_days", "Centralized TTL Days", False),
             ("app_log_level", "Log Level", False),
+            ("app_log_max_bytes", "Max Log File Size (bytes)", False),
+            ("app_log_backup_count", "Rotated Backup Count", False),
             ("app_log_excluded_loggers", "Excluded Loggers", False),
         ],
     },
     "github_auth": {
         "title": "GitHub Private Repo Auth",
-        "order": 19,
+        "order": 20,
         "fields": [
             ("github_pat", "Personal Access Token", True),
             ("github_app_id", "GitHub App ID", False),

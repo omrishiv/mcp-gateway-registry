@@ -261,6 +261,54 @@ oauth_store_tokens_in_session = false
 # documentdb_shard_count = 1
 
 # ============================================================================
+# MONGODB CONNECTION STRING OVERRIDE (PR #947)
+# ============================================================================
+# Optional full MongoDB connection string override. When set, takes precedence
+# over the documentdb_* variables above. Use for MongoDB Atlas, replica sets,
+# or URI-level tuning not expressible via the discrete variables.
+#
+# Prefer mongodb_connection_string_secret_arn when the URI contains credentials
+# (the plain-text variable value lands in Terraform state).
+#
+# When both are empty (default), the registry uses the documentdb_* variables
+# and connects to the Amazon DocumentDB cluster provisioned by this module.
+#
+# Examples:
+#   mongodb_connection_string = "mongodb+srv://user:pass@cluster.mongodb.net/mcp_registry?retryWrites=true"
+#   mongodb_connection_string_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:mongodb-atlas-uri-XXXXXX"
+# mongodb_connection_string            = ""
+# mongodb_connection_string_secret_arn = ""
+
+# ============================================================================
+# EXTERNAL MONGODB (Atlas, self-managed) - issue #955
+# ============================================================================
+# To point the registry at a MongoDB you already own (MongoDB Atlas,
+# self-managed replica set, etc.) WITHOUT provisioning AWS DocumentDB in
+# this Terraform state, set:
+#
+#   storage_backend = "mongodb-atlas"
+#   mongodb_connection_string_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:mongodb-atlas-uri-XXXXXX"
+#
+# Accepted storage_backend values (must match registry/core/config.py):
+#   "file"          - JSON files, no DocumentDB provisioned
+#   "documentdb"    - Provision AWS DocumentDB (this module manages the cluster)
+#   "mongodb-ce"    - External MongoDB CE, URI via mongodb_connection_string*
+#   "mongodb"       - Alias for mongodb-ce
+#   "mongodb-atlas" - Alias for mongodb-ce (intended for MongoDB Atlas)
+#
+# For any non-"documentdb" MongoDB backend, mongodb_connection_string or
+# mongodb_connection_string_secret_arn is REQUIRED. `terraform plan` will
+# fail with a clear precondition error if you forget.
+#
+# The Secrets Manager secret value must be the full URI, e.g.:
+#   mongodb+srv://user:pass@cluster.mongodb.net/mcp_registry?retryWrites=true&w=majority
+#
+# When switching from "documentdb" to an external-MongoDB backend, `terraform
+# apply` will destroy the existing DocumentDB cluster, its KMS key (7-day
+# pending-deletion), and the credentials secret (0-day recovery window -
+# immediate delete). Take a final snapshot first. See the PR release notes.
+
+# ============================================================================
 # REGISTRY STATIC TOKEN AUTH (IdP-independent API access)
 # ============================================================================
 
@@ -334,6 +382,19 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 
 # Retries after the first gate attempt (exponential backoff). Default: 2
 # registration_gate_max_retries = 2
+
+# OAuth2 token endpoint for client credentials flow (used when auth_type=oauth2_client_credentials)
+# Example (Entra): https://login.microsoftonline.com/{tenant-id}/oauth2/v2.0/token
+# registration_gate_oauth2_token_url = ""
+
+# OAuth2 client ID for client credentials flow
+# registration_gate_oauth2_client_id = ""
+
+# OAuth2 client secret for client credentials flow
+# registration_gate_oauth2_client_secret = ""
+
+# OAuth2 scope parameter (optional, e.g., api://your-app-id/.default for Entra)
+# registration_gate_oauth2_scope = ""
 
 # ============================================================================
 # M2M DIRECT CLIENT REGISTRATION (Issue #851)
@@ -465,6 +526,21 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # Comma-separated logger names to exclude from MongoDB writes
 # Default: "uvicorn.access,httpx,pymongo,motor"
 # app_log_excluded_loggers = "uvicorn.access,httpx,pymongo,motor"
+
+# Directory where service log files are written (issue #987).
+# Empty string uses the backend default: /var/log/containers/ai-registry.
+# Must be an absolute path when set; '..' segments are rejected.
+# On ECS, files land on task-ephemeral storage - the awslogs driver still
+# handles log shipping via CloudWatch. This variable primarily controls the
+# in-container path for code-path consistency with Docker Compose deployments.
+# Default: ""
+# app_log_dir = ""
+
+# On-disk format for service .log files: 'json' (JSON Lines per
+# docs/logging-standard.md) or 'text' (legacy comma-separated).
+# Console/stdout format is unaffected.
+# Default: "json"
+# app_log_file_format = "json"
 
 # ============================================================================
 # AUTHENTICATION PROVIDER CONFIGURATION
@@ -702,6 +778,10 @@ grafana_admin_password = "CHANGE-ME-SET-STRONG-PASSWORD"
 # Debug mode: log telemetry payload to stdout instead of sending
 # Useful for verifying what data would be sent
 # telemetry_debug = "false"
+
+# Disable IMDS probing in cloud detection (issue #986, default: probes enabled).
+# Env-var, DMI, ECS-metadata, and Kubernetes heuristics still run when set.
+# mcp_telemetry_imds_probe_disabled = ""
 
 # ============================================================================
 # AWS REGISTRY FEDERATION (optional)

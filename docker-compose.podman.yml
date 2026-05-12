@@ -87,6 +87,10 @@ services:
       # Storage Backend Configuration
       - STORAGE_BACKEND=${STORAGE_BACKEND:-file}
       # DocumentDB/MongoDB Configuration (when STORAGE_BACKEND=documentdb)
+      # MONGODB_CONNECTION_STRING: Optional full URI override (e.g. for MongoDB
+      # Atlas, mongodb+srv://...). When set, takes precedence over the discrete
+      # DOCUMENTDB_* values below.
+      - MONGODB_CONNECTION_STRING=${MONGODB_CONNECTION_STRING:-}
       - DOCUMENTDB_HOST=${DOCUMENTDB_HOST:-mongodb}
       - DOCUMENTDB_PORT=${DOCUMENTDB_PORT:-27017}
       - DOCUMENTDB_USERNAME=${DOCUMENTDB_USERNAME}
@@ -137,6 +141,10 @@ services:
       - REGISTRATION_GATE_AUTH_HEADER_NAME=${REGISTRATION_GATE_AUTH_HEADER_NAME:-X-Api-Key}
       - REGISTRATION_GATE_TIMEOUT_SECONDS=${REGISTRATION_GATE_TIMEOUT_SECONDS:-5}
       - REGISTRATION_GATE_MAX_RETRIES=${REGISTRATION_GATE_MAX_RETRIES:-2}
+      - REGISTRATION_GATE_OAUTH2_TOKEN_URL=${REGISTRATION_GATE_OAUTH2_TOKEN_URL:-}
+      - REGISTRATION_GATE_OAUTH2_CLIENT_ID=${REGISTRATION_GATE_OAUTH2_CLIENT_ID:-}
+      - REGISTRATION_GATE_OAUTH2_CLIENT_SECRET=${REGISTRATION_GATE_OAUTH2_CLIENT_SECRET:-}
+      - REGISTRATION_GATE_OAUTH2_SCOPE=${REGISTRATION_GATE_OAUTH2_SCOPE:-}
       # M2M Direct Registration
       - M2M_DIRECT_REGISTRATION_ENABLED=${M2M_DIRECT_REGISTRATION_ENABLED:-true}
       - MAX_TOKENS_PER_USER_PER_HOUR=${MAX_TOKENS_PER_USER_PER_HOUR:-100}
@@ -150,6 +158,7 @@ services:
       - MCP_TELEMETRY_OPT_OUT=${MCP_TELEMETRY_OPT_OUT:-}
       - MCP_TELEMETRY_HEARTBEAT_INTERVAL_MINUTES=${MCP_TELEMETRY_HEARTBEAT_INTERVAL_MINUTES:-1440}
       - TELEMETRY_DEBUG=${TELEMETRY_DEBUG:-false}
+      - MCP_TELEMETRY_IMDS_PROBE_DISABLED=${MCP_TELEMETRY_IMDS_PROBE_DISABLED:-}
       # Application Log Configuration
       - APP_LOG_MAX_BYTES=${APP_LOG_MAX_BYTES:-52428800}
       - APP_LOG_BACKUP_COUNT=${APP_LOG_BACKUP_COUNT:-5}
@@ -159,6 +168,9 @@ services:
       - APP_LOG_MONGODB_FLUSH_INTERVAL_SECONDS=${APP_LOG_MONGODB_FLUSH_INTERVAL_SECONDS:-5.0}
       - APP_LOG_LEVEL=${APP_LOG_LEVEL:-INFO}
       - APP_LOG_EXCLUDED_LOGGERS=${APP_LOG_EXCLUDED_LOGGERS:-uvicorn.access,httpx,pymongo,motor}
+      # Application file-log location (Issue #987) + format (json|text)
+      - APP_LOG_DIR=${APP_LOG_DIR:-/var/log/containers/ai-registry}
+      - APP_LOG_FILE_FORMAT=${APP_LOG_FILE_FORMAT:-json}
     ports:
       - "80:8080"   # Map host 80 to container 8080 (non-root nginx)
       - "443:8443"  # Map host 443 to container 8443 (non-root nginx)
@@ -167,11 +179,14 @@ services:
       - ${HOME}/mcp-gateway/servers:/app/registry/servers
       - ${HOME}/mcp-gateway/agents:/app/registry/agents
       - ${HOME}/mcp-gateway/models:/app/registry/models
+      # Audit logs kept under ${HOME}/mcp-gateway/logs (legacy path)
       - ${HOME}/mcp-gateway/logs:/app/logs
       - ${HOME}/mcp-gateway/security_scans:/app/security_scans
       - ${HOME}/mcp-gateway/auth_server/scopes.yml:/app/auth_server/scopes.yml
       - ${HOME}/mcp-gateway/federation.json:/app/config/federation.json
       - ${HOME}/mcp-gateway/ssl:/etc/ssl:ro
+      # Application log files (bind mount to host for Splunk ingestion, Issue #987)
+      - /var/log/containers/ai-registry:/var/log/containers/ai-registry
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -190,6 +205,8 @@ services:
     build:
       context: metrics-service
       dockerfile: Dockerfile
+      args:
+        BUILD_VERSION: ${BUILD_VERSION:-1.0.0}
     environment:
       - METRICS_SERVICE_PORT=8890
       - METRICS_SERVICE_HOST=0.0.0.0
@@ -226,6 +243,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.auth
+      args:
+        BUILD_VERSION: ${BUILD_VERSION:-1.0.0}
     environment:
       - REGISTRY_URL=${REGISTRY_URL}
       - SECRET_KEY=${SECRET_KEY}
@@ -272,6 +291,10 @@ services:
       # Storage Backend Configuration
       - STORAGE_BACKEND=${STORAGE_BACKEND:-file}
       # DocumentDB/MongoDB Configuration (when STORAGE_BACKEND=documentdb or mongodb-ce)
+      # MONGODB_CONNECTION_STRING: Optional full URI override (e.g. for MongoDB
+      # Atlas, mongodb+srv://...). When set, takes precedence over the discrete
+      # DOCUMENTDB_* values below.
+      - MONGODB_CONNECTION_STRING=${MONGODB_CONNECTION_STRING:-}
       - DOCUMENTDB_HOST=${DOCUMENTDB_HOST:-mongodb}
       - DOCUMENTDB_PORT=${DOCUMENTDB_PORT:-27017}
       - DOCUMENTDB_USERNAME=${DOCUMENTDB_USERNAME}
@@ -298,10 +321,16 @@ services:
       - APP_LOG_MONGODB_FLUSH_INTERVAL_SECONDS=${APP_LOG_MONGODB_FLUSH_INTERVAL_SECONDS:-5.0}
       - APP_LOG_LEVEL=${APP_LOG_LEVEL:-INFO}
       - APP_LOG_EXCLUDED_LOGGERS=${APP_LOG_EXCLUDED_LOGGERS:-uvicorn.access,httpx,pymongo,motor}
+      # Application file-log location (Issue #987) + format (json|text)
+      - APP_LOG_DIR=${APP_LOG_DIR:-/var/log/containers/ai-registry}
+      - APP_LOG_FILE_FORMAT=${APP_LOG_FILE_FORMAT:-json}
     ports:
       - "8888:8888"
     volumes:
+      # Audit logs kept under ${HOME}/mcp-gateway/logs (legacy path)
       - ${HOME}/mcp-gateway/logs:/app/logs
+      # Application log files (bind mount to host for Splunk ingestion, Issue #987)
+      - /var/log/containers/ai-registry:/var/log/containers/ai-registry
       # - ${HOME}/mcp-gateway/auth_server/scopes.yml:/app/scopes.yml
     depends_on:
       metrics-service:
@@ -315,6 +344,8 @@ services:
     build:
       context: servers/currenttime
       dockerfile: ../../docker/Dockerfile.mcp-server
+      args:
+        BUILD_VERSION: ${BUILD_VERSION:-1.0.0}
     environment:
       - PORT=8000
       - MCP_TRANSPORT=streamable-http
@@ -327,6 +358,8 @@ services:
     build:
       context: servers/fininfo
       dockerfile: ../../docker/Dockerfile.mcp-server
+      args:
+        BUILD_VERSION: ${BUILD_VERSION:-1.0.0}
     environment:
       - PORT=8001
       - SECRET_KEY=${SECRET_KEY}
@@ -343,14 +376,23 @@ services:
       dockerfile: docker/Dockerfile.mcp-server
       args:
         SERVER_DIR: servers/mcpgw
+        BUILD_VERSION: ${BUILD_VERSION:-1.0.0}
     environment:
       - HOST=0.0.0.0
       - PORT=8003
       - REGISTRY_BASE_URL=http://registry:8080
+      # Application file-log location (Issue #987) + format (json|text)
+      - APP_LOG_DIR=${APP_LOG_DIR:-/var/log/containers/ai-registry}
+      - APP_LOG_FILE_FORMAT=${APP_LOG_FILE_FORMAT:-json}
+      - APP_LOG_LEVEL=${APP_LOG_LEVEL:-INFO}
+      - APP_LOG_MAX_BYTES=${APP_LOG_MAX_BYTES:-52428800}
+      - APP_LOG_BACKUP_COUNT=${APP_LOG_BACKUP_COUNT:-5}
     volumes:
       - ${HOME}/mcp-gateway/servers:/app/registry/servers
       - ${HOME}/mcp-gateway/models:/app/registry/models
       - ${HOME}/mcp-gateway/auth_server/scopes.yml:/app/auth_server/scopes.yml
+      # Application log file (bind mount to host for Splunk ingestion, Issue #987)
+      - /var/log/containers/ai-registry:/var/log/containers/ai-registry
     ports:
       - "8003:8003"
     depends_on:
@@ -362,6 +404,8 @@ services:
     build:
       context: servers/realserverfaketools
       dockerfile: ../../docker/Dockerfile.mcp-server
+      args:
+        BUILD_VERSION: ${BUILD_VERSION:-1.0.0}
     environment:
       - PORT=8002
     ports:

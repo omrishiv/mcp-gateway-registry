@@ -2,6 +2,7 @@ import React, {
   useState,
   useEffect,
 } from 'react';
+import axios from 'axios';
 import {
   SystemStats,
 } from '../types/stats';
@@ -17,20 +18,23 @@ import {
  * - Handles loading and error states gracefully
  * - Hidden on mobile screens (<768px)
  */
+interface TelemetryDetection {
+  cloud: string;
+  cloud_detection_method: string;
+}
+
+
 const UptimeDisplay: React.FC = () => {
   const [stats, setStats] = useState<SystemStats | null>(null);
+  const [detection, setDetection] = useState<TelemetryDetection | null>(null);
   const [error, setError] = useState<boolean>(false);
 
 
   useEffect(() => {
     const fetchStats = async () => {
       try {
-        const response = await fetch('/api/stats');
-        if (!response.ok) {
-          throw new Error('Failed to fetch stats');
-        }
-        const data = await response.json();
-        setStats(data);
+        const response = await axios.get<SystemStats>('/api/stats');
+        setStats(response.data);
         setError(false);
       } catch (err) {
         console.error('Error fetching stats:', err);
@@ -38,8 +42,19 @@ const UptimeDisplay: React.FC = () => {
       }
     };
 
+    // Telemetry detection is cached server-side, so fetch once per mount.
+    const fetchDetection = async () => {
+      try {
+        const response = await axios.get<TelemetryDetection>('/api/system/telemetry-detection');
+        setDetection(response.data);
+      } catch (err) {
+        console.error('Error fetching telemetry detection:', err);
+      }
+    };
+
     // Initial fetch
     fetchStats();
+    fetchDetection();
 
     // Poll every 60 seconds
     const interval = setInterval(fetchStats, 60000);
@@ -148,6 +163,20 @@ const UptimeDisplay: React.FC = () => {
                   {stats.deployment_mode}
                 </span>
               </div>
+              {detection && (
+                <div className="flex justify-between gap-2">
+                  <span className="text-gray-500 dark:text-gray-400 flex-shrink-0">Cloud:</span>
+                  <span
+                    className="text-gray-900 dark:text-gray-100 truncate text-right"
+                    title={`Detected via ${detection.cloud_detection_method}. See docs/TELEMETRY.md for details.`}
+                  >
+                    {detection.cloud}{' '}
+                    <small className="text-gray-500 dark:text-gray-400">
+                      (via {detection.cloud_detection_method})
+                    </small>
+                  </span>
+                </div>
+              )}
             </div>
           </div>
 

@@ -89,10 +89,14 @@ module "ecs_service_auth" {
         }
       ]
 
-      environment = [
+      environment = concat([
         {
           name  = "REGISTRY_URL"
           value = "https://${var.domain_name}"
+        },
+        {
+          name  = "BIND_HOST"
+          value = var.bind_host
         },
         {
           name  = "AUTH_SERVER_URL"
@@ -329,12 +333,31 @@ module "ecs_service_auth" {
           name  = "APP_LOG_EXCLUDED_LOGGERS"
           value = var.app_log_excluded_loggers
         },
+        {
+          name  = "APP_LOG_DIR"
+          value = var.app_log_dir
+        },
+        {
+          name  = "APP_LOG_FILE_FORMAT"
+          value = var.app_log_file_format
+        },
         # Metrics pipeline (only wired when observability is enabled)
         {
           name  = "METRICS_SERVICE_URL"
           value = var.enable_observability ? "http://metrics-service:8890" : ""
         }
-      ]
+        ],
+        # PR #947: MongoDB connection string override (plain-text variant).
+        # Only emitted when var.mongodb_connection_string is non-empty and a
+        # Secrets Manager ARN was not provided. When empty, the registry
+        # falls back to the DOCUMENTDB_* env vars above.
+        var.mongodb_connection_string != "" && var.mongodb_connection_string_secret_arn == "" ? [
+          {
+            name  = "MONGODB_CONNECTION_STRING"
+            value = var.mongodb_connection_string
+          }
+        ] : []
+      )
 
       secrets = concat(
         [
@@ -359,6 +382,14 @@ module "ecs_service_auth" {
             valueFrom = "${var.documentdb_credentials_secret_arn}:password::"
           }
         ],
+        # PR #947: MongoDB connection string override (Secrets Manager variant).
+        # Preferred when the URI contains credentials (avoids plain text in state).
+        var.mongodb_connection_string_secret_arn != "" ? [
+          {
+            name      = "MONGODB_CONNECTION_STRING"
+            valueFrom = var.mongodb_connection_string_secret_arn
+          }
+        ] : [],
         var.entra_enabled ? [
           {
             name      = "ENTRA_CLIENT_SECRET"
@@ -573,10 +604,14 @@ module "ecs_service_registry" {
         }
       ]
 
-      environment = [
+      environment = concat([
         {
           name  = "REGISTRY_URL"
           value = var.domain_name != "" ? "https://${var.domain_name}" : "http://${module.alb.dns_name}"
+        },
+        {
+          name  = "BIND_HOST"
+          value = var.bind_host
         },
         {
           name  = "GATEWAY_ADDITIONAL_SERVER_NAMES"
@@ -865,6 +900,14 @@ module "ecs_service_registry" {
           value = var.app_log_excluded_loggers
         },
         {
+          name  = "APP_LOG_DIR"
+          value = var.app_log_dir
+        },
+        {
+          name  = "APP_LOG_FILE_FORMAT"
+          value = var.app_log_file_format
+        },
+        {
           name  = "DEPLOYMENT_MODE"
           value = var.deployment_mode
         },
@@ -959,6 +1002,22 @@ module "ecs_service_registry" {
           name  = "REGISTRATION_GATE_MAX_RETRIES"
           value = tostring(var.registration_gate_max_retries)
         },
+        {
+          name  = "REGISTRATION_GATE_OAUTH2_TOKEN_URL"
+          value = var.registration_gate_oauth2_token_url
+        },
+        {
+          name  = "REGISTRATION_GATE_OAUTH2_CLIENT_ID"
+          value = var.registration_gate_oauth2_client_id
+        },
+        {
+          name  = "REGISTRATION_GATE_OAUTH2_CLIENT_SECRET"
+          value = var.registration_gate_oauth2_client_secret
+        },
+        {
+          name  = "REGISTRATION_GATE_OAUTH2_SCOPE"
+          value = var.registration_gate_oauth2_scope
+        },
         # Telemetry configuration
         {
           name  = "MCP_TELEMETRY_DISABLED"
@@ -975,6 +1034,10 @@ module "ecs_service_registry" {
         {
           name  = "TELEMETRY_DEBUG"
           value = var.telemetry_debug
+        },
+        {
+          name  = "MCP_TELEMETRY_IMDS_PROBE_DISABLED"
+          value = var.mcp_telemetry_imds_probe_disabled
         },
         # Demo server configuration
         {
@@ -1017,7 +1080,18 @@ module "ecs_service_registry" {
           name  = "GITHUB_API_BASE_URL"
           value = var.github_api_base_url
         },
-      ]
+        ],
+        # PR #947: MongoDB connection string override (plain-text variant).
+        # Only emitted when var.mongodb_connection_string is non-empty and a
+        # Secrets Manager ARN was not provided. When empty, the registry
+        # falls back to the DOCUMENTDB_* env vars above.
+        var.mongodb_connection_string != "" && var.mongodb_connection_string_secret_arn == "" ? [
+          {
+            name  = "MONGODB_CONNECTION_STRING"
+            value = var.mongodb_connection_string
+          }
+        ] : []
+      )
 
       secrets = concat(
         [
@@ -1042,6 +1116,14 @@ module "ecs_service_registry" {
             valueFrom = aws_secretsmanager_secret.embeddings_api_key.arn
           }
         ],
+        # PR #947: MongoDB connection string override (Secrets Manager variant).
+        # Preferred when the URI contains credentials (avoids plain text in state).
+        var.mongodb_connection_string_secret_arn != "" ? [
+          {
+            name      = "MONGODB_CONNECTION_STRING"
+            valueFrom = var.mongodb_connection_string_secret_arn
+          }
+        ] : [],
         var.storage_backend == "documentdb" ? [
           {
             name      = "DOCUMENTDB_USERNAME"
@@ -1274,6 +1356,10 @@ module "ecs_service_currenttime" {
           value = "8000"
         },
         {
+          name  = "HOST"
+          value = var.bind_host
+        },
+        {
           name  = "MCP_TRANSPORT"
           value = "streamable-http"
         }
@@ -1398,13 +1484,33 @@ module "ecs_service_mcpgw" {
           value = "8003"
         },
         {
+          name  = "HOST"
+          value = var.bind_host
+        },
+        {
           name  = "REGISTRY_BASE_URL"
           value = "http://registry:8080"
         },
         {
           name  = "REGISTRY_USERNAME"
           value = "admin"
-        }
+        },
+        # Application log configuration (issue #987). Matches the Docker
+        # Compose wiring for the mcpgw container; keeps behavior consistent
+        # across deployment surfaces. Values are consumed by
+        # servers/mcpgw/logging_setup.py.
+        {
+          name  = "APP_LOG_DIR"
+          value = var.app_log_dir
+        },
+        {
+          name  = "APP_LOG_FILE_FORMAT"
+          value = var.app_log_file_format
+        },
+        {
+          name  = "APP_LOG_LEVEL"
+          value = var.app_log_level
+        },
       ]
 
       secrets = []

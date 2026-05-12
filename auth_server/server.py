@@ -30,7 +30,7 @@ import requests
 import uvicorn
 import yaml
 from botocore.exceptions import ClientError
-from fastapi import Cookie, FastAPI, Header, HTTPException, Request
+from fastapi import APIRouter, Cookie, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from jwt.api_jwk import PyJWK
@@ -48,8 +48,6 @@ from pydantic import (
 
 sys.path.insert(0, "/app")
 # Import MCP audit logging components
-from pathlib import Path as _LogPath
-
 from registry.audit.mcp_logger import MCPLogger
 from registry.audit.models import Identity, MCPServer
 from registry.audit.service import AuditLogger
@@ -61,10 +59,10 @@ from registry.repositories.factory import get_scope_repository
 from registry.utils.logging_setup import setup_logging as _setup_logging
 from registry.utils.request_utils import get_client_ip
 
-_auth_log_file = _setup_logging(
-    service_name="auth-server",
-    log_file=_LogPath("/app/logs/auth-server.log") if _LogPath("/app").exists() else None,
-)
+# Let setup_logging resolve the file path from settings.log_dir /
+# {service_name}.log. Honors APP_LOG_DIR overrides and the new
+# /var/log/containers/ai-registry default introduced by issue #987.
+_auth_log_file = _setup_logging(service_name="auth-server")
 logger = logging.getLogger(__name__)
 logger.info(f"Auth-server logging configured. Writing to file: {_auth_log_file}")
 
@@ -75,6 +73,7 @@ from registry.auth.internal import (
 from registry.auth.internal import (
     _INTERNAL_JWT_ISSUER as JWT_ISSUER,
 )
+from registry.auth.internal import validate_internal_auth
 
 MAX_TOKEN_LIFETIME_HOURS = 24
 DEFAULT_TOKEN_LIFETIME_HOURS = 8
@@ -452,6 +451,44 @@ def mask_token(token: str) -> str:
     return "***MASKED***"
 
 
+def _is_redirect_within_cookie_domain(
+    url: str,
+    cookie_domain: str,
+    request: Request | None = None,
+) -> bool:
+    """Check if an absolute redirect URL is safe to redirect to.
+
+    An absolute URL is safe when either:
+      - its (scheme, host) matches the inbound request's origin (same-origin
+        is always safe because the browser already trusts that host), or
+      - its host is within SESSION_COOKIE_DOMAIN, which defines the
+        cross-subdomain trust boundary for deployments that share the session
+        cookie across hosts (e.g. ".example.com" covers the apex and any
+        subdomain).
+
+    SESSION_COOKIE_DOMAIN is optional: .env.example documents the empty default
+    for single-domain deployments, so this helper must not reject same-origin
+    redirects when it is unset.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return False
+    hostname = (parsed.hostname or "").lower()
+
+    if request is not None:
+        forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip()
+        forwarded_host = request.headers.get("x-forwarded-host", "").split(",")[0].strip()
+        request_scheme = forwarded_proto or request.url.scheme
+        request_host = (forwarded_host or request.url.hostname or "").lower()
+        if request_host and parsed.scheme == request_scheme and hostname == request_host:
+            return True
+
+    if not cookie_domain:
+        return False
+    apex = cookie_domain.lstrip(".").lower()
+    return hostname == apex or hostname.endswith(f".{apex}")
+
+
 def _is_safe_redirect_url(
     url: str,
     allowed_hosts: set[str] | None = None,
@@ -660,9 +697,6 @@ def parse_server_and_tool_from_url(original_url: str) -> tuple[str | None, str |
         Tuple of (server_name, tool_name) or (None, None) if parsing fails
     """
     try:
-        # Extract path from URL (remove query parameters and fragments)
-        from urllib.parse import urlparse
-
         parsed_url = urlparse(original_url)
         path = parsed_url.path.strip("/")
 
@@ -931,6 +965,26 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
     root_path=ROOT_PATH,
+)
+
+
+# Router for service-to-service /internal/* endpoints.
+#
+# Every route registered on this router inherits the
+# ``validate_internal_auth`` dependency, so no /internal/* handler can
+# accidentally ship without the internal-JWT gate — a new handler just
+# needs ``@internal_router.post("/foo")`` and the signed-Bearer check
+# is already in place before the handler body runs.
+#
+# Individual handlers additionally declare ``caller: str = Depends(
+# validate_internal_auth)`` so (a) the caller identity is available for
+# audit logging and (b) the Authorization header shows up in OpenAPI.
+# The dependency is cached per-request by FastAPI, so declaring it
+# twice (router-level gate + handler-level injection) does not
+# re-validate the JWT.
+internal_router = APIRouter(
+    prefix="/internal",
+    dependencies=[Depends(validate_internal_auth)],
 )
 
 
@@ -2143,8 +2197,11 @@ async def manage_federation_token(request: Request):
         }
 
 
-@app.post("/internal/tokens", response_model=GenerateTokenResponse)
-async def generate_user_token(request: GenerateTokenRequest):
+@internal_router.post("/tokens", response_model=GenerateTokenResponse)
+async def generate_user_token(
+    body: GenerateTokenRequest,
+    caller: str = Depends(validate_internal_auth),
+):
     """
     Generate or refresh a JWT token for a user.
 
@@ -2155,15 +2212,29 @@ async def generate_user_token(request: GenerateTokenRequest):
     This is an internal API endpoint meant to be called only by the registry service.
     The generated token will have the same or fewer privileges than the user currently has.
 
+    Authentication is enforced at the router level: every route on
+    ``internal_router`` requires a Bearer JWT signed with the shared
+    ``SECRET_KEY`` (see ``registry.auth.internal.generate_internal_token``).
+    The ``caller`` parameter re-declares the same dependency so the
+    identity is available for audit logging and the Authorization
+    header appears in OpenAPI. FastAPI caches per-request dependencies,
+    so the JWT is validated exactly once.
+
     Args:
-        request: Token generation request containing user context and requested scopes
+        body: Token generation request containing user context and requested scopes
+        caller: Identity of the trusted internal service that signed the request
 
     Returns:
         JWT token with expiration info (either refreshed user token or M2M token)
 
     Raises:
-        HTTPException: If request is invalid or user doesn't have required permissions
+        HTTPException: 401 if internal auth is missing/invalid; 400/403/429 for
+            request validation / permission / rate-limit failures.
     """
+    logger.info(f"/internal/tokens call from '{caller}'")
+
+    request = body  # keep the existing variable name used throughout the body
+
     try:
         # Extract user context
         user_context = request.user_context
@@ -2323,56 +2394,18 @@ async def generate_user_token(request: GenerateTokenRequest):
         )
 
 
-@app.post("/internal/reload-scopes")
-async def reload_scopes(request: Request, authorization: str | None = Header(None)):
+@internal_router.post("/reload-scopes")
+async def reload_scopes(caller_identity: str = Depends(validate_internal_auth)):
     """
     Reload the scopes configuration.
 
-    Accepts internal service authentication via self-signed JWT (Bearer token)
-    signed with the shared SECRET_KEY.
+    Authentication is enforced at the router level (see
+    ``internal_router``): the caller must present a Bearer JWT signed
+    with the shared ``SECRET_KEY``. Re-declaring the dependency here
+    surfaces the caller identity for audit logging without re-validating
+    the JWT (FastAPI caches per-request dependencies).
     """
-    if not authorization:
-        logger.warning("No Authorization header found for reload-scopes request")
-        raise HTTPException(
-            status_code=401,
-            detail="Authentication required",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    caller_identity = "unknown"
-
-    if authorization.startswith("Bearer "):
-        # Validate self-signed JWT using shared SECRET_KEY
-        token = authorization.split(" ", 1)[1]
-        try:
-            claims = jwt.decode(
-                token,
-                SECRET_KEY,
-                algorithms=["HS256"],
-                issuer=JWT_ISSUER,
-                audience=JWT_AUDIENCE,
-                options={
-                    "verify_exp": True,
-                    "verify_iat": True,
-                    "verify_iss": True,
-                    "verify_aud": True,
-                },
-                leeway=30,
-            )
-            token_use = claims.get("token_use")
-            if token_use != "access":  # nosec B105 - OAuth2 token type validation per RFC 6749, not a password
-                raise ValueError(f"Invalid token_use: {token_use}")
-            caller_identity = claims.get("sub", "service")
-            logger.info(f"Reload-scopes authorized via JWT for: {caller_identity}")
-        except jwt.ExpiredSignatureError:
-            logger.warning("Expired JWT token for reload-scopes request")
-            raise HTTPException(status_code=401, detail="Token has expired")
-        except (jwt.InvalidTokenError, ValueError) as e:
-            logger.warning(f"JWT validation failed for reload-scopes: {e}")
-            raise HTTPException(status_code=401, detail="Invalid token")
-
-    else:
-        raise HTTPException(status_code=401, detail="Unsupported authentication scheme")
+    logger.info(f"Reload-scopes authorized via JWT for: {caller_identity}")
 
     # Reload the scopes configuration
     global SCOPES_CONFIG
@@ -2395,6 +2428,13 @@ async def reload_scopes(request: Request, authorization: str | None = Header(Non
     except Exception as e:
         logger.error(f"Failed to reload scopes configuration: {e}")
         raise HTTPException(status_code=500, detail="Failed to reload scopes configuration")
+
+
+# Mount the /internal/* router. All routes registered on
+# ``internal_router`` inherit the signed-Bearer authentication
+# requirement via its router-level dependency; mounting it here keeps
+# the gate co-located with the handlers it protects.
+app.include_router(internal_router)
 
 
 def parse_arguments():
@@ -2678,7 +2718,10 @@ async def oauth2_login(provider: str, request: Request, redirect_uri: str = None
         # The callback_uri MUST match exactly between authorization and token exchange
         auth_server_external_url = os.environ.get("AUTH_SERVER_EXTERNAL_URL", "").rstrip("/")
         if auth_server_external_url:
-            auth_server_url = f"{auth_server_external_url}{ROOT_PATH}"
+            # AUTH_SERVER_EXTERNAL_URL is the complete public base URL and
+            # already includes any path prefix (e.g. "/auth-server" in path
+            # routing mode); ROOT_PATH is only used in the host-fallback branch.
+            auth_server_url = auth_server_external_url
             scheme = "https" if auth_server_external_url.startswith("https") else "http"
             logger.info(f"OAuth2 login - using AUTH_SERVER_EXTERNAL_URL: {auth_server_url}")
         else:
@@ -3034,21 +3077,14 @@ async def oauth2_callback(
         redirect_url = temp_session_data.get(
             "redirect_uri", OAUTH2_CONFIG.get("registry", {}).get("success_redirect", "/")
         )
-        # Validate redirect_url to prevent open redirect attacks.
-        # Allow relative URLs and absolute URLs within the deployment's cookie domain.
-        # SESSION_COOKIE_DOMAIN (e.g., ".example.com") defines the trust boundary —
-        # any service sharing the session cookie is a safe redirect target.
+        # Validate redirect_url to prevent open redirect attacks. Relative URLs
+        # are always safe; absolute URLs must be same-origin with the inbound
+        # request or within SESSION_COOKIE_DOMAIN when that is configured.
         cookie_domain = os.environ.get("SESSION_COOKIE_DOMAIN", "").strip()
         redirect_parsed = urlparse(redirect_url)
-        redirect_is_safe = False
-        if not redirect_parsed.scheme and not redirect_parsed.netloc:
-            # Relative URL — always safe
-            redirect_is_safe = True
-        elif redirect_parsed.scheme in ("http", "https"):
-            redirect_hostname = redirect_parsed.hostname or ""
-            if cookie_domain and redirect_hostname.endswith(cookie_domain):
-                # Redirect is within the deployment's cookie domain
-                redirect_is_safe = True
+        redirect_is_safe = (
+            not redirect_parsed.scheme and not redirect_parsed.netloc
+        ) or _is_redirect_within_cookie_domain(redirect_url, cookie_domain, request)
         if not redirect_is_safe:
             logger.warning(f"Blocked unsafe redirect URL: {redirect_url}, falling back to /")
             redirect_url = "/"
@@ -3092,8 +3128,9 @@ async def oauth2_callback(
 
         response.set_cookie(**cookie_params)
 
-        # Clear temporary OAuth2 session
-        response.delete_cookie("oauth2_temp_session")
+        # Clear temporary OAuth2 session. The cookie was set without a
+        # domain attribute, so delete must also omit domain to match.
+        response.delete_cookie("oauth2_temp_session", path="/")
 
         logger.info(
             f"Successfully authenticated user {hash_username(mapped_user['username'])} via {provider}"
@@ -3202,6 +3239,21 @@ async def oauth2_logout(
         if provider not in OAUTH2_CONFIG.get("providers", {}):
             raise HTTPException(status_code=404, detail=f"Provider {provider} not found")
 
+        # Reject absolute redirect_uri that escapes the
+        # deployment's cookie domain before forwarding it to the IdP. The IdP's
+        # post_logout_redirect_uri allow-list is the authoritative check, but
+        # this guards against misconfigured IdP clients and makes the intent
+        # explicit at our boundary.
+        if redirect_uri:
+            parsed = urlparse(redirect_uri)
+            if parsed.scheme or parsed.netloc:
+                cookie_domain = os.environ.get("SESSION_COOKIE_DOMAIN", "").strip()
+                if not _is_redirect_within_cookie_domain(redirect_uri, cookie_domain, request):
+                    logger.warning(
+                        f"Blocked unsafe logout redirect_uri for {provider}: {redirect_uri}"
+                    )
+                    redirect_uri = None
+
         provider_config = OAUTH2_CONFIG["providers"][provider]
         logout_url = provider_config.get("logout_url")
 
@@ -3221,8 +3273,6 @@ async def oauth2_logout(
                 # Try to derive from the request
                 referer = request.headers.get("referer", "")
                 if referer:
-                    from urllib.parse import urlparse
-
                     parsed = urlparse(referer)
                     registry_base = f"{parsed.scheme}://{parsed.netloc}"
                 else:

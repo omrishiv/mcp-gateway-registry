@@ -2,6 +2,8 @@
 
 This document provides a comprehensive reference for all configuration files in the MCP Gateway Registry project. Each configuration file serves a specific purpose in the authentication and operation of the system.
 
+> **Looking for a parameter by name across deployment surfaces?** See [`unified-parameter-reference.md`](unified-parameter-reference.md) for a cross-surface index that maps every parameter to its Docker `.env` variable, Terraform `.tfvars` variable, and Helm `values.yaml` path.
+
 ## Configuration Files Overview
 
 | File | Purpose | Type | Location | Example File | User Modification |
@@ -380,6 +382,26 @@ mongosh --host <cluster-endpoint> \
         --tlsCAFile global-bundle.pem \
         --eval "use mcp_registry; show collections"
 ```
+
+#### Full Connection String Override (MongoDB Atlas and any externally-managed MongoDB)
+
+For MongoDB Atlas or any MongoDB cluster you manage yourself, set `MONGODB_CONNECTION_STRING` to the full URI. When set, it takes precedence over all of the discrete `DOCUMENTDB_HOST`, `DOCUMENTDB_PORT`, `DOCUMENTDB_USERNAME`, `DOCUMENTDB_PASSWORD`, and TLS settings — the URI owns connection behavior end to end, including TLS, `retryWrites`, replica-set selection, and read preference.
+
+```bash
+# MongoDB Atlas example
+export STORAGE_BACKEND=mongodb-ce
+export MONGODB_CONNECTION_STRING='mongodb+srv://user:password@cluster0.abc123.mongodb.net/mcp_registry?retryWrites=true&w=majority'
+export DOCUMENTDB_DATABASE=mcp_registry
+export DOCUMENTDB_NAMESPACE=default
+```
+
+**Notes:**
+- `STORAGE_BACKEND=mongodb-ce` is the correct value for Atlas — it is wire-compatible MongoDB.
+- The registry **never logs the full URI** and the health endpoint extracts only the hostname (via `urllib.parse.urlsplit`, no DNS, no userinfo).
+- Do **not** set `STORAGE_BACKEND=documentdb` when pointing at Atlas; that backend selects SCRAM-SHA-1 for the discrete-vars path (used only when `MONGODB_CONNECTION_STRING` is unset) and hardcodes `retryWrites=False`.
+- For Helm, set `mongodb.connectionString` (see `charts/mongodb-configure/values.yaml`). For externally-managed MongoDB, also set `mongodb.enabled: false` at the stack level to skip the in-cluster MongoDB operator.
+- For production, prefer injecting the URI via a pre-existing Kubernetes Secret (`global.existingMongoCredentialsSecret`) or AWS Secrets Manager rather than as a plain Helm value.
+- The replica-set initialization job (`mongodb-configure`) automatically skips `replSetInitiate` when the override is set — Atlas clusters are already configured and will reject the command.
 
 **Important Notes:**
 - MongoDB CE uses application-level vector search (Python cosine similarity)

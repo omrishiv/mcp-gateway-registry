@@ -1,9 +1,18 @@
 # Global configuration
 global:
   image:
-    repository: public.ecr.aws/p3v1o3c6/mcpgw
-    tag: 1.0.21
+    # Container registry (host + optional namespace). Shared default across subcharts.
+    registry: public.ecr.aws/p3v1o3c6
+    tag: 1.23.0
     pullPolicy: IfNotPresent
+
+# Per-service image configuration
+# Any field left empty falls back to the corresponding global.image.* value.
+image:
+  registry: ""      # Overrides global.image.registry when set
+  repository: mcpgw  # Image name within the registry
+  tag: ""           # Overrides global.image.tag when set
+  pullPolicy: ""    # Overrides global.image.pullPolicy when set
 
 # Application configuration
 app:
@@ -12,9 +21,16 @@ app:
   envSecretName: mcpgw-secret
   existingSecret: ""  # If set, use this existing secret instead of creating one
   port: 8000
+  # Server bind address. Default "0.0.0.0" works on all Kubernetes nodes.
+  # Set to "::" only for IPv6-only clusters (requires net.ipv6.bindv6only=0
+  # on the node). See docs/unified-parameter-reference.md Group 4.
+  bindHost: "0.0.0.0"
 
-  # Registry connection
-  registryUrl: http://registry:8080
+  # Registry connection — default is the standalone fallback. When this
+  # subchart is deployed as part of mcp-gateway-registry-stack, the
+  # template overrides this with the full ClusterIP DNS and the
+  # registry Service's correct port (8000, see charts/registry/values.yaml).
+  registryUrl: http://registry:8000
 
   # Security settings
   # secretKey: Required for standalone deployment (not needed when deployed via stack).
@@ -59,18 +75,68 @@ resources:
     cpu: 1
     memory: 2Gi
 
-# Ingress configuration
-ingress:
-  enabled: false
-  className: alb
-  hostname: ""
-  annotations: {}
-  tls: false
-  # Routing mode: "subdomain" or "path"
-  # - subdomain: mcpgw.domain.com
-  # - path: domain.com/mcpgw
-  routingMode: subdomain
-  # Path prefix when using path-based routing (default: /mcpgw)
-  path: /mcpgw
+# mcpgw does NOT expose a public ingress. External MCP clients reach
+# its tools via the registry's nginx reverse proxy, which dynamically
+# generates a `location /airegistry-tools/` block from the registered
+# server record seeded at registry startup
+# (see registry/services/demo_servers_init.py and
+# cli/examples/airegistry.json). Traffic flow:
+#   client → registry ingress → registry pod nginx
+#          → location /airegistry-tools/ { proxy_pass http://mcpgw-server:8003/; }
+#          → mcpgw pod
+# The Service defined in templates/service.yaml is the only external
+# surface mcpgw needs — it's what the registry nginx resolves to.
+
+# Extra environment variables appended to the container's `env:` list.
+# Uses the native Kubernetes EnvVar schema, so `valueFrom` is supported.
+#
+# Validation (template render fails if violated):
+#   - Names must be unique within this list.
+#   - Names must not collide with chart-managed variables; use the
+#     corresponding values.yaml field instead (e.g. set app.githubAppId
+#     rather than GITHUB_APP_ID here). See the reserved list in
+#     templates/_helpers.tpl.
+#
+# User entries are appended last, so they win over chart `envFrom:`
+# sources on name collision — which is why the reserved list guards
+# catastrophic envFrom-sourced keys like SECRET_KEY.
+#
+# Example:
+# extraEnv:
+#   - name: MY_FEATURE_FLAG
+#     value: "true"
+#   - name: MY_SECRET_VAR
+#     valueFrom:
+#       secretKeyRef:
+#         name: my-secret
+#         key: my-key
+extraEnv: []
+
+# Extra `envFrom:` sources appended to the container. Use this to inject
+# all keys from an external ConfigMap or Secret you manage (e.g. via
+# External Secrets Operator, SealedSecrets, or Vault CSI).
+#
+# NOT validated at template time — Helm cannot introspect external
+# ConfigMap/Secret contents. Consequences:
+#   - Keys in your source will SILENTLY OVERRIDE chart-managed envFrom
+#     entries (within envFrom, last source wins). Do NOT include keys
+#     like SECRET_KEY, PORT, REGISTRY_BASE_URL, EMBEDDINGS_API_KEY, or
+#     any EMBEDDINGS_* / FEDERATION_* key — shadowing them breaks
+#     service wiring with no error.
+#   - Chart-managed `env:` entries (e.g. HOST) always win over anything
+#     in extraEnvFrom — K8s rules: explicit env: beats envFrom regardless
+#     of order.
+#   - Referenced resources must exist when the pod starts (the default
+#     is optional: false). Set `optional: true` if the resource may be
+#     absent.
+#
+# Example:
+# extraEnvFrom:
+#   - secretRef:
+#       name: my-external-secrets
+#   - configMapRef:
+#       name: my-external-config
+#       optional: true
+extraEnvFrom: []
 
 nodeSelector: {}

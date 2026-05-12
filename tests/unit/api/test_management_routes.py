@@ -15,6 +15,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+from registry.utils.iam_errors import IdPForbiddenError, IdPNotFoundError
+
 logger = logging.getLogger(__name__)
 
 
@@ -277,6 +279,194 @@ class TestManagementListUsers:
         assert response.status_code == 502
         assert "Connection refused" in response.json()["detail"]
 
+    def test_dedup_skips_mongo_entries_matching_idp(self, test_client_admin):
+        """MongoDB entries whose client_id already appears in IdP are skipped.
+
+        Covers the dedup logic introduced in PR #942.
+        """
+        client, mock_iam = test_client_admin
+        mock_iam.list_users.return_value = [
+            {
+                "id": "svc-1",
+                "username": "service-1",
+                "email": "service-1@example.com",
+                "firstName": None,
+                "lastName": None,
+                "enabled": True,
+                "groups": [],
+            },
+        ]
+
+        mock_cursor = MagicMock()
+        mock_cursor.to_list = AsyncMock(
+            return_value=[{"client_id": "service-1", "name": "service-1"}]
+        )
+        mock_collection = MagicMock()
+        mock_collection.find = MagicMock(return_value=mock_cursor)
+        mock_db = MagicMock()
+        mock_db.__getitem__.return_value = mock_collection
+
+        with patch(
+            "registry.api.management_routes.get_documentdb_client",
+            new=AsyncMock(return_value=mock_db),
+        ):
+            response = client.get("/api/management/iam/users")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert data["users"][0]["username"] == "service-1"
+
+    def test_dedup_case_insensitive(self, test_client_admin):
+        """Dedup matches usernames case-insensitively."""
+        client, mock_iam = test_client_admin
+        mock_iam.list_users.return_value = [
+            {
+                "id": "svc-1",
+                "username": "Service-1",
+                "email": "svc@example.com",
+                "firstName": None,
+                "lastName": None,
+                "enabled": True,
+                "groups": [],
+            },
+        ]
+
+        mock_cursor = MagicMock()
+        mock_cursor.to_list = AsyncMock(
+            return_value=[{"client_id": "service-1", "name": "service-1"}]
+        )
+        mock_collection = MagicMock()
+        mock_collection.find = MagicMock(return_value=mock_cursor)
+        mock_db = MagicMock()
+        mock_db.__getitem__.return_value = mock_collection
+
+        with patch(
+            "registry.api.management_routes.get_documentdb_client",
+            new=AsyncMock(return_value=mock_db),
+        ):
+            response = client.get("/api/management/iam/users")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+
+
+# =============================================================================
+# TEST DELETE /management/iam/users/{username} - Delete User
+# =============================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.api
+class TestManagementDeleteUser:
+    """Tests for DELETE /management/iam/users/{username} endpoint.
+
+    Covers the orphan-delete behavior introduced in PR #942.
+    """
+
+    @staticmethod
+    def _make_mock_db(deleted_count: int = 0):
+        """Build a mock MongoDB database whose delete_one returns deleted_count."""
+        delete_result = MagicMock()
+        delete_result.deleted_count = deleted_count
+        mock_collection = MagicMock()
+        mock_collection.delete_one = AsyncMock(return_value=delete_result)
+        mock_db = MagicMock()
+        mock_db.__getitem__.return_value = mock_collection
+        return mock_db, mock_collection
+
+    def test_deletes_idp_only_user(self, test_client_admin):
+        """IdP delete succeeds, MongoDB has no matching record - returns 200."""
+        client, mock_iam = test_client_admin
+        mock_iam.delete_user.return_value = True
+        mock_db, mock_collection = self._make_mock_db(deleted_count=0)
+
+        with patch(
+            "registry.api.management_routes.get_documentdb_client",
+            new=AsyncMock(return_value=mock_db),
+        ):
+            response = client.delete("/api/management/iam/users/human-user")
+
+        assert response.status_code == 200
+        mock_iam.delete_user.assert_called_once_with(username="human-user")
+        mock_collection.delete_one.assert_called_once()
+
+    def test_deletes_mongo_only_orphan(self, test_client_admin):
+        """IdP raises 'not found', MongoDB delete succeeds - returns 200."""
+        client, mock_iam = test_client_admin
+        mock_iam.delete_user.side_effect = Exception("User not found in IdP")
+        mock_db, mock_collection = self._make_mock_db(deleted_count=1)
+
+        with patch(
+            "registry.api.management_routes.get_documentdb_client",
+            new=AsyncMock(return_value=mock_db),
+        ):
+            response = client.delete("/api/management/iam/users/orphan-client")
+
+        assert response.status_code == 200
+        mock_collection.delete_one.assert_called_once()
+
+    def test_rejects_truly_missing_user(self, test_client_admin):
+        """IdP raises 'not found', MongoDB has no record - returns 400."""
+        client, mock_iam = test_client_admin
+        mock_iam.delete_user.side_effect = Exception("User not found")
+        mock_db, _ = self._make_mock_db(deleted_count=0)
+
+        with patch(
+            "registry.api.management_routes.get_documentdb_client",
+            new=AsyncMock(return_value=mock_db),
+        ):
+            response = client.delete("/api/management/iam/users/ghost-user")
+
+        assert response.status_code == 400
+        assert "not found" in response.json()["detail"].lower()
+
+    def test_propagates_non_not_found_idp_errors(self, test_client_admin):
+        """IdP raises '502 Bad Gateway' - error is propagated, MongoDB not touched."""
+        client, mock_iam = test_client_admin
+        mock_iam.delete_user.side_effect = Exception("502 Bad Gateway")
+        mock_db, mock_collection = self._make_mock_db(deleted_count=0)
+
+        with patch(
+            "registry.api.management_routes.get_documentdb_client",
+            new=AsyncMock(return_value=mock_db),
+        ):
+            response = client.delete("/api/management/iam/users/some-user")
+
+        assert response.status_code == 502
+        assert "Bad Gateway" in response.json()["detail"]
+        mock_collection.delete_one.assert_not_called()
+
+    def test_mongo_delete_filter_is_case_insensitive(self, test_client_admin):
+        """The MongoDB delete filter uses a case-insensitive regex match.
+
+        Covers the case-insensitive filter added as PR #942 follow-up (P1.3).
+        """
+        import re as _re
+
+        client, mock_iam = test_client_admin
+        mock_iam.delete_user.return_value = True
+        mock_db, mock_collection = self._make_mock_db(deleted_count=1)
+
+        with patch(
+            "registry.api.management_routes.get_documentdb_client",
+            new=AsyncMock(return_value=mock_db),
+        ):
+            response = client.delete("/api/management/iam/users/Mixed-Case")
+
+        assert response.status_code == 200
+        args, _kwargs = mock_collection.delete_one.call_args
+        filter_doc = args[0]
+        or_clauses = filter_doc["$or"]
+        patterns = [
+            clause.get("client_id") or clause.get("name")
+            for clause in or_clauses
+        ]
+        # Ensure each side of the $or is a compiled case-insensitive regex
+        assert all(isinstance(p, _re.Pattern) for p in patterns)
+        assert all(p.flags & _re.IGNORECASE for p in patterns)
+
 
 # =============================================================================
 # TEST GET /management/iam/groups - List Groups
@@ -407,7 +597,11 @@ class TestManagementCreateGroup:
             # Act
             response = client.post(
                 "/api/management/iam/groups",
-                json={"name": "new-group", "description": "A new test group"},
+                json={
+                    "name": "new-group",
+                    "description": "A new test group",
+                    "scope_config": {"create_in_idp": True},
+                },
             )
 
             # Assert
@@ -428,6 +622,7 @@ class TestManagementCreateGroup:
                 server_access=[],
                 ui_permissions={},
                 agent_access=[],
+                is_idp_managed=True,
             )
 
     def test_create_group_success_entra(self, test_client_admin):
@@ -453,7 +648,11 @@ class TestManagementCreateGroup:
             # Act
             response = client.post(
                 "/api/management/iam/groups",
-                json={"name": "new-group", "description": "Entra test group"},
+                json={
+                    "name": "new-group",
+                    "description": "Entra test group",
+                    "scope_config": {"create_in_idp": True},
+                },
             )
 
             # Assert
@@ -474,6 +673,7 @@ class TestManagementCreateGroup:
                 server_access=[],
                 ui_permissions={},
                 agent_access=[],
+                is_idp_managed=True,
             )
 
     def test_create_group_requires_admin(self, test_client_regular):
@@ -500,7 +700,10 @@ class TestManagementCreateGroup:
         # Act
         response = client.post(
             "/api/management/iam/groups",
-            json={"name": "existing-group"},
+            json={
+                "name": "existing-group",
+                "scope_config": {"create_in_idp": True},
+            },
         )
 
         # Assert
@@ -516,7 +719,10 @@ class TestManagementCreateGroup:
         # Act
         response = client.post(
             "/api/management/iam/groups",
-            json={"name": "new-group"},
+            json={
+                "name": "new-group",
+                "scope_config": {"create_in_idp": True},
+            },
         )
 
         # Assert
@@ -545,7 +751,10 @@ class TestManagementCreateGroup:
             # Act
             response = client.post(
                 "/api/management/iam/groups",
-                json={"name": "partial-group"},
+                json={
+                    "name": "partial-group",
+                    "scope_config": {"create_in_idp": True},
+                },
             )
 
             # Assert - should still succeed (IdP creation succeeded)
@@ -575,7 +784,10 @@ class TestManagementCreateGroup:
             # Act
             response = client.post(
                 "/api/management/iam/groups",
-                json={"name": "minimal-group"},
+                json={
+                    "name": "minimal-group",
+                    "scope_config": {"create_in_idp": True},
+                },
             )
 
             # Assert
@@ -590,6 +802,7 @@ class TestManagementCreateGroup:
                 server_access=[],
                 ui_permissions={},
                 agent_access=[],
+                is_idp_managed=True,
             )
 
 
@@ -634,7 +847,9 @@ class TestManagementCreateGroupCreateInIdp:
             # IdP create_group should NOT have been called
             mock_iam.create_group.assert_not_called()
 
-            # MongoDB scope should still be created with group name as mapping
+            # MongoDB scope should still be created with group name as mapping.
+            # is_idp_managed=False is persisted so later PATCH/DELETE won't
+            # call the IdP (see issue #946).
             mock_import_group.assert_called_once_with(
                 scope_name="local-only-group",
                 description="Local only group",
@@ -642,6 +857,7 @@ class TestManagementCreateGroupCreateInIdp:
                 server_access=[],
                 ui_permissions={},
                 agent_access=[],
+                is_idp_managed=False,
             )
 
     def test_create_group_with_create_in_idp_true(self, test_client_admin):
@@ -693,25 +909,20 @@ class TestManagementCreateGroupCreateInIdp:
                 server_access=[],
                 ui_permissions={},
                 agent_access=[],
+                is_idp_managed=True,
             )
 
-    def test_create_group_default_creates_in_idp(self, test_client_admin):
-        """When create_in_idp not in scope_config, default to creating in IdP."""
+    def test_create_group_default_does_not_create_in_idp(self, test_client_admin):
+        """When create_in_idp not in scope_config, default to NOT creating in IdP."""
         # Arrange
         client, mock_iam = test_client_admin
-        mock_iam.create_group.return_value = {
-            "id": "default-group-id",
-            "name": "default-group",
-            "path": "/default-group",
-            "attributes": None,
-        }
 
         with (
             patch(
                 "registry.api.management_routes.scope_service.import_group",
                 new_callable=AsyncMock,
                 return_value=True,
-            ),
+            ) as mock_import_group,
             patch("registry.api.management_routes.AUTH_PROVIDER", "keycloak"),
         ):
             # Act
@@ -722,7 +933,23 @@ class TestManagementCreateGroupCreateInIdp:
 
             # Assert
             assert response.status_code == 200
-            mock_iam.create_group.assert_called_once()
+            data = response.json()
+            assert data["name"] == "default-group"
+
+            # IdP create_group should NOT be called (default is False)
+            mock_iam.create_group.assert_not_called()
+
+            # MongoDB scope should still be created with group name as mapping.
+            # Default create_in_idp=False => is_idp_managed=False persisted.
+            mock_import_group.assert_called_once_with(
+                scope_name="default-group",
+                description="",
+                group_mappings=["default-group"],
+                server_access=[],
+                ui_permissions={},
+                agent_access=[],
+                is_idp_managed=False,
+            )
 
 
 # =============================================================================
@@ -736,16 +963,38 @@ class TestManagementDeleteGroupLocalOnly:
     """Tests for deleting groups that only exist in MongoDB (local-only)."""
 
     def test_delete_local_only_group_succeeds(self, test_client_admin):
-        """Delete succeeds when group only exists in MongoDB (IdP returns not found)."""
+        """Delete succeeds when group only exists in MongoDB (IdP returns not found).
+
+        Two paths both lead to success:
+        - is_idp_managed=False persisted (issue #946): IdP call is skipped.
+        - is_idp_managed=True but IdP raises not-found: typed exception
+          fall-through in the route handler still lets MongoDB delete proceed.
+
+        This test covers the second path (legacy record, IdP raises not found).
+        """
         # Arrange
         client, mock_iam = test_client_admin
-        mock_iam.delete_group.side_effect = Exception("Group 'local-group' not found")
+        # Provider managers translate a 404 error to IdPNotFoundError; the
+        # route catches that typed exception and falls through.
+        mock_iam.delete_group.side_effect = IdPNotFoundError(
+            "Group 'local-group' not found"
+        )
 
-        with patch(
-            "registry.api.management_routes.scope_service.delete_group",
-            new_callable=AsyncMock,
-            return_value=True,
-        ) as mock_delete_scope:
+        with (
+            patch(
+                "registry.api.management_routes.scope_service.get_group",
+                new_callable=AsyncMock,
+                return_value={
+                    "scope_name": "local-group",
+                    "is_idp_managed": True,
+                },
+            ),
+            patch(
+                "registry.api.management_routes.scope_service.delete_group",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_delete_scope,
+        ):
             # Act
             response = client.delete("/api/management/iam/groups/local-group")
 
@@ -808,16 +1057,28 @@ class TestManagementDeleteGroup:
         assert "Administrator permissions" in response.json()["detail"]
 
     def test_delete_group_not_found_in_idp_still_deletes_from_mongodb(self, test_client_admin):
-        """Test that IdP 'not found' is handled gracefully (local-only group delete)."""
+        """Test that IdP 'not found' is handled gracefully (legacy record delete)."""
         # Arrange
         client, mock_iam = test_client_admin
-        mock_iam.delete_group.side_effect = Exception("Group 'nonexistent' not found")
+        mock_iam.delete_group.side_effect = IdPNotFoundError(
+            "Group 'nonexistent' not found"
+        )
 
-        with patch(
-            "registry.api.management_routes.scope_service.delete_group",
-            new_callable=AsyncMock,
-            return_value=True,
-        ) as mock_delete_scope:
+        with (
+            patch(
+                "registry.api.management_routes.scope_service.get_group",
+                new_callable=AsyncMock,
+                return_value={
+                    "scope_name": "nonexistent",
+                    "is_idp_managed": True,
+                },
+            ),
+            patch(
+                "registry.api.management_routes.scope_service.delete_group",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_delete_scope,
+        ):
             # Act
             response = client.delete("/api/management/iam/groups/nonexistent")
 

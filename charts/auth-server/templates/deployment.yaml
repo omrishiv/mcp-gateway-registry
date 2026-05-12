@@ -3,6 +3,13 @@
 {{- if .Values.global.authProvider }}
   {{- $authProviderType = .Values.global.authProvider.type | default $authProviderType }}
 {{- end }}
+{{- /* Resolve image coordinates: per-service image.* overrides global.image.* when set */ -}}
+{{- $imgRegistry := default .Values.global.image.registry .Values.image.registry }}
+{{- $imgRepository := required "image.repository must be set" .Values.image.repository }}
+{{- $imgTag := default .Values.global.image.tag .Values.image.tag }}
+{{- $imgPullPolicy := default .Values.global.image.pullPolicy .Values.image.pullPolicy }}
+{{- /* Fail-fast validation of user-supplied extraEnv */ -}}
+{{- include "auth-server.validateExtraEnv" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -34,8 +41,8 @@ spec:
         fsGroup: 1000
       containers:
         - name: {{ .Values.app.name }}
-          image: "{{ .Values.global.image.repository }}:{{ .Values.global.image.tag }}"
-          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          image: "{{ $imgRegistry }}/{{ $imgRepository }}:{{ $imgTag }}"
+          imagePullPolicy: {{ $imgPullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -64,6 +71,9 @@ spec:
             {{- if .Values.global.oauthProviderSecretName }}
             - secretRef:
                 name: {{ .Values.global.existingOauthProviderSecret | default .Values.global.oauthProviderSecretName }}
+            {{- end }}
+            {{- with .Values.extraEnvFrom }}
+            {{- toYaml . | nindent 12 }}
             {{- end }}
           env:
             {{- if .Values.entra.clientSecretExistingSecret }}
@@ -114,6 +124,9 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.auth0.managementApiTokenExistingSecret }}
                   key: {{ .Values.auth0.managementApiTokenExistingSecretKey }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
             {{- end }}
           livenessProbe:
             httpGet:

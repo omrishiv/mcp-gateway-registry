@@ -7,9 +7,11 @@ These endpoints provide system-level information for monitoring and display.
 import logging
 import os
 from datetime import UTC, datetime
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from ..auth.dependencies import nginx_proxied_auth
 from ..core.config import settings
 from ..version import __version__
 
@@ -177,6 +179,7 @@ async def _get_database_status() -> dict:
         }
 
     # DocumentDB/MongoDB backend - check connection
+    host_str = _describe_mongo_host()
     try:
         from registry.repositories.documentdb.client import get_documentdb_client
 
@@ -185,9 +188,6 @@ async def _get_database_status() -> dict:
         # Try to ping the database (db is AsyncIOMotorDatabase, not client)
         await db.command("ping")
 
-        # Get host information
-        host_str = f"{settings.documentdb_host}:{settings.documentdb_port}"
-
         return {
             "backend": backend,
             "status": "Healthy",
@@ -195,12 +195,32 @@ async def _get_database_status() -> dict:
         }
     except Exception as e:
         logger.error(f"Database health check failed: {e}")
-        host_str = f"{settings.documentdb_host}:{settings.documentdb_port}"
         return {
             "backend": backend,
             "status": "Unhealthy",
             "host": host_str,
         }
+
+
+def _describe_mongo_host() -> str:
+    """Describe the MongoDB host for the health endpoint without leaking creds.
+
+    When a full connection-string override is in use, parse the URI with
+    ``urllib.parse.urlsplit`` to extract the hostname only — stdlib parsing
+    strips the userinfo and triggers no DNS (unlike pymongo.uri_parser.parse_uri,
+    which resolves mongodb+srv:// records live).
+    """
+    if settings.mongodb_connection_string:
+        from urllib.parse import urlsplit
+
+        try:
+            host = urlsplit(settings.mongodb_connection_string).hostname
+            if host:
+                return host
+        except ValueError:
+            pass
+        return "(connection string override)"
+    return f"{settings.documentdb_host}:{settings.documentdb_port}"
 
 
 async def _get_registry_card_status() -> dict:
@@ -300,8 +320,37 @@ async def get_version():
     return {"version": __version__}
 
 
+@router.get("/api/system/telemetry-detection")
+async def get_telemetry_detection_info(
+    # Declared for its side effects: rejects unauthenticated callers with 401
+    # and populates request.state.user_context so the audit middleware logs
+    # the caller's real username instead of "anonymous".
+    _: Annotated[dict, Depends(nginx_proxied_auth)],
+) -> dict:
+    """Return the telemetry cloud-detection result for the current process.
+
+    Reads from the cached result in the telemetry module; no additional probes
+    are triggered. Lets operators verify how their instance was classified
+    without tailing logs.
+
+    Returns:
+        Dictionary with:
+        - cloud: aws/gcp/azure/unknown
+        - cloud_detection_method: env/dmi/ecs_meta/k8s_heuristic/imds/unknown
+    """
+    from ..core.telemetry import _detect_cloud_provider_with_method
+
+    cloud, method = _detect_cloud_provider_with_method()
+    return {"cloud": cloud, "cloud_detection_method": method}
+
+
 @router.get("/api/stats")
-async def get_system_stats():
+async def get_system_stats(
+    # Declared for its side effects: rejects unauthenticated callers with 401
+    # and populates request.state.user_context so the audit middleware logs
+    # the caller's real username instead of "anonymous".
+    _: Annotated[dict, Depends(nginx_proxied_auth)],
+):
     """Get system statistics including uptime, deployment info, and registry metrics.
 
     This endpoint provides operational information for monitoring and display:

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, Fragment } from 'react';
+import axios from 'axios';
 import { Menu, Transition } from '@headlessui/react';
 import { Link } from 'react-router-dom';
 import {
@@ -33,17 +34,15 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   }, []);
 
   const fetchTags = useCallback(() => {
-    fetch('/api/search/tags')
-      .then(res => res.json())
-      .then(data => setAvailableTags(data.tags || []))
+    axios.get<{ tags?: string[] }>('/api/search/tags')
+      .then(res => setAvailableTags(res.data.tags || []))
       .catch(err => console.error('Failed to fetch tags:', err));
   }, []);
 
   useEffect(() => {
     // Fetch version from API
-    fetch('/api/version')
-      .then(res => res.json())
-      .then(data => setVersion(data.version))
+    axios.get<{ version: string }>('/api/version')
+      .then(res => setVersion(res.data.version))
       .catch(err => console.error('Failed to fetch version:', err));
 
     // Initial tag fetch

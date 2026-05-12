@@ -43,8 +43,14 @@ COLLECTION_SKILLS = "agent_skills"
 
 
 def _get_config_from_env() -> dict:
-    """Get MongoDB CE configuration from environment variables."""
+    """Get MongoDB CE configuration from environment variables.
+
+    When MONGODB_CONNECTION_STRING is set, the caller owns the full URI
+    (Atlas, externally-managed replica set, etc.) and discrete
+    host/port/user/password values are ignored.
+    """
     return {
+        "connection_string": os.getenv("MONGODB_CONNECTION_STRING", ""),
         "host": os.getenv("DOCUMENTDB_HOST", "mongodb"),
         "port": int(os.getenv("DOCUMENTDB_PORT", "27017")),
         "database": os.getenv("DOCUMENTDB_DATABASE", "mcp_registry"),
@@ -290,11 +296,19 @@ async def _load_default_scopes(
 async def _initialize_mongodb_ce() -> None:
     """Main initialization function."""
     config = _get_config_from_env()
+    override = config["connection_string"]
 
     logger.info("=" * 60)
     logger.info("MongoDB CE Initialization for MCP Gateway")
     logger.info("=" * 60)
-    logger.info(f"Host: {config['host']}:{config['port']}")
+    if override:
+        from urllib.parse import urlsplit
+
+        logger.info(
+            f"Host: {urlsplit(override).hostname or '(override)'} (connection string override)"
+        )
+    else:
+        logger.info(f"Host: {config['host']}:{config['port']}")
     logger.info(f"Database: {config['database']}")
     logger.info(f"Namespace: {config['namespace']}")
     logger.info("")
@@ -303,16 +317,25 @@ async def _initialize_mongodb_ce() -> None:
     logger.info("Waiting for MongoDB to be ready...")
     time.sleep(10)
 
-    # Initialize replica set (synchronous)
-    _initialize_replica_set(config["host"], config["port"], config["username"], config["password"])
-
-    # Connect with motor for async operations
-    # Use auth only if username is provided (MongoDB CE runs without auth by default)
-    if config["username"] and config["password"]:
-        connection_string = f"mongodb://{config['username']}:{config['password']}@{config['host']}:{config['port']}/{config['database']}?replicaSet={config['replicaset']}&authMechanism=SCRAM-SHA-256&authSource=admin"
+    if override:
+        # Caller owns the topology (Atlas, externally-managed replica set, etc.).
+        # Skip replSetInitiate — we lack admin rights and the replica set is
+        # already configured by the provider.
+        logger.info("Skipping replica-set initialization (connection string override in use)")
+        connection_string = override
     else:
-        connection_string = f"mongodb://{config['host']}:{config['port']}/{config['database']}?replicaSet={config['replicaset']}"
-        logger.info("Using no-auth connection for async client")
+        # Initialize replica set (synchronous)
+        _initialize_replica_set(
+            config["host"], config["port"], config["username"], config["password"]
+        )
+
+        # Connect with motor for async operations
+        # Use auth only if username is provided (MongoDB CE runs without auth by default)
+        if config["username"] and config["password"]:
+            connection_string = f"mongodb://{config['username']}:{config['password']}@{config['host']}:{config['port']}/{config['database']}?replicaSet={config['replicaset']}&authMechanism=SCRAM-SHA-256&authSource=admin"
+        else:
+            connection_string = f"mongodb://{config['host']}:{config['port']}/{config['database']}?replicaSet={config['replicaset']}"
+            logger.info("Using no-auth connection for async client")
 
     try:
         client = AsyncIOMotorClient(

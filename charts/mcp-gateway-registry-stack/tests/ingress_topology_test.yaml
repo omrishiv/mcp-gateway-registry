@@ -1,0 +1,193 @@
+suite: stack ingress topology — single ingress via registry nginx
+release:
+  name: test
+  namespace: default
+tests:
+  # Registry ingress in path mode exposes /oauth2, /keycloak, /realms,
+  # /resources — required because auth-server and Keycloak have no
+  # ingress of their own and the registry's nginx proxies them internally.
+  - it: registry ingress in path mode exposes auth and Keycloak sibling paths
+    templates:
+      - charts/registry/templates/ingress.yaml
+    set:
+      global:
+        domain: example.com
+        ingress:
+          routingMode: path
+          tls: true
+          paths:
+            registry: /registry
+    asserts:
+      - equal:
+          path: spec.rules[0].http.paths[0].path
+          value: /registry
+      - equal:
+          path: spec.rules[0].http.paths[1].path
+          value: /oauth2
+      - equal:
+          path: spec.rules[0].http.paths[2].path
+          value: /keycloak
+      - equal:
+          path: spec.rules[0].http.paths[3].path
+          value: /realms
+      - equal:
+          path: spec.rules[0].http.paths[4].path
+          value: /resources
+      - lengthEqual:
+          path: spec.rules[0].http.paths
+          count: 5
+
+  - it: registry ingress in subdomain mode keeps the single wildcard
+    templates:
+      - charts/registry/templates/ingress.yaml
+    set:
+      global:
+        domain: example.com
+        ingress:
+          routingMode: subdomain
+          tls: true
+    asserts:
+      - equal:
+          path: spec.rules[0].http.paths[0].path
+          value: /
+      - lengthEqual:
+          path: spec.rules[0].http.paths
+          count: 1
+
+  # keycloak-configure Job runs on every helm install/upgrade so the
+  # realm's client redirect URIs stay in sync with the computed URLs.
+  - it: keycloak-configure Job has helm hook annotations
+    templates:
+      - charts/keycloak-configure/templates/job.yaml
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-install,post-upgrade
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation
+
+  # Internal KEYCLOAK_URL must be bare (no /keycloak suffix) in both
+  # routing modes — the registry pod's nginx handles browser-side path
+  # rewriting, and Keycloak serves from its own root.
+  - it: internal KEYCLOAK_URL has no path suffix in subdomain mode
+    templates:
+      - templates/oauth-provider-secret.yaml
+    set:
+      global:
+        domain: example.com
+        ingress:
+          routingMode: subdomain
+          tls: true
+    asserts:
+      - equal:
+          path: data.KEYCLOAK_URL
+          # base64 of http://test-keycloak-headless.default.svc.cluster.local:8080
+          value: aHR0cDovL3Rlc3Qta2V5Y2xvYWstaGVhZGxlc3MuZGVmYXVsdC5zdmMuY2x1c3Rlci5sb2NhbDo4MDgw
+
+  - it: internal KEYCLOAK_URL has no path suffix in path mode
+    templates:
+      - templates/oauth-provider-secret.yaml
+    set:
+      global:
+        domain: example.com
+        ingress:
+          routingMode: path
+          tls: true
+    asserts:
+      - equal:
+          path: data.KEYCLOAK_URL
+          value: aHR0cDovL3Rlc3Qta2V5Y2xvYWstaGVhZGxlc3MuZGVmYXVsdC5zdmMuY2x1c3Rlci5sb2NhbDo4MDgw
+
+  # KEYCLOAK_EXTERNAL_URL includes /keycloak path in both routing modes.
+  - it: KEYCLOAK_EXTERNAL_URL has /keycloak path in subdomain mode
+    templates:
+      - templates/oauth-provider-secret.yaml
+    set:
+      global:
+        domain: example.com
+        ingress:
+          routingMode: subdomain
+          tls: true
+    asserts:
+      - equal:
+          path: data.KEYCLOAK_EXTERNAL_URL
+          # base64 of https://mcpregistry.example.com/keycloak
+          value: aHR0cHM6Ly9tY3ByZWdpc3RyeS5leGFtcGxlLmNvbS9rZXljbG9haw==
+
+  - it: KEYCLOAK_EXTERNAL_URL is <domain>/keycloak in path mode (not /registry/keycloak)
+    templates:
+      - templates/oauth-provider-secret.yaml
+    set:
+      global:
+        domain: example.com
+        ingress:
+          routingMode: path
+          tls: true
+    asserts:
+      - equal:
+          path: data.KEYCLOAK_EXTERNAL_URL
+          # base64 of https://example.com/keycloak
+          value: aHR0cHM6Ly9leGFtcGxlLmNvbS9rZXljbG9haw==
+
+  # AUTH_SERVER_EXTERNAL_URL is the bare registry host — no /registry
+  # path prefix in path mode, no /auth-server anywhere.
+  - it: AUTH_SERVER_EXTERNAL_URL in path mode is the bare domain (no path)
+    templates:
+      - charts/auth-server/templates/secret.yaml
+    set:
+      global:
+        domain: example.com
+        ingress:
+          routingMode: path
+          tls: true
+    asserts:
+      - equal:
+          path: data.AUTH_SERVER_EXTERNAL_URL
+          # base64 of https://example.com
+          value: aHR0cHM6Ly9leGFtcGxlLmNvbQ==
+
+  - it: AUTH_SERVER_EXTERNAL_URL in subdomain mode is the registry hostname
+    templates:
+      - charts/auth-server/templates/secret.yaml
+    set:
+      global:
+        domain: example.com
+        ingress:
+          routingMode: subdomain
+          tls: true
+    asserts:
+      - equal:
+          path: data.AUTH_SERVER_EXTERNAL_URL
+          # base64 of https://mcpregistry.example.com
+          value: aHR0cHM6Ly9tY3ByZWdpc3RyeS5leGFtcGxlLmNvbQ==
+
+  # auth-server FastAPI root_path is always empty — it has no ingress
+  # of its own; nginx strips any path prefix before forwarding.
+  - it: auth-server ROOT_PATH is empty in subdomain mode
+    templates:
+      - charts/auth-server/templates/secret.yaml
+    set:
+      global:
+        domain: example.com
+        ingress:
+          routingMode: subdomain
+          tls: true
+    asserts:
+      - equal:
+          path: data.ROOT_PATH
+          value: ""
+
+  - it: auth-server ROOT_PATH is empty in path mode
+    templates:
+      - charts/auth-server/templates/secret.yaml
+    set:
+      global:
+        domain: example.com
+        ingress:
+          routingMode: path
+          tls: true
+    asserts:
+      - equal:
+          path: data.ROOT_PATH
+          value: ""

@@ -21,10 +21,13 @@ async def get_documentdb_client() -> AsyncIOMotorDatabase:
         return _database
 
     connection_string = build_connection_string()
-    logger.info(
-        f"Connecting to {settings.storage_backend} "
-        f"(host: {settings.documentdb_host})"
-    )
+    if settings.mongodb_connection_string:
+        logger.info(f"Connecting to {settings.storage_backend} via connection string override")
+    else:
+        logger.info(
+            f"Connecting to {settings.storage_backend} "
+            f"(host: {settings.documentdb_host})"
+        )
 
     _client = AsyncIOMotorClient(
         connection_string,

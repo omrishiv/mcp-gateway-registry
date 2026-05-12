@@ -4,8 +4,35 @@ from datetime import UTC
 from enum import Enum
 from pathlib import Path
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, field_validator
 from pydantic_settings import BaseSettings
+
+# Accepted values for STORAGE_BACKEND. Keep in sync with the Terraform allowlist
+# at terraform/aws-ecs/variables.tf (issue #955) so both layers reject the same
+# typos with the same messages.
+ALLOWED_STORAGE_BACKENDS: frozenset[str] = frozenset(
+    {
+        "file",
+        "documentdb",
+        "mongodb-ce",
+        "mongodb",
+        "mongodb-atlas",
+    }
+)
+
+
+# MongoDB-compatible backends. All values in this set route to the same
+# DocumentDB/MongoDB repositories via the factory; documentdb is retained
+# only to preserve AWS DocumentDB-specific SCRAM-SHA-1 auth selection in
+# utils/mongodb_connection.py.
+MONGODB_BACKENDS: frozenset[str] = frozenset(
+    {
+        "documentdb",
+        "mongodb-ce",
+        "mongodb",
+        "mongodb-atlas",
+    }
+)
 
 
 class DeploymentMode(str, Enum):
@@ -32,6 +59,14 @@ class Settings(BaseSettings):
         case_sensitive=False,
         extra="ignore",  # Ignore extra environment variables
     )
+
+    # Network binding: default "0.0.0.0" binds to all IPv4 interfaces inside
+    # the container (works everywhere). Opt into IPv6 dual-stack by setting
+    # BIND_HOST=:: — but note that requires net.ipv6.bindv6only=0 on the host
+    # AND an IPv6 loopback in the container image, which the stock Docker
+    # image does not have. See docs/TELEMETRY.md and
+    # docs/unified-parameter-reference.md (Group 4) for details.
+    bind_host: str = "0.0.0.0"  # nosec B104 - bind to all IPv4 interfaces inside container
 
     # Auth settings
     secret_key: str = ""
@@ -77,7 +112,7 @@ class Settings(BaseSettings):
     )
     registration_gate_auth_type: str = Field(
         default="none",
-        description="Auth type for gate endpoint: 'none', 'api_key', or 'bearer'",
+        description="Auth type for gate endpoint: 'none', 'api_key', 'bearer', or 'oauth2_client_credentials'",
     )
     registration_gate_auth_credential: str = Field(
         default="",
@@ -94,6 +129,24 @@ class Settings(BaseSettings):
     registration_gate_max_retries: int = Field(
         default=2,
         description="Maximum retry attempts for gate calls on transient failures",
+    )
+
+    # Registration Gate OAuth2 Client Credentials (Issue #917)
+    registration_gate_oauth2_token_url: str = Field(
+        default="",
+        description="OAuth2 token endpoint URL for client credentials flow",
+    )
+    registration_gate_oauth2_client_id: str = Field(
+        default="",
+        description="OAuth2 client ID for client credentials flow",
+    )
+    registration_gate_oauth2_client_secret: str = Field(
+        default="",
+        description="OAuth2 client secret for client credentials flow",
+    )
+    registration_gate_oauth2_scope: str = Field(
+        default="",
+        description="OAuth2 scope parameter (e.g., api://app-id/.default for Entra)",
     )
 
     # Embeddings settings [Default]
@@ -407,6 +460,24 @@ class Settings(BaseSettings):
         default="uvicorn.access,httpx,pymongo,motor",
         description="Comma-separated logger names to exclude from MongoDB log writes",
     )
+    app_log_dir: str | None = Field(
+        default=None,
+        description=(
+            "Directory where service log files are written. "
+            "When unset, defaults to /var/log/containers/ai-registry in "
+            "containers and ./logs in local dev mode. "
+            "Each service writes {app_log_dir}/{service_name}.log."
+        ),
+    )
+    app_log_file_format: str = Field(
+        default="json",
+        description=(
+            "Format for service log files. 'json' emits JSON Lines per "
+            "docs/logging-standard.md (Splunk-friendly). 'text' emits the "
+            "legacy comma-separated format. Console/stdout format is not "
+            "affected by this setting."
+        ),
+    )
 
     # Audit Logging Configuration
     audit_log_enabled: bool = True  # Enable/disable audit logging globally
@@ -480,6 +551,15 @@ class Settings(BaseSettings):
         default=False,
         description="Log telemetry payloads instead of sending (for debugging)",
     )
+    telemetry_imds_probe_disabled: bool = Field(
+        default=False,
+        description=(
+            "Disable IMDS probing in cloud detection (opt-out). "
+            "When true, registry will only use env vars, DMI files, ECS "
+            "metadata URI, and k8s node-name heuristics to detect the cloud "
+            "provider. MCP_TELEMETRY_IMDS_PROBE_DISABLED=1"
+        ),
+    )
 
     # Demo server configuration
     disable_ai_registry_tools_server: bool = Field(
@@ -493,9 +573,88 @@ class Settings(BaseSettings):
         return self.deployment_mode == DeploymentMode.WITH_GATEWAY
 
     # Storage Backend Configuration
-    storage_backend: str = "file"  # Options: "file", "documentdb"
+    storage_backend: str = Field(
+        default="file",
+        description=(
+            "Storage backend selection. Accepted values: "
+            "file, documentdb, mongodb-ce, mongodb, mongodb-atlas. "
+            "mongodb, mongodb-atlas, and mongodb-ce are aliases that route to "
+            "the same MongoDB/DocumentDB repositories. documentdb is retained "
+            "for AWS DocumentDB-specific auth (SCRAM-SHA-1). Unknown values "
+            "fail startup with a clear error listing accepted values."
+        ),
+    )
 
-    # DocumentDB Configuration (only used when storage_backend="documentdb")
+    @field_validator("app_log_dir", mode="before")
+    @classmethod
+    def _validate_app_log_dir(
+        cls,
+        v: str | None,
+    ) -> str | None:
+        """Reject non-absolute APP_LOG_DIR and paths containing '..'.
+
+        Operator-supplied config; we validate at startup to fail fast with a
+        clear message instead of letting the container silently fall back to
+        console-only logging after a mkdir error.
+        """
+        if v is None or v == "":
+            return None
+        if not isinstance(v, str):
+            raise ValueError(f"APP_LOG_DIR must be a string, got {type(v).__name__}")
+        if not v.startswith("/"):
+            raise ValueError(f"APP_LOG_DIR must be an absolute path, got {v!r}")
+        if ".." in Path(v).parts:
+            raise ValueError(f"APP_LOG_DIR must not contain '..' segments, got {v!r}")
+        return v
+
+    @field_validator("app_log_file_format", mode="before")
+    @classmethod
+    def _validate_app_log_file_format(
+        cls,
+        v: str,
+    ) -> str:
+        """Accept only 'json' (new default) or 'text' (legacy back-compat)."""
+        if v is None:
+            return "json"
+        if not isinstance(v, str):
+            raise ValueError(
+                f"APP_LOG_FILE_FORMAT must be a string, got {type(v).__name__}"
+            )
+        normalized = v.strip().lower()
+        if normalized not in ("json", "text"):
+            raise ValueError(
+                f"APP_LOG_FILE_FORMAT must be 'json' or 'text', got {v!r}"
+            )
+        return normalized
+
+    @field_validator("storage_backend", mode="before")
+    @classmethod
+    def _validate_storage_backend(
+        cls,
+        v: str | None,
+    ) -> str:
+        """Reject unknown STORAGE_BACKEND values at startup.
+
+        Empty string and None coerce to "file" (the historical default). Any
+        other value is normalized (stripped, lowercased) and compared against
+        ALLOWED_STORAGE_BACKENDS. Unknown values raise ValueError with the
+        full allowlist in the error message so operators can fix the env var
+        without a round-trip through the code.
+
+        Safe to echo v in the error: storage_backend is a non-secret config
+        name. Do not copy this pattern for fields that could hold credentials.
+        """
+        if v is None or v == "":
+            return "file"
+        if not isinstance(v, str):
+            raise ValueError(f"STORAGE_BACKEND must be a string, got {type(v).__name__}")
+        normalized = v.strip().lower()
+        if normalized not in ALLOWED_STORAGE_BACKENDS:
+            accepted = ", ".join(sorted(ALLOWED_STORAGE_BACKENDS))
+            raise ValueError(f"Invalid STORAGE_BACKEND={v!r}. Accepted values: {accepted}.")
+        return normalized
+
+    # DocumentDB Configuration (only used when storage_backend="documentdb" or "mongodb-ce")
     documentdb_host: str = "localhost"
     documentdb_port: int = 27017
     documentdb_database: str = "mcp_registry"
@@ -507,6 +666,12 @@ class Settings(BaseSettings):
     documentdb_replica_set: str | None = None
     documentdb_read_preference: str = "secondaryPreferred"
     documentdb_direct_connection: bool = False  # Set to True only for single-node MongoDB (tests)
+
+    # Full MongoDB connection URI override. When set, bypasses host/port/user/password
+    # assembly and is passed verbatim to the MongoDB client. Required for MongoDB Atlas
+    # (mongodb+srv://...) and any externally-managed MongoDB where the caller wants to
+    # own the full URI (replica sets, TLS params, retryWrites, etc.).
+    mongodb_connection_string: str | None = None
 
     # DocumentDB Namespace (for multi-tenancy support)
     documentdb_namespace: str = "default"
@@ -562,16 +727,33 @@ class Settings(BaseSettings):
 
     @property
     def log_dir(self) -> Path:
-        """Get log directory based on environment."""
+        """Resolve the directory where application .log files are written.
+
+        Resolution order:
+        1. APP_LOG_DIR override (if set) - used verbatim.
+        2. ./logs in local dev (when /app does not exist).
+        3. /var/log/containers/ai-registry in containers (issue #987).
+
+        Note: this is for the Python application logs (registry.log,
+        auth-server.log, ai-registry-tools.log). Audit logs still use
+        container_log_dir via the audit_log_path property and are not
+        affected by this setting.
+        """
+        if self.app_log_dir:
+            return Path(self.app_log_dir)
         if self.is_local_dev:
             return Path.cwd() / "logs"
-        return self.container_log_dir
+        return Path("/var/log/containers/ai-registry")
 
     @property
     def log_file_path(self) -> Path:
-        if self.is_local_dev:
-            return Path.cwd() / "logs" / "registry.log"
-        return self.container_log_dir / "registry.log"
+        """Resolve the full path to this service's .log file.
+
+        Kept for backwards compatibility with callers that import log_file_path
+        directly; most code should call setup_logging(service_name=...) instead,
+        which computes the same path via log_dir.
+        """
+        return self.log_dir / "registry.log"
 
     @property
     def faiss_index_path(self) -> Path:

@@ -1,9 +1,25 @@
 # Global configuration
 global:
   image:
-    repository: public.ecr.aws/p3v1o3c6/registry
-    tag: 1.0.21
+    # Container registry (host + optional namespace). Shared default across subcharts.
+    registry: public.ecr.aws/p3v1o3c6
+    tag: 1.23.0
     pullPolicy: IfNotPresent
+
+  ingress:
+    # Default ALB scheme for the registry's ingress when this subchart is
+    # deployed standalone. Overridden by mcp-gateway-registry-stack's
+    # global.ingress.scheme when deployed via the umbrella. Per-ingress
+    # override available at .ingress.scheme below.
+    scheme: internet-facing
+
+# Per-service image configuration
+# Any field left empty falls back to the corresponding global.image.* value.
+image:
+  registry: ""      # Overrides global.image.registry when set
+  repository: registry  # Image name within the registry
+  tag: ""           # Overrides global.image.tag when set
+  pullPolicy: ""    # Overrides global.image.pullPolicy when set
 
 # Application configuration
 app:
@@ -12,14 +28,16 @@ app:
   envSecretName: registry-secret
   existingSecret: ""  # If set, use this existing secret instead of creating one
 
-  # External URLs
-  authServerUrl: http://localhost:8888
-
   # Security settings
   # secretKey: If not provided, a random 64-character key is auto-generated.
   # When deployed via mcp-gateway-registry-stack, the key is shared with auth-server.
   # Uncomment to use a specific key:
   # secretKey: "your-secure-key-here"
+
+  # Session cookie Domain attribute. Leave empty to default to
+  # ".<global.domain>". See charts/auth-server/values.yaml for a longer
+  # note on when to override.
+  sessionCookieDomain: ""
 
   # Federation configuration
   federationStaticTokenAuthEnabled: false #If not provided, defaults to false
@@ -62,6 +80,10 @@ app:
   registrationGateAuthHeaderName: "X-Api-Key"  # Header for api_key auth
   registrationGateTimeoutSeconds: "5"
   registrationGateMaxRetries: "2"
+  registrationGateOauth2TokenUrl: ""  # OAuth2 token endpoint for client credentials flow
+  registrationGateOauth2ClientId: ""  # OAuth2 client ID
+  registrationGateOauth2ClientSecret: ""  # OAuth2 client secret
+  registrationGateOauth2Scope: ""  # OAuth2 scope (e.g., api://app-id/.default for Entra)
 
   # M2M direct client registration (issue #851)
   # Exposes /api/iam/m2m-clients admin API for registering M2M client_ids and
@@ -80,6 +102,7 @@ app:
   mcpTelemetryOptOut: false  # Set to true to disable daily heartbeat only (startup ping still sent)
   telemetryHeartbeatIntervalMinutes: "1440"  # Heartbeat interval in minutes (default: 1440 = 24 hours)
   telemetryDebug: false  # Set to true to log payloads instead of sending
+  mcpTelemetryImdsProbeDisabled: false  # Set to true to disable IMDS probing in cloud detection (issue #986)
 
   # Demo server configuration
   disableAiRegistryToolsServer: false  # Set to true to disable auto-registration of the built-in airegistry-tools server
@@ -111,6 +134,11 @@ app:
   appLogMongodbFlushIntervalSeconds: "5.0"  # Seconds between periodic flushes
   appLogLevel: "INFO"              # Application log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
   appLogExcludedLoggers: "uvicorn.access,httpx,pymongo,motor"  # Comma-separated logger names to exclude from MongoDB
+  # Log file path and format (issue #987). On EKS, pod stdout is scraped by
+  # Splunk Connect for Kubernetes - these settings control the in-container
+  # file path for code-path consistency with Docker Compose deployments.
+  appLogDir: ""                    # Empty uses backend default: /var/log/containers/ai-registry
+  appLogFileFormat: "json"         # "json" (default, Splunk-friendly) or "text" (legacy comma-separated)
 
 # AWS Agent Registry Federation
 awsRegistry:
@@ -212,6 +240,11 @@ resources:
 ingress:
   enabled: false
   className: alb
+  # ALB scheme for this specific ingress. Leave empty to fall back to
+  # global.ingress.scheme (chart-level default, or stack-level override
+  # when deployed via mcp-gateway-registry-stack), and finally to
+  # "internet-facing".
+  scheme: ""
   hostname: ""
   annotations: {}
   tls: false
@@ -221,5 +254,58 @@ ingress:
   routingMode: subdomain
   # Path prefix when using path-based routing (default: /registry)
   path: /registry
+
+# Extra environment variables appended to the container's `env:` list.
+# Uses the native Kubernetes EnvVar schema, so `valueFrom` is supported.
+#
+# Validation (template render fails if violated):
+#   - Names must be unique within this list.
+#   - Names must not collide with chart-managed variables; use the
+#     corresponding values.yaml field instead (e.g. set app.showSkillsTab
+#     rather than SHOW_SKILLS_TAB here). See the reserved list in
+#     templates/_helpers.tpl.
+#
+# User entries are appended last, so they win over chart `envFrom:`
+# sources on name collision — which is why the reserved list guards
+# catastrophic envFrom-sourced keys like SECRET_KEY, AUTH_PROVIDER,
+# and DOCUMENTDB_PASSWORD.
+#
+# Example:
+# extraEnv:
+#   - name: MY_FEATURE_FLAG
+#     value: "true"
+#   - name: MY_SECRET_VAR
+#     valueFrom:
+#       secretKeyRef:
+#         name: my-secret
+#         key: my-key
+extraEnv: []
+
+# Extra `envFrom:` sources appended to the container. Use this to inject
+# all keys from an external ConfigMap or Secret you manage (e.g. via
+# External Secrets Operator, SealedSecrets, or Vault CSI).
+#
+# NOT validated at template time — Helm cannot introspect external
+# ConfigMap/Secret contents. Consequences:
+#   - Keys in your source will SILENTLY OVERRIDE chart-managed envFrom
+#     entries (within envFrom, last source wins). Do NOT include keys
+#     like SECRET_KEY, AUTH_PROVIDER, DOCUMENTDB_PASSWORD,
+#     MONGODB_CONNECTION_STRING, KEYCLOAK_URL — shadowing these breaks
+#     cross-service auth or data access with no error.
+#   - Chart-managed `env:` entries (e.g. DEPLOYMENT_MODE, SHOW_*_TAB)
+#     always win over anything in extraEnvFrom — K8s rules: explicit
+#     env: beats envFrom regardless of order.
+#   - Referenced resources must exist when the pod starts (the default
+#     is optional: false). Set `optional: true` if the resource may be
+#     absent.
+#
+# Example:
+# extraEnvFrom:
+#   - secretRef:
+#       name: my-external-secrets
+#   - configMapRef:
+#       name: my-external-config
+#       optional: true
+extraEnvFrom: []
 
 nodeSelector: {}

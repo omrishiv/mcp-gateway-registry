@@ -19,3 +19,14 @@ mongodb:
   username: my-user
   use_tls: false
   storage_backend: mongodb-ce
+  # connectionString: Full MongoDB URI override. When set, takes precedence
+  # over host/port/username/password above and is passed verbatim to the
+  # MongoDB client. Required for MongoDB Atlas (mongodb+srv://...) and any
+  # externally-managed MongoDB. When set, the replica-set init job will
+  # skip replSetInitiate (the caller's cluster is assumed to already be
+  # configured).
+  #
+  # For production, prefer providing the URI via an existing Kubernetes
+  # Secret: put MONGODB_CONNECTION_STRING into your own Secret and set
+  # global.existingMongoCredentialsSecret to its name.
+  connectionString: ""

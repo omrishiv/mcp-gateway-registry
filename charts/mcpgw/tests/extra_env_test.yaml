@@ -1,0 +1,127 @@
+suite: extraEnv and extraEnvFrom
+templates:
+  - deployment.yaml
+release:
+  name: test
+  namespace: default
+tests:
+  - it: renders without extraEnv by default
+    set:
+      app.secretKey: test-key
+    asserts:
+      - isKind:
+          of: Deployment
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: HOST
+            value: 0.0.0.0
+
+  - it: appends extraEnv entries after chart-managed env vars
+    set:
+      app.secretKey: test-key
+      extraEnv:
+        - name: MY_FLAG
+          value: "on"
+        - name: MY_SECRET_VAR
+          valueFrom:
+            secretKeyRef:
+              name: my-secret
+              key: my-key
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MY_FLAG
+            value: "on"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MY_SECRET_VAR
+            valueFrom:
+              secretKeyRef:
+                name: my-secret
+                key: my-key
+      # Order: chart-managed HOST comes first, user extraEnv entries last.
+      - equal:
+          path: spec.template.spec.containers[0].env[0].name
+          value: HOST
+      - equal:
+          path: spec.template.spec.containers[0].env[1].name
+          value: MY_FLAG
+      - equal:
+          path: spec.template.spec.containers[0].env[2].name
+          value: MY_SECRET_VAR
+
+  - it: appends extraEnvFrom entries after chart-managed envFrom sources
+    set:
+      app.secretKey: test-key
+      extraEnvFrom:
+        - secretRef:
+            name: my-external-secrets
+        - configMapRef:
+            name: my-external-config
+            optional: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: my-external-secrets
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            configMapRef:
+              name: my-external-config
+              optional: true
+      # Order: chart-managed mcpgw-secret is envFrom[0]; user entries are last.
+      - equal:
+          path: spec.template.spec.containers[0].envFrom[0].secretRef.name
+          value: mcpgw-secret
+      - equal:
+          path: spec.template.spec.containers[0].envFrom[1].secretRef.name
+          value: my-external-secrets
+      - equal:
+          path: spec.template.spec.containers[0].envFrom[2].configMapRef.name
+          value: my-external-config
+
+  - it: fails when extraEnv contains a reserved name (HOST)
+    set:
+      app.secretKey: test-key
+      extraEnv:
+        - name: HOST
+          value: "1.2.3.4"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"HOST\" is a reserved variable"
+
+  - it: fails when extraEnv contains a reserved envFrom-sourced name (SECRET_KEY)
+    set:
+      app.secretKey: test-key
+      extraEnv:
+        - name: SECRET_KEY
+          value: "oops"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"SECRET_KEY\" is a reserved variable"
+
+  - it: fails on duplicate names within extraEnv
+    set:
+      app.secretKey: test-key
+      extraEnv:
+        - name: MY_VAR
+          value: "a"
+        - name: MY_VAR
+          value: "b"
+    asserts:
+      - failedTemplate:
+          errorPattern: "duplicate name \"MY_VAR\""
+
+  - it: fails when an extraEnv entry is missing the name field
+    set:
+      app.secretKey: test-key
+      extraEnv:
+        - value: "just-a-value"
+    asserts:
+      - failedTemplate:
+          errorPattern: "missing required 'name' field"

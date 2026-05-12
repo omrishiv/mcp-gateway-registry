@@ -146,3 +146,104 @@ class TestDispatch:
 
     async def _async_return(self, value):
         return value
+
+
+class TestBestEffortSessionIdentity:
+    """Tests for the session-cookie fallback used when no auth dep ran.
+
+    These cover the /api/version case: a public endpoint with no auth
+    dependency still gets logged under the caller's real username when
+    the browser presents a valid session cookie.
+    """
+
+    def setup_method(self):
+        from registry.auth.dependencies import signer
+        from registry.core.config import settings
+
+        self.tmpdir = tempfile.mkdtemp()
+        self.audit_logger = AuditLogger(log_dir=self.tmpdir)
+        self.middleware = AuditMiddleware(MagicMock(), self.audit_logger)
+        self.signer = signer
+        self.cookie_name = settings.session_cookie_name
+
+    def _make_cookie(self, **overrides) -> str:
+        payload = {
+            "username": "alice",
+            "auth_method": "oauth2",
+            "provider": "keycloak",
+        }
+        payload.update(overrides)
+        return self.signer.dumps(payload)
+
+    def test_fallback_recovers_username_from_valid_cookie(self):
+        cookie = self._make_cookie()
+        request = MockRequest(cookies={self.cookie_name: cookie})
+
+        identity = self.middleware._extract_identity(request)
+
+        assert identity.username == "alice"
+        assert identity.auth_method == "session-cookie-fallback"
+        assert identity.provider == "keycloak"
+        assert identity.credential_type == "session_cookie"
+
+    def test_fallback_anonymous_on_missing_cookie(self):
+        request = MockRequest(cookies={})
+
+        identity = self.middleware._extract_identity(request)
+
+        assert identity.username == "anonymous"
+        assert identity.auth_method == "anonymous"
+
+    def test_fallback_anonymous_on_tampered_cookie(self):
+        request = MockRequest(cookies={self.cookie_name: "garbage.value.here"})
+
+        identity = self.middleware._extract_identity(request)
+
+        assert identity.username == "anonymous"
+        assert identity.auth_method == "anonymous"
+
+    def test_auth_dependency_wins_over_fallback(self):
+        """If a dep populated user_context, do NOT overwrite with fallback."""
+        cookie = self._make_cookie(username="alice")
+        request = MockRequest(cookies={self.cookie_name: cookie})
+        request.state.user_context = {
+            "username": "bob",
+            "auth_method": "oauth2",
+            "provider": "keycloak",
+        }
+
+        identity = self.middleware._extract_identity(request)
+
+        assert identity.username == "bob"
+        assert identity.auth_method == "oauth2"
+
+    def test_fallback_does_not_mutate_request_state(self):
+        cookie = self._make_cookie()
+        request = MockRequest(cookies={self.cookie_name: cookie})
+
+        self.middleware._extract_identity(request)
+
+        assert request.state.user_context is None
+
+    def test_fallback_anonymous_when_cookie_missing_username(self):
+        payload = self.signer.dumps({"auth_method": "oauth2"})
+        request = MockRequest(cookies={self.cookie_name: payload})
+
+        identity = self.middleware._extract_identity(request)
+
+        assert identity.username == "anonymous"
+        assert identity.auth_method == "anonymous"
+
+    def test_fallback_anonymous_on_expired_cookie(self, monkeypatch):
+        """max_age=-1 forces SignatureExpired on any cookie regardless of age,
+        exercising the expired-cookie branch without waiting real time."""
+        from registry.core.config import settings
+
+        cookie = self._make_cookie()
+        request = MockRequest(cookies={self.cookie_name: cookie})
+
+        monkeypatch.setattr(settings, "session_max_age_seconds", -1)
+        identity = self.middleware._extract_identity(request)
+
+        assert identity.username == "anonymous"
+        assert identity.auth_method == "anonymous"
