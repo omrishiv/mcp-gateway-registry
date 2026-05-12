@@ -21,6 +21,7 @@ app:
   envSecretName: mcpgw-secret
   existingSecret: ""  # If set, use this existing secret instead of creating one
   port: 8000
+  bindHost: "::"
 
   # Registry connection — default is the standalone fallback. When this
   # subchart is deployed as part of mcp-gateway-registry-stack, the

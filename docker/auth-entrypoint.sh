@@ -97,7 +97,9 @@ while True:
     echo "MongoDB is ready."
 fi
 
-echo "Starting Auth Server..."
+BIND_HOST="${BIND_HOST:-::}"
+
+echo "Starting Auth Server (host=$BIND_HOST)..."
 cd /app
 source .venv/bin/activate
-exec uvicorn server:app --host 0.0.0.0 --port 8888 --proxy-headers --forwarded-allow-ips='*'
+exec uvicorn server:app --host "$BIND_HOST" --port 8888 --proxy-headers --forwarded-allow-ips='*'

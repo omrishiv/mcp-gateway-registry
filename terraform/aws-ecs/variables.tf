@@ -251,6 +251,12 @@ variable "session_cookie_domain" {
   default     = ""
 }
 
+variable "bind_host" {
+  description = "Network bind address for registry and gateway services. Use '::' for dual-stack IPv4+IPv6 or '0.0.0.0' for IPv4 only."
+  type        = string
+  default     = "::"
+}
+
 # =============================================================================
 # DOCUMENTDB CONFIGURATION (from upstream v1.0.9)
 # =============================================================================

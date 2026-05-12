@@ -109,6 +109,7 @@ module "mcp_gateway" {
   # Session cookie security configuration
   session_cookie_secure = var.session_cookie_secure
   session_cookie_domain = var.session_cookie_domain
+  bind_host             = var.bind_host
 
   # DocumentDB configuration
   storage_backend = var.storage_backend

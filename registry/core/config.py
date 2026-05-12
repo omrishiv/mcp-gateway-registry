@@ -60,6 +60,9 @@ class Settings(BaseSettings):
         extra="ignore",  # Ignore extra environment variables
     )
 
+    # Network binding: "::" for dual-stack IPv4+IPv6, "0.0.0.0" for IPv4 only
+    bind_host: str = "::"
+
     # Auth settings
     secret_key: str = ""
     session_cookie_name: str = "mcp_gateway_session"
