@@ -3,6 +3,7 @@ import { XMarkIcon, ChevronDownIcon, ChevronRightIcon } from '@heroicons/react/2
 import { VirtualServerInfo, VirtualServerConfig, ToolMapping } from '../types/virtualServer';
 import axios from 'axios';
 import useEscapeKey from '../hooks/useEscapeKey';
+import ResourceBoundTokenButton from './ResourceBoundTokenButton';
 
 
 interface VirtualServerDetailsModalProps {
@@ -112,6 +113,14 @@ const VirtualServerDetailsModal: React.FC<VirtualServerDetailsModalProps> = ({
               {virtualServer.description || 'No description available.'}
             </p>
           </div>
+
+          {virtualServer.path && (
+            <ResourceBoundTokenButton
+              resourceType="virtual_server"
+              resourceId={virtualServer.path}
+              resourceName={virtualServer.server_name}
+            />
+          )}
 
           {/* Tags */}
           {virtualServer.tags && virtualServer.tags.length > 0 && (

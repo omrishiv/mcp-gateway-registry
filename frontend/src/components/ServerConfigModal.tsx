@@ -13,6 +13,13 @@ interface ServerConfigModalProps {
   isOpen: boolean;
   onClose: () => void;
   onShowToast?: (message: string, type: 'success' | 'error') => void;
+  /**
+   * Resource type for the bound-token mint. Callers pass
+   * 'virtual_server' when opening this modal for a virtual server
+   * or 'server' (the default) for a regular MCP
+   * server. Used to build the `resource` field on /api/tokens/generate.
+   */
+  resourceType?: 'server' | 'virtual_server';
 }
 
 const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
@@ -20,6 +27,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
   isOpen,
   onClose,
   onShowToast,
+  resourceType = 'server',
 }) => {
   const [selectedIDE, setSelectedIDE] = useState<IDE>('cursor');
   const [jwtToken, setJwtToken] = useState<string | null>(null);
@@ -50,10 +58,14 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     setTokenLoading(true);
     setTokenError(null);
     try {
-      const response = await axios.post('/api/tokens/generate', {
-        description: 'Generated for MCP configuration',
+      const body: Record<string, unknown> = {
+        description: `Generated for MCP configuration (${server.name})`,
         expires_in_hours: 8,
-      }, {
+      };
+      if (server.path) {
+        body.resource = { type: resourceType, id: server.path };
+      }
+      const response = await axios.post('/api/tokens/generate', body, {
         headers: {
           'Content-Type': 'application/json',
         },

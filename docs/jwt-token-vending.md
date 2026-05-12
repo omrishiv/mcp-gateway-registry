@@ -350,6 +350,59 @@ except jwt.InvalidTokenError:
 - **Risk**: Intercepted tokens used maliciously
 - **Mitigation**: HTTPS enforcement, short token lifetimes, unique token IDs
 
+## Resource-Bound Tokens
+
+By default, a generated JWT is **user-kind**: it carries the user's full OAuth scope set and can reach any server, agent, or skill the scope allows. For long-lived tokens held by agents or CI pipelines, that's often broader trust than the workflow actually needs. Resource-bound tokens narrow the trust to a single resource.
+
+### Two token kinds
+
+| Kind | JWT `token_kind` claim | Scope |
+|------|------------------------|-------|
+| User | `"user"` | Everything the user's scopes permit (today's behavior). |
+| Resource-bound | `"resource"` plus `resource_type` + `resource_id` claims | One specific `(type, id)` pair only. Mismatched requests are rejected with 403 at the nginx edge. |
+
+### Requesting a resource-bound token
+
+Include an optional `resource` object in the `/api/tokens/generate` body:
+
+```json
+{
+  "description": "CI token for the code-reviewer agent",
+  "expires_in_hours": 8,
+  "resource": {
+    "type": "agent",
+    "id": "code-reviewer"
+  }
+}
+```
+
+- `type` must be one of `server`, `virtual_server`, `agent`, `skill`.
+- `id` is the resource path or slug. Leading and trailing slashes are normalized; `..`, percent-encoding, and control characters are rejected.
+- The registry refuses to mint a binding for a resource the user cannot currently access — a bound token can never grant more than the user already had.
+
+In the web UI, each resource detail modal (server / virtual server / agent / skill) has a **Get bound token** button that fills in the `resource` field automatically. The sidebar "Get JWT Token" and the standalone Token Generation page continue to produce user-kind tokens.
+
+### Enforcement at the edge
+
+The nginx `auth_request /validate` subrequest reads `token_kind` from the JWT claims:
+
+- **User tokens** behave as they do today.
+- **Resource tokens** are checked against the request URL:
+  1. If `X-Original-URL` is missing, the request is rejected (fail-closed).
+  2. The request path is matched against a short allow-list (`/api/auth/me` introspection) — allowed.
+  3. The request path is matched against a deny-list of escalation endpoints (`/api/tokens/*`, `/api/admin/*`, `/api/search/*`, `/api/federation/*`, `/api/config/*`, `/api/peers/*`, `/api/registry/*`, other `/api/auth/*`) — rejected.
+  4. Otherwise, the URL is classified into `(resource_type, resource_id)` and must match the token's claims byte-for-byte after normalization.
+- Anything else: 403 with a generic error body (the specific binding is logged server-side but never sent to the client, so a leaked token cannot disclose which resource it was minted for).
+
+### `token_kind` is required on self-signed tokens
+
+Every JWT the gateway mints carries a `token_kind` claim (`"user"` or `"resource"`). A self-signed token **without** the claim is rejected by the edge with 403 — it is either an old artifact whose holder needs to re-mint, or a forgery attempt. External IdP tokens (Cognito, Keycloak, Entra, Okta, Auth0) and session cookies never carry `token_kind` by design and continue to flow through the unrestricted user-token path; only self-signed tokens are gated.
+
+### Operator notes
+
+- **Deploy ordering**: deploy the auth-server first (or simultaneously with the registry). If a new registry mints resource-bound tokens while an old auth-server is still serving `/validate`, the old instance will accept the `token_kind: "resource"` JWT as an ordinary user token — the binding is ignored until the auth-server upgrades. Prefer atomic replacement (single-task / blue-green).
+- **Token re-issue required after upgrade**: any self-signed token minted before the upgrade will be rejected by the new edge guard. Users should re-mint their tokens after the upgrade. Programmatic consumers need to either regenerate or fall back to re-authenticating through their IdP.
+
 ## Implementation Configuration
 
 ### Environment Variables

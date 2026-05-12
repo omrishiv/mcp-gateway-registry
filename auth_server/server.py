@@ -43,6 +43,7 @@ from providers.factory import get_auth_provider
 from pydantic import (
     BaseModel,
     Field,
+    StrictStr,
     field_validator,
 )
 
@@ -1018,6 +1019,75 @@ class TokenValidationResponse(BaseModel):
     username: str | None = None
 
 
+# Resource-binding enforcement helpers. Single source of truth
+# lives in ``registry.auth.resource_binding``; both the registry's pre-mint
+# check and the auth-server's /validate guard call the same functions so
+# they can never disagree on what is blocked or how a URL classifies.
+from registry.auth.resource_binding import (
+    RESOURCE_ID_CLAIM,
+    RESOURCE_TYPE_CLAIM,
+    RESOURCE_TYPES,
+    TOKEN_KIND_CLAIM,
+    ResourceType,
+    TokenKind,
+    check_resource_token_allowed,
+    classify_request_url,
+    is_resource_token_introspection_path,
+    normalize_resource_id,
+)
+
+# String identifier used in ``validation_result['method']`` for tokens
+# minted and verified by this server (as opposed to external IdP tokens
+# like Cognito/Keycloak). Used by the resource-binding enforcement block
+# to scope the legacy-token deprecation warning to our own tokens only.
+# Centralized so a future rename of the value cannot silently break the
+# warning gating.
+AUTH_METHOD_SELF_SIGNED: str = "self_signed"  # nosec B105 - identifier, not a credential
+
+
+class ResourceBinding(BaseModel):
+    """Identifies a single resource that a JWT should be bound to.
+
+    A resource-bound token is scoped to exactly one (type, id) pair. The auth
+    server refuses to mint a binding for a resource the user cannot access,
+    and the edge guards refuse requests where the token's binding does not
+    match the resource being accessed.
+    """
+
+    type: ResourceType = Field(
+        ..., description="Resource type. One of: " + ", ".join(RESOURCE_TYPES)
+    )
+    # StrictStr refuses non-string input (int, bool, list) rather than
+    # Pydantic v2's default lax coercion, which would silently turn
+    # ``{"id": 123}`` into ``"123"``. Resource ids are compared
+    # byte-for-byte against URL paths at the edge; a coerced numeric id
+    # would silently mint a token nobody can actually use.
+    id: StrictStr = Field(
+        ..., min_length=1, description="Resource identifier (path or slug)"
+    )
+
+    @field_validator("id")
+    @classmethod
+    def _normalize_id(cls, v: str) -> str:
+        # Reject path traversal, URL-encoded payloads, and control
+        # characters (null byte, CR, LF, tabs, etc.) before any
+        # normalization. Control characters in particular can cause
+        # truncation in C-backed URL parsers downstream and should never
+        # appear in a legitimate resource id.
+        if ".." in v or "%" in v:
+            raise ValueError(
+                "Resource id must not contain '..' or percent-encoded characters"
+            )
+        if any(ord(c) < 0x20 or ord(c) == 0x7F for c in v):
+            raise ValueError("Resource id must not contain control characters")
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("Resource id cannot be empty")
+        # Delegate to the shared normalizer so mint-time and compare-time
+        # canonicalize identically.
+        return normalize_resource_id(stripped)
+
+
 class GenerateTokenRequest(BaseModel):
     """Request model for token generation"""
 
@@ -1025,6 +1095,7 @@ class GenerateTokenRequest(BaseModel):
     requested_scopes: list[str] = []
     expires_in_hours: int = DEFAULT_TOKEN_LIFETIME_HOURS
     description: str | None = None
+    resource: ResourceBinding | None = None
 
 
 class GenerateTokenResponse(BaseModel):
@@ -1297,7 +1368,7 @@ class SimplifiedCognitoValidator:
 
             return {
                 "valid": True,
-                "method": "self_signed",
+                "method": AUTH_METHOD_SELF_SIGNED,
                 "data": claims,
                 "client_id": claims.get("client_id", "user-generated"),
                 "username": claims.get("sub", ""),
@@ -1961,6 +2032,181 @@ async def validate_request(request: Request):
         else:
             logger.debug("No server information available, skipping scope validation")
 
+        # --- Resource-bound token enforcement ---
+        # Resource-bound tokens carry the claims `token_kind: "resource"`,
+        # `resource_type`, and `resource_id`. At the edge we:
+        #   1. Refuse to let a resource-bound token reach endpoints that
+        #      could escalate or bypass the binding
+        #      (/api/tokens/generate, /api/admin/*, /api/search/*).
+        #   2. Require the claims to match the (resource_type, resource_id)
+        #      parsed from the request URL. Mismatch = 403.
+        #
+        # Every self-signed token this server mints since carries
+        # a ``token_kind`` claim. Self-signed tokens WITHOUT the claim are
+        # either artifacts that outlived their deployment or forged
+        # attempts — neither is acceptable, so we reject hard.
+        #
+        # External IdP tokens (Cognito, Keycloak, Entra, Okta, Auth0) and
+        # session-cookie authentication do NOT produce a self-signed JWT;
+        # their ``validation_result["data"]`` does not contain
+        # ``token_kind`` by design, and they flow through the
+        # ``token_kind is None`` branch as unrestricted user tokens. The
+        # rejection therefore gates on ``validation_method`` being the
+        # self-signed method specifically — an external-IdP request without
+        # a ``token_kind`` claim is the normal, permanent behavior, not a
+        # legacy state.
+        token_claims = validation_result.get("data") or {}
+        token_kind = token_claims.get(TOKEN_KIND_CLAIM)
+        validation_method = validation_result.get("method")
+        if token_kind is None:
+            if validation_method == AUTH_METHOD_SELF_SIGNED:
+                logger.warning(
+                    "Self-signed token without token_kind claim rejected "
+                    f"for user {hash_username(validation_result.get('username') or '')} "
+                    "(token_kind is required on every self-signed token)"
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        "Token is missing the required token_kind claim. "
+                        "Re-issue the token from the current gateway."
+                    ),
+                    headers={"Connection": "close"},
+                )
+            # External IdP / session / static / federation: no token_kind
+            # and never has been — treat as user token, no warning.
+        elif token_kind == TokenKind.USER:
+            # Explicit no-op branch for clarity: user-kind tokens have no
+            # resource binding and reach the same enforcement path as a
+            # legacy/external-IdP token.
+            pass
+        elif token_kind == TokenKind.RESOURCE:
+            claim_type = token_claims.get(RESOURCE_TYPE_CLAIM)
+            claim_id = token_claims.get(RESOURCE_ID_CLAIM)
+            # Strip whitespace before the truthy check so a whitespace-only
+            # claim (e.g. ``resource_id: "   "``) is reported as "missing
+            # required claims" rather than giving a misleading
+            # "does not permit this request" error downstream.
+            if (
+                not isinstance(claim_type, str)
+                or not claim_type.strip()
+                or not isinstance(claim_id, str)
+                or not claim_id.strip()
+            ):
+                logger.warning(
+                    f"Resource token for {hash_username(validation_result.get('username') or '')} "
+                    "missing resource_type or resource_id claim"
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail="Resource-bound token is missing required claims",
+                    headers={"Connection": "close"},
+                )
+
+            # Fail-closed if the edge did not forward the original URL.
+            # Without it, we cannot determine which resource was requested,
+            # so a resource-bound token must not be accepted blindly.
+            if not original_url:
+                logger.warning(
+                    f"Resource token for {hash_username(validation_result.get('username') or '')} "
+                    "rejected: X-Original-URL header missing from subrequest"
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail="Resource-bound token cannot be validated: request URL unavailable",
+                    headers={"Connection": "close"},
+                )
+
+            request_path = urlparse(original_url).path
+            if not check_resource_token_allowed(
+                request_path, root_path=REGISTRY_ROOT_PATH
+            ):
+                logger.warning(
+                    f"Resource token for {hash_username(validation_result.get('username') or '')} "
+                    f"rejected at blocked endpoint: {original_url}"
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail="Resource-bound tokens cannot access this endpoint",
+                    headers={"Connection": "close"},
+                )
+
+            # Introspection endpoints on the allow-list (e.g. /api/auth/me)
+            # are reachable by every token but do not classify to any
+            # (type, id) — they are utility endpoints, not resources.
+            # Accept here, before classification, so resource-bound tokens
+            # can verify themselves without tripping the "unclassifiable"
+            # check below.
+            if is_resource_token_introspection_path(
+                request_path, root_path=REGISTRY_ROOT_PATH
+            ):
+                logger.info(
+                    f"Resource-bound token on introspection endpoint: {request_path}"
+                )
+            else:
+                classified = classify_request_url(
+                    request_path, root_path=REGISTRY_ROOT_PATH
+                )
+                if classified is None:
+                    logger.warning(
+                        f"Resource token for "
+                        f"{hash_username(validation_result.get('username') or '')} "
+                        f"could not classify request URL: {original_url}"
+                    )
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Resource-bound token cannot be used on this endpoint",
+                        headers={"Connection": "close"},
+                    )
+
+                req_type, req_id = classified
+                # Compare normalized ids so the claim "foo" matches URL
+                # "/foo". ResourceType inherits from str so req_type ==
+                # claim_type compares string values.
+                # Use the same normalizer mint-side uses, so the claim is
+                # canonicalized identically on both ends (strips leading
+                # AND trailing slashes). Mint-side normalization guarantees
+                # the claim is already canonical, but re-normalizing at
+                # the edge keeps the two paths symmetric and prevents a
+                # future claim that slips through without canonicalization
+                # from silently failing comparison.
+                normalized_claim_id = normalize_resource_id(claim_id or "")
+                if req_type.value != claim_type or req_id != normalized_claim_id:
+                    # Keep the specific binding details in the server log
+                    # for operational debugging, but return a generic
+                    # client-facing error so a leaked token does not
+                    # disclose the exact resource it was issued for.
+                    logger.warning(
+                        "Resource token binding mismatch for user "
+                        f"{hash_username(validation_result.get('username') or '')}: "
+                        f"claim={claim_type}:{normalized_claim_id}, "
+                        f"request={req_type}:{req_id}"
+                    )
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Resource-bound token does not permit this request",
+                        headers={"Connection": "close"},
+                    )
+                logger.info(
+                    f"Resource-bound token match: {claim_type}:{normalized_claim_id}"
+                )
+        else:
+            # Unknown ``token_kind`` value. Only this code is supposed to
+            # mint self-signed tokens (and it emits "user" or "resource").
+            # Anything else came from a forged claim (the attacker would
+            # need SECRET_KEY) or a future feature that has not yet been
+            # taught how to enforce. Fail-closed so the failure mode of
+            # an unexpected claim is "denied", not "silently admin".
+            logger.warning(
+                f"Unknown token_kind {token_kind!r} rejected for user "
+                f"{hash_username(validation_result.get('username') or '')}"
+            )
+            raise HTTPException(
+                status_code=403,
+                detail="Token has an unrecognized token_kind claim",
+                headers={"Connection": "close"},
+            )
+
         # Prepare JSON response data
         response_data = {
             "valid": True,
@@ -2306,7 +2552,25 @@ async def generate_user_token(
                 "iat": current_time,
                 "exp": current_time + expires_in,
                 "description": request.description,
+                TOKEN_KIND_CLAIM: (
+                    TokenKind.RESOURCE.value
+                    if request.resource
+                    else TokenKind.USER.value
+                ),
             }
+
+            # For resource-bound tokens, add resource_type and resource_id
+            # claims. Authorization that the user can reach this resource is
+            # expected to have already been performed by the caller (registry)
+            # before this endpoint was invoked (see
+            # registry/api/server_routes.py::/tokens/generate).
+            if request.resource:
+                jwt_claims[RESOURCE_TYPE_CLAIM] = request.resource.type.value
+                jwt_claims[RESOURCE_ID_CLAIM] = request.resource.id
+                logger.info(
+                    f"Minting resource-bound token for user '{hash_username(username)}': "
+                    f"type={request.resource.type.value}, id={request.resource.id}"
+                )
 
             # Sign the JWT with our SECRET_KEY
             access_token = jwt.encode(jwt_claims, SECRET_KEY, algorithm="HS256")

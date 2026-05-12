@@ -465,6 +465,7 @@ const VirtualServerCard: React.FC<VirtualServerCardProps> = ({
         isOpen={showConfig}
         onClose={() => setShowConfig(false)}
         onShowToast={onShowToast}
+        resourceType="virtual_server"
       />
     </>
   );
