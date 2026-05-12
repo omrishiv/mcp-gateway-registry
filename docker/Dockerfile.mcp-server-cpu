@@ -53,17 +53,6 @@ RUN uv sync --locked --no-dev
 USER root
 COPY --chown=appuser:appuser ${SERVER_DIR:-.}/ /app/
 
-# Copy registry module for embeddings support (only when building from root with SERVER_DIR set)
-COPY --chown=root:root . /tmp/build-context/
-RUN if [ -d /tmp/build-context/registry ]; then \
-        cp -r /tmp/build-context/registry /app/registry && \
-        chown -R appuser:appuser /app/registry && \
-        echo "Registry module copied successfully"; \
-    else \
-        echo "Registry module not found in build context (expected for non-mcpgw servers)"; \
-    fi && \
-    rm -rf /tmp/build-context
-
 USER appuser
 
 # Expose default port (can be overridden by environment variable)

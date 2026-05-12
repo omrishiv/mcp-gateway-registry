@@ -363,11 +363,6 @@ mcpgw:
   app:
     replicas: 1
 
-    # Embeddings configuration
-    embeddingsProvider: sentence-transformers
-    embeddingsModelName: all-MiniLM-L6-v2
-    embeddingsModelDimensions: "384"
-
   nodeSelector: {}
 
   # Extra env vars / envFrom sources appended to the mcpgw container.

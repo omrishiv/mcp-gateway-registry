@@ -38,16 +38,6 @@ app:
   # Uncomment to use a specific key:
   # secretKey: "your-secure-key-here"
 
-  # Embeddings configuration
-  embeddingsProvider: sentence-transformers
-  embeddingsModelName: all-MiniLM-L6-v2
-  embeddingsModelDimensions: "384"
-  embeddingsApiKey: ""
-  embeddingsApiKeyExistingSecret: ""  # If set, read EMBEDDINGS_API_KEY from this K8s secret instead of embeddingsApiKey
-  embeddingsApiKeyExistingSecretKey: "EMBEDDINGS_API_KEY"  # Key within the existing secret
-  embeddingsApiBase: ""
-  embeddingsAwsRegion: us-east-1
-
   # GitHub private repo auth (SKILL.md fetching)
   githubPat: ""
   githubPatExistingSecret: ""  # If set, read GITHUB_PAT from this K8s secret
@@ -120,9 +110,8 @@ extraEnv: []
 # ConfigMap/Secret contents. Consequences:
 #   - Keys in your source will SILENTLY OVERRIDE chart-managed envFrom
 #     entries (within envFrom, last source wins). Do NOT include keys
-#     like SECRET_KEY, PORT, REGISTRY_BASE_URL, EMBEDDINGS_API_KEY, or
-#     any EMBEDDINGS_* / FEDERATION_* key — shadowing them breaks
-#     service wiring with no error.
+#     like SECRET_KEY, PORT, REGISTRY_BASE_URL, or any FEDERATION_* key
+#     — shadowing them breaks service wiring with no error.
 #   - Chart-managed `env:` entries (e.g. HOST) always win over anything
 #     in extraEnvFrom — K8s rules: explicit env: beats envFrom regardless
 #     of order.

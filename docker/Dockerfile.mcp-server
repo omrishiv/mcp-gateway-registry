@@ -1,6 +1,7 @@
-# Generic MCP Server Dockerfile for servers in the servers/ directory
-# Each server must have pyproject.toml and server.py
-# Build context can be either the server directory or repo root (for servers needing registry module)
+# Generic MCP Server Dockerfile for servers in the servers/ directory.
+# Each server must have pyproject.toml, uv.lock, and server.py.
+# Build context can be either the server directory directly, or the repo
+# root with --build-arg SERVER_DIR=servers/<name>.
 FROM python:3.14-slim
 
 ENV PYTHONUNBUFFERED=1 \
@@ -54,19 +55,6 @@ RUN uv sync --locked --no-dev
 # Copy source last (busts frequently; the cached install layer above is preserved).
 USER root
 COPY --chown=appuser:appuser ${SERVER_DIR:-.}/ /app/
-
-# Copy registry module for embeddings support (only when building from root with SERVER_DIR set)
-# This is required for servers that use the embeddings client (like mcpgw)
-# Use a conditional copy that won't fail if registry doesn't exist
-COPY --chown=root:root . /tmp/build-context/
-RUN if [ -d /tmp/build-context/registry ]; then \
-        cp -r /tmp/build-context/registry /app/registry && \
-        chown -R appuser:appuser /app/registry && \
-        echo "Registry module copied successfully"; \
-    else \
-        echo "Registry module not found in build context (expected for non-mcpgw servers)"; \
-    fi && \
-    rm -rf /tmp/build-context
 
 USER appuser
 

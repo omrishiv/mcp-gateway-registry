@@ -1,7 +1,9 @@
-# Lightweight MCP Server Dockerfile for simple servers in the servers/ directory
-# Each server must have pyproject.toml and server.py
-# Use this for servers that don't need PyTorch or the registry module (e.g., currenttime, fininfo)
-# For servers needing embeddings/sentence-transformers, use Dockerfile.mcp-server instead
+# Lightweight MCP Server Dockerfile for simple servers in the servers/ directory.
+# Each server must have pyproject.toml, uv.lock, and server.py.
+# Skips git + build-essential; use this when none of the server's locked
+# dependencies need to compile from source. For servers that do (e.g.
+# anything pulling a sdist without a wheel for the build target), use
+# Dockerfile.mcp-server.
 FROM python:3.14-slim
 
 # Build arg for server directory (when building from repo root)

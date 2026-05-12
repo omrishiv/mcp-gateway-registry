@@ -8,7 +8,7 @@ Users must not supply these via .Values.extraEnv. The list is the union of:
     per-chart secrets/configmaps.
 
 Sections (in order below):
-  1. env: block (HOST, EMBEDDINGS_*, GITHUB_*)
+  1. env: block (HOST, GITHUB_*)
   2. mcpgw per-chart secret
   3. shared-secret (stack-level)
 
@@ -17,18 +17,12 @@ inject one of these via extraEnv gets a clear template-render error.
 */}}
 {{- define "mcpgw.reservedEnvNames" -}}
 - HOST
-- EMBEDDINGS_API_KEY
 - GITHUB_APP_ID
 - GITHUB_APP_INSTALLATION_ID
 - GITHUB_EXTRA_HOSTS
 - GITHUB_API_BASE_URL
 - GITHUB_PAT
 - GITHUB_APP_PRIVATE_KEY
-- EMBEDDINGS_API_BASE
-- EMBEDDINGS_AWS_REGION
-- EMBEDDINGS_MODEL_DIMENSIONS
-- EMBEDDINGS_MODEL_NAME
-- EMBEDDINGS_PROVIDER
 - PORT
 - REGISTRY_BASE_URL
 - SECRET_KEY
