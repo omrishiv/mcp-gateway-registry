@@ -454,7 +454,7 @@ async def validate_user_can_bind_resource(
                 agent_service.get_agent_info(f"/{normalized_id}"),
                 timeout=_BIND_CHECK_LOOKUP_TIMEOUT_SECONDS,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning(
                 "Timed out looking up agent %s during resource-binding check; "
                 "denying bind request",
@@ -485,7 +485,7 @@ async def validate_user_can_bind_resource(
                 get_skill_service().get_skill(f"/{normalized_id}"),
                 timeout=_BIND_CHECK_LOOKUP_TIMEOUT_SECONDS,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning(
                 "Timed out looking up skill %s during resource-binding check; "
                 "denying bind request",

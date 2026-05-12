@@ -1027,8 +1027,8 @@ from registry.auth.resource_binding import (
     RESOURCE_ID_CLAIM,
     RESOURCE_TYPE_CLAIM,
     RESOURCE_TYPES,
-    ResourceType,
     TOKEN_KIND_CLAIM,
+    ResourceType,
     TokenKind,
     check_resource_token_allowed,
     classify_request_url,
@@ -2088,10 +2088,8 @@ async def validate_request(request: Request):
             # required claims" rather than giving a misleading
             # "does not permit this request" error downstream.
             if (
-                not claim_type
-                or not isinstance(claim_type, str)
+                not isinstance(claim_type, str)
                 or not claim_type.strip()
-                or not claim_id
                 or not isinstance(claim_id, str)
                 or not claim_id.strip()
             ):

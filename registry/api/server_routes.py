@@ -17,9 +17,9 @@ from ..auth.internal import validate_internal_auth
 from ..constants import VALID_AUTH_SCHEMES
 from ..core.config import DeploymentMode, settings
 from ..core.schemas import AuthCredentialUpdateRequest
+from ..services.registration_gate_service import check_registration_gate
 from ..services.security_scanner import security_scanner_service
 from ..services.server_service import server_service
-from ..services.registration_gate_service import check_registration_gate
 from ..services.webhook_service import send_registration_webhook
 from ..utils.credential_encryption import encrypt_credential_in_server_dict
 from ..utils.metadata import flatten_metadata_to_text

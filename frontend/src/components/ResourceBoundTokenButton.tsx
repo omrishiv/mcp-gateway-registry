@@ -57,8 +57,14 @@ const ResourceBoundTokenButton: React.FC<ResourceBoundTokenButtonProps> = ({
         throw new Error('No access_token in response');
       }
       setToken(accessToken);
-    } catch (err: any) {
-      setError(err.response?.data?.detail || err.message || 'Failed to generate token');
+    } catch (err: unknown) {
+      if (axios.isAxiosError(err)) {
+        setError(err.response?.data?.detail || err.message || 'Failed to generate token');
+      } else if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError('Failed to generate token');
+      }
     } finally {
       setLoading(false);
     }
