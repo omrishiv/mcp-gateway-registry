@@ -71,19 +71,17 @@ resources:
     cpu: 1
     memory: 2Gi
 
-# Ingress configuration
-ingress:
-  enabled: false
-  className: alb
-  hostname: ""
-  annotations: {}
-  tls: false
-  # Routing mode: "subdomain" or "path"
-  # - subdomain: mcpgw.domain.com
-  # - path: domain.com/mcpgw
-  routingMode: subdomain
-  # Path prefix when using path-based routing (default: /mcpgw)
-  path: /mcpgw
+# mcpgw does NOT expose a public ingress. External MCP clients reach
+# its tools via the registry's nginx reverse proxy, which dynamically
+# generates a `location /airegistry-tools/` block from the registered
+# server record seeded at registry startup
+# (see registry/services/demo_servers_init.py and
+# cli/examples/airegistry.json). Traffic flow:
+#   client → registry ingress → registry pod nginx
+#          → location /airegistry-tools/ { proxy_pass http://mcpgw-server:8003/; }
+#          → mcpgw pod
+# The Service defined in templates/service.yaml is the only external
+# surface mcpgw needs — it's what the registry nginx resolves to.
 
 # Extra environment variables appended to the container's `env:` list.
 # Uses the native Kubernetes EnvVar schema, so `valueFrom` is supported.
