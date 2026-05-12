@@ -1663,6 +1663,75 @@ These guidelines ensure consistent, maintainable, and modern Python code. Key pr
 - **Type Safety**: Clear type annotations with modern syntax
 
 Always prioritize simplicity and clarity over cleverness.
+
+## Deployment Surface Customization
+
+### Helm Charts
+
+Helm charts support `extraEnv` for injecting custom environment variables. The reserved names are read from `charts/*/reserved-env-names.txt` files using `.Files.Get` and `splitList` functions.
+
+**Example:**
+```yaml
+extraEnv:
+  - name: MY_CUSTOM_VAR
+    value: "my-value"
+  - name: MY_FLAG
+    value: "true"
+```
+
+**Reserved Names:** The following variables are managed by the deployment and cannot be overridden:
+- `DEPLOYMENT_MODE`, `REGISTRY_MODE`, `SECRET_KEY`, etc.
+
+See `charts/*/reserved-env-names.txt` for the complete list per service.
+
+### Docker Compose
+
+For Docker Compose deployments, you can inject custom environment variables by creating files in `extra_env/` at the repo root (next to `.env`):
+
+```bash
+# Create the extra_env directory at the repo root
+mkdir -p extra_env
+
+# Create your environment file
+cat > extra_env/registry.env << EOF
+# Custom environment variables for the registry
+MY_FEATURE_FLAG=true
+CUSTOM_TIMEOUT=30
+EOF
+
+# Start the stack
+./build_and_run.sh
+```
+
+The `env_file:` entries are configured for `registry.env`, `auth-server.env`, and `mcpgw.env` with `required: false`, so missing files are allowed.
+
+**Overriding the path:** Both the preflight validator and the compose files resolve the extra_env directory from `$MCP_EXTRA_ENV_DIR`, falling back to `./extra_env` (relative to the repo root) when unset. Export `MCP_EXTRA_ENV_DIR` before running `build_and_run.sh` (or `docker compose` directly) to point both surfaces at an alternative location — e.g. a tmpfs for local testing or `/etc/mcp-gateway/extra_env` for a shared host deployment.
+
+**Compose version requirement:** The `env_file: [{ path, required }]` object form requires **Docker Compose v2.24 or newer** (Docker Desktop 4.27+) or **Podman Compose v1.0.7+**. Older versions silently ignore the `required` flag and will error out if the referenced file does not exist. Check with `docker compose version` or `podman-compose --version` before deploying.
+
+**Preflight Validation:** Before starting containers, `build_and_run.sh` validates that no environment variable in your extra_env files conflicts with chart-managed reserved names. If a collision is found, deployment fails with a clear error message pointing to the exact line number and file. The validator also warns on malformed lines (missing `=` or empty keys), normalizes names to upper-case before comparing (so `secret_key=foo` is still caught), and logs the per-service custom-variable count at startup. The same validator lives at `scripts/validate-extra-env.sh` and can be run standalone for CI or pre-commit use.
+
+### Terraform / ECS
+
+For Terraform/ECS deployments, add `*_extra_env` variables to your `terraform.tfvars`:
+
+```hcl
+registry_extra_env = [
+  { name = "MY_FEATURE_FLAG", value = "true" },
+  { name = "CUSTOM_TIMEOUT", value = "30" },
+]
+
+auth_server_extra_env = [
+  { name = "MY_AUTH_VAR", value = "value" },
+]
+
+mcpgw_extra_env = [
+  { name = "MY_MCPGW_VAR", value = "test" },
+]
+```
+
+**Validation:** Terraform validates that none of the names conflict with reserved variables at `terraform plan` time using `file()` and `contains()` functions.
+
 ## Federated Registry Implementation Workflow
 
 When implementing the federated registry feature, follow this 3-agent workflow for each sub-feature:

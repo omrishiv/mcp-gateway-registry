@@ -494,6 +494,24 @@ else
     log "WARNING: scripts/prepare-log-dirs.sh not found or not executable; skipping log-directory prep"
 fi
 
+# Preflight validation for extra_env files (Issue #1000).
+# Source scripts/validate-extra-env.sh so the same collision logic is shared
+# with CI and pre-commit hooks.
+validate_predeployment() {
+    log "Running predeployment validations..."
+
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    # shellcheck source=scripts/validate-extra-env.sh
+    source "$script_dir/scripts/validate-extra-env.sh"
+
+    validate_extra_env_all || exit 1
+
+    log "Predeployment validations passed."
+}
+
+validate_predeployment
+
 # Start metrics service first to generate API keys
 log "Starting metrics service first..."
 $COMPOSE_CMD $COMPOSE_FILES up -d metrics-service || handle_error "Failed to start metrics service"
