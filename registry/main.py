@@ -1069,7 +1069,7 @@ if __name__ == "__main__":
 
     uvicorn.run(
         "registry.main:app",
-        host=os.getenv("REGISTRY_HOST", "127.0.0.1"),  # nosec B104
+        host=settings.bind_host,  # nosec B104 - dual-stack IPv4+IPv6 by default
         port=7860,
         reload=True,
         log_level="info",

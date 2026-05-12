@@ -40,6 +40,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("deployment_mode", "Deployment Mode", False),
             ("registry_mode", "Registry Mode", False),
             ("nginx_updates_enabled", "Nginx Updates Enabled", False),
+            ("bind_host", "Bind Host", False),
             ("show_servers_tab", "Show MCP Servers Tab", False),
             ("show_virtual_servers_tab", "Show Virtual MCP Servers Tab", False),
             ("show_skills_tab", "Show Skills Tab", False),

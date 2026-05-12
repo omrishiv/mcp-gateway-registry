@@ -14,8 +14,3 @@ export const getBaseURL = (): string => {
 export const getBasename = (): string => {
   return getBaseURL() || '/';
 };
-
-export const apiUrl = (path: string): string => {
-  const normalized = path.startsWith('/') ? path : `/${path}`;
-  return `${getBaseURL()}${normalized}`;
-};

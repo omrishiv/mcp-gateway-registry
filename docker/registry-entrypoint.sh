@@ -279,11 +279,17 @@ export EMBEDDINGS_PROVIDER=$EMBEDDINGS_PROVIDER
 export EMBEDDINGS_MODEL_NAME=$EMBEDDINGS_MODEL_NAME
 export EMBEDDINGS_MODEL_DIMENSIONS=$EMBEDDINGS_MODEL_DIMENSIONS
 
+# Default binds to all IPv4 interfaces inside the container. Operators who
+# need IPv6 dual-stack can set BIND_HOST=:: — but see docs/TELEMETRY.md for
+# the net.ipv6.bindv6only=0 host-side requirement.
+BIND_HOST="${BIND_HOST:-0.0.0.0}"
+
 echo "Starting MCP Registry in the background..."
 cd /app
 source /app/.venv/bin/activate
-uvicorn registry.main:app --host 0.0.0.0 --port 7860 --proxy-headers --forwarded-allow-ips='*' &
-echo "MCP Registry started."
+uvicorn registry.main:app --host "$BIND_HOST" --port 7860 --proxy-headers --forwarded-allow-ips='*' &
+UVICORN_PID=$!
+echo "MCP Registry started (PID=$UVICORN_PID, host=$BIND_HOST)."
 
 # Wait for nginx config to be generated (check that placeholders are replaced)
 echo "Waiting for nginx configuration to be generated..."

@@ -358,6 +358,12 @@ variable "session_cookie_domain" {
   default     = ""
 }
 
+variable "bind_host" {
+  description = "Network bind address for registry and gateway services. Default '0.0.0.0' (IPv4) works on all hosts. Set to '::' only for IPv6-only deployments (requires net.ipv6.bindv6only=0 on the host)."
+  type        = string
+  default     = "0.0.0.0"
+}
+
 variable "oauth_store_tokens_in_session" {
   description = "Store OAuth provider tokens in session cookies. Set to false to avoid cookie size limits with large tokens (e.g., Entra ID). Tokens are not used functionally."
   type        = bool

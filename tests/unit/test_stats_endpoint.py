@@ -377,14 +377,29 @@ class TestStatsEndpoint:
     """Tests for /api/stats endpoint."""
 
     @pytest.mark.asyncio
-    async def test_stats_endpoint_success(self, mock_repositories):
-        """Test successful stats endpoint call."""
+    async def test_stats_endpoint_success_when_authenticated(self, mock_repositories):
+        """Authenticated caller sees full stats payload."""
         import registry.api.system_routes
+        from registry.auth.dependencies import nginx_proxied_auth
 
         # Reset cache
         registry.api.system_routes._stats_cache = None
         registry.api.system_routes._stats_cache_time = None
         registry.api.system_routes._server_start_time = datetime.now(UTC)
+
+        user_context = {
+            "username": "alice",
+            "groups": ["mcp-registry-user"],
+            "scopes": [],
+            "auth_method": "oauth2",
+            "provider": "keycloak",
+            "accessible_servers": [],
+            "accessible_services": [],
+            "accessible_agents": [],
+            "ui_permissions": {},
+            "can_modify_servers": False,
+            "is_admin": False,
+        }
 
         with patch(
             "registry.repositories.factory.get_server_repository",
@@ -404,12 +419,13 @@ class TestStatsEndpoint:
 
                         from registry.main import app
 
-                        client = TestClient(app)
+                        app.dependency_overrides[nginx_proxied_auth] = lambda: user_context
+                        try:
+                            client = TestClient(app)
+                            response = client.get("/api/stats")
+                        finally:
+                            app.dependency_overrides.pop(nginx_proxied_auth, None)
 
-                        # Act
-                        response = client.get("/api/stats")
-
-                        # Assert
                         assert response.status_code == 200
                         data = response.json()
                         assert "uptime_seconds" in data
@@ -417,3 +433,26 @@ class TestStatsEndpoint:
                         assert "version" in data
                         assert "deployment_type" in data
                         assert "registry_stats" in data
+
+    def test_stats_endpoint_rejects_unauthenticated_callers(self):
+        """Unauthenticated callers must get 401, not an anonymous-logged 200.
+
+        Regression guard for the audit-anonymous bug: /api/stats previously
+        had no auth dependency and logged authenticated users as anonymous.
+        """
+        from registry.main import app
+
+        client = TestClient(app)
+        response = client.get("/api/stats")
+
+        assert response.status_code == 401
+
+    def test_telemetry_detection_rejects_unauthenticated_callers(self):
+        """Regression guard: /api/system/telemetry-detection now requires auth
+        for the same audit-attribution reason as /api/stats."""
+        from registry.main import app
+
+        client = TestClient(app)
+        response = client.get("/api/system/telemetry-detection")
+
+        assert response.status_code == 401
