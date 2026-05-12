@@ -6,7 +6,7 @@ import { useRegistryConfig } from '../hooks/useRegistryConfig';
 import useEscapeKey from '../hooks/useEscapeKey';
 import { getBaseURL } from '../utils/basePath';
 
-type IDE = 'cursor' | 'roo-code' | 'claude-code' | 'kiro';
+type IDE = 'cursor' | 'roo-code' | 'claude-code' | 'kiro' | 'goose';
 
 interface ServerConfigModalProps {
   server: Server;
@@ -211,6 +211,54 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     }
   }, [server.name, server.path, server.proxy_pass_url, server.mcp_endpoint, server.auth_scheme, server.auth_header_name, selectedIDE, isRegistryOnly, jwtToken]);
 
+  const generateGooseConfig = useCallback(() => {
+    const serverName = server.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+
+    let url: string;
+    if (server.mcp_endpoint) {
+      url = server.mcp_endpoint;
+    } else if (isRegistryOnly && server.proxy_pass_url) {
+      url = server.proxy_pass_url;
+    } else {
+      const baseUrl = `${window.location.origin}${getBaseURL()}`;
+      const cleanPath = server.path.replace(/\/+$/, '').replace(/^\/+/, '/');
+      url = `${baseUrl}${cleanPath}/mcp`;
+    }
+
+    const includeAuthHeaders = !isRegistryOnly;
+    const authToken = jwtToken || '[YOUR_GATEWAY_AUTH_TOKEN]';
+
+    const headerLines: string[] = [];
+    if (includeAuthHeaders) {
+      headerLines.push(`      X-Authorization: Bearer ${authToken}`);
+    }
+    if (server.auth_scheme && server.auth_scheme !== 'none') {
+      if (server.auth_scheme === 'bearer') {
+        headerLines.push(`      Authorization: Bearer [YOUR_SERVER_AUTH_TOKEN]`);
+      } else if (server.auth_scheme === 'api_key') {
+        const headerName = server.auth_header_name || 'X-API-Key';
+        headerLines.push(`      ${headerName}: [YOUR_API_KEY]`);
+      }
+    }
+
+    const lines = [
+      'extensions:',
+      `  ${serverName}:`,
+      `    name: ${serverName}`,
+      `    description: ${server.description}`,
+      `    type: streamable_http`,
+      `    uri: ${url}`,
+      `    enabled: true`,
+    ];
+    if (headerLines.length > 0) {
+      lines.push('    headers:');
+      lines.push(...headerLines);
+    }
+    lines.push('    timeout: 300');
+
+    return lines.join('\n');
+  }, [server.name, server.path, server.proxy_pass_url, server.mcp_endpoint, server.auth_scheme, server.auth_header_name, isRegistryOnly, jwtToken]);
+
   const generateClaudeCodeCommand = useCallback(() => {
     const serverName = server.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
 
@@ -267,6 +315,21 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
       onShowToast?.('Failed to copy configuration', 'error');
     }
   }, [generateMCPConfig, onShowToast]);
+
+  const copyGooseConfigToClipboard = useCallback(async () => {
+    try {
+      const configText = generateGooseConfig();
+      await navigator.clipboard.writeText(configText);
+
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+
+      onShowToast?.('Configuration copied to clipboard!', 'success');
+    } catch (error) {
+      console.error('Failed to copy to clipboard:', error);
+      onShowToast?.('Failed to copy configuration', 'error');
+    }
+  }, [generateGooseConfig, onShowToast]);
 
   const copyCommandToClipboard = useCallback(async () => {
     try {
@@ -404,7 +467,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
           <div className="bg-gray-50 dark:bg-gray-900 border dark:border-gray-700 rounded-lg p-4">
             <h4 className="font-medium text-gray-900 dark:text-white mb-3">Select your IDE/Tool:</h4>
             <div className="flex flex-wrap gap-2">
-              {(['cursor', 'roo-code', 'claude-code', 'kiro'] as IDE[]).map((ide) => (
+              {(['cursor', 'roo-code', 'claude-code', 'kiro', 'goose'] as IDE[]).map((ide) => (
                 <button
                   key={ide}
                   onClick={() => setSelectedIDE(ide)}
@@ -420,7 +483,9 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                     ? 'Roo Code'
                     : ide === 'claude-code'
                     ? 'Claude Code'
-                    : 'Kiro'}
+                    : ide === 'kiro'
+                    ? 'Kiro'
+                    : 'Goose'}
                 </button>
               ))}
             </div>
@@ -432,7 +497,9 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                 ? 'Roo Code'
                 : selectedIDE === 'claude-code'
                 ? 'Claude Code'
-                : 'Kiro'}{' '}
+                : selectedIDE === 'kiro'
+                ? 'Kiro'
+                : 'Goose'}{' '}
               integration
             </p>
           </div>
@@ -459,6 +526,35 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
               <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
                 Run this command in your terminal to add the MCP server to Claude Code.
               </p>
+            </div>
+          ) : selectedIDE === 'goose' ? (
+            <div className="space-y-2">
+              <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 mb-3">
+                <h4 className="font-medium text-blue-900 dark:text-blue-100 mb-2">Goose Configuration:</h4>
+                <p className="text-sm text-blue-800 dark:text-blue-200">
+                  Copy the YAML below and merge it into{' '}
+                  <code className="bg-blue-100 dark:bg-blue-800 px-1 rounded">~/.config/goose/config.yaml</code>{' '}
+                  under the <code className="bg-blue-100 dark:bg-blue-800 px-1 rounded">extensions:</code> key. If an{' '}
+                  <code className="bg-blue-100 dark:bg-blue-800 px-1 rounded">extensions:</code> block already exists, add this entry underneath it.
+                </p>
+              </div>
+              <div className="flex items-center justify-between">
+                <h4 className="font-medium text-gray-900 dark:text-white">Configuration YAML:</h4>
+                <button
+                  onClick={copyGooseConfigToClipboard}
+                  className={`flex items-center gap-2 px-3 py-2 text-white rounded-lg transition-colors duration-200 ${
+                    copied
+                      ? 'bg-green-700'
+                      : 'bg-green-600 hover:bg-green-700'
+                  }`}
+                >
+                  <ClipboardDocumentIcon className="h-4 w-4" />
+                  {copied ? 'Copied!' : 'Copy to Clipboard'}
+                </button>
+              </div>
+              <pre className="bg-gray-900 text-green-100 p-4 rounded-lg text-sm overflow-x-auto">
+                {generateGooseConfig()}
+              </pre>
             </div>
           ) : selectedIDE === 'kiro' ? (
             <div className="space-y-2">

@@ -60,7 +60,7 @@ spec:
             {{- end }}
           env:
             - name: HOST
-              value: 0.0.0.0
+              value: {{ .Values.app.bindHost | quote }}
             {{- if .Values.app.embeddingsApiKeyExistingSecret }}
             - name: EMBEDDINGS_API_KEY
               valueFrom:

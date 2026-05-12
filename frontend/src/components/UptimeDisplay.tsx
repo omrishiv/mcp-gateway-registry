@@ -2,10 +2,10 @@ import React, {
   useState,
   useEffect,
 } from 'react';
+import axios from 'axios';
 import {
   SystemStats,
 } from '../types/stats';
-import { apiUrl } from '../utils/basePath';
 
 
 /**
@@ -33,12 +33,8 @@ const UptimeDisplay: React.FC = () => {
   useEffect(() => {
     const fetchStats = async () => {
       try {
-        const response = await fetch(apiUrl('/api/stats'));
-        if (!response.ok) {
-          throw new Error('Failed to fetch stats');
-        }
-        const data = await response.json();
-        setStats(data);
+        const response = await axios.get<SystemStats>('/api/stats');
+        setStats(response.data);
         setError(false);
       } catch (err) {
         console.error('Error fetching stats:', err);
@@ -49,12 +45,8 @@ const UptimeDisplay: React.FC = () => {
     // Telemetry detection is cached server-side, so fetch once per mount.
     const fetchDetection = async () => {
       try {
-        const response = await fetch(apiUrl('/api/system/telemetry-detection'));
-        if (!response.ok) {
-          return;
-        }
-        const data = await response.json();
-        setDetection(data);
+        const response = await axios.get<TelemetryDetection>('/api/system/telemetry-detection');
+        setDetection(response.data);
       } catch (err) {
         console.error('Error fetching telemetry detection:', err);
       }

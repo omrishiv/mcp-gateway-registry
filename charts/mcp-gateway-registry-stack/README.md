@@ -224,14 +224,15 @@ global:
     routingMode: path
     paths:
       registry: /registry   # Customize as needed (e.g., /api)
-      mcpgw: /mcpgw         # Customize as needed
 ```
 
-Only the registry and mcpgw services expose public ingresses. auth-server
-and Keycloak stay on their ClusterIP Services and are fronted by the
-registry pod's in-cluster nginx reverse proxy. The Keycloak path
-(`/keycloak`) is pinned by the nginx config — do NOT set
-`keycloak.httpRelativePath`; leave it at the Bitnami default (`/`).
+Only the registry service exposes a public ingress. auth-server,
+Keycloak, and mcpgw stay on their ClusterIP Services and are fronted by
+the registry pod's in-cluster nginx reverse proxy — mcpgw's MCP tools
+are reachable at `/airegistry-tools/*`, seeded into the registry at
+startup. The Keycloak path (`/keycloak`) is pinned by the nginx config
+— do NOT set `keycloak.httpRelativePath`; leave it at the Bitnami
+default (`/`).
 
 **DNS Requirements:** Configure a single A/CNAME record for your domain pointing to your ingress load balancer.
 

@@ -138,7 +138,7 @@ def get_config() -> str:
 
 def main():
     # Use configurable host with secure default (127.0.0.1)
-    # Set HOST=0.0.0.0 in environment for Docker deployments
+    # Set HOST=:: in Docker/Helm deployments for dual-stack IPv4+IPv6.
     host = os.environ.get("HOST", "127.0.0.1")
 
     # Log startup information

@@ -251,6 +251,12 @@ variable "session_cookie_domain" {
   default     = ""
 }
 
+variable "bind_host" {
+  description = "Network bind address for registry and gateway services. Default '0.0.0.0' (IPv4) works on all hosts. Set to '::' only for IPv6-only deployments (requires net.ipv6.bindv6only=0 on the host)."
+  type        = string
+  default     = "0.0.0.0"
+}
+
 # =============================================================================
 # DOCUMENTDB CONFIGURATION (from upstream v1.0.9)
 # =============================================================================
