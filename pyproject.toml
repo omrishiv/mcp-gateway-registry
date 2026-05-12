@@ -172,6 +172,18 @@ title = "MCP Registry Coverage Report"
 # Local-only project - never resolve from PyPI
 package = false
 
+# Resolve torch from the PyTorch CPU wheel index so the lockfile pins the
+# CPU-only wheels (vs. the default CUDA-enabled wheels from PyPI). This
+# lets Docker builds install torch via `uv sync --locked` without any
+# special pre-install step or --extra-index-url flag.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
 # Bandit Configuration
 # B101 (assert_used): exclude test directories where assert is expected
 # Requires: bandit -c pyproject.toml -r .

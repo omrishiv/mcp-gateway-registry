@@ -16,8 +16,9 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y \
 # Copy dependency files (build-images.sh copies these to .tmp/ directory before build)
 COPY .tmp/pyproject.toml .tmp/uv.lock ./
 
-# Install Python dependencies using uv (as root, before switching users)
-RUN uv sync --frozen --no-dev
+# Install Python dependencies using uv (as root, before switching users).
+# --locked fails the build if uv.lock is out of sync with pyproject.toml.
+RUN uv sync --locked --no-dev
 
 # Copy agent code (all files from the context directory)
 COPY . ./

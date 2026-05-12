@@ -18,12 +18,14 @@ WORKDIR /app
 RUN pip install --no-cache-dir uv && \
     uv venv .venv --python 3.14
 
-# Copy ONLY the dependency manifest first to leverage Docker layer caching.
-# Dependencies are reinstalled only when pyproject.toml changes, not on every code change.
+# Copy dependency manifests first so the install layer is cached on the
+# (pyproject, lock) pair, not on source changes.
 COPY auth_server/pyproject.toml /app/pyproject.toml
+COPY auth_server/uv.lock        /app/uv.lock
 
-RUN . .venv/bin/activate && \
-    uv pip install --requirement pyproject.toml
+# Install dependencies from uv.lock. --locked fails the build if the
+# lock is out of sync with pyproject.toml.
+RUN uv sync --locked --no-dev
 
 # ===== RUNTIME STAGE =====
 FROM python:3.14-slim

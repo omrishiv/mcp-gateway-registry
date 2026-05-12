@@ -33,21 +33,26 @@ USER appuser
 # Setup Python environment as appuser (avoids need to chown .venv later)
 RUN uv venv .venv --python 3.14
 
-# Install CPU-only PyTorch first to avoid GPU dependencies (for sentence-transformers)
-RUN . .venv/bin/activate && \
-    uv pip install --index-url https://download.pytorch.org/whl/cpu \
-    "torch>=2.0.0" \
-    "torchvision"
-
 # Build arg for server directory (when building from repo root)
 ARG SERVER_DIR
 
 # Switch back to root temporarily for COPY operations (Docker requires root for COPY)
 USER root
 
-# Copy server files - handle both build contexts
-# If SERVER_DIR is set (building from root), copy from that directory
-# Otherwise copy from current context (building from server directory)
+# Copy dependency manifests FIRST so the install layer is cached on the
+# (pyproject, lock) pair, not on source changes. COPY with ${SERVER_DIR:-.}
+# expands to the server directory when building from repo root, or to the
+# context root when building from the server directory.
+COPY --chown=appuser:appuser ${SERVER_DIR:-.}/pyproject.toml /app/pyproject.toml
+COPY --chown=appuser:appuser ${SERVER_DIR:-.}/uv.lock        /app/uv.lock
+
+# Install dependencies from uv.lock. --locked fails the build if the
+# lock is out of sync with pyproject.toml.
+USER appuser
+RUN uv sync --locked --no-dev
+
+# Copy source last (busts frequently; the cached install layer above is preserved).
+USER root
 COPY --chown=appuser:appuser ${SERVER_DIR:-.}/ /app/
 
 # Copy registry module for embeddings support (only when building from root with SERVER_DIR set)
@@ -63,14 +68,7 @@ RUN if [ -d /tmp/build-context/registry ]; then \
     fi && \
     rm -rf /tmp/build-context
 
-# Switch back to appuser for package installation
 USER appuser
-
-# Install dependencies from pyproject.toml (copied from SERVER_PATH)
-RUN . .venv/bin/activate && \
-    if [ -f /app/pyproject.toml ]; then \
-        uv pip install --requirement /app/pyproject.toml; \
-    fi
 
 # Expose default port (can be overridden by environment variable)
 EXPOSE 8000
