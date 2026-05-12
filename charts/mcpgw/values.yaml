@@ -6,13 +6,6 @@ global:
     tag: 1.23.0
     pullPolicy: IfNotPresent
 
-  ingress:
-    # Default ALB scheme for the mcpgw ingress when this subchart is
-    # deployed standalone. Overridden by mcp-gateway-registry-stack's
-    # global.ingress.scheme when deployed via the umbrella. Per-ingress
-    # override available at .ingress.scheme below.
-    scheme: internet-facing
-
 # Per-service image configuration
 # Any field left empty falls back to the corresponding global.image.* value.
 image:
@@ -82,24 +75,17 @@ resources:
     cpu: 1
     memory: 2Gi
 
-# Ingress configuration
-ingress:
-  enabled: false
-  className: alb
-  # ALB scheme for this specific ingress. Leave empty to fall back to
-  # global.ingress.scheme (chart-level default, or stack-level override
-  # when deployed via mcp-gateway-registry-stack), and finally to
-  # "internet-facing".
-  scheme: ""
-  hostname: ""
-  annotations: {}
-  tls: false
-  # Routing mode: "subdomain" or "path"
-  # - subdomain: mcpgw.domain.com
-  # - path: domain.com/mcpgw
-  routingMode: subdomain
-  # Path prefix when using path-based routing (default: /mcpgw)
-  path: /mcpgw
+# mcpgw does NOT expose a public ingress. External MCP clients reach
+# its tools via the registry's nginx reverse proxy, which dynamically
+# generates a `location /airegistry-tools/` block from the registered
+# server record seeded at registry startup
+# (see registry/services/demo_servers_init.py and
+# cli/examples/airegistry.json). Traffic flow:
+#   client → registry ingress → registry pod nginx
+#          → location /airegistry-tools/ { proxy_pass http://mcpgw-server:8003/; }
+#          → mcpgw pod
+# The Service defined in templates/service.yaml is the only external
+# surface mcpgw needs — it's what the registry nginx resolves to.
 
 # Extra environment variables appended to the container's `env:` list.
 # Uses the native Kubernetes EnvVar schema, so `valueFrom` is supported.

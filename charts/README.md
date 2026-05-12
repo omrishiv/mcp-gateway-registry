@@ -224,15 +224,15 @@ global:
     routingMode: path
     paths:
       registry: /registry   # Customize as needed
-      mcpgw: /mcpgw         # Customize as needed
 ```
 
-Only the registry and mcpgw services are exposed through public
-ingresses. auth-server and Keycloak stay on their ClusterIP Services;
+Only the registry service is exposed through a public ingress.
+auth-server, Keycloak, and mcpgw stay on their ClusterIP Services;
 the registry pod's in-cluster nginx reverse proxy fronts them at
-`/oauth2/*`, `/keycloak/*`, `/realms/*`, and `/resources/*`. The
-`/keycloak` path is pinned by the nginx config — do NOT set
-`keycloak.httpRelativePath`; leave it at the Bitnami default (`/`).
+`/oauth2/*`, `/keycloak/*`, `/realms/*`, `/resources/*`, and
+`/airegistry-tools/*` (mcpgw's MCP tools). The `/keycloak` path is
+pinned by the nginx config — do NOT set `keycloak.httpRelativePath`;
+leave it at the Bitnami default (`/`).
 
 **How it works:**
 

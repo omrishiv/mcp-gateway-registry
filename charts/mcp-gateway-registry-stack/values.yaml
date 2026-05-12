@@ -58,8 +58,10 @@ global:
     entra:
       adminGroupId: # UUID of Entra admin group
 
-  # Common ingress settings. Only the registry and mcpgw expose a
-  # public ingress.
+  # Common ingress settings. Only the registry exposes a public ingress.
+  # mcpgw is reached through the registry nginx at /airegistry-tools/*
+  # (auto-registered at registry startup). auth-server and Keycloak are
+  # also fronted by the registry pod's in-cluster nginx reverse proxy.
   ingress:
     inboundCidrs: # optional comma separated list of allowed inbound CIDR ranges
     # Default ALB scheme applied to every ingress in the stack. Stack-level
@@ -73,8 +75,8 @@ global:
     className: alb
     tls: true
     # Routing mode: "subdomain" or "path"
-    # - subdomain: mcpregistry.domain.com, mcpgw.domain.com
-    # - path:      domain.com/registry,    domain.com/mcpgw
+    # - subdomain: mcpregistry.domain.com
+    # - path:      domain.com/registry
     routingMode: subdomain
     # Path prefixes used when routingMode: path. Keycloak's browser path
     # (/keycloak) is not configurable here — it's pinned by the registry
@@ -82,7 +84,6 @@ global:
     # KEYCLOAK_EXTERNAL_URL.
     paths:
       registry: /registry
-      mcpgw: /mcpgw
 
 mongodb-kubernetes:
   operator:
@@ -346,7 +347,11 @@ registry:
   extraEnv: []
   extraEnvFrom: []
 
-# MCPGW MCP server configuration
+# MCPGW MCP server configuration.
+# Reached externally through the registry ingress at /airegistry-tools/*
+# (the registry seeds an airegistry-tools server record at startup, and
+# its nginx proxy_passes that path to mcpgw-server:8003). No dedicated
+# mcpgw ingress — only the ClusterIP Service is needed.
 mcpgw:
   enabled: true # Set to true to deploy the MCPGW MCP server
   app:
@@ -356,10 +361,6 @@ mcpgw:
     embeddingsProvider: sentence-transformers
     embeddingsModelName: all-MiniLM-L6-v2
     embeddingsModelDimensions: "384"
-
-  ingress:
-    enabled: true
-    ingressClassName: alb
 
   nodeSelector: {}
 
