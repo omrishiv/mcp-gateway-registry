@@ -140,6 +140,12 @@ celerybeat.pid
 .env.user
 .env.docker
 
+# Extra environment injection files (Issue #1000)
+# Default location is extra_env/ at the repo root; users can override the
+# path with MCP_EXTRA_ENV_DIR. Exclude the .env files themselves so
+# per-operator secrets never land in git.
+**/extra_env/*.env
+
 # Configuration files with sensitive data
 credentials-provider/agentcore-auth/config.yaml
 credentials-provider/oauth/config.yaml
