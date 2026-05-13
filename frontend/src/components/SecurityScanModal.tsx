@@ -42,6 +42,14 @@ interface SecurityScanModalProps {
   scanResult?: SecurityScanResult | null;
   onRescan?: () => Promise<void>;
   canRescan?: boolean;
+  /**
+   * Optional user-facing explanation shown when this resource cannot be
+   * scanned (e.g. local stdio MCP servers — no HTTP endpoint to probe).
+   * When provided, the empty state uses this copy instead of the generic
+   * "no results available" line and suppresses the rescan button regardless
+   * of `canRescan`.
+   */
+  unscannableReason?: string;
   onShowToast?: (message: string, type: 'success' | 'error') => void;
 }
 
@@ -130,6 +138,7 @@ const SecurityScanModal: React.FC<SecurityScanModalProps> = ({
   scanResult,
   onRescan,
   canRescan,
+  unscannableReason,
   onShowToast,
 }) => {
   const [showRawJson, setShowRawJson] = useState(false);
@@ -211,9 +220,10 @@ const SecurityScanModal: React.FC<SecurityScanModalProps> = ({
           <div className="text-center py-12">
             <ShieldCheckIcon className="h-12 w-12 mx-auto text-gray-400 mb-4" />
             <p className="text-gray-600 dark:text-gray-400">
-              No security scan results available for this {resourceType}.
+              {unscannableReason
+                ?? `No security scan results available for this ${resourceType}.`}
             </p>
-            {canRescan && onRescan && (
+            {!unscannableReason && canRescan && onRescan && (
               <button
                 onClick={handleRescan}
                 disabled={rescanning}
@@ -442,7 +452,7 @@ const SecurityScanModal: React.FC<SecurityScanModalProps> = ({
                 <ClipboardDocumentIcon className="h-4 w-4" />
                 Copy Results
               </button>
-              {canRescan && onRescan && (
+              {!unscannableReason && canRescan && onRescan && (
                 <button
                   onClick={handleRescan}
                   disabled={rescanning}

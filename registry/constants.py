@@ -19,6 +19,7 @@ class HealthStatus(str, Enum):
     UNHEALTHY_MISSING_PROXY_URL = "unhealthy: missing proxy URL"
     CHECKING = "checking"
     UNKNOWN = "unknown"
+    LOCAL = "local"
 
     @classmethod
     def get_healthy_statuses(cls) -> list[str]:
@@ -36,6 +37,23 @@ class TransportType(str, Enum):
 
     STREAMABLE_HTTP = "streamable-http"
     SSE = "sse"
+    STDIO = "stdio"
+
+
+class DeploymentType(str, Enum):
+    """Server deployment type: remote (HTTP-reachable) or local (stdio)."""
+
+    REMOTE = "remote"
+    LOCAL = "local"
+
+
+class LocalRuntimeType(str, Enum):
+    """Launcher type for local stdio MCP servers."""
+
+    NPX = "npx"
+    DOCKER = "docker"
+    UVX = "uvx"
+    COMMAND = "command"
 
 
 class AuthScheme(str, Enum):

@@ -54,10 +54,15 @@ SENSITIVE_HEADERS: set[str] = {
 }
 
 
-def _sanitize_payload(
+def sanitize_payload(
     payload: dict,
 ) -> dict:
     """Remove credential and sensitive fields from a registration payload.
+
+    Also strips raw env values from local_runtime entries — env
+    values can contain ${VAR} placeholders or non-secret defaults, but they
+    shouldn't be sent to external gate webhooks. Keys are preserved so the
+    gate can reason about which env vars exist; values are masked.
 
     Args:
         payload: Raw registration payload dict.
@@ -72,8 +77,25 @@ def _sanitize_payload(
         key_lower = key.lower()
         if any(sub in key_lower for sub in SENSITIVE_FIELD_SUBSTRINGS):
             continue
+        if key == "local_runtime" and isinstance(value, dict):
+            sanitized_rt = dict(value)
+            if "env" in sanitized_rt and isinstance(sanitized_rt["env"], dict):
+                sanitized_rt["env"] = dict.fromkeys(sanitized_rt["env"], "<redacted>")
+            # args may also carry sensitive material. Mask values; the count and
+            # length of args is preserved so the gate can still reason about
+            # shape.
+            if isinstance(sanitized_rt.get("args"), list):
+                sanitized_rt["args"] = ["<redacted>"] * len(sanitized_rt["args"])
+            sanitized[key] = sanitized_rt
+            continue
         sanitized[key] = value
     return sanitized
+
+
+# Backward-compat alias. The function was originally underscore-prefixed
+# (private to this module). It's now reused cross-module (webhook_service.py),
+# so the public name is preferred — but tests still import the old name.
+_sanitize_payload = sanitize_payload
 
 
 async def _acquire_oauth2_token() -> str | None:
@@ -118,32 +140,22 @@ async def _acquire_oauth2_token() -> str | None:
         token_data = response.json()
         access_token = token_data.get("access_token")
         if not access_token:
-            logger.error(
-                "OAuth2 token response missing 'access_token' field"
-            )
+            logger.error("OAuth2 token response missing 'access_token' field")
             return None
 
-        logger.info(
-            "OAuth2 token acquired successfully for gate authentication"
-        )
+        logger.info("OAuth2 token acquired successfully for gate authentication")
         return access_token
 
     except httpx.TimeoutException:
-        logger.error(
-            f"OAuth2 token acquisition timed out after {timeout}s"
-        )
+        logger.error(f"OAuth2 token acquisition timed out after {timeout}s")
         return None
 
     except httpx.RequestError as e:
-        logger.error(
-            f"OAuth2 token acquisition connection error: {e}"
-        )
+        logger.error(f"OAuth2 token acquisition connection error: {e}")
         return None
 
     except Exception as e:
-        logger.error(
-            f"OAuth2 token acquisition unexpected error: {e}"
-        )
+        logger.error(f"OAuth2 token acquisition unexpected error: {e}")
         return None
 
 
@@ -170,9 +182,7 @@ async def _build_auth_headers() -> dict[str, str]:
         token = await _acquire_oauth2_token()
         if token:
             return {"Authorization": f"Bearer {token}"}
-        logger.error(
-            "Failed to acquire OAuth2 token for gate authentication"
-        )
+        logger.error("Failed to acquire OAuth2 token for gate authentication")
         return {}
 
     return {}
@@ -208,8 +218,7 @@ def _is_gate_configured() -> bool:
 
     if not settings.registration_gate_url:
         logger.warning(
-            "Registration gate is enabled but no URL is configured. "
-            "Treating as disabled."
+            "Registration gate is enabled but no URL is configured. Treating as disabled."
         )
         return False
 
@@ -251,19 +260,12 @@ async def _call_gate_endpoint(
     auth_headers = await _build_auth_headers()
 
     auth_type = settings.registration_gate_auth_type.lower()
-    if (
-        auth_type == RegistrationGateAuthType.OAUTH2_CLIENT_CREDENTIALS
-        and not auth_headers
-    ):
-        logger.error(
-            "OAuth2 token acquisition failed. "
-            "Blocking registration (fail-closed)."
-        )
+    if auth_type == RegistrationGateAuthType.OAUTH2_CLIENT_CREDENTIALS and not auth_headers:
+        logger.error("OAuth2 token acquisition failed. Blocking registration (fail-closed).")
         return RegistrationGateResult(
             allowed=False,
             error_message=(
-                "Registration gate authentication failed. "
-                "Unable to acquire OAuth2 token."
+                "Registration gate authentication failed. Unable to acquire OAuth2 token."
             ),
             gate_status_code=None,
             attempts=0,
@@ -302,9 +304,7 @@ async def _call_gate_endpoint(
             if response.status_code == DENIED_STATUS_CODE:
                 error_message = "Registration denied by policy"
                 try:
-                    gate_response = RegistrationGateResponse(
-                        **response.json()
-                    )
+                    gate_response = RegistrationGateResponse(**response.json())
                     if gate_response.error:
                         error_message = _truncate_error(gate_response.error)
                 except Exception:
@@ -318,10 +318,7 @@ async def _call_gate_endpoint(
                     attempts=attempt,
                 )
 
-            last_error = (
-                f"Unexpected status code {response.status_code} "
-                f"from gate endpoint"
-            )
+            last_error = f"Unexpected status code {response.status_code} from gate endpoint"
             logger.warning(
                 f"Registration gate returned unexpected status "
                 f"{response.status_code} on attempt {attempt}/{total_attempts}"
@@ -331,8 +328,7 @@ async def _call_gate_endpoint(
             elapsed = time.time() - start_time
             last_error = f"Gate endpoint timed out after {elapsed:.2f}s"
             logger.warning(
-                f"Registration gate timeout on attempt "
-                f"{attempt}/{total_attempts}: {last_error}"
+                f"Registration gate timeout on attempt {attempt}/{total_attempts}: {last_error}"
             )
 
         except httpx.RequestError as e:
@@ -345,8 +341,7 @@ async def _call_gate_endpoint(
         if attempt < total_attempts:
             backoff = INITIAL_BACKOFF_SECONDS * (2 ** (attempt - 1))
             logger.info(
-                f"Retrying gate call in {backoff:.1f}s "
-                f"(attempt {attempt + 1}/{total_attempts})"
+                f"Retrying gate call in {backoff:.1f}s (attempt {attempt + 1}/{total_attempts})"
             )
             await asyncio.sleep(backoff)
 
@@ -357,8 +352,7 @@ async def _call_gate_endpoint(
     return RegistrationGateResult(
         allowed=False,
         error_message=(
-            "Registration gate is unavailable. "
-            "Registration blocked (fail-closed policy)."
+            "Registration gate is unavailable. Registration blocked (fail-closed policy)."
         ),
         gate_status_code=None,
         attempts=total_attempts,
@@ -396,7 +390,7 @@ async def check_registration_gate(
             attempts=0,
         )
 
-    sanitized_payload = _sanitize_payload(registration_payload)
+    sanitized_payload = sanitize_payload(registration_payload)
     request_headers = _extract_request_headers(raw_headers)
 
     gate_request = RegistrationGateRequest(
@@ -407,10 +401,7 @@ async def check_registration_gate(
         request_headers=request_headers,
     )
 
-    logger.info(
-        f"Calling registration gate for {operation} of {asset_type} "
-        f"from {source_api}"
-    )
+    logger.info(f"Calling registration gate for {operation} of {asset_type} from {source_api}")
 
     return await _call_gate_endpoint(gate_request)
 
@@ -428,22 +419,18 @@ async def verify_gate_connectivity() -> None:
     url = settings.registration_gate_url
     auth_type = settings.registration_gate_auth_type
 
-    logger.info(
-        f"Registration gate enabled: url={url}, auth_type={auth_type}"
-    )
+    logger.info(f"Registration gate enabled: url={url}, auth_type={auth_type}")
 
     if url.startswith("http://"):
         logger.warning(
-            "Registration gate URL uses HTTP. "
-            "HTTPS is strongly recommended for production."
+            "Registration gate URL uses HTTP. HTTPS is strongly recommended for production."
         )
 
     try:
         async with httpx.AsyncClient(timeout=5) as client:
             response = await client.head(url)
         logger.info(
-            f"Registration gate connectivity check: "
-            f"status={response.status_code} (reachable)"
+            f"Registration gate connectivity check: status={response.status_code} (reachable)"
         )
     except Exception as e:
         logger.warning(
@@ -486,10 +473,7 @@ async def verify_gate_connectivity() -> None:
             )
             test_token = await _acquire_oauth2_token()
             if test_token:
-                logger.info(
-                    "Registration gate OAuth2 startup check: "
-                    "token acquisition succeeded"
-                )
+                logger.info("Registration gate OAuth2 startup check: token acquisition succeeded")
             else:
                 logger.warning(
                     "Registration gate OAuth2 startup check: "

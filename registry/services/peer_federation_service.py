@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from threading import Lock as ThreadingLock
 from typing import Any, Literal, Optional
 
+from ..constants import DeploymentType
 from ..core.metrics import PEER_SYNC_DURATION_SECONDS, PEER_SYNC_FAILURES
 from ..repositories.factory import (
     get_peer_federation_repository,
@@ -770,6 +771,10 @@ class PeerFederationService:
         """
         Filter servers based on peer sync configuration.
 
+        Local (deployment='local') servers are excluded unless
+        peer_config.sync_local_servers is True. This is a trust-boundary
+        gate — local servers distribute executable launch recipes.
+
         Args:
             servers: List of server data from peer
             peer_config: Peer configuration with sync settings
@@ -777,6 +782,18 @@ class PeerFederationService:
         Returns:
             Filtered list of servers
         """
+        # Pre-filter: drop local servers if peer is not opted in
+        if not peer_config.sync_local_servers:
+            before = len(servers)
+            servers = [s for s in servers if s.get("deployment") != DeploymentType.LOCAL]
+            excluded = before - len(servers)
+            if excluded > 0:
+                logger.info(
+                    f"Peer '{peer_config.peer_id}' has {excluded} local servers "
+                    f"(sync_local_servers=False). Set sync_local_servers=True to "
+                    f"include them."
+                )
+
         if peer_config.sync_mode == "all":
             return servers
 

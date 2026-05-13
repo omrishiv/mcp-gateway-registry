@@ -10,6 +10,7 @@ Tests the main server routes including:
 - POST /internal/remove - Internal removal with JWT Bearer Auth
 """
 
+import json
 import logging
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -432,6 +433,58 @@ class TestGetServersJSON:
         assert data["offset"] == 0
         assert data["has_next"] is False
         mock_server_service.get_servers_paginated.assert_called_once_with(skip=0, limit=20)
+
+    def test_list_response_includes_local_server_fields(
+        self, test_client_admin, mock_server_service
+    ):
+        """GET /api/servers must surface deployment + local_runtime so the
+        frontend can render the LOCAL badge and the connect modal can emit a
+        stdio launch recipe."""
+        mock_server_service.get_servers_paginated = AsyncMock(
+            return_value=(
+                {
+                    "/local-weather": {
+                        "server_name": "Local Weather",
+                        "description": "stdio",
+                        "tags": ["security-pending-local"],
+                        "num_tools": 0,
+                        "license": "MIT",
+                        "deployment": "local",
+                        "local_runtime": {
+                            "type": "npx",
+                            "package": "@acme/weather-mcp",
+                            "version": "1.0.0",
+                        },
+                        "registered_by": "admin",
+                    },
+                    "/remote-srv": {
+                        "server_name": "Remote",
+                        "description": "http",
+                        "tags": [],
+                        "num_tools": 5,
+                        "license": "Apache-2.0",
+                        "proxy_pass_url": "http://upstream:9000",
+                        "deployment": "remote",
+                    },
+                },
+                2,
+            )
+        )
+
+        response = test_client_admin.get("/api/servers")
+        assert response.status_code == 200
+        servers_by_path = {s["path"]: s for s in response.json()["servers"]}
+
+        local = servers_by_path["/local-weather"]
+        assert local["deployment"] == "local"
+        assert local["local_runtime"]["type"] == "npx"
+        assert local["local_runtime"]["package"] == "@acme/weather-mcp"
+        assert local["registered_by"] == "admin"
+
+        # Remote servers carry deployment too (default echoed back).
+        remote = servers_by_path["/remote-srv"]
+        assert remote["deployment"] == "remote"
+        assert remote["local_runtime"] is None
 
     def test_non_admin_gets_filtered_servers(
         self, test_client_regular, mock_server_service, regular_user_context
@@ -1149,3 +1202,718 @@ class TestHelperFunctions:
             assert response.status_code == 201
             call_args = mock_server_service.register_server.call_args[0][0]
             assert call_args["tags"] == ["tag1", "tag2", "tag3"]
+
+
+# ==================================================================
+# TEST POST /register - Local server support on the unified endpoint
+# ==================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.api
+@pytest.mark.servers
+class TestRegisterLocalServer:
+    """Tests for local (stdio) server registration on /api/register."""
+
+    def test_register_local_server_admin(
+        self,
+        test_client_admin,
+        mock_server_service,
+        mock_faiss_service,
+        mock_nginx_service,
+        mock_security_scanner_service,
+    ):
+        """Admin can register a local (stdio) server via form-encoded data.
+
+        Also asserts the automated security scanner is NOT invoked for local
+        servers — the registry can't probe a stdio launch recipe — so the
+        skip-when-deployment==local branch is locked in by behavior.
+        """
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
+        ):
+            response = test_client_admin.post(
+                "/api/register",
+                data={
+                    "name": "Local Weather",
+                    "description": "stdio",
+                    "path": "/local-weather",
+                    "deployment": "local",
+                    "local_runtime": json.dumps(
+                        {
+                            "type": "npx",
+                            "package": "@acme/weather-mcp",
+                            "version": "1.0.0",
+                        }
+                    ),
+                },
+            )
+        assert response.status_code == 201
+        entry = response.json()["service"]
+        assert entry["deployment"] == "local"
+        assert entry["local_runtime"]["type"] == "npx"
+        assert entry["registered_by"] == "admin"
+        # Tagged for manual security review (no automated scan ran).
+        assert "security-pending-local" in entry["tags"]
+        # The scanner must NOT have been called.
+        mock_security_scanner_service.scan_server.assert_not_called()
+
+    def test_register_local_server_non_admin_rejected(
+        self,
+        test_client_regular,
+    ):
+        """Non-admin users cannot register local servers."""
+        response = test_client_regular.post(
+            "/api/register",
+            data={
+                "name": "Local",
+                "description": "x",
+                "path": "/local",
+                "deployment": "local",
+                "local_runtime": json.dumps({"type": "npx", "package": "@acme/mcp"}),
+            },
+        )
+        assert response.status_code == 403
+        assert "admin" in response.json()["detail"].lower()
+
+    def test_register_local_with_leaked_secret_rejected(
+        self,
+        test_client_admin,
+    ):
+        """An obvious literal secret in env values is rejected."""
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
+        ):
+            response = test_client_admin.post(
+                "/api/register",
+                data={
+                    "name": "Bad",
+                    "description": "x",
+                    "path": "/bad",
+                    "deployment": "local",
+                    "local_runtime": json.dumps(
+                        {
+                            "type": "npx",
+                            "package": "@acme/mcp",
+                            "env": {"OPENAI_KEY": "sk-proj-realsecretvalue123"},
+                        }
+                    ),
+                },
+            )
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert "OPENAI_KEY" in detail.get("env_keys", [])
+
+    def test_register_local_with_unpinned_npx_gets_warning_tag(
+        self,
+        test_client_admin,
+        mock_server_service,
+        mock_faiss_service,
+        mock_nginx_service,
+    ):
+        """Unpinned npx package gets the 'unpinned-version' soft warning tag."""
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
+        ):
+            response = test_client_admin.post(
+                "/api/register",
+                data={
+                    "name": "Unpinned",
+                    "description": "x",
+                    "path": "/unpinned",
+                    "deployment": "local",
+                    "local_runtime": json.dumps({"type": "npx", "package": "@acme/mcp"}),
+                },
+            )
+        assert response.status_code == 201
+        assert "unpinned-version" in response.json()["service"]["tags"]
+
+    def test_register_local_rejects_proxy_pass_url(
+        self,
+        test_client_admin,
+    ):
+        """Local deployment must not include proxy_pass_url."""
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
+        ):
+            response = test_client_admin.post(
+                "/api/register",
+                data={
+                    "name": "Confused",
+                    "description": "x",
+                    "path": "/confused",
+                    "deployment": "local",
+                    "proxy_pass_url": "http://nope",
+                    "local_runtime": json.dumps({"type": "npx", "package": "@acme/mcp"}),
+                },
+            )
+        assert response.status_code == 400
+        assert "must not set proxy_pass_url" in response.json()["detail"]
+
+    def test_register_remote_unaffected(
+        self,
+        test_client_admin,
+        mock_server_service,
+        mock_faiss_service,
+        mock_nginx_service,
+    ):
+        """Remote registration without explicit deployment still works (default)."""
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
+        ):
+            response = test_client_admin.post(
+                "/api/register",
+                data={
+                    "name": "Remote Server",
+                    "description": "test",
+                    "path": "/remote-srv",
+                    "proxy_pass_url": "http://upstream:9000",
+                },
+            )
+        assert response.status_code == 201
+        entry = response.json()["service"]
+        assert entry["deployment"] == "remote"
+        assert entry["registered_by"] == "admin"
+
+
+# =============================================================================
+# TEST POST /edit/{path} - Local server edit support
+# =============================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.api
+@pytest.mark.servers
+class TestEditLocalServer:
+    """Edit endpoint must accept deployment + local_runtime fields and gate
+    local edits to admins (mirrors the registration flow)."""
+
+    LOCAL_SERVER_INFO = {
+        "server_name": "Existing Local",
+        "description": "stdio",
+        "path": "/local-srv",
+        "deployment": "local",
+        "local_runtime": {"type": "npx", "package": "@acme/mcp", "version": "1.0.0"},
+        "tags": ["security-pending-local"],
+        "auth_scheme": "none",
+        "registered_by": "admin",
+    }
+
+    REMOTE_SERVER_INFO = {
+        "server_name": "Existing Remote",
+        "description": "http",
+        "path": "/remote-srv",
+        "deployment": "remote",
+        "proxy_pass_url": "http://upstream:9000",
+        "tags": [],
+        "auth_scheme": "none",
+        "registered_by": "admin",
+    }
+
+    def test_edit_local_server_admin(
+        self,
+        test_client_admin,
+        mock_server_service,
+        mock_faiss_service,
+        mock_nginx_service,
+    ):
+        """Admin can edit a local server's launch recipe."""
+        mock_server_service.get_server_info.return_value = self.LOCAL_SERVER_INFO
+        mock_server_service.is_service_enabled.return_value = True
+
+        response = test_client_admin.post(
+            "/api/edit/local-srv",
+            data={
+                "name": "Existing Local",
+                "description": "updated",
+                "deployment": "local",
+                "tags": "team:weather",
+                "local_runtime": json.dumps(
+                    {
+                        "type": "npx",
+                        "package": "@acme/mcp",
+                        "version": "1.1.0",
+                    }
+                ),
+            },
+        )
+        assert response.status_code == 200
+        # Verify update_server was called with merged entry
+        call_args = mock_server_service.update_server.call_args
+        assert call_args is not None
+        updated_entry = call_args[0][1]
+        assert updated_entry["deployment"] == "local"
+        assert updated_entry["local_runtime"]["version"] == "1.1.0"
+        # Audit trail is preserved across edits
+        assert updated_entry["registered_by"] == "admin"
+        # Recipe content changed (1.0.0 → 1.1.0) so security-pending-local is
+        # re-added — the prior review was for the OLD recipe.
+        assert "security-pending-local" in updated_entry["tags"]
+
+    def test_edit_local_server_non_admin_rejected(
+        self,
+        test_client_regular,
+        mock_server_service,
+    ):
+        """Non-admin cannot edit local servers (executable recipe)."""
+        mock_server_service.get_server_info.return_value = self.LOCAL_SERVER_INFO
+
+        response = test_client_regular.post(
+            "/api/edit/local-srv",
+            data={
+                "name": "Existing Local",
+                "deployment": "local",
+                "local_runtime": json.dumps({"type": "npx", "package": "@acme/mcp"}),
+            },
+        )
+        assert response.status_code == 403
+        assert "admin" in response.json()["detail"].lower()
+
+    def test_edit_local_rejects_proxy_pass_url(
+        self,
+        test_client_admin,
+        mock_server_service,
+    ):
+        """Local edit must not include proxy_pass_url."""
+        mock_server_service.get_server_info.return_value = self.LOCAL_SERVER_INFO
+
+        response = test_client_admin.post(
+            "/api/edit/local-srv",
+            data={
+                "name": "Existing Local",
+                "deployment": "local",
+                "proxy_pass_url": "http://nope",
+                "local_runtime": json.dumps({"type": "npx", "package": "@acme/mcp"}),
+            },
+        )
+        assert response.status_code == 400
+        assert "must not set proxy_pass_url" in response.json()["detail"]
+
+    def test_edit_local_with_leaked_secret_rejected(
+        self,
+        test_client_admin,
+        mock_server_service,
+    ):
+        """Edit-time secret-leak guard works the same as registration."""
+        mock_server_service.get_server_info.return_value = self.LOCAL_SERVER_INFO
+
+        response = test_client_admin.post(
+            "/api/edit/local-srv",
+            data={
+                "name": "Existing Local",
+                "deployment": "local",
+                "local_runtime": json.dumps(
+                    {
+                        "type": "npx",
+                        "package": "@acme/mcp",
+                        "env": {"OPENAI_KEY": "sk-proj-realsecretvalue123"},
+                    }
+                ),
+            },
+        )
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert "OPENAI_KEY" in detail.get("env_keys", [])
+
+    def test_edit_remote_unaffected_by_new_fields(
+        self,
+        test_client_admin,
+        mock_server_service,
+        mock_faiss_service,
+        mock_nginx_service,
+    ):
+        """Remote edit still works when deployment field is omitted (preserves existing)."""
+        mock_server_service.get_server_info.return_value = self.REMOTE_SERVER_INFO
+        mock_server_service.is_service_enabled.return_value = True
+
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
+        ):
+            response = test_client_admin.post(
+                "/api/edit/remote-srv",
+                data={
+                    "name": "Existing Remote",
+                    "description": "updated",
+                    "proxy_pass_url": "http://upstream:9001",
+                    "tags": "",
+                },
+            )
+        assert response.status_code == 200
+        call_args = mock_server_service.update_server.call_args
+        updated_entry = call_args[0][1]
+        assert updated_entry["deployment"] == "remote"
+        assert updated_entry["proxy_pass_url"] == "http://upstream:9001"
+
+    def test_edit_remote_requires_proxy_pass_url(
+        self,
+        test_client_admin,
+        mock_server_service,
+    ):
+        """Remote edit without proxy_pass_url is rejected (regression check)."""
+        mock_server_service.get_server_info.return_value = self.REMOTE_SERVER_INFO
+
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
+        ):
+            response = test_client_admin.post(
+                "/api/edit/remote-srv",
+                data={
+                    "name": "Existing Remote",
+                    "description": "broken",
+                },
+            )
+        assert response.status_code == 400
+        assert "proxy_pass_url is required" in response.json()["detail"]
+
+
+# =============================================================================
+# TEST POST /register and /edit input validation
+# =============================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.api
+@pytest.mark.servers
+class TestDeploymentValidation:
+    """Hardening: explicit deployment value validation + edit-time type lock."""
+
+    def test_register_rejects_invalid_deployment_value(self, test_client_admin):
+        """Garbage deployment value must be rejected before persist (else
+        ServerInfo's Literal validator only catches it on read)."""
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
+        ):
+            response = test_client_admin.post(
+                "/api/register",
+                data={
+                    "name": "Bad",
+                    "description": "x",
+                    "path": "/bad",
+                    "deployment": "banana",
+                    "proxy_pass_url": "http://upstream:9000",
+                },
+            )
+        assert response.status_code == 400
+        assert "deployment must be" in response.json()["detail"]
+
+    def test_edit_rejects_remote_to_local_change(
+        self,
+        test_client_admin,
+        mock_server_service,
+    ):
+        """Switching deployment type via edit is blocked: it would strip the
+        nginx route, change auth semantics, and break the audit trail."""
+        mock_server_service.get_server_info.return_value = {
+            "server_name": "Remote",
+            "path": "/remote-srv",
+            "deployment": "remote",
+            "proxy_pass_url": "http://upstream:9000",
+            "tags": [],
+        }
+
+        response = test_client_admin.post(
+            "/api/edit/remote-srv",
+            data={
+                "name": "Remote",
+                "deployment": "local",
+                "local_runtime": json.dumps({"type": "npx", "package": "@acme/mcp"}),
+            },
+        )
+        assert response.status_code == 400
+        assert "Cannot change deployment" in response.json()["detail"]
+
+    def test_edit_rejects_local_to_remote_change(
+        self,
+        test_client_admin,
+        mock_server_service,
+    ):
+        mock_server_service.get_server_info.return_value = {
+            "server_name": "Local",
+            "path": "/local-srv",
+            "deployment": "local",
+            "local_runtime": {"type": "npx", "package": "@acme/mcp"},
+            "tags": ["security-pending-local"],
+        }
+
+        response = test_client_admin.post(
+            "/api/edit/local-srv",
+            data={
+                "name": "Local",
+                "deployment": "remote",
+                "proxy_pass_url": "http://upstream:9000",
+            },
+        )
+        assert response.status_code == 400
+        assert "Cannot change deployment" in response.json()["detail"]
+
+    def test_edit_rejects_invalid_deployment_value(
+        self,
+        test_client_admin,
+        mock_server_service,
+    ):
+        mock_server_service.get_server_info.return_value = {
+            "server_name": "Remote",
+            "path": "/remote-srv",
+            "deployment": "remote",
+            "proxy_pass_url": "http://upstream:9000",
+            "tags": [],
+        }
+        response = test_client_admin.post(
+            "/api/edit/remote-srv",
+            data={"name": "Remote", "deployment": "banana"},
+        )
+        assert response.status_code == 400
+        assert "deployment must be" in response.json()["detail"]
+
+
+@pytest.mark.unit
+@pytest.mark.api
+@pytest.mark.servers
+class TestEditLocalSecurityReviewReset:
+    """When the launch recipe materially changes on edit, the prior security
+    review is invalidated — the admin approved the OLD recipe. Cosmetic edits
+    (description, tags, status) preserve the existing review state."""
+
+    REVIEWED_LOCAL = {
+        "server_name": "Reviewed",
+        "path": "/local-srv",
+        "deployment": "local",
+        "local_runtime": {
+            "type": "npx",
+            "package": "@acme/mcp",
+            "version": "1.0.0",
+            "args": [],
+            "env": {},
+            "required_env": [],
+        },
+        # Tag previously cleared by an admin via /clear-security-pending-local.
+        "tags": ["team:weather"],
+        "auth_scheme": "none",
+        "registered_by": "admin",
+    }
+
+    def test_cosmetic_edit_preserves_cleared_review(
+        self,
+        test_client_admin,
+        mock_server_service,
+        mock_faiss_service,
+        mock_nginx_service,
+    ):
+        """Identical recipe → tag stays cleared (review preserved)."""
+        mock_server_service.get_server_info.return_value = self.REVIEWED_LOCAL
+        mock_server_service.is_service_enabled.return_value = True
+
+        response = test_client_admin.post(
+            "/api/edit/local-srv",
+            data={
+                "name": "Reviewed",
+                "description": "updated copy",  # cosmetic change
+                "deployment": "local",
+                "tags": "team:weather",
+                "local_runtime": json.dumps(
+                    {
+                        "type": "npx",
+                        "package": "@acme/mcp",
+                        "version": "1.0.0",
+                        "args": [],
+                        "env": {},
+                        "required_env": [],
+                    }
+                ),
+            },
+        )
+        assert response.status_code == 200
+        updated = mock_server_service.update_server.call_args[0][1]
+        assert "security-pending-local" not in updated["tags"]
+
+    def test_recipe_change_resets_review(
+        self,
+        test_client_admin,
+        mock_server_service,
+        mock_faiss_service,
+        mock_nginx_service,
+    ):
+        """Different recipe (version bump) → tag re-added even though it had
+        been cleared. Admin must re-review the new recipe."""
+        mock_server_service.get_server_info.return_value = self.REVIEWED_LOCAL
+        mock_server_service.is_service_enabled.return_value = True
+
+        response = test_client_admin.post(
+            "/api/edit/local-srv",
+            data={
+                "name": "Reviewed",
+                "deployment": "local",
+                "tags": "team:weather",
+                "local_runtime": json.dumps(
+                    {
+                        "type": "npx",
+                        "package": "@acme/mcp",
+                        "version": "2.0.0",  # ← recipe change
+                        "args": [],
+                        "env": {},
+                        "required_env": [],
+                    }
+                ),
+            },
+        )
+        assert response.status_code == 200
+        updated = mock_server_service.update_server.call_args[0][1]
+        assert "security-pending-local" in updated["tags"]
+
+    def test_args_change_resets_review(
+        self,
+        test_client_admin,
+        mock_server_service,
+        mock_faiss_service,
+        mock_nginx_service,
+    ):
+        """args list change (e.g. swapping a flag) is also a material change."""
+        mock_server_service.get_server_info.return_value = self.REVIEWED_LOCAL
+        mock_server_service.is_service_enabled.return_value = True
+
+        response = test_client_admin.post(
+            "/api/edit/local-srv",
+            data={
+                "name": "Reviewed",
+                "deployment": "local",
+                "tags": "team:weather",
+                "local_runtime": json.dumps(
+                    {
+                        "type": "npx",
+                        "package": "@acme/mcp",
+                        "version": "1.0.0",
+                        "args": ["--unsafe-flag"],  # ← args change
+                        "env": {},
+                        "required_env": [],
+                    }
+                ),
+            },
+        )
+        assert response.status_code == 200
+        updated = mock_server_service.update_server.call_args[0][1]
+        assert "security-pending-local" in updated["tags"]
+
+
+# =============================================================================
+# TEST POST /refresh/{path} - Local server refresh path
+# =============================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.api
+@pytest.mark.servers
+class TestRefreshLocalServer:
+    """clicking Refresh Health on a local server card must NOT
+    return a 500 'no proxy URL' error. The endpoint should short-circuit
+    identically to the toggle path."""
+
+    def test_refresh_local_server_returns_local_status(
+        self,
+        test_client_admin,
+        mock_server_service,
+        mock_faiss_service,
+        mock_nginx_service,
+    ):
+        mock_server_service.get_server_info.return_value = {
+            "server_name": "Local",
+            "path": "/local-srv",
+            "deployment": "local",
+            "local_runtime": {"type": "npx", "package": "@acme/mcp"},
+            "num_tools": 3,
+        }
+        mock_server_service.is_service_enabled.return_value = True
+
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
+        ):
+            response = test_client_admin.post("/api/refresh/local-srv")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "local"
+        assert body["last_checked_iso"] is None
+        assert body["num_tools"] == 3
+
+
+# =============================================================================
+# TEST POST /clear-security-pending-local/{path}
+# =============================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.api
+@pytest.mark.servers
+class TestClearSecurityPendingLocal:
+    """Admin action that removes the security-pending-local tag — gives admins
+    a discoverable way to mark a local server as reviewed without editing the
+    tags string by hand."""
+
+    LOCAL_PENDING = {
+        "server_name": "Local",
+        "path": "/local-srv",
+        "deployment": "local",
+        "local_runtime": {"type": "npx", "package": "@acme/mcp"},
+        "tags": ["security-pending-local", "team:weather"],
+    }
+
+    def test_clears_tag_for_admin(
+        self,
+        test_client_admin,
+        mock_server_service,
+        mock_faiss_service,
+    ):
+        mock_server_service.get_server_info.return_value = self.LOCAL_PENDING
+        mock_server_service.is_service_enabled.return_value = True
+
+        response = test_client_admin.post(
+            "/api/clear-security-pending-local/local-srv"
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert "security-pending-local" not in body["tags"]
+        assert "team:weather" in body["tags"]
+
+        # update_server called with tag removed
+        call_args = mock_server_service.update_server.call_args
+        updated = call_args[0][1]
+        assert "security-pending-local" not in updated["tags"]
+
+    def test_non_admin_rejected(self, test_client_regular, mock_server_service):
+        mock_server_service.get_server_info.return_value = self.LOCAL_PENDING
+        response = test_client_regular.post(
+            "/api/clear-security-pending-local/local-srv"
+        )
+        assert response.status_code == 403
+
+    def test_404_for_unknown_server(self, test_client_admin, mock_server_service):
+        mock_server_service.get_server_info.return_value = None
+        response = test_client_admin.post("/api/clear-security-pending-local/nope")
+        assert response.status_code == 404
+
+    def test_400_for_remote_server(self, test_client_admin, mock_server_service):
+        mock_server_service.get_server_info.return_value = {
+            "server_name": "Remote",
+            "path": "/remote",
+            "deployment": "remote",
+            "proxy_pass_url": "http://upstream",
+            "tags": [],
+        }
+        response = test_client_admin.post("/api/clear-security-pending-local/remote")
+        assert response.status_code == 400
+
+    def test_idempotent_when_tag_absent(
+        self,
+        test_client_admin,
+        mock_server_service,
+    ):
+        """Calling on a local server that's already been cleared is a no-op."""
+        mock_server_service.get_server_info.return_value = {
+            **self.LOCAL_PENDING,
+            "tags": ["team:weather"],  # already cleared
+        }
+        response = test_client_admin.post(
+            "/api/clear-security-pending-local/local-srv"
+        )
+        assert response.status_code == 200
+        # update_server NOT called — we short-circuit.
+        mock_server_service.update_server.assert_not_called()

@@ -27,10 +27,22 @@ interface Server {
   last_checked_time?: string;
   usersCount?: number;
   rating?: number;
-  status?: 'healthy' | 'healthy-auth-expired' | 'unhealthy' | 'unknown';
+  status?: 'healthy' | 'healthy-auth-expired' | 'unhealthy' | 'unknown' | 'local';
   num_tools?: number;
   type: 'server' | 'agent';
   proxy_pass_url?: string;
+  // Local-server fields
+  deployment?: 'remote' | 'local';
+  local_runtime?: {
+    type: 'npx' | 'docker' | 'uvx' | 'command';
+    package: string;
+    args?: string[];
+    env?: Record<string, string>;
+    required_env?: string[];
+    image_digest?: string;
+    platforms?: string[];
+    version?: string;
+  };
   version?: string;
   versions?: ServerVersion[];
   default_version?: string;
@@ -94,9 +106,10 @@ export const useServerStats = (): UseServerStatsReturn => {
   const { config: registryConfig } = useRegistryConfig();
 
   // Helper function to map backend health status to frontend status
-  const mapHealthStatus = (healthStatus: string): 'healthy' | 'unhealthy' | 'unknown' => {
+  const mapHealthStatus = (healthStatus: string): 'healthy' | 'unhealthy' | 'unknown' | 'local' => {
     if (!healthStatus || healthStatus === 'unknown') return 'unknown';
     if (healthStatus === 'healthy') return 'healthy';
+    if (healthStatus === 'local') return 'local';
     if (healthStatus.includes('unhealthy') || healthStatus.includes('error') || healthStatus.includes('timeout')) return 'unhealthy';
     return 'unknown';
   };
@@ -147,28 +160,8 @@ export const useServerStats = (): UseServerStatsReturn => {
       const skillsData = skillsResponse.data || {};
       const skillsList = skillsData.skills || [];
 
-      // Debug logging to see what servers are returned
-      console.log('🔍 Server filtering debug info:');
-      console.log(`📊 Total servers returned from API: ${serversList.length}`);
-      console.log('📋 Server list:', serversList.map((s: any) => ({ 
-        name: s.display_name, 
-        path: s.path, 
-        enabled: s.is_enabled 
-      })));
-      
-      // Debug logging for agents
-      console.log(`📊 Total agents returned from API: ${agentsList.length}`);
-      console.log('📋 Agent list:', agentsList.map((a: any) => ({ 
-        name: a.name, 
-        path: a.path, 
-        enabled: a.is_enabled 
-      })));
-      
       // Transform server data from backend format to frontend format
       const transformedServers: Server[] = serversList.map((serverInfo: any) => {
-        // Debug log to see what last_checked_iso data we're getting
-        console.log(`🕐 Server ${serverInfo.display_name}: last_checked_iso =`, serverInfo.last_checked_iso);
-        
         const transformed = {
           name: serverInfo.display_name || 'Unknown Server',
           path: serverInfo.path,
@@ -195,15 +188,11 @@ export const useServerStats = (): UseServerStatsReturn => {
           auth_scheme: serverInfo.auth_scheme,
           auth_header_name: serverInfo.auth_header_name,
           lifecycle_status: serverInfo.status || 'active',
+          // Local-server fields
+          deployment: serverInfo.deployment || 'remote',
+          local_runtime: serverInfo.local_runtime,
+          registered_by: serverInfo.registered_by ?? null,
         };
-        
-        // Debug log the transformed server
-        console.log(`🔄 Transformed server ${transformed.name}:`, {
-          last_checked_time: transformed.last_checked_time,
-          status: transformed.status,
-          enabled: transformed.enabled
-        });
-        
         return transformed;
       });
       
@@ -230,12 +219,6 @@ export const useServerStats = (): UseServerStatsReturn => {
           supported_protocol: agentInfo.supported_protocol || agentInfo.supportedProtocol || null,
           lifecycle_status: agentInfo.status || 'active',
         };
-        
-        console.log(`🔄 Transformed agent ${transformed.name}:`, {
-          enabled: transformed.enabled,
-          num_skills: transformed.num_tools
-        });
-        
         return transformed;
       });
       
@@ -299,8 +282,6 @@ export const useServerStats = (): UseServerStatsReturn => {
         disabled,
         withIssues,
       };
-      
-      console.log('Calculated stats (servers + agents + skills):', newStats);
       setStats(newStats);
     } catch (err: any) {
       console.error('Failed to fetch data:', err);

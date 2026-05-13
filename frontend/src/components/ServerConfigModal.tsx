@@ -65,17 +65,17 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
   // While config is loading, default to with-gateway behavior (safer default)
   const isRegistryOnly = !configLoading && registryConfig?.deployment_mode === 'registry-only';
 
-  // Fetch JWT token when modal opens (only in gateway mode)
-  // We intentionally only depend on isOpen and isRegistryOnly to fetch once per modal open
+  // Fetch JWT token when modal opens (only in gateway mode, and only for remote servers).
+  // Local stdio servers don't go through the gateway — no token needed.
   useEffect(() => {
-    if (isOpen && !isRegistryOnly) {
+    if (isOpen && !isRegistryOnly && server.deployment !== 'local') {
       // Reset token state when modal opens
       setJwtToken(null);
       setTokenError(null);
       fetchJwtToken();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, isRegistryOnly]);
+  }, [isOpen, isRegistryOnly, server.deployment]);
 
   const fetchJwtToken = async () => {
     setTokenLoading(true);
@@ -121,8 +121,84 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     }
   };
 
+  const isLocal = server.deployment === 'local';
+
+  const buildLocalLaunchSpec = useCallback(() => {
+    const rt = server.local_runtime;
+    if (!rt) return null;
+
+    const env: Record<string, string> = { ...(rt.env ?? {}) };
+    // Show literal placeholders for required_env keys the user hasn't filled in.
+    for (const k of rt.required_env ?? []) {
+      if (!(k in env)) env[k] = '<your-value>';
+    }
+
+    switch (rt.type) {
+      case 'docker': {
+        // For docker, env must be passed into the container with -e flags.
+        // The top-level `env` map only sets vars on the host docker CLI process —
+        // it does NOT propagate inside the container. So we expand both literal
+        // env entries and required_env into -e flags on the docker run command.
+        const args = ['run', '-i', '--rm'];
+        for (const [k, v] of Object.entries(rt.env ?? {})) {
+          args.push('-e', `${k}=${v}`);
+        }
+        for (const k of rt.required_env ?? []) {
+          // -e KEY (no value) tells docker to inherit the host env var of that
+          // name — letting the IDE pass the user-supplied secret through.
+          args.push('-e', k);
+        }
+        const imageRef = rt.image_digest ? `${rt.package}@${rt.image_digest}` : rt.package;
+        args.push(imageRef, ...(rt.args ?? []));
+        // The IDE-visible `env` block carries placeholders for required keys so
+        // users know what to fill in; literal values are already in the args.
+        const ideEnv: Record<string, string> = {};
+        for (const k of rt.required_env ?? []) {
+          ideEnv[k] = '<your-value>';
+        }
+        return { command: 'docker', args, env: ideEnv };
+      }
+      case 'npx': {
+        const pkg = rt.version ? `${rt.package}@${rt.version}` : rt.package;
+        return { command: 'npx', args: ['-y', pkg, ...(rt.args ?? [])], env };
+      }
+      case 'uvx': {
+        const pkg = rt.version ? `${rt.package}@${rt.version}` : rt.package;
+        return { command: 'uvx', args: [pkg, ...(rt.args ?? [])], env };
+      }
+      case 'command':
+      default:
+        return { command: rt.package, args: rt.args ?? [], env };
+    }
+  }, [server.local_runtime]);
+
   const generateMCPConfig = useCallback(() => {
     const serverName = server.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+
+    // Local (stdio) servers: emit a launch recipe shaped per IDE.
+    if (isLocal) {
+      const spec = buildLocalLaunchSpec();
+      if (!spec) {
+        return { mcpServers: { [serverName]: { error: 'No local_runtime configured' } } };
+      }
+      switch (selectedIDE) {
+        case 'roo-code':
+          return {
+            mcpServers: {
+              [serverName]: { type: 'stdio', ...spec, disabled: false },
+            },
+          };
+        case 'kiro':
+          return {
+            mcpServers: {
+              [serverName]: { ...spec, disabled: false, autoApprove: [] },
+            },
+          };
+        default:
+          // Cursor, Claude Code: identical command/args/env shape.
+          return { mcpServers: { [serverName]: spec } };
+      }
+    }
 
     // URL determination with fallback chain:
     // 1. mcp_endpoint (custom override) - always takes precedence
@@ -237,6 +313,32 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
   const generateGooseConfig = useCallback(() => {
     const serverName = server.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
 
+    // Local (stdio) servers: emit Goose's stdio extension form.
+    if (isLocal) {
+      const spec = buildLocalLaunchSpec();
+      if (!spec) {
+        return `# No local_runtime configured for ${serverName}`;
+      }
+      const lines = [
+        'extensions:',
+        `  ${serverName}:`,
+        `    name: ${serverName}`,
+        `    description: ${server.description}`,
+        `    type: stdio`,
+        `    cmd: ${spec.command}`,
+        `    args: [${spec.args.map(a => JSON.stringify(a)).join(', ')}]`,
+        `    enabled: true`,
+        `    timeout: 300`,
+      ];
+      if (Object.keys(spec.env).length > 0) {
+        lines.splice(7, 0, '    envs:');
+        for (const [k, v] of Object.entries(spec.env)) {
+          lines.splice(8, 0, `      ${k}: ${JSON.stringify(v)}`);
+        }
+      }
+      return lines.join('\n');
+    }
+
     let url: string;
     if (server.mcp_endpoint) {
       url = server.mcp_endpoint;
@@ -284,6 +386,23 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
 
   const generateClaudeCodeCommand = useCallback(() => {
     const serverName = server.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+
+    // Local (stdio) servers: emit `claude mcp add` with stdio transport.
+    if (isLocal) {
+      const spec = buildLocalLaunchSpec();
+      if (!spec) {
+        return `# No local_runtime configured for ${serverName}`;
+      }
+      const envFlags = Object.entries(spec.env)
+        .map(([k, v]) => `-e ${k}=${JSON.stringify(v)}`)
+        .join(' ');
+      const argsStr = spec.args.map(a => JSON.stringify(a)).join(' ');
+      let command = `claude mcp add ${serverName}`;
+      if (envFlags) command += ` ${envFlags}`;
+      command += ` -- ${spec.command}`;
+      if (argsStr) command += ` ${argsStr}`;
+      return command;
+    }
 
     // URL determination (same logic as generateMCPConfig)
     let url: string;
@@ -409,7 +528,28 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
             </ol>
           </div>
 
-          {!isRegistryOnly ? (
+          {isLocal ? (
+            <div className="bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg p-4">
+              <h4 className="font-medium text-purple-900 dark:text-purple-100 mb-2">Local Server</h4>
+              <p className="text-sm text-purple-800 dark:text-purple-200">
+                This server runs on your machine via stdio. The configuration below
+                is a launch recipe — no gateway authentication needed.
+              </p>
+              {server.local_runtime?.required_env && server.local_runtime.required_env.length > 0 && (
+                <div className="mt-3 p-3 rounded bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800">
+                  <p className="text-sm text-yellow-900 dark:text-yellow-100">
+                    <strong>Action required:</strong> replace{' '}
+                    <code className="bg-yellow-100 dark:bg-yellow-800 px-1 rounded">&lt;your-value&gt;</code>{' '}
+                    in the <code className="bg-yellow-100 dark:bg-yellow-800 px-1 rounded">env</code> block
+                    for these keys before pasting into your IDE config:{' '}
+                    <code className="bg-yellow-100 dark:bg-yellow-800 px-1 rounded">
+                      {server.local_runtime.required_env.join(', ')}
+                    </code>
+                  </p>
+                </div>
+              )}
+            </div>
+          ) : !isRegistryOnly ? (
             <div className={`border rounded-lg p-4 ${
               jwtToken
                 ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'

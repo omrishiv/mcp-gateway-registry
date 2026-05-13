@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from ..audit import set_audit_action
 from ..auth.dependencies import nginx_proxied_auth
+from ..constants import DeploymentType
 from ..core.config import DeploymentMode, RegistryMode, settings
 from ..repositories.factory import get_search_repository
 from ..repositories.interfaces import SearchRepositoryBase
@@ -123,6 +124,20 @@ class ServerSearchResult(BaseModel):
     trust_verified: str = Field(
         default="none",
         description="Trust verification status: none, verified, expired, revoked, not_found, pending",
+    )
+    # Local-server fields. For deployment='local', endpoint_url is
+    # not meaningful — clients should use local_runtime to construct a stdio
+    # launch recipe instead.
+    deployment: Literal["remote", "local"] = Field(
+        default="remote",
+        description="Deployment model: 'remote' (HTTP) or 'local' (stdio launch recipe).",
+    )
+    local_runtime: dict | None = Field(
+        default=None,
+        description=(
+            "Stdio launch recipe for local servers (type, package, args, env, "
+            "required_env, version, image_digest). Null for remote."
+        ),
     )
 
 
@@ -549,6 +564,15 @@ async def semantic_search(
         server_ans_meta = server_full_info.get("ans_metadata") if server_full_info else None
         server_trust = _compute_trust_verified(server_ans_meta)
 
+        # For local servers, endpoint_url is meaningless (no nginx route). The
+        # FAISS service surfaces deployment + local_runtime in its result dict;
+        # propagate them so consumers can construct a stdio launch recipe
+        # rather than try to GET a gateway URL that returns 503.
+        server_deployment = server.get("deployment", "remote")
+        server_local_runtime = server.get("local_runtime")
+        if server_deployment == DeploymentType.LOCAL:
+            endpoint_url = None
+
         filtered_servers.append(
             ServerSearchResult(
                 path=server_path,
@@ -567,6 +591,8 @@ async def semantic_search(
                 sse_endpoint=server.get("sse_endpoint"),
                 supported_transports=server.get("supported_transports", []),
                 trust_verified=server_trust,
+                deployment=server_deployment,
+                local_runtime=server_local_runtime,
             )
         )
 

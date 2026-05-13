@@ -1091,6 +1091,10 @@ class FaissService:
                             "is_enabled": server_info.get("is_enabled", False),
                             "relevance_score": relevance,
                             "match_context": match_context,
+                            # Local-server fields so consumers can distinguish how
+                            # to connect (HTTP gateway vs stdio launch recipe).
+                            "deployment": server_info.get("deployment", "remote"),
+                            "local_runtime": server_info.get("local_runtime"),
                             "matching_tools": [
                                 {
                                     "tool_name": tool.get("tool_name", ""),

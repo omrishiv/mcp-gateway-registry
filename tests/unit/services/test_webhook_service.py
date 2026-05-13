@@ -264,3 +264,65 @@ class TestSendRegistrationWebhook:
                 assert any(
                     "Invalid webhook URL scheme" in record.message for record in caplog.records
                 )
+
+
+    @pytest.mark.asyncio
+    async def test_local_runtime_env_redacted_in_payload(self):
+        """local_runtime.env values must be masked before being
+        sent to the external webhook endpoint, mirroring the registration gate
+        sanitizer."""
+        from unittest.mock import AsyncMock
+
+        local_card = {
+            "server_name": "local-server",
+            "deployment": "local",
+            "local_runtime": {
+                "type": "npx",
+                "package": "@acme/mcp",
+                "env": {"LOG_LEVEL": "info", "API_KEY": "${API_KEY}"},
+                "args": ["--api-key", "sk-realsecret"],
+                "required_env": ["API_KEY"],
+            },
+            "auth_credential": "should-be-stripped",
+        }
+
+        captured_payload = {}
+
+        async def _capture_post(url, json, headers):
+            captured_payload.update(json)
+            response = MagicMock()
+            response.status_code = 200
+            return response
+
+        with patch("registry.services.webhook_service.settings") as mock_settings:
+            mock_settings.registration_webhook_url = "https://hooks.example.com/recv"
+            mock_settings.registration_webhook_auth_header_name = ""
+            mock_settings.registration_webhook_auth_token = ""
+            mock_settings.registration_webhook_timeout_seconds = 10
+
+            mock_client = AsyncMock()
+            mock_client.__aenter__.return_value.post = _capture_post
+            mock_client.__aexit__.return_value = None
+
+            with patch(
+                "registry.services.webhook_service.httpx.AsyncClient",
+                return_value=mock_client,
+            ):
+                await send_registration_webhook(
+                    event_type="registration",
+                    registration_type="server",
+                    card_data=local_card,
+                )
+
+        sent_card = captured_payload["card"]
+        # Top-level credential fields stripped (existing behavior).
+        assert "auth_credential" not in sent_card
+        # local_runtime.env values masked, keys preserved.
+        rt = sent_card["local_runtime"]
+        assert set(rt["env"].keys()) == {"LOG_LEVEL", "API_KEY"}
+        assert all(v == "<redacted>" for v in rt["env"].values())
+        # args fully masked.
+        assert rt["args"] == ["<redacted>", "<redacted>"]
+        # Non-sensitive fields pass through.
+        assert rt["package"] == "@acme/mcp"
+        assert rt["required_env"] == ["API_KEY"]
