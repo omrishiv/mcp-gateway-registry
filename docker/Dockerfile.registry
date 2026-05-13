@@ -33,19 +33,16 @@ WORKDIR /app
 RUN pip install --no-cache-dir uv && \
     uv venv .venv --python 3.14
 
-# Install CPU-only PyTorch first from the dedicated index (large, rarely changes)
-RUN . .venv/bin/activate && \
-    uv pip install --index-url https://download.pytorch.org/whl/cpu \
-    "torch>=2.0.0" \
-    "torchvision"
-
-# Copy ONLY the dependency manifest to leverage Docker layer caching.
-# This layer only rebuilds when pyproject.toml changes.
+# Copy dependency manifests FIRST so the install layer is cached on the
+# (pyproject, lock) pair, not on source changes. The root pyproject.toml
+# pins torch to the CPU wheel via [tool.uv.sources], so uv sync --locked
+# gets the CPU-only build with no --extra-index-url ceremony.
 COPY pyproject.toml /app/pyproject.toml
+COPY uv.lock        /app/uv.lock
 
-# Install all remaining deps from pyproject.toml in one step (no duplicate inline list)
-RUN . .venv/bin/activate && \
-    uv pip install --requirement pyproject.toml
+# Install dependencies from uv.lock. --locked fails the build if the
+# lock is out of sync with pyproject.toml.
+RUN uv sync --locked --no-dev
 
 # Copy only the application source directories needed (NOT the entire repo)
 COPY registry/ /app/registry/
@@ -54,8 +51,9 @@ COPY api/ /app/api/
 COPY scripts/ /app/scripts/
 COPY cli/examples/ /app/cli/examples/
 
-# Install the registry package in editable mode
-RUN . .venv/bin/activate && uv pip install -e .
+# Install the registry package in editable mode (--no-deps; all runtime
+# deps already installed above by `uv sync --locked`).
+RUN . .venv/bin/activate && uv pip install --no-deps -e .
 
 # Copy scopes.yml to /app/config/ to avoid EFS mount overwriting it
 RUN mkdir -p /app/config && cp /app/auth_server/scopes.yml /app/config/scopes.yml

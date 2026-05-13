@@ -34,36 +34,26 @@ RUN chown appuser:appuser /app
 USER appuser
 
 # Setup Python environment as appuser
-# Install CPU-only PyTorch FIRST from the CPU wheel index
-RUN uv venv .venv --python 3.14 && \
-    . .venv/bin/activate && \
-    uv pip install torch --index-url https://download.pytorch.org/whl/cpu
+RUN uv venv .venv --python 3.14
 
 # Switch back to root for COPY operations
 USER root
 
-# Copy server files with correct ownership
+# Copy dependency manifests FIRST so the install layer is cached on the
+# (pyproject, lock) pair, not on source changes.
+COPY --chown=appuser:appuser ${SERVER_DIR:-.}/pyproject.toml /app/pyproject.toml
+COPY --chown=appuser:appuser ${SERVER_DIR:-.}/uv.lock        /app/uv.lock
+
+# Install dependencies from uv.lock. --locked fails the build if the
+# lock is out of sync with pyproject.toml.
+USER appuser
+RUN uv sync --locked --no-dev
+
+# Copy source last.
+USER root
 COPY --chown=appuser:appuser ${SERVER_DIR:-.}/ /app/
 
-# Copy registry module for embeddings support (only when building from root with SERVER_DIR set)
-COPY --chown=root:root . /tmp/build-context/
-RUN if [ -d /tmp/build-context/registry ]; then \
-        cp -r /tmp/build-context/registry /app/registry && \
-        chown -R appuser:appuser /app/registry && \
-        echo "Registry module copied successfully"; \
-    else \
-        echo "Registry module not found in build context (expected for non-mcpgw servers)"; \
-    fi && \
-    rm -rf /tmp/build-context
-
-# Switch to appuser for package installation
 USER appuser
-
-# Install remaining dependencies from pyproject.toml
-RUN . .venv/bin/activate && \
-    if [ -f /app/pyproject.toml ]; then \
-        uv pip install --requirement /app/pyproject.toml; \
-    fi
 
 # Expose default port (can be overridden by environment variable)
 EXPOSE 8000

@@ -1,7 +1,9 @@
-# Lightweight MCP Server Dockerfile for simple servers in the servers/ directory
-# Each server must have pyproject.toml and server.py
-# Use this for servers that don't need PyTorch or the registry module (e.g., currenttime, fininfo)
-# For servers needing embeddings/sentence-transformers, use Dockerfile.mcp-server instead
+# Lightweight MCP Server Dockerfile for simple servers in the servers/ directory.
+# Each server must have pyproject.toml, uv.lock, and server.py.
+# Skips git + build-essential; use this when none of the server's locked
+# dependencies need to compile from source. For servers that do (e.g.
+# anything pulling a sdist without a wheel for the build target), use
+# Dockerfile.mcp-server.
 FROM python:3.14-slim
 
 # Build arg for server directory (when building from repo root)
@@ -38,17 +40,21 @@ RUN uv venv .venv --python 3.14
 # Switch back to root for COPY operations
 USER root
 
-# Copy server files with correct ownership
+# Copy dependency manifests first so the install layer caches on the
+# (pyproject, lock) pair, not on source changes.
+COPY --chown=appuser:appuser ${SERVER_DIR:-.}/pyproject.toml /app/pyproject.toml
+COPY --chown=appuser:appuser ${SERVER_DIR:-.}/uv.lock        /app/uv.lock
+
+# Install dependencies from uv.lock. --locked fails the build if the
+# lock is out of sync with pyproject.toml.
+USER appuser
+RUN uv sync --locked --no-dev
+
+# Copy source last.
+USER root
 COPY --chown=appuser:appuser ${SERVER_DIR:-.}/ /app/
 
-# Switch to appuser for package installation
 USER appuser
-
-# Install dependencies from pyproject.toml
-RUN . .venv/bin/activate && \
-    if [ -f /app/pyproject.toml ]; then \
-        uv pip install --requirement /app/pyproject.toml; \
-    fi
 
 # Expose default port (can be overridden by environment variable)
 EXPOSE 8000

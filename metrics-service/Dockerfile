@@ -10,13 +10,24 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install dependencies
-COPY pyproject.toml .
-RUN pip install uv && uv pip install --system -e .
+# Install uv and create venv
+RUN pip install uv && uv venv .venv --python 3.14
+
+# Copy dependency manifests first so the install layer is cached on the
+# (pyproject, lock) pair, not on source changes.
+COPY pyproject.toml uv.lock ./
+
+# Install dependencies from uv.lock. --locked fails the build if the
+# lock is out of sync with pyproject.toml.
+RUN uv sync --locked --no-dev
 
 # Copy application
 COPY app/ app/
 COPY create_api_key.py ./
+
+# Install the app package itself in editable mode (runtime deps already
+# installed above by uv sync; --no-deps skips re-resolving).
+RUN . .venv/bin/activate && uv pip install --no-deps -e .
 
 # Create data directory
 RUN mkdir -p /var/lib/sqlite
@@ -42,4 +53,4 @@ ENV BUILD_VERSION=$BUILD_VERSION
 # Switch to non-root user
 USER appuser
 
-CMD ["python", "-m", "app.main"]
+CMD ["/app/.venv/bin/python", "-m", "app.main"]

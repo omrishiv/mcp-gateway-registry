@@ -61,13 +61,6 @@ spec:
           env:
             - name: HOST
               value: {{ .Values.app.bindHost | quote }}
-            {{- if .Values.app.embeddingsApiKeyExistingSecret }}
-            - name: EMBEDDINGS_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.app.embeddingsApiKeyExistingSecret }}
-                  key: {{ .Values.app.embeddingsApiKeyExistingSecretKey }}
-            {{- end }}
             {{- /* GitHub private repo auth (SKILL.md fetching) */}}
             {{- if .Values.app.githubAppId }}
             - name: GITHUB_APP_ID

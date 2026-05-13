@@ -1,0 +1,59 @@
+name: uv.lock freshness check
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - '**/pyproject.toml'
+      - '**/uv.lock'
+      - '.github/workflows/uv-lock-check.yml'
+  push:
+    branches: [main, develop]
+    paths:
+      - '**/pyproject.toml'
+      - '**/uv.lock'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lock-check:
+    name: "Lock check: ${{ matrix.project }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        project:
+          - "."
+          - "auth_server"
+          - "metrics-service"
+          - "servers/currenttime"
+          - "servers/example-server"
+          - "servers/fininfo"
+          - "servers/mcpgw"
+          - "servers/realserverfaketools"
+          - "agents/a2a"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b #v8.1.0
+
+      - name: Verify uv.lock is in sync with pyproject.toml
+        working-directory: ${{ matrix.project }}
+        run: |
+          echo "Checking ${{ matrix.project }}/uv.lock ..."
+          if ! uv lock --check; then
+            echo ""
+            echo "::error::uv.lock in ${{ matrix.project }}/ is out of sync with pyproject.toml."
+            echo "::error::Run 'uv lock' in that directory and commit the updated uv.lock."
+            exit 1
+          fi

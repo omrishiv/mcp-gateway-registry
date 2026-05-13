@@ -11,7 +11,7 @@ To update: edit charts/mcpgw/reserved-env-names.txt and run
 `helm dep update` on any parent chart that depends on this subchart.
 
 Sections (in order below):
-  1. env: block (HOST, EMBEDDINGS_*, GITHUB_*)
+  1. env: block (HOST, GITHUB_*)
   2. mcpgw per-chart secret
   3. shared-secret (stack-level)
 

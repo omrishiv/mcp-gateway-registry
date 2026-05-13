@@ -625,12 +625,6 @@ For finer-grained control, individual sensitive values can be sourced from separ
 | `ans.apiKey` | `ans.apiKeyExistingSecret` | `ANS_API_KEY` |
 | `ans.apiSecret` | `ans.apiSecretExistingSecret` | `ANS_API_SECRET` |
 
-**mcpgw only:**
-
-| Field | ExistingSecret value | ExistingSecretKey default |
-|-------|---------------------|--------------------------|
-| `app.embeddingsApiKey` | `app.embeddingsApiKeyExistingSecret` | `EMBEDDINGS_API_KEY` |
-
 When a per-key existing secret is set, the chart skips writing that key into its managed secret and instead injects the value via `env.valueFrom.secretKeyRef`. The key name within the existing secret can be customized using the corresponding `ExistingSecretKey` value.
 
 ### Example: Using External Secrets

@@ -12,6 +12,7 @@ on:
       - 'docker/Dockerfile.registry'
       - 'docker/registry-entrypoint.sh'
       - 'pyproject.toml'
+      - 'uv.lock'
       - '.github/workflows/build-registry.yml'
   workflow_dispatch:
 
