@@ -101,13 +101,24 @@ spec:
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+          lifecycle:
+            preStop:
+              exec:
+                # Give the LB time to deregister this pod before the
+                # ASGI server closes in-flight MCP/tool HTTP requests.
+                command: ["sh", "-c", "sleep 5"]
           livenessProbe:
-            tcpSocket:
-              port: 8000
+            httpGet:
+              path: /health
+              port: http
             initialDelaySeconds: 30
             periodSeconds: 10
           readinessProbe:
-            tcpSocket:
-              port: 8000
+            httpGet:
+              path: /health
+              port: http
             initialDelaySeconds: 10
             periodSeconds: 5
+      # Exceeds the httpx 30s per-request timeout used by the mcpgw
+      # tools so rolling deploys drain in-flight requests cleanly.
+      terminationGracePeriodSeconds: 45

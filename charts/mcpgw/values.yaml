@@ -17,6 +17,10 @@ image:
 # Application configuration
 app:
   name: mcpgw-server
+  # Number of replicas. The server always runs in stateless MCP transport
+  # mode (hardcoded in server.py) so multi-replica is safe under round-robin
+  # load balancing without any further configuration. OIDC is not currently
+  # wired through the chart; see issue #895.
   replicas: 1
   envSecretName: mcpgw-secret
   existingSecret: ""  # If set, use this existing secret instead of creating one
@@ -55,6 +59,18 @@ service:
   type: ClusterIP
   port: 8003
   annotations: {}
+  # Session affinity. Not needed for multi-replica — the server runs in
+  # stateless MCP mode, so any replica can handle any request. Leave as
+  # "None" unless you have a specific reason (e.g. debugging per-replica
+  # behavior) to pin clients to a single pod.
+  sessionAffinity: None
+
+# PodDisruptionBudget. Only rendered when replicas > 1; protects against
+# voluntary disruptions (node drains, rolling deploys) taking the whole
+# gateway down.
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
 
 # Resource limits and requests
 resources:

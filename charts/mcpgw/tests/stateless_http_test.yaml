@@ -1,0 +1,96 @@
+suite: deployment lifecycle and multi-replica readiness
+templates:
+  - deployment.yaml
+  - poddisruptionbudget.yaml
+  - service.yaml
+release:
+  name: test
+  namespace: default
+tests:
+  - it: uses HTTP /health probes instead of TCP
+    template: deployment.yaml
+    set:
+      app.secretKey: test-key
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /health
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.port
+          value: http
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /health
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.port
+          value: http
+      - isNull:
+          path: spec.template.spec.containers[0].livenessProbe.tcpSocket
+      - isNull:
+          path: spec.template.spec.containers[0].readinessProbe.tcpSocket
+
+  - it: configures graceful shutdown with preStop hook and termination grace period
+    template: deployment.yaml
+    set:
+      app.secretKey: test-key
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 45
+      - equal:
+          path: spec.template.spec.containers[0].lifecycle.preStop.exec.command
+          value: ["sh", "-c", "sleep 5"]
+
+  - it: does not render PDB for single replica
+    template: poddisruptionbudget.yaml
+    set:
+      app.secretKey: test-key
+      app.replicas: 1
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders PDB when replicas > 1
+    template: poddisruptionbudget.yaml
+    set:
+      app.secretKey: test-key
+      app.replicas: 3
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: PodDisruptionBudget
+      - equal:
+          path: spec.minAvailable
+          value: 1
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/name"]
+          value: mcpgw-server
+
+  - it: does not render PDB when explicitly disabled
+    template: poddisruptionbudget.yaml
+    set:
+      app.secretKey: test-key
+      app.replicas: 3
+      podDisruptionBudget.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: service does not set sessionAffinity by default
+    template: service.yaml
+    set:
+      app.secretKey: test-key
+    asserts:
+      - isNull:
+          path: spec.sessionAffinity
+
+  - it: service sets ClientIP sessionAffinity when requested
+    template: service.yaml
+    set:
+      app.secretKey: test-key
+      service.sessionAffinity: ClientIP
+    asserts:
+      - equal:
+          path: spec.sessionAffinity
+          value: ClientIP

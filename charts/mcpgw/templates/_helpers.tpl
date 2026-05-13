@@ -14,6 +14,10 @@ Sections (in order below):
   1. env: block (HOST, GITHUB_*)
   2. mcpgw per-chart secret
   3. shared-secret (stack-level)
+  4. OIDC / OAuth proxy vars read by server.py — chart does not wire
+     OIDC today (see issue #895). OIDC_ENABLED is reserved so an
+     operator cannot half-enable OAuthProxy by setting the flag
+     in via extraEnv without the rest of the required config.
 
 Over-rejection is preferred to under-rejection: a user attempting to
 inject one of these via extraEnv gets a clear template-render error.
@@ -42,7 +46,11 @@ Call as: {{- include "mcpgw.validateExtraEnv" . -}}
     {{- fail (printf "mcpgw.extraEnv[%d]: missing required 'name' field" $i) -}}
   {{- end -}}
   {{- if has $e.name $reserved -}}
-    {{- fail (printf "mcpgw.extraEnv[%d]: %q is a reserved variable managed by the chart (via env: or envFrom from the chart's secrets/configmaps). Remove it from extraEnv. If a values.yaml field controls it (e.g. app.githubAppId for GITHUB_APP_ID), set that instead; otherwise the value is managed by the chart's internal secrets and must not be overridden via extraEnv." $i $e.name) -}}
+    {{- if eq $e.name "OIDC_ENABLED" -}}
+      {{- fail (printf "mcpgw.extraEnv[%d]: %q is reserved by the chart. OIDC is not currently configurable through chart values (see issue #895); setting just this flag starts a misconfigured OAuthProxy. To enable OIDC, supply the full OIDC env set (OIDC_ENABLED, OIDC_CLIENT_ID/SECRET, Keycloak URLs, M2M creds, MCPGW_BASE_URL) via extraEnvFrom from a secret you manage." $i $e.name) -}}
+    {{- else -}}
+      {{- fail (printf "mcpgw.extraEnv[%d]: %q is a reserved variable managed by the chart (via env: or envFrom from the chart's secrets/configmaps). Remove it from extraEnv. If a values.yaml field controls it (e.g. app.githubAppId for GITHUB_APP_ID), set that instead; otherwise the value is managed by the chart's internal secrets and must not be overridden via extraEnv." $i $e.name) -}}
+    {{- end -}}
   {{- end -}}
   {{- if hasKey $seen $e.name -}}
     {{- fail (printf "mcpgw.extraEnv[%d]: duplicate name %q (first seen at index %v)" $i $e.name (index $seen $e.name)) -}}
