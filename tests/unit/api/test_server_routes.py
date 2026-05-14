@@ -1423,6 +1423,7 @@ class TestEditLocalServer:
 
         response = test_client_admin.post(
             "/api/edit/local-srv",
+            headers={"accept": "application/json"},
             data={
                 "name": "Existing Local",
                 "description": "updated",
@@ -1531,6 +1532,7 @@ class TestEditLocalServer:
         ):
             response = test_client_admin.post(
                 "/api/edit/remote-srv",
+                headers={"accept": "application/json"},
                 data={
                     "name": "Existing Remote",
                     "description": "updated",
@@ -1705,6 +1707,7 @@ class TestEditLocalSecurityReviewReset:
 
         response = test_client_admin.post(
             "/api/edit/local-srv",
+            headers={"accept": "application/json"},
             data={
                 "name": "Reviewed",
                 "description": "updated copy",  # cosmetic change
@@ -1740,6 +1743,7 @@ class TestEditLocalSecurityReviewReset:
 
         response = test_client_admin.post(
             "/api/edit/local-srv",
+            headers={"accept": "application/json"},
             data={
                 "name": "Reviewed",
                 "deployment": "local",
@@ -1773,6 +1777,7 @@ class TestEditLocalSecurityReviewReset:
 
         response = test_client_admin.post(
             "/api/edit/local-srv",
+            headers={"accept": "application/json"},
             data={
                 "name": "Reviewed",
                 "deployment": "local",
