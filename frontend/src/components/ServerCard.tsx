@@ -23,6 +23,7 @@ import StarRatingWidget from './StarRatingWidget';
 import VersionBadge from './VersionBadge';
 import VersionSelectorModal from './VersionSelectorModal';
 import DeleteConfirmation from './DeleteConfirmation';
+import ConfirmModal from './ConfirmModal';
 import StatusBadge from './StatusBadge';
 import { ANSBadge } from './ANSBadge';
 import ServerDetailsModal from './ServerDetailsModal';
@@ -189,6 +190,8 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [expandedDescriptions, setExpandedDescriptions] = useState<Set<number>>(new Set());
+  const [showClearSecurityPendingConfirm, setShowClearSecurityPendingConfirm] = useState(false);
+  const [clearingSecurityPending, setClearingSecurityPending] = useState(false);
 
   const closeToolsModal = useCallback(() => {
     setShowTools(false);
@@ -379,6 +382,27 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
     }
   }, [server.path, authToken, onServerUpdate]);
 
+  const handleClearSecurityPending = useCallback(async () => {
+    if (clearingSecurityPending) return;
+    setClearingSecurityPending(true);
+    try {
+      const cleanPath = server.path.replace(/^\/+/, '');
+      await axios.post(`/api/clear-security-pending-local/${cleanPath}`);
+      onShowToast?.('Marked as security-reviewed', 'success');
+      if (onServerUpdate) {
+        onServerUpdate(server.path, {
+          tags: (server.tags || []).filter(t => t !== 'security-pending-local'),
+        });
+      }
+      setShowClearSecurityPendingConfirm(false);
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { detail?: string } } };
+      onShowToast?.(e.response?.data?.detail || 'Failed to clear tag', 'error');
+    } finally {
+      setClearingSecurityPending(false);
+    }
+  }, [server.path, server.tags, clearingSecurityPending, onServerUpdate, onShowToast]);
+
   const getSecurityIconState = () => {
     // Local (stdio) servers can't be auto-scanned. Their security state is
     // signalled by the security-pending-local tag instead:
@@ -501,29 +525,7 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                 {isSecurityPendingLocal && isAdmin && (
                   <button
                     type="button"
-                    onClick={async () => {
-                      const ok = window.confirm(
-                        `Mark "${server.name}" as security-reviewed?\n\n` +
-                        `Local servers are not auto-scanned because the registry has no HTTP ` +
-                        `endpoint to probe. Clearing this tag asserts that you have manually ` +
-                        `reviewed the launch recipe (package, args, env) and consider it safe ` +
-                        `for distribution to developers.`
-                      );
-                      if (!ok) return;
-                      try {
-                        const cleanPath = server.path.replace(/^\/+/, '');
-                        await axios.post(`/api/clear-security-pending-local/${cleanPath}`);
-                        onShowToast?.('Marked as security-reviewed', 'success');
-                        if (onServerUpdate) {
-                          onServerUpdate(server.path, {
-                            tags: (server.tags || []).filter(t => t !== 'security-pending-local'),
-                          });
-                        }
-                      } catch (err: unknown) {
-                        const e = err as { response?: { data?: { detail?: string } } };
-                        onShowToast?.(e.response?.data?.detail || 'Failed to clear tag', 'error');
-                      }
-                    }}
+                    onClick={() => setShowClearSecurityPendingConfirm(true)}
                     className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-amber-100 to-orange-100 text-amber-700 dark:from-amber-900/30 dark:to-orange-900/30 dark:text-amber-300 rounded-full flex-shrink-0 border border-amber-200 dark:border-amber-600 hover:from-amber-200 hover:to-orange-200 transition"
                     title="Click to mark as security-reviewed (admin only)"
                   >
@@ -787,8 +789,11 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                 ) : null;
               })()}
 
-              {/* Refresh Button - only show if user has health_check_service permission */}
-              {canHealthCheck && (
+              {/* Refresh Button — only show if the user has health_check_service
+                  permission AND the server has something to refresh. Local
+                  (stdio) servers have no HTTP endpoint to probe, so refresh
+                  is a no-op for them — hide the button entirely. */}
+              {canHealthCheck && !isLocal && (
                 <button
                   onClick={handleRefreshHealth}
                   disabled={loadingRefresh}
@@ -936,6 +941,23 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
             : undefined
         }
         onShowToast={onShowToast}
+      />
+
+      <ConfirmModal
+        isOpen={showClearSecurityPendingConfirm}
+        onClose={() => setShowClearSecurityPendingConfirm(false)}
+        onConfirm={handleClearSecurityPending}
+        title={`Mark "${server.name}" as security-reviewed?`}
+        message={
+          'Local servers are not auto-scanned because the registry has no HTTP ' +
+          'endpoint to probe. Clearing this tag asserts that you have manually ' +
+          'reviewed the launch recipe (package, args, env) and consider it safe ' +
+          'for distribution to developers.'
+        }
+        confirmLabel="Mark as reviewed"
+        cancelLabel="Cancel"
+        loadingLabel="Marking..."
+        isLoading={clearingSecurityPending}
       />
 
       <VersionSelectorModal
