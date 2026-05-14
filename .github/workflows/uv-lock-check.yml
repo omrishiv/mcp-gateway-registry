@@ -51,6 +51,27 @@ jobs:
         working-directory: ${{ matrix.project }}
         run: |
           echo "Checking ${{ matrix.project }}/uv.lock ..."
+
+          # If the lockfile pins an exclude-newer in its [options] block,
+          # export it as UV_EXCLUDE_NEWER so `uv lock --check` re-resolves
+          # against the same supply-chain quarantine that produced the lock.
+          # Without this, uv reports the lockfile as out of sync because the
+          # global exclude-newer is "missing" at check time.
+          lock_cutoff=$(awk '
+            /^\[options\]/ { in_opts = 1; next }
+            /^\[/ { in_opts = 0 }
+            in_opts && /^exclude-newer[[:space:]]*=/ {
+              gsub(/.*=[[:space:]]*"|"[[:space:]]*$/, "")
+              print
+              exit
+            }
+          ' uv.lock)
+
+          if [ -n "$lock_cutoff" ]; then
+            echo "Lockfile pins exclude-newer=$lock_cutoff; exporting UV_EXCLUDE_NEWER"
+            export UV_EXCLUDE_NEWER="$lock_cutoff"
+          fi
+
           if ! uv lock --check; then
             echo ""
             echo "::error::uv.lock in ${{ matrix.project }}/ is out of sync with pyproject.toml."
