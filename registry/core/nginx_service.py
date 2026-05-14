@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from registry.constants import REGISTRY_CONSTANTS, HealthStatus, DeploymentType
+from registry.constants import REGISTRY_CONSTANTS, DeploymentType, HealthStatus
 
 from .config import settings
 from .metrics import NGINX_UPDATES_SKIPPED
