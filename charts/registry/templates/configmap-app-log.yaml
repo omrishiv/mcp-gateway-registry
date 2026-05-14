@@ -18,3 +18,4 @@ data:
   # Issue #987: log file path + format. Empty APP_LOG_DIR lets the backend use its default.
   APP_LOG_DIR: {{ .Values.app.appLogDir | default "" | quote }}
   APP_LOG_FILE_FORMAT: {{ .Values.app.appLogFileFormat | default "json" | quote }}
+  APP_LOG_CONSOLE_FORMAT: {{ .Values.app.appLogConsoleFormat | default "text" | quote }}

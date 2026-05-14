@@ -103,6 +103,18 @@ def _resolve_file_format() -> str:
     return raw
 
 
+def _resolve_console_format() -> str:
+    """Read APP_LOG_CONSOLE_FORMAT from env; accept only 'json' or 'text'."""
+    raw = os.getenv("APP_LOG_CONSOLE_FORMAT", "text").strip().lower()
+    if raw not in ("json", "text"):
+        logging.getLogger(__name__).warning(
+            "APP_LOG_CONSOLE_FORMAT=%r is invalid; falling back to 'text'",
+            raw,
+        )
+        return "text"
+    return raw
+
+
 def setup_mcpgw_logging() -> Path | None:
     """Configure root logger for mcpgw.
 
@@ -121,6 +133,7 @@ def setup_mcpgw_logging() -> Path | None:
     max_bytes = int(os.getenv("APP_LOG_MAX_BYTES", str(50 * 1024 * 1024)))
     backup_count = int(os.getenv("APP_LOG_BACKUP_COUNT", "5"))
     file_format = _resolve_file_format()
+    console_format = _resolve_console_format()
 
     root = logging.getLogger()
     root.setLevel(log_level)
@@ -128,12 +141,20 @@ def setup_mcpgw_logging() -> Path | None:
     for handler in root.handlers[:]:
         root.removeHandler(handler)
 
-    console_formatter = logging.Formatter(CONSOLE_FORMAT)
+    text_formatter = logging.Formatter(CONSOLE_FORMAT)
+    json_formatter = JsonlFormatter(service_name=SERVICE_NAME)
+
+    console_formatter: logging.Formatter
+    if console_format == "json":
+        console_formatter = json_formatter
+    else:
+        console_formatter = text_formatter
+
     file_formatter: logging.Formatter
     if file_format == "json":
-        file_formatter = JsonlFormatter(service_name=SERVICE_NAME)
+        file_formatter = json_formatter
     else:
-        file_formatter = console_formatter
+        file_formatter = text_formatter
 
     # Console handler (always on, human-readable)
     console = logging.StreamHandler()

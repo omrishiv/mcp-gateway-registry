@@ -921,6 +921,17 @@ variable "app_log_file_format" {
   }
 }
 
+variable "app_log_console_format" {
+  description = "STDOUT/console format: 'text' (default, human-readable comma-separated) or 'json' (same JSON Lines schema as app_log_file_format=json). Use 'json' when a log agent / sidecar scrapes container stdout."
+  type        = string
+  default     = "text"
+
+  validation {
+    condition     = contains(["json", "text"], var.app_log_console_format)
+    error_message = "app_log_console_format must be one of: 'json', 'text'"
+  }
+}
+
 # =============================================================================
 # TOOL-LEVEL ACCESS CONTROL (Issue #1026)
 # =============================================================================

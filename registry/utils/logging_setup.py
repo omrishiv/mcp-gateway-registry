@@ -1,16 +1,16 @@
 """Shared logging configuration for registry and auth-server.
 
 Configures three output destinations:
-1. Console (stdout/stderr) - always enabled, human-readable format
+1. Console (stdout/stderr) - always enabled; format from app_log_console_format
 2. RotatingFileHandler - rotated log file (JSONL by default, text if configured)
 3. MongoDBLogHandler - optional, writes to MongoDB application_logs collection
 
-The file format is controlled by settings.app_log_file_format:
-- "json" (default): JSON Lines per docs/logging-standard.md
-- "text": legacy comma-separated format (same as console)
-
-Console format always stays human-readable so `docker logs <container>` is
-skimmable without a JSON parser.
+The file format is controlled by settings.app_log_file_format and the console
+format by settings.app_log_console_format. Both accept "json" (JSON Lines per
+docs/logging-standard.md) or "text" (legacy comma-separated format). File
+format defaults to "json"; console defaults to "text" so `docker logs` /
+`kubectl logs` stay human-skimmable unless an operator opts into JSON for a
+log aggregator.
 """
 
 import json
@@ -92,16 +92,20 @@ def setup_logging(
     for handler in root.handlers[:]:
         root.removeHandler(handler)
 
-    # Console always uses the human-readable text format so `docker logs`
-    # stays skimmable without a JSON parser.
-    console_formatter = logging.Formatter(LOG_FORMAT)
+    text_formatter = logging.Formatter(LOG_FORMAT)
+    json_formatter = JsonlFormatter(service_name=service_name)
 
-    # File format is selected by settings (default JSONL, per issue #987).
+    console_formatter: logging.Formatter
+    if settings.app_log_console_format == "json":
+        console_formatter = json_formatter
+    else:
+        console_formatter = text_formatter
+
     file_formatter: logging.Formatter
     if settings.app_log_file_format == "json":
-        file_formatter = JsonlFormatter(service_name=service_name)
+        file_formatter = json_formatter
     else:
-        file_formatter = console_formatter
+        file_formatter = text_formatter
 
     # 1. Console handler
     console = logging.StreamHandler()

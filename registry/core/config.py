@@ -478,6 +478,16 @@ class Settings(BaseSettings):
             "affected by this setting."
         ),
     )
+    app_log_console_format: str = Field(
+        default="text",
+        description=(
+            "Format for STDOUT/console output. 'text' (default) emits the "
+            "human-readable comma-separated format so `docker logs` / "
+            "`kubectl logs` stay skimmable. 'json' emits the same JSON "
+            "Lines schema as APP_LOG_FILE_FORMAT=json so a sidecar/agent "
+            "scraping STDOUT receives structured records."
+        ),
+    )
 
     # Audit Logging Configuration
     audit_log_enabled: bool = True  # Enable/disable audit logging globally
@@ -674,6 +684,26 @@ class Settings(BaseSettings):
         if normalized not in ("json", "text"):
             raise ValueError(
                 f"APP_LOG_FILE_FORMAT must be 'json' or 'text', got {v!r}"
+            )
+        return normalized
+
+    @field_validator("app_log_console_format", mode="before")
+    @classmethod
+    def _validate_app_log_console_format(
+        cls,
+        v: str,
+    ) -> str:
+        """Accept only 'text' (default, human-readable) or 'json' (JSONL)."""
+        if v is None:
+            return "text"
+        if not isinstance(v, str):
+            raise ValueError(
+                f"APP_LOG_CONSOLE_FORMAT must be a string, got {type(v).__name__}"
+            )
+        normalized = v.strip().lower()
+        if normalized not in ("json", "text"):
+            raise ValueError(
+                f"APP_LOG_CONSOLE_FORMAT must be 'json' or 'text', got {v!r}"
             )
         return normalized
 
