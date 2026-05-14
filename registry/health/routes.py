@@ -2,17 +2,14 @@ import asyncio
 import logging
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
+from ..auth.dependencies import resolve_session_from_cookie
 from ..core.config import settings
 from .service import health_service
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-# Initialize session signer for WebSocket authentication
-signer = URLSafeTimedSerializer(settings.secret_key)
 
 
 @router.websocket("/ws/health_status")
@@ -54,22 +51,13 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.debug(f"WebSocket session cookie found: {bool(session_cookie)}")
 
         if session_cookie:
-            try:
-                # Validate session
-                session_data = signer.loads(
-                    session_cookie, max_age=settings.session_max_age_seconds
+            session_data = await resolve_session_from_cookie(session_cookie)
+            if session_data and session_data.get("username"):
+                logger.info(
+                    f"WebSocket connection from authenticated user: {session_data['username']}"
                 )
-                username = session_data.get("username")
-                if username:
-                    logger.info(f"WebSocket connection from authenticated user: {username}")
-                else:
-                    raise ValueError("No username in session")
-            except (SignatureExpired, BadSignature, ValueError) as e:
-                logger.warning(f"WebSocket authentication failed: {e}")
-                await websocket.close(code=1008, reason="Authentication failed")
-                return
-            except Exception as e:
-                logger.warning(f"WebSocket authentication error: {e}")
+            else:
+                logger.warning("WebSocket authentication failed")
                 await websocket.close(code=1008, reason="Authentication failed")
                 return
         else:

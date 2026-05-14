@@ -208,29 +208,24 @@ class OAuthCallbackHandler(BaseHTTPRequestHandler):
             return None
 
     def create_session_cookie(self, user_info):
-        """Create session cookie matching registry format"""
-        try:
-            signer = URLSafeTimedSerializer(SECRET_KEY)
+        """DEPRECATED — broken by the move to server-side OAuth sessions.
 
-            # Create session data matching old implementation format
-            session_data = {
-                "username": user_info["username"],
-                "groups": user_info.get("groups", []),
-                "provider_type": "cognito",
-                "is_oauth": True,
-                "session_id": secrets.token_urlsafe(16),
-                "login_time": None,  # Will be set by registry if needed
-            }
+        The registry now stores OAuth sessions in MongoDB and the browser
+        cookie carries only an opaque session_id signed with SECRET_KEY. Any
+        cookie minted locally by this CLI without a corresponding MongoDB
+        record will be rejected by the registry as a legacy dict-payload
+        cookie (forces re-login via the auth server).
 
-            # Serialize the session data
-            cookie_value = signer.dumps(session_data)
-            logger.info(f"Session cookie created for user: {user_info['username']}")
-
-            return cookie_value
-
-        except Exception as e:
-            logger.error(f"Failed to create session cookie: {e}")
-            return None
+        To use this CLI, drive the auth server's OAuth flow from the browser
+        (it sets the cookie and writes the session record together) or
+        rewrite this tool to write to the session store directly via the
+        registry's auth_server/session_store.create_session() helper.
+        """
+        raise NotImplementedError(
+            "cli_user_auth's local cookie minting is incompatible with the "
+            "server-side session store. Use the auth server's OAuth flow "
+            "(browser-driven) to obtain a working session cookie."
+        )
 
     def send_success_response(self):
         """Send success response to browser"""

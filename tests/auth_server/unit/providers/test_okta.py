@@ -192,8 +192,15 @@ class TestOktaTokenValidation:
 
     def test_validate_token_self_signed(self):
         """Test self-signed token path delegates correctly."""
+        import os
+
         provider = OktaProvider("dev-123.okta.com", "cid", "cs")
 
+        # Sign with whatever SECRET_KEY the okta provider module loaded.
+        # This used to default to a hardcoded "development-secret-key" when
+        # SECRET_KEY was unset; now SECRET_KEY is required at startup, so we
+        # must read the same value the provider reads.
+        secret = os.environ["SECRET_KEY"]
         now = int(time.time())
         token = pyjwt.encode(
             {
@@ -207,7 +214,7 @@ class TestOktaTokenValidation:
                 "exp": now + 3600,
                 "iat": now,
             },
-            "development-secret-key",
+            secret,
             algorithm="HS256",
         )
 

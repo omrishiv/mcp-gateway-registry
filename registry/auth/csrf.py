@@ -1,7 +1,8 @@
 """CSRF token generation and validation utilities.
 
-Provides signed CSRF tokens bound to user sessions using itsdangerous.
-Tokens are validated against the session ID and expire based on session max age.
+Provides signed CSRF tokens bound to the user's opaque session_id (resolved
+from the signed session cookie via the server-side session store). Tokens
+expire based on session max age.
 """
 
 import logging
@@ -10,6 +11,7 @@ from fastapi import Form, HTTPException, Request, status
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from ..core.config import settings
+from .dependencies import resolve_session_from_cookie
 
 logger = logging.getLogger(__name__)
 
@@ -21,10 +23,12 @@ _csrf_signer = URLSafeTimedSerializer(settings.secret_key)
 def generate_csrf_token(
     session_id: str,
 ) -> str:
-    """Generate a signed CSRF token bound to the given session ID.
+    """Generate a signed CSRF token bound to the given session_id.
 
     Args:
-        session_id: The session cookie value to bind the token to.
+        session_id: The opaque server-side session identifier (NOT the raw
+            cookie value). Callers obtain this by resolving the session
+            cookie first.
 
     Returns:
         A signed CSRF token string.
@@ -38,11 +42,11 @@ def validate_csrf_token(
     token: str,
     session_id: str,
 ) -> bool:
-    """Validate a CSRF token against the session ID.
+    """Validate a CSRF token against the session_id.
 
     Args:
         token: The CSRF token to validate.
-        session_id: The session cookie value the token should be bound to.
+        session_id: The opaque session identifier the token should be bound to.
 
     Returns:
         True if the token is valid, False otherwise.
@@ -69,26 +73,29 @@ def validate_csrf_token(
         return False
 
 
+async def _resolve_session_id(request: Request) -> str | None:
+    """Resolve the request's session cookie to the underlying session_id."""
+    cookie = request.cookies.get(settings.session_cookie_name)
+    if not cookie:
+        return None
+    data = await resolve_session_from_cookie(cookie)
+    if not data:
+        return None
+    return data.get("session_id")
+
+
 async def verify_csrf_token(
     request: Request,
     csrf_token: str = Form(...),
 ) -> None:
     """FastAPI dependency that validates the CSRF token from form data.
 
-    Reads the session cookie from the request and validates the submitted
-    CSRF token against it.
-
-    Args:
-        request: The incoming FastAPI request.
-        csrf_token: The CSRF token submitted via form data.
-
-    Raises:
-        HTTPException: If the CSRF token is missing, invalid, or the session
-            cookie is not present.
+    Resolves the request's session cookie to its session_id and validates the
+    submitted CSRF token against it.
     """
-    session_id = request.cookies.get(settings.session_cookie_name)
+    session_id = await _resolve_session_id(request)
     if not session_id:
-        logger.warning("CSRF validation failed: no session cookie present")
+        logger.warning("CSRF validation failed: no session")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="CSRF validation failed: no session",
@@ -107,31 +114,26 @@ async def verify_csrf_token(
 async def verify_csrf_token_flexible(
     request: Request,
 ) -> None:
-    """FastAPI dependency that validates CSRF token from multiple sources.
+    """FastAPI dependency that validates CSRF token from header or form.
 
-    Accepts CSRF token from:
-    - Form data (for traditional HTML forms)
-    - X-CSRF-Token header (for React/SPA applications)
-
-    Skips CSRF validation when no session cookie is present, as the request
-    is from a non-browser client (e.g. Bearer token auth) and CSRF attacks
+    Skips CSRF validation when no session cookie is present, as the request is
+    from a non-browser client (e.g. Bearer token auth) and CSRF attacks
     require a browser session with cookies.
-
-    Args:
-        request: The incoming FastAPI request.
-
-    Raises:
-        HTTPException: If CSRF token is missing or invalid for session-based requests.
     """
-    session_id = request.cookies.get(settings.session_cookie_name)
-    if not session_id:
+    cookie = request.cookies.get(settings.session_cookie_name)
+    if not cookie:
         logger.debug("No session cookie present, skipping CSRF check (non-browser client)")
         return
 
-    # Try to get token from header first (for JSON requests)
-    csrf_token = request.headers.get("X-CSRF-Token")
+    session_id = await _resolve_session_id(request)
+    if not session_id:
+        # Cookie was present but unresolvable (legacy format, expired,
+        # tampered). Treat the same as no-session for CSRF purposes; the
+        # downstream auth dependency will already reject with 401 anyway.
+        logger.debug("Session cookie present but unresolved; skipping CSRF check")
+        return
 
-    # If not in header, try form data (for HTML form requests)
+    csrf_token = request.headers.get("X-CSRF-Token")
     if not csrf_token:
         try:
             form_data = await request.form()

@@ -1,5 +1,4 @@
 import logging
-import secrets
 from datetime import UTC
 from enum import Enum
 from pathlib import Path
@@ -714,9 +713,12 @@ class Settings(BaseSettings):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        # Generate secret key if not provided
         if not self.secret_key:
-            self.secret_key = secrets.token_hex(32)
+            raise RuntimeError(
+                "SECRET_KEY environment variable is required. "
+                "Set it to a value at least 32 bytes long, identical across all auth_server "
+                "and registry replicas (see chart values.yaml: global.secretKey)."
+            )
 
     @property
     def embeddings_model_dir(self) -> Path:

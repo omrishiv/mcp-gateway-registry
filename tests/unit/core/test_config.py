@@ -24,18 +24,17 @@ class TestSettingsInstantiation:
     """Test Settings class instantiation and default values."""
 
     def test_settings_default_values(self, monkeypatch, tmp_path) -> None:
-        """Test Settings instantiation with default values."""
-        # Arrange - Clear environment variables and disable .env file loading
-        monkeypatch.delenv("AUTH_SERVER_URL", raising=False)
-        monkeypatch.delenv("SECRET_KEY", raising=False)
+        """Test Settings instantiation with default values.
 
-        # Change to temp directory to prevent .env file loading
+        SECRET_KEY is required by Settings.__init__; provide a placeholder so we
+        can assert the rest of the defaults.
+        """
+        monkeypatch.delenv("AUTH_SERVER_URL", raising=False)
+        monkeypatch.setenv("SECRET_KEY", "test-key-for-defaults")
         monkeypatch.chdir(tmp_path)
 
-        # Act
         settings = Settings()
 
-        # Assert - Auth settings
         assert settings.session_cookie_name == "mcp_gateway_session"
         assert settings.session_max_age_seconds == 60 * 60 * 8  # 8 hours
         assert settings.session_cookie_secure is False
@@ -97,19 +96,17 @@ class TestSettingsInstantiation:
         assert settings.container_registry_dir == Path("/app/registry")
         assert settings.container_log_dir == Path("/app/logs")
 
-    def test_settings_secret_key_auto_generation(self, monkeypatch, tmp_path) -> None:
-        """Test that secret_key is auto-generated when not provided."""
-        # Arrange - Clear SECRET_KEY env var and disable .env file loading
+    def test_settings_fails_without_secret_key(self, monkeypatch, tmp_path) -> None:
+        """Settings refuses to instantiate when SECRET_KEY is unset.
+
+        A per-replica auto-generated key would silently break cookie signing
+        across replicas, so the missing-key path is now a hard startup error.
+        """
         monkeypatch.delenv("SECRET_KEY", raising=False)
         monkeypatch.chdir(tmp_path)
 
-        # Act
-        settings = Settings()
-
-        # Assert
-        assert settings.secret_key != ""
-        assert len(settings.secret_key) == 64  # 32 bytes hex = 64 chars
-        assert all(c in "0123456789abcdef" for c in settings.secret_key)
+        with pytest.raises(RuntimeError, match="SECRET_KEY"):
+            Settings(secret_key="")
 
     def test_settings_secret_key_not_overridden(self) -> None:
         """Test that provided secret_key is not overridden."""
@@ -729,41 +726,26 @@ class TestSettingsWithFixtures:
 
 @pytest.mark.unit
 @pytest.mark.core
-class TestSettingsSecretKeyGeneration:
-    """Test secret key generation logic."""
+class TestSettingsSecretKey:
+    """Test SECRET_KEY validation behavior.
 
-    def test_secret_key_generated_when_empty_string(self) -> None:
-        """Test that secret key is generated when provided as empty string."""
-        # Act
-        settings = Settings(secret_key="")
+    SECRET_KEY is now required at construction time so multiple replicas
+    cannot diverge on cookie-signing keys (see #960). Provided keys are
+    accepted as-is; missing or empty values raise immediately.
+    """
 
-        # Assert
-        assert settings.secret_key != ""
-        assert len(settings.secret_key) == 64
+    def test_secret_key_empty_string_rejected(self, monkeypatch, tmp_path) -> None:
+        """Empty string secret_key is rejected (no silent auto-generation)."""
+        monkeypatch.delenv("SECRET_KEY", raising=False)
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(RuntimeError, match="SECRET_KEY"):
+            Settings(secret_key="")
 
-    def test_secret_key_different_on_each_instantiation(self) -> None:
-        """Test that generated secret keys are different for each instance."""
-        # Act
-        settings1 = Settings(secret_key="")
-        settings2 = Settings(secret_key="")
-
-        # Assert
-        assert settings1.secret_key != settings2.secret_key
-
-    def test_secret_key_is_hex_string(self) -> None:
-        """Test that generated secret key is a valid hex string."""
-        # Act
-        settings = Settings(secret_key="")
-
-        # Assert
-        # Should be 64 character hex string (32 bytes)
-        assert len(settings.secret_key) == 64
-        try:
-            bytes.fromhex(settings.secret_key)
-            is_valid_hex = True
-        except ValueError:
-            is_valid_hex = False
-        assert is_valid_hex
+    def test_provided_secret_key_used_verbatim(self, monkeypatch) -> None:
+        """A provided non-empty secret_key is used verbatim, not regenerated."""
+        custom = "my-explicit-32-byte-secret-key-aaaa"
+        settings = Settings(secret_key=custom)
+        assert settings.secret_key == custom
 
 
 # =============================================================================

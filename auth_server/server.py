@@ -694,14 +694,22 @@ async def validate_session_cookie(cookie_value: str) -> dict[str, any]:
         raise ValueError("Session cookie validation not configured")
 
     try:
-        # Decrypt cookie (max_age=28800 for 8 hours)
-        data = signer.loads(cookie_value, max_age=28800)
+        # Decrypt cookie (max_age=28800 for 8 hours). The cookie now carries
+        # only an opaque session_id; the full record lives server-side.
+        payload = signer.loads(cookie_value, max_age=28800)
 
-        # Extract user info
-        username = data.get("username")
-        groups = data.get("groups", [])
+        # Reject legacy dict-payload cookies (forces re-login post-rollout).
+        if not isinstance(payload, str):
+            raise ValueError("Legacy session cookie format; please re-login")
 
-        # Map groups to scopes (async call to query DocumentDB)
+        from session_store import resolve_session
+
+        session_data = await resolve_session(payload)
+        if not session_data or not session_data.get("username"):
+            raise ValueError("Session not found or expired")
+
+        username = session_data["username"]
+        groups = session_data.get("groups", [])
         scopes = await map_groups_to_scopes(groups)
 
         logger.info(f"Session cookie validated for user: {hash_username(username)}")
@@ -713,7 +721,7 @@ async def validate_session_cookie(cookie_value: str) -> dict[str, any]:
             "method": "session_cookie",
             "groups": groups,
             "client_id": "",  # Not applicable for session
-            "data": data,  # Include full data for consistency
+            "data": session_data,
         }
     except SignatureExpired:
         logger.warning("Session cookie has expired")
@@ -721,6 +729,8 @@ async def validate_session_cookie(cookie_value: str) -> dict[str, any]:
     except BadSignature:
         logger.warning("Invalid session cookie signature")
         raise ValueError("Invalid session cookie")
+    except ValueError:
+        raise
     except Exception as e:
         logger.error(f"Session cookie validation error: {e}")
         raise ValueError(f"Session cookie validation failed: {e}")
@@ -2921,15 +2931,15 @@ def substitute_env_vars(config):
 # Global OAuth2 configuration
 OAUTH2_CONFIG = load_oauth2_config()
 
-# Initialize SECRET_KEY and signer for session management
+# Initialize SECRET_KEY and signer for session management.
+# Fail loud: a per-replica random key would silently break sessions across replicas
+# (auth_server signs with key A, registry verifies with key B → BadSignature on every request).
 SECRET_KEY = os.environ.get("SECRET_KEY")
 if not SECRET_KEY:
-    # Generate a secure random key (32 bytes = 256 bits of entropy)
-    SECRET_KEY = secrets.token_hex(32)
-    logger.warning(
-        "No SECRET_KEY environment variable found. Using a randomly generated key. "
-        "While this is more secure than a hardcoded default, it will change on restart. "
-        "Set a permanent SECRET_KEY environment variable for production."
+    raise RuntimeError(
+        "SECRET_KEY environment variable is required. "
+        "Set it to a value at least 32 bytes long, identical across all auth_server "
+        "and registry replicas (see chart values.yaml: global.secretKey)."
     )
 
 signer = URLSafeTimedSerializer(SECRET_KEY)
@@ -3416,30 +3426,29 @@ async def oauth2_callback(
             mapped_user = map_user_info(user_info, provider_config)
             logger.info(f"Mapped user info: {mapped_user}")
 
-        # Create session cookie compatible with registry
-        session_data = {
-            "username": mapped_user["username"],
-            "email": mapped_user.get("email"),
-            "name": mapped_user.get("name"),
-            "groups": mapped_user.get("groups", []),
-            "provider": provider,
-            "auth_method": "oauth2",
-            # Always store id_token for OIDC logout (not a credential, just identity info)
-            # Required for proper SSO logout with id_token_hint parameter
-            "id_token": token_data.get("id_token"),
-        }
+        # Persist the full session record server-side and put only an opaque
+        # session_id in the browser cookie. This prevents cookie-size failures
+        # for IdPs that return large groups claims (e.g. Entra ID with many
+        # group memberships) and keeps id_token off the client entirely.
+        session_max_age = OAUTH2_CONFIG.get("session", {}).get("max_age_seconds", 28800)
+        # id_token is required for OIDC logout's id_token_hint, but we only
+        # persist it when OAUTH_STORE_TOKENS_IN_SESSION=true. With the flag
+        # disabled, IdP single-logout via id_token_hint is unavailable —
+        # acceptable trade-off documented on the flag.
+        id_token_to_store = token_data.get("id_token") if OAUTH_STORE_TOKENS_IN_SESSION else None
+        from session_store import create_session
 
-        # Optionally store token metadata (legacy flag, not needed for security)
-        # Note: access_token and refresh_token are never stored (removed in issue #490)
-        if OAUTH_STORE_TOKENS_IN_SESSION:
-            session_data.update(
-                {
-                    "token_expires_in": token_data.get("expires_in"),
-                    "token_obtained_at": int(time.time()),
-                }
-            )
-
-        registry_session = signer.dumps(session_data)
+        session_id = await create_session(
+            username=mapped_user["username"],
+            email=mapped_user.get("email"),
+            name=mapped_user.get("name"),
+            groups=mapped_user.get("groups", []),
+            provider=provider,
+            auth_method="oauth2",
+            max_age_seconds=session_max_age,
+            id_token=id_token_to_store,
+        )
+        registry_session = signer.dumps(session_id)
 
         # Redirect to registry with session cookie
         redirect_url = temp_session_data.get(
@@ -3483,7 +3492,7 @@ async def oauth2_callback(
         cookie_params = {
             "key": "mcp_gateway_session",  # Same as registry SESSION_COOKIE_NAME
             "value": registry_session,
-            "max_age": OAUTH2_CONFIG.get("session", {}).get("max_age_seconds", 28800),
+            "max_age": session_max_age,
             "httponly": OAUTH2_CONFIG.get("session", {}).get("httponly", True),
             "samesite": cookie_samesite,
             "secure": cookie_secure,

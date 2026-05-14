@@ -11,6 +11,26 @@ from registry.auth.csrf import (
 )
 
 
+@pytest.fixture
+def mock_session_resolver(monkeypatch):
+    """Mock the cookie -> session_id resolver used by the CSRF dependency.
+
+    Default resolves any non-empty cookie to session_id 'sid-1'. Tests that
+    want an unresolvable cookie can set `mock_session_resolver.next_value = None`.
+    """
+
+    class _Stub:
+        next_value: dict | None = {"session_id": "sid-1", "username": "u"}
+
+    stub = _Stub()
+
+    async def _fake_resolve(cookie_value: str):
+        return stub.next_value
+
+    monkeypatch.setattr("registry.auth.csrf.resolve_session_from_cookie", _fake_resolve)
+    return stub
+
+
 def _make_request(
     cookies: dict | None = None,
     headers: dict | None = None,
@@ -51,8 +71,8 @@ class TestVerifyCsrfTokenFlexibleEnforcement:
     """Tests for CSRF enforcement when session cookie is present."""
 
     @pytest.mark.asyncio
-    async def test_reject_when_session_cookie_but_no_csrf_token(self):
-        """Session cookie present but no CSRF token should return 403."""
+    async def test_reject_when_session_cookie_but_no_csrf_token(self, mock_session_resolver):
+        """Session cookie present (and resolvable) but no CSRF token → 403."""
         request = _make_request(
             cookies={"mcp_gateway_session": "test-session"},
             headers={},
@@ -65,8 +85,8 @@ class TestVerifyCsrfTokenFlexibleEnforcement:
         assert "no token provided" in exc_info.value.detail
 
     @pytest.mark.asyncio
-    async def test_reject_when_session_cookie_and_invalid_csrf_token(self):
-        """Session cookie + invalid CSRF token should return 403."""
+    async def test_reject_when_session_cookie_and_invalid_csrf_token(self, mock_session_resolver):
+        """Resolvable session cookie + invalid CSRF token → 403."""
         request = _make_request(
             cookies={"mcp_gateway_session": "test-session"},
             headers={"X-CSRF-Token": "invalid-token-value"},

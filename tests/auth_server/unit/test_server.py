@@ -423,20 +423,34 @@ class TestSessionCookieValidation:
 
     @pytest.mark.asyncio
     async def test_validate_session_cookie_valid(self, auth_env_vars, valid_session_cookie):
-        """Test validating a valid session cookie."""
+        """Test validating a valid session cookie.
+
+        With server-side sessions, validation does signer.loads(cookie) →
+        session_id (string), then store.resolve_session(session_id) →
+        hydrated record. We mock the store lookup.
+        """
         from itsdangerous import URLSafeTimedSerializer
 
         from auth_server.server import validate_session_cookie
 
-        # Create a signer with the test SECRET_KEY
         test_signer = URLSafeTimedSerializer(auth_env_vars["SECRET_KEY"])
 
-        # Patch the module's signer to use test key (loaded at import time)
-        with patch("auth_server.server.signer", test_signer):
-            # Act
+        async def _fake_resolve(_session_id):
+            return {
+                "session_id": _session_id,
+                "username": "testuser",
+                "email": "testuser@example.com",
+                "groups": ["users", "developers"],
+                "provider": "cognito",
+                "auth_method": "oauth2",
+            }
+
+        with (
+            patch("auth_server.server.signer", test_signer),
+            patch("session_store.resolve_session", _fake_resolve),
+        ):
             result = await validate_session_cookie(valid_session_cookie)
 
-            # Assert
             assert result["valid"] is True
             assert result["username"] == "testuser"
             assert result["method"] == "session_cookie"
@@ -677,34 +691,42 @@ class TestValidateEndpoint:
         mock_scope_repository_with_data,
     ):
         """Test validation with valid session cookie."""
-        # Arrange
         from itsdangerous import URLSafeTimedSerializer
 
         import auth_server.server as server_module
 
-        # Create signer with test SECRET_KEY (module's signer uses different key loaded at import)
         test_signer = URLSafeTimedSerializer(auth_env_vars["SECRET_KEY"])
 
-        with patch(
-            "auth_server.server.get_scope_repository", return_value=mock_scope_repository_with_data
+        async def _fake_resolve(_session_id):
+            return {
+                "session_id": _session_id,
+                "username": "testuser",
+                "groups": ["users", "developers"],
+                "provider": "cognito",
+                "auth_method": "oauth2",
+            }
+
+        with (
+            patch(
+                "auth_server.server.get_scope_repository",
+                return_value=mock_scope_repository_with_data,
+            ),
+            patch("auth_server.server.signer", test_signer),
+            patch("session_store.resolve_session", _fake_resolve),
         ):
-            with patch("auth_server.server.signer", test_signer):
-                client = TestClient(server_module.app)
+            client = TestClient(server_module.app)
 
-                # Act
-                # URL format: /server-name/mcp-endpoint where endpoint is mcp, sse, or messages
-                response = client.get(
-                    "/validate",
-                    headers={
-                        "Cookie": f"mcp_gateway_session={valid_session_cookie}",
-                        "X-Original-URL": "https://example.com/test-server/mcp",
-                    },
-                )
+            response = client.get(
+                "/validate",
+                headers={
+                    "Cookie": f"mcp_gateway_session={valid_session_cookie}",
+                    "X-Original-URL": "https://example.com/test-server/mcp",
+                },
+            )
 
-                # Assert
-                assert response.status_code == 200
-                data = response.json()
-                assert data["valid"] is True
+            assert response.status_code == 200
+            data = response.json()
+            assert data["valid"] is True
 
 
 class TestConfigEndpoint:
@@ -2025,27 +2047,18 @@ class TestOAuthTokenStorageConfiguration:
 
 
 class TestOAuth2CallbackTokenStorage:
-    """Test that OAUTH_STORE_TOKENS_IN_SESSION controls actual session cookie content."""
+    """OAUTH_STORE_TOKENS_IN_SESSION controls whether id_token persists in the
+    server-side session record. The browser cookie always carries only an
+    opaque session_id — never user data, groups, or tokens.
+    """
 
-    def _call_oauth2_callback(
-        self,
-        store_tokens: bool,
-    ) -> dict:
-        """Call the real oauth2_callback endpoint and return decoded session data.
+    def _call_oauth2_callback(self, store_tokens: bool) -> dict:
+        """Drive the real oauth2_callback endpoint with create_session mocked.
 
-        Args:
-            store_tokens: Value for OAUTH_STORE_TOKENS_IN_SESSION flag
-
-        Returns:
-            Decoded session cookie data dict
+        Returns the kwargs that the auth server passed to create_session, so
+        tests can assert what would have landed in the persistent record.
         """
-        from itsdangerous import URLSafeTimedSerializer
-
-        from auth_server.server import (
-            SECRET_KEY,
-            app,
-            signer,
-        )
+        from auth_server.server import app, signer
 
         mock_token_data = {
             "access_token": "mock-access-token-value",
@@ -2064,6 +2077,12 @@ class TestOAuth2CallbackTokenStorage:
             "callback_uri": "http://localhost:8888/oauth2/callback/github",
         }
         temp_cookie = signer.dumps(temp_session_data)
+
+        captured: dict = {}
+
+        async def _fake_create_session(**kwargs):
+            captured.update(kwargs)
+            return "fake-session-id"
 
         client = TestClient(app, raise_server_exceptions=False)
 
@@ -2088,6 +2107,7 @@ class TestOAuth2CallbackTokenStorage:
                     "groups": [],
                 },
             ),
+            patch("session_store.create_session", _fake_create_session),
         ):
             response = client.get(
                 "/oauth2/callback/github",
@@ -2096,44 +2116,34 @@ class TestOAuth2CallbackTokenStorage:
                 follow_redirects=False,
             )
 
-        # Extract session cookie from redirect response
         assert response.status_code == 302
+        # Cookie payload is the signed opaque session_id, never user data.
         session_cookie = response.cookies.get("mcp_gateway_session")
         assert session_cookie is not None, "Session cookie not set in response"
+        assert signer.loads(session_cookie) == "fake-session-id"
 
-        # Decode session cookie
-        decoder = URLSafeTimedSerializer(SECRET_KEY)
-        return decoder.loads(session_cookie)
+        return captured
 
     def test_tokens_excluded_when_disabled(self):
-        """oauth2_callback stores id_token but omits metadata when flag is False."""
-        session_data = self._call_oauth2_callback(store_tokens=False)
+        """When the flag is off, no id_token is persisted in the record."""
+        kwargs = self._call_oauth2_callback(store_tokens=False)
 
-        assert session_data["username"] == "testuser"
-        assert session_data["auth_method"] == "oauth2"
-        # id_token is always stored for OIDC logout (issue #490)
-        assert session_data["id_token"] == "mock-id-token"
-        # Credentials are never stored (removed in issue #490)
-        assert "access_token" not in session_data
-        assert "refresh_token" not in session_data
-        # Metadata only stored when flag is True
-        assert "token_expires_in" not in session_data
-        assert "token_obtained_at" not in session_data
+        assert kwargs["username"] == "testuser"
+        assert kwargs["auth_method"] == "oauth2"
+        assert kwargs["id_token"] is None
+        # Credentials are never stored.
+        assert "access_token" not in kwargs
+        assert "refresh_token" not in kwargs
 
     def test_tokens_included_when_enabled(self):
-        """oauth2_callback stores id_token and metadata when flag is True."""
-        session_data = self._call_oauth2_callback(store_tokens=True)
+        """When the flag is on, id_token is passed to the session store."""
+        kwargs = self._call_oauth2_callback(store_tokens=True)
 
-        assert session_data["username"] == "testuser"
-        assert session_data["auth_method"] == "oauth2"
-        # id_token is always stored for OIDC logout (issue #490)
-        assert session_data["id_token"] == "mock-id-token"
-        # Credentials are never stored (removed in issue #490)
-        assert "access_token" not in session_data
-        assert "refresh_token" not in session_data
-        # Metadata is stored when flag is True
-        assert session_data["token_expires_in"] == 3600
-        assert "token_obtained_at" in session_data
+        assert kwargs["username"] == "testuser"
+        assert kwargs["auth_method"] == "oauth2"
+        assert kwargs["id_token"] == "mock-id-token"
+        assert "access_token" not in kwargs
+        assert "refresh_token" not in kwargs
 
 
 # =============================================================================

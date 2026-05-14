@@ -163,24 +163,19 @@ async def oauth2_callback(request: Request, error: str = None, details: str = No
             return RedirectResponse(url=safe_redirect, status_code=302)
 
         # If we reach here, the auth server should have set the session cookie
-        # Verify the session is valid by checking the cookie
+        # Verify the session is valid by resolving it against the server-side store.
         session_cookie = request.cookies.get(settings.session_cookie_name)
         if session_cookie:
-            try:
-                from .dependencies import signer
+            from .dependencies import resolve_session_from_cookie
 
-                # Validate session cookie
-                session_data = signer.loads(
-                    session_cookie, max_age=settings.session_max_age_seconds
+            session_data = await resolve_session_from_cookie(session_cookie)
+            if session_data and session_data.get("username"):
+                logger.info(
+                    f"OAuth2 callback successful for user {session_data['username']} "
+                    f"via {session_data.get('auth_method', 'unknown')}"
                 )
-                username = session_data.get("username")
-                auth_method = session_data.get("auth_method", "unknown")
-
-                logger.info(f"OAuth2 callback successful for user {username} via {auth_method}")
                 return RedirectResponse(url="/", status_code=302)
-
-            except Exception as e:
-                logger.warning(f"Invalid session cookie in OAuth2 callback: {e}")
+            logger.warning("Invalid session cookie in OAuth2 callback")
 
         # If no valid session, redirect to login with error
         logger.warning("OAuth2 callback completed but no valid session found")
@@ -200,21 +195,35 @@ async def logout_handler(
     set_audit_action(request, "logout", "auth", description="User logged out")
 
     try:
-        # Check if user was logged in via OAuth2
+        # Resolve the server-side session record up front. We need the
+        # provider for the IdP redirect, the id_token for id_token_hint, and
+        # the session_id so we can delete the server record before clearing
+        # the cookie (so a stolen cookie cannot be replayed).
         provider = None
+        id_token = None
+        session_id = None
+        session_data: dict | None = None
         if session:
-            try:
-                from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+            from .dependencies import resolve_session_from_cookie
 
-                serializer = URLSafeTimedSerializer(settings.secret_key)
-                session_data = serializer.loads(session, max_age=settings.session_max_age_seconds)
-
+            session_data = await resolve_session_from_cookie(session)
+            if session_data:
                 if session_data.get("auth_method") == "oauth2":
                     provider = session_data.get("provider")
                     logger.info(f"User was authenticated via OAuth2 provider: {provider}")
+                id_token = session_data.get("id_token")
+                session_id = session_data.get("session_id")
 
-            except (SignatureExpired, BadSignature, Exception) as e:
-                logger.debug(f"Could not decode session for logout: {e}")
+        # Invalidate the server-side session before issuing the cookie clear.
+        # If the resolve above failed (legacy cookie, expired, store outage),
+        # there is no record to delete; the TTL cleans up either way.
+        if session_id:
+            from .session_store import delete_session
+
+            try:
+                await delete_session(session_id)
+            except Exception as e:
+                logger.warning(f"Best-effort session_store delete failed during logout: {e}")
 
         # Clear local session cookie. Must match (name, domain, path) of the
         # Set-Cookie used by auth_server to create the cookie, or the browser
@@ -234,46 +243,27 @@ async def logout_handler(
             redirect_uri = _build_external_url(request, "/logout")
             logout_url = f"{auth_external_url}/oauth2/logout/{provider}?redirect_uri={redirect_uri}"
 
-            # Extract id_token from session and append as id_token_hint if present
-            # This enables proper SSO session termination for Keycloak and Entra ID
-            if session:
-                try:
-                    from itsdangerous import URLSafeTimedSerializer
+            # Append id_token_hint for proper SSO session termination if we
+            # have an id_token from the server-side session record.
+            if id_token:
+                if not _validate_jwt_format(id_token):
+                    logger.debug("id_token failed JWT format validation, not forwarding")
+                    logout_jwt_validation_failed.inc()
+                else:
+                    encoded_token = urllib.parse.quote(id_token, safe="")
+                    logout_url = f"{logout_url}&id_token_hint={encoded_token}"
 
-                    serializer = URLSafeTimedSerializer(settings.secret_key)
-                    session_data = serializer.loads(
-                        session, max_age=settings.session_max_age_seconds
-                    )
-                    id_token = session_data.get("id_token")
+                    if len(logout_url) > 2000:
+                        logger.debug(
+                            f"Logout URL length ({len(logout_url)}) exceeds recommended limit (2000)"
+                        )
+                        logout_url_length_warning.inc()
 
-                    if id_token:
-                        # Validate JWT format before forwarding
-                        if not _validate_jwt_format(id_token):
-                            logger.debug("id_token failed JWT format validation, not forwarding")
-                            logout_jwt_validation_failed.inc()
-                        else:
-                            # URL encode the token
-                            encoded_token = urllib.parse.quote(id_token, safe="")
-
-                            # Append id_token_hint to logout URL
-                            logout_url = f"{logout_url}&id_token_hint={encoded_token}"
-
-                            # Validate URL length (warn if > 2000 chars)
-                            if len(logout_url) > 2000:
-                                logger.debug(
-                                    f"Logout URL length ({len(logout_url)}) exceeds recommended limit (2000)"
-                                )
-                                logout_url_length_warning.inc()
-
-                            logger.debug("id_token extracted and forwarded, has_id_token=True")
-                            logout_id_token_hint_present.inc()
-                    else:
-                        logger.debug("id_token not found in session, has_id_token=False")
-                        logout_id_token_hint_missing.inc()
-
-                except Exception as e:
-                    logger.debug(f"Could not extract id_token from session: {e}")
-                    logout_id_token_hint_missing.inc()
+                    logger.debug("id_token extracted and forwarded, has_id_token=True")
+                    logout_id_token_hint_present.inc()
+            else:
+                logger.debug("id_token not present in session, has_id_token=False")
+                logout_id_token_hint_missing.inc()
 
             logger.debug(f"Redirecting to {provider} logout")
             response = RedirectResponse(url=logout_url, status_code=status.HTTP_303_SEE_OTHER)
@@ -340,12 +330,15 @@ async def get_csrf_token(
     Returns a CSRF token bound to the current session that can be used
     in X-CSRF-Token headers for API requests.
     """
-    if not session:
-        from fastapi.responses import JSONResponse
+    from fastapi.responses import JSONResponse
 
+    from .dependencies import resolve_session_from_cookie
+
+    session_data = await resolve_session_from_cookie(session)
+    if not session_data or not session_data.get("session_id"):
         return JSONResponse(
             status_code=status.HTTP_401_UNAUTHORIZED, content={"error": "No session found"}
         )
 
-    csrf_token = generate_csrf_token(session)
+    csrf_token = generate_csrf_token(session_data["session_id"])
     return {"csrf_token": csrf_token}

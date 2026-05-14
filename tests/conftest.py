@@ -95,6 +95,13 @@ def pytest_configure(config):
     # (dedicated gate tests mock settings directly)
     os.environ["REGISTRATION_GATE_ENABLED"] = "false"
 
+    # Set a fixed SECRET_KEY for tests. Application code now refuses to start without one;
+    # production deployments must set this themselves so cookie signing is consistent
+    # across replicas.
+    os.environ.setdefault(
+        "SECRET_KEY", "test-secret-key-for-testing-only-do-not-use-in-production"
+    )
+
     print(
         "Test environment configured: DOCUMENTDB_HOST=localhost, STORAGE_BACKEND=mongodb-ce, DOCUMENTDB_DIRECT_CONNECTION=true, DOCUMENTDB_USE_TLS=false"
     )

@@ -501,29 +501,27 @@ def mock_entra_provider():
 
 @pytest.fixture
 def valid_session_cookie(auth_env_vars) -> str:
-    """
-    Create a valid session cookie for testing.
+    """Create a valid session cookie for testing.
 
-    Args:
-        auth_env_vars: Environment variables fixture
-
-    Returns:
-        Encrypted session cookie string
+    With server-side sessions, the cookie payload is a signed opaque
+    session_id. Tests that exercise validate_session_cookie must also patch
+    the session_store to return a hydrated record for that id; see the
+    `valid_session_id` fixture for the matching id.
     """
     from itsdangerous import URLSafeTimedSerializer
 
-    secret_key = auth_env_vars["SECRET_KEY"]
-    signer = URLSafeTimedSerializer(secret_key)
+    signer = URLSafeTimedSerializer(auth_env_vars["SECRET_KEY"])
+    return signer.dumps("test-session-id")
 
-    session_data = {
-        "username": "testuser",
-        "email": "testuser@example.com",
-        "groups": ["users", "developers"],
-        "provider": "cognito",
-        "auth_method": "oauth2",
-    }
 
-    return signer.dumps(session_data)
+@pytest.fixture
+def valid_session_id() -> str:
+    """The session_id embedded in `valid_session_cookie`.
+
+    Use with `patch("auth_server.session_store.resolve_session", ...)` to
+    return a hydrated record for this id.
+    """
+    return "test-session-id"
 
 
 @pytest.fixture

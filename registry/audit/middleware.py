@@ -164,44 +164,36 @@ class AuditMiddleware(BaseHTTPMiddleware):
 
         return None
 
-    def _best_effort_session_identity(self, request: Request) -> dict | None:
-        """Decode the session cookie to recover the caller's username.
+    async def _best_effort_session_identity(self, request: Request) -> dict | None:
+        """Resolve the session cookie to recover the caller's username.
 
         Used only when no auth dependency has populated request.state.user_context
-        (e.g. endpoints declared without Depends(...) such as /api/version). The
-        cookie is validated with the same URLSafeTimedSerializer + max_age check
-        as get_user_session_data — a forged or expired cookie yields None. This
-        is strictly read-only: the method must not mutate request.state, extend
-        the session, or issue any cookie.
+        (e.g. endpoints declared without Depends(...) such as /api/version).
+        Resolves the opaque session_id in the signed cookie to its server-side
+        record. Strictly read-only: must not mutate request.state, extend the
+        session, or issue any cookie.
 
-        Returns None on missing, tampered, or expired cookies so callers can
-        stamp anonymous identity.
+        Returns None on missing, tampered, expired, or legacy-format cookies
+        so callers can stamp anonymous identity.
         """
-        from ..auth.dependencies import signer
+        from ..auth.dependencies import resolve_session_from_cookie
         from ..core.config import settings
 
         session = request.cookies.get(settings.session_cookie_name)
         if not session:
             return None
 
-        try:
-            data = signer.loads(session, max_age=settings.session_max_age_seconds)
-        except Exception:
-            return None
-
-        if not isinstance(data, dict):
-            return None
-        username = data.get("username")
-        if not username:
+        data = await resolve_session_from_cookie(session)
+        if not data or not data.get("username"):
             return None
 
         return {
-            "username": username,
+            "username": data["username"],
             "auth_method": "session-cookie-fallback",
             "provider": data.get("provider"),
         }
 
-    def _extract_identity(self, request: Request) -> Identity:
+    async def _extract_identity(self, request: Request) -> Identity:
         """
         Extract identity information from the request.
 
@@ -232,7 +224,7 @@ class AuditMiddleware(BaseHTTPMiddleware):
 
         # Fallback 1: decode session cookie ourselves (read-only) so audit
         # logs tell the truth on endpoints without an auth dependency.
-        fallback = self._best_effort_session_identity(request)
+        fallback = await self._best_effort_session_identity(request)
         if fallback:
             return Identity(
                 username=fallback["username"],
@@ -360,7 +352,7 @@ class AuditMiddleware(BaseHTTPMiddleware):
                 timestamp=datetime.now(UTC),
                 request_id=request_id,
                 correlation_id=correlation_id,
-                identity=self._extract_identity(request),
+                identity=await self._extract_identity(request),
                 request=AuditRequest(
                     method=request.method,
                     path=request.url.path,

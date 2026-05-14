@@ -9,6 +9,7 @@ from .access_resolver import (
     get_user_accessible_tools,  # noqa: F401 - re-exported for external callers
     resolve_scope_access,
 )
+from .session_store import resolve_session as _store_resolve_session
 
 logger = logging.getLogger(__name__)
 
@@ -16,102 +17,82 @@ logger = logging.getLogger(__name__)
 signer = URLSafeTimedSerializer(settings.secret_key)
 
 
-def get_current_user(
+async def resolve_session_from_cookie(
+    cookie_value: str | None,
+) -> dict[str, Any] | None:
+    """Resolve a session cookie to its server-side record.
+
+    Returns None for any non-recoverable failure: missing cookie, bad
+    signature, expired signature, legacy dict-payload (pre-server-side
+    rollout — forces re-login), or store unavailable. Callers must translate
+    None into 401, never into 500.
+    """
+    if not cookie_value:
+        return None
+
+    try:
+        payload = signer.loads(cookie_value, max_age=settings.session_max_age_seconds)
+    except SignatureExpired:
+        logger.debug("Session cookie has expired")
+        return None
+    except BadSignature:
+        logger.debug("Session cookie has invalid signature")
+        return None
+    except Exception as e:
+        logger.warning(f"Unexpected error decoding session cookie: {e}")
+        return None
+
+    # Legacy cookies signed before this rollout carried a dict payload. With
+    # the server-side store, the cookie holds only an opaque session_id
+    # string. Anything else is a stale cookie and the user must re-login.
+    if not isinstance(payload, str):
+        logger.debug("Legacy session cookie format detected; forcing re-login")
+        return None
+
+    return await _store_resolve_session(payload)
+
+
+async def get_current_user(
     session: Annotated[str | None, Cookie(alias=settings.session_cookie_name)] = None,
 ) -> str:
-    """
-    Get the current authenticated user from session cookie.
+    """Get the username for the authenticated user.
 
-    Returns:
-        str: Username of the authenticated user
-
-    Raises:
-        HTTPException: If user is not authenticated
+    Raises 401 for missing, tampered, expired, or legacy-format cookies.
     """
-    if not session:
-        logger.warning("No session cookie provided")
+    data = await resolve_session_from_cookie(session)
+    if data is None or not data.get("username"):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required"
         )
-
-    try:
-        data = signer.loads(session, max_age=settings.session_max_age_seconds)
-        username = data.get("username")
-
-        if not username:
-            logger.warning("No username found in session data")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session data"
-            )
-
-        logger.debug(f"Authentication successful for user: {username}")
-        return username
-
-    except SignatureExpired:
-        logger.warning("Session cookie has expired")
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session has expired")
-    except BadSignature:
-        logger.warning("Invalid session cookie signature")
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session")
-    except Exception as e:
-        logger.error(f"Session validation error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication failed"
-        )
+    return data["username"]
 
 
-def get_user_session_data(
+async def get_user_session_data(
     session: Annotated[str | None, Cookie(alias=settings.session_cookie_name)] = None,
 ) -> dict[str, Any]:
-    """
-    Get the full session data for the authenticated user.
+    """Get the full session record for the authenticated user.
 
-    Returns:
-        Dict containing username, groups, auth_method, provider, etc.
-
-    Raises:
-        HTTPException: If user is not authenticated
+    The record contains username, email, name, groups, provider, auth_method,
+    and (when OAUTH_STORE_TOKENS_IN_SESSION=true) id_token. Loaded from the
+    server-side session store via the opaque session_id in the signed cookie.
     """
-    if not session:
-        logger.warning("No session cookie provided for session data extraction")
+    data = await resolve_session_from_cookie(session)
+    if data is None or not data.get("username"):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required"
         )
 
-    try:
-        data = signer.loads(session, max_age=settings.session_max_age_seconds)
-
-        if not data.get("username"):
-            logger.warning("No username found in session data")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session data"
-            )
-
-        # All sessions must be OAuth2 - reject legacy "traditional" sessions
-        if data.get("auth_method") != "oauth2":
-            logger.warning(
-                f"Rejecting non-OAuth2 session for user {data.get('username')} "
-                f"(auth_method={data.get('auth_method')}). Please re-login via OAuth2."
-            )
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Session expired. Please login again via OAuth2.",
-            )
-
-        logger.debug(f"Session data extracted for user: {data.get('username')}")
-        return data
-
-    except SignatureExpired:
-        logger.warning("Session cookie has expired")
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session has expired")
-    except BadSignature:
-        logger.warning("Invalid session cookie signature")
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session")
-    except Exception as e:
-        logger.error(f"Session data extraction error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication failed"
+    if data.get("auth_method") != "oauth2":
+        logger.warning(
+            f"Rejecting non-OAuth2 session for user {data.get('username')} "
+            f"(auth_method={data.get('auth_method')}). Please re-login via OAuth2."
         )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session expired. Please login again via OAuth2.",
+        )
+
+    return data
 
 
 # Global scopes configuration - will be loaded during app startup
@@ -455,24 +436,18 @@ async def user_can_access_server(server_name: str, user_scopes: list[str]) -> bo
     return server_name in accessible_servers
 
 
-def api_auth(
+async def api_auth(
     session: Annotated[str | None, Cookie(alias=settings.session_cookie_name)] = None,
 ) -> str:
-    """
-    API authentication dependency that returns the username.
-    Used for API endpoints that need authentication.
-    """
-    return get_current_user(session)
+    """API authentication dependency that returns the username."""
+    return await get_current_user(session)
 
 
-def web_auth(
+async def web_auth(
     session: Annotated[str | None, Cookie(alias=settings.session_cookie_name)] = None,
 ) -> str:
-    """
-    Web authentication dependency that returns the username.
-    Used for web pages that need authentication.
-    """
-    return get_current_user(session)
+    """Web authentication dependency that returns the username."""
+    return await get_current_user(session)
 
 
 async def enhanced_auth(
@@ -484,7 +459,7 @@ async def enhanced_auth(
     Returns username, groups, scopes, and permission flags.
     Also sets request.state.user_context for audit logging middleware.
     """
-    session_data = get_user_session_data(session)
+    session_data = await get_user_session_data(session)
 
     username = session_data["username"]
     groups = session_data.get("groups", [])
@@ -522,6 +497,9 @@ async def enhanced_auth(
         "scopes": scopes,
         "auth_method": auth_method,
         "provider": session_data.get("provider", "local"),
+        # session_id is the opaque server-side identifier — used by template
+        # callers to mint CSRF tokens via generate_csrf_token(session_id).
+        "session_id": session_data.get("session_id"),
         "accessible_servers": accessible_servers,
         "accessible_tools": access.tools,
         "accessible_services": accessible_services,
@@ -691,14 +669,6 @@ async def nginx_proxied_auth(
             f"[NGINX_AUTH_FALLBACK] enhanced_auth raised unexpected exception: {type(e).__name__}: {str(e)}"
         )
         raise
-
-
-def create_session_cookie(
-    username: str, auth_method: str = "oauth2", provider: str = "local"
-) -> str:
-    """Create a session cookie for a user."""
-    session_data = {"username": username, "auth_method": auth_method, "provider": provider}
-    return signer.dumps(session_data)
 
 
 def ui_permission_required(permission: str, service_name: str = None):
