@@ -522,23 +522,24 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                     SECURITY PENDING
                   </span>
                 )}
-                {isSecurityPendingLocal && isAdmin && (
-                  <button
-                    type="button"
-                    onClick={() => setShowClearSecurityPendingConfirm(true)}
-                    className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-amber-100 to-orange-100 text-amber-700 dark:from-amber-900/30 dark:to-orange-900/30 dark:text-amber-300 rounded-full flex-shrink-0 border border-amber-200 dark:border-amber-600 hover:from-amber-200 hover:to-orange-200 transition"
-                    title="Click to mark as security-reviewed (admin only)"
-                  >
-                    SECURITY PENDING (LOCAL) ×
-                  </button>
-                )}
-                {isSecurityPendingLocal && !isAdmin && (
-                  <span
-                    className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-amber-100 to-orange-100 text-amber-700 dark:from-amber-900/30 dark:to-orange-900/30 dark:text-amber-300 rounded-full flex-shrink-0 border border-amber-200 dark:border-amber-600"
-                    title="Pending security review by an admin (local server)"
-                  >
-                    SECURITY PENDING (LOCAL)
-                  </span>
+                {isSecurityPendingLocal && (
+                  isAdmin ? (
+                    <button
+                      type="button"
+                      onClick={() => setShowClearSecurityPendingConfirm(true)}
+                      className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-amber-100 to-orange-100 text-amber-700 dark:from-amber-900/30 dark:to-orange-900/30 dark:text-amber-300 rounded-full flex-shrink-0 border border-amber-200 dark:border-amber-600 hover:from-amber-200 hover:to-orange-200 transition"
+                      title="Click to mark as security-reviewed (admin only)"
+                    >
+                      SECURITY PENDING (LOCAL) ×
+                    </button>
+                  ) : (
+                    <span
+                      className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-amber-100 to-orange-100 text-amber-700 dark:from-amber-900/30 dark:to-orange-900/30 dark:text-amber-300 rounded-full flex-shrink-0 border border-amber-200 dark:border-amber-600"
+                      title="Pending security review by an admin (local server)"
+                    >
+                      SECURITY PENDING (LOCAL)
+                    </span>
+                  )
                 )}
                 {/* ANS badge moved to trust bar below description */}
                 {/* Registry source badge - only show for federated (peer registry) items */}

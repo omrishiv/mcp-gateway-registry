@@ -21,6 +21,11 @@ import VirtualServerForm from '../components/VirtualServerForm';
 import DiscoverTab from '../components/DiscoverTab';
 import axios from 'axios';
 import { getBaseURL } from '../utils/basePath';
+import {
+  buildLocalRuntimeForm,
+  buildLocalRuntimeJson,
+} from '../utils/localRuntime';
+import LocalRuntimeFormPanel from '../components/LocalRuntimeFormPanel';
 
 
 interface SyncMetadata {
@@ -1032,26 +1037,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
   };
 
   const handleEditServer = useCallback(async (server: Server) => {
-    // Build the local-runtime form sub-state from a stored local_runtime dict.
-    const buildLocalRuntimeForm = (rt: any) => {
-      const env = (rt?.env ?? {}) as Record<string, string>;
-      const requiredEnv = (rt?.required_env ?? []) as string[];
-      const envRows: { key: string; value: string; required: boolean }[] = [];
-      for (const k of requiredEnv) {
-        envRows.push({ key: k, value: '', required: true });
-      }
-      for (const [k, v] of Object.entries(env)) {
-        envRows.push({ key: k, value: v, required: false });
-      }
-      return {
-        type: (rt?.type ?? 'npx') as 'npx' | 'docker' | 'uvx' | 'command',
-        package: rt?.package ?? '',
-        version: rt?.version ?? '',
-        image_digest: rt?.image_digest ?? '',
-        argList: Array.isArray(rt?.args) ? [...rt.args] : [],
-        envRows,
-      };
-    };
+    // buildLocalRuntimeForm() handles the populate-from-stored-dict path
+    // (returns fresh defaults for remote servers / undefined input).
 
     try {
       // Fetch full server details including proxy_pass_url and tags
@@ -1175,45 +1162,20 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
 
     const isLocal = editForm.deployment === 'local';
 
-    // Build local_runtime JSON for local edits.
-    let localRuntimeJson: string | null = null;
-    if (isLocal) {
+    if (isLocal && !editForm.local_runtime.package.trim()) {
       const rt = editForm.local_runtime;
-      if (!rt.package.trim()) {
-        showToast(
-          rt.type === 'docker' ? 'Image reference is required'
-          : rt.type === 'command' ? 'Command path is required'
-          : 'Package name is required',
-          'error',
-        );
-        return;
-      }
-      const env: Record<string, string> = {};
-      const required_env: string[] = [];
-      for (const row of rt.envRows) {
-        if (!row.key.trim()) continue;
-        if (row.required) {
-          required_env.push(row.key.trim());
-        } else {
-          env[row.key.trim()] = row.value;
-        }
-      }
-      const args = rt.argList.filter(a => a.length > 0);
-      const local_runtime: Record<string, unknown> = {
-        type: rt.type,
-        package: rt.package.trim(),
-        args,
-        env,
-        required_env,
-      };
-      if (rt.type === 'docker' && rt.image_digest) {
-        local_runtime.image_digest = rt.image_digest;
-      }
-      if ((rt.type === 'npx' || rt.type === 'uvx') && rt.version) {
-        local_runtime.version = rt.version;
-      }
-      localRuntimeJson = JSON.stringify(local_runtime);
+      showToast(
+        rt.type === 'docker' ? 'Image reference is required'
+        : rt.type === 'command' ? 'Command path is required'
+        : 'Package name is required',
+        'error',
+      );
+      return;
     }
+
+    const localRuntimeJson = isLocal
+      ? buildLocalRuntimeJson(editForm.local_runtime)
+      : null;
 
     try {
       setEditLoading(true);
@@ -3050,235 +3012,10 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
               )}
 
               {editForm.deployment === 'local' && (
-                <div className="border border-purple-200 dark:border-purple-800 rounded-lg p-4 bg-purple-50/40 dark:bg-purple-900/10">
-                  <h4 className="font-medium text-gray-900 dark:text-white mb-3">Launch Recipe</h4>
-                  {editForm.local_runtime.type === 'command' && (
-                    <div className="mb-3 p-3 rounded-md bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 text-sm text-yellow-900 dark:text-yellow-100">
-                      Warning: command type executes an arbitrary binary on every developer&apos;s machine.
-                      Only trust commands you have vetted.
-                    </div>
-                  )}
-                  <div className="space-y-3">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                        Runtime Type
-                      </label>
-                      <select
-                        value={editForm.local_runtime.type}
-                        onChange={(e) => setEditForm(prev => ({
-                          ...prev,
-                          local_runtime: { ...prev.local_runtime, type: e.target.value as 'npx' | 'docker' | 'uvx' | 'command' },
-                        }))}
-                        className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                      >
-                        <option value="npx">npx</option>
-                        <option value="docker">docker</option>
-                        <option value="uvx">uvx</option>
-                        <option value="command">command (admin-only)</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                        {editForm.local_runtime.type === 'docker' ? 'Image Reference *'
-                          : editForm.local_runtime.type === 'command' ? 'Command Path *'
-                          : 'Package Name *'}
-                      </label>
-                      <input
-                        type="text"
-                        value={editForm.local_runtime.package}
-                        onChange={(e) => setEditForm(prev => ({
-                          ...prev,
-                          local_runtime: { ...prev.local_runtime, package: e.target.value },
-                        }))}
-                        className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                        placeholder={
-                          editForm.local_runtime.type === 'docker' ? 'acme/weather-mcp:1.2.0'
-                          : editForm.local_runtime.type === 'command' ? '/usr/local/bin/my-mcp'
-                          : '@acme/weather-mcp'
-                        }
-                      />
-                    </div>
-                    {(editForm.local_runtime.type === 'npx' || editForm.local_runtime.type === 'uvx') && (
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                          Version Pin (recommended)
-                        </label>
-                        <input
-                          type="text"
-                          value={editForm.local_runtime.version}
-                          onChange={(e) => setEditForm(prev => ({
-                            ...prev,
-                            local_runtime: { ...prev.local_runtime, version: e.target.value },
-                          }))}
-                          className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                          placeholder="1.2.0"
-                        />
-                      </div>
-                    )}
-                    {editForm.local_runtime.type === 'docker' && (
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                          Image Digest (recommended, sha256:...)
-                        </label>
-                        <input
-                          type="text"
-                          value={editForm.local_runtime.image_digest}
-                          onChange={(e) => setEditForm(prev => ({
-                            ...prev,
-                            local_runtime: { ...prev.local_runtime, image_digest: e.target.value },
-                          }))}
-                          className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                          placeholder="sha256:..."
-                        />
-                      </div>
-                    )}
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                        Args
-                      </label>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
-                        Argv-style list — one entry per argument. No shell interpolation.
-                      </p>
-                      {editForm.local_runtime.argList.map((arg, idx) => (
-                        <div key={idx} className="flex gap-2 mb-2 items-center">
-                          <input
-                            type="text"
-                            value={arg}
-                            onChange={(e) => {
-                              const next = [...editForm.local_runtime.argList];
-                              next[idx] = e.target.value;
-                              setEditForm(prev => ({
-                                ...prev,
-                                local_runtime: { ...prev.local_runtime, argList: next },
-                              }));
-                            }}
-                            className="flex-1 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                            placeholder={`arg ${idx + 1}`}
-                          />
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const next = editForm.local_runtime.argList.filter((_, i) => i !== idx);
-                              setEditForm(prev => ({
-                                ...prev,
-                                local_runtime: { ...prev.local_runtime, argList: next },
-                              }));
-                            }}
-                            className="text-red-500 hover:text-red-700 px-2"
-                          >
-                            ×
-                          </button>
-                        </div>
-                      ))}
-                      <button
-                        type="button"
-                        onClick={() => setEditForm(prev => ({
-                          ...prev,
-                          local_runtime: {
-                            ...prev.local_runtime,
-                            argList: [...prev.local_runtime.argList, ''],
-                          },
-                        }))}
-                        className="mt-1 px-3 py-1 text-sm bg-purple-100 dark:bg-purple-800 text-purple-700 dark:text-purple-200 rounded hover:bg-purple-200"
-                      >
-                        + Add arg
-                      </button>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                        Environment Variables
-                      </label>
-                      <div className="mb-2 p-3 rounded-md bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-xs text-amber-900 dark:text-amber-100">
-                        <strong>Visibility note:</strong> values you put here
-                        are visible to every authenticated registry user, and
-                        may appear in process listings on developer machines
-                        once launched. Use literal values only for non-secret
-                        defaults; use <code>${'$'}{'{VAR}'}</code> or mark the
-                        row &lsquo;required&rsquo; for secrets.
-                      </div>
-                      {editForm.local_runtime.envRows.length === 0 && (
-                        <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
-                          None. Add rows for env vars. Mark a row &lsquo;required from user&rsquo;
-                          for secrets the user supplies at connect time.
-                        </p>
-                      )}
-                      {editForm.local_runtime.envRows.map((row, idx) => (
-                        <div key={idx} className="flex gap-2 mb-2 items-center">
-                          <input
-                            type="text"
-                            placeholder="KEY"
-                            value={row.key}
-                            onChange={(e) => {
-                              const rows = [...editForm.local_runtime.envRows];
-                              rows[idx] = { ...rows[idx], key: e.target.value };
-                              setEditForm(prev => ({
-                                ...prev,
-                                local_runtime: { ...prev.local_runtime, envRows: rows },
-                              }));
-                            }}
-                            className="flex-1 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                          />
-                          <input
-                            type="text"
-                            placeholder={row.required ? '(provided by user at connect)' : 'value or ${VAR}'}
-                            disabled={row.required}
-                            value={row.value}
-                            onChange={(e) => {
-                              const rows = [...editForm.local_runtime.envRows];
-                              rows[idx] = { ...rows[idx], value: e.target.value };
-                              setEditForm(prev => ({
-                                ...prev,
-                                local_runtime: { ...prev.local_runtime, envRows: rows },
-                              }));
-                            }}
-                            className={`flex-1 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white ${row.required ? 'opacity-50' : ''}`}
-                          />
-                          <label className="flex items-center gap-1 text-xs text-gray-700 dark:text-gray-300 whitespace-nowrap">
-                            <input
-                              type="checkbox"
-                              checked={row.required}
-                              onChange={(e) => {
-                                const rows = [...editForm.local_runtime.envRows];
-                                rows[idx] = { ...rows[idx], required: e.target.checked, value: e.target.checked ? '' : rows[idx].value };
-                                setEditForm(prev => ({
-                                  ...prev,
-                                  local_runtime: { ...prev.local_runtime, envRows: rows },
-                                }));
-                              }}
-                            />
-                            required
-                          </label>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const rows = editForm.local_runtime.envRows.filter((_, i) => i !== idx);
-                              setEditForm(prev => ({
-                                ...prev,
-                                local_runtime: { ...prev.local_runtime, envRows: rows },
-                              }));
-                            }}
-                            className="text-red-500 hover:text-red-700 px-2"
-                          >
-                            ×
-                          </button>
-                        </div>
-                      ))}
-                      <button
-                        type="button"
-                        onClick={() => setEditForm(prev => ({
-                          ...prev,
-                          local_runtime: {
-                            ...prev.local_runtime,
-                            envRows: [...prev.local_runtime.envRows, { key: '', value: '', required: false }],
-                          },
-                        }))}
-                        className="mt-2 px-3 py-1 text-sm bg-purple-100 dark:bg-purple-800 text-purple-700 dark:text-purple-200 rounded hover:bg-purple-200"
-                      >
-                        + Add env var
-                      </button>
-                    </div>
-                  </div>
-                </div>
+                <LocalRuntimeFormPanel
+                  runtime={editForm.local_runtime}
+                  onChange={(next) => setEditForm(prev => ({ ...prev, local_runtime: next }))}
+                />
               )}
 
               <div>

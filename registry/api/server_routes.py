@@ -87,6 +87,81 @@ def _build_scan_headers_from_credentials(
     return None
 
 
+def _validate_visibility_and_groups(
+    visibility: str,
+    allowed_groups: str | None,
+) -> tuple[str, list[str]]:
+    """Validate visibility and parse allowed_groups for register/edit endpoints.
+
+    Normalizes visibility, raises HTTPException(400) on invalid values, parses
+    the comma-separated allowed_groups string into a list, and enforces that
+    'group-restricted' visibility carries at least one group.
+
+    Returns:
+        Tuple of (normalized visibility, parsed allowed_groups list).
+    """
+    from ..utils.visibility import VALID_VISIBILITY_VALUES, _normalize_visibility
+
+    normalized = _normalize_visibility(visibility)
+    if normalized not in VALID_VISIBILITY_VALUES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid visibility value. Must be one of: {', '.join(VALID_VISIBILITY_VALUES)}",
+        )
+
+    allowed_groups_list: list[str] = []
+    if allowed_groups:
+        allowed_groups_list = [g.strip() for g in allowed_groups.split(",") if g.strip()]
+
+    if normalized == "group-restricted" and not allowed_groups_list:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="group-restricted visibility requires at least one allowed_group",
+        )
+
+    return normalized, allowed_groups_list
+
+
+async def _build_versions_list(
+    server_info: dict,
+    current_version: str,
+    current_status: str,
+) -> list[dict]:
+    """Build the multi-version routing list for a server response.
+
+    Local (stdio) servers can't have multiple versions — the ServerInfo
+    validator forbids it — so this returns an empty list for them. Callers
+    typically expose the result as `versions if len(versions) > 1 else None`,
+    which resolves to None for both single-version remote servers and all
+    local servers.
+    """
+    if server_info.get("deployment") == DeploymentType.LOCAL:
+        return []
+
+    versions: list[dict] = [
+        {
+            "version": current_version,
+            "proxy_pass_url": server_info.get("proxy_pass_url", ""),
+            "status": current_status,
+            "is_default": True,
+        }
+    ]
+
+    for version_id in server_info.get("other_version_ids", []):
+        version_info = await server_service.get_server_info(version_id)
+        if version_info:
+            versions.append(
+                {
+                    "version": version_info.get("version", "unknown"),
+                    "proxy_pass_url": version_info.get("proxy_pass_url", ""),
+                    "status": version_info.get("status", "stable"),
+                    "is_default": False,
+                }
+            )
+
+    return versions
+
+
 async def _perform_security_scan_on_registration(
     path: str,
     proxy_pass_url: str,
@@ -454,35 +529,9 @@ async def get_servers_json(
             # Local (stdio) servers don't support multi-version routing — the
             # ServerInfo validator forbids `versions` for them, so the response
             # mirrors that: no synthesized versions block.
-            versions = []
             current_version = server_info.get("version", "v1.0.0")
             current_status = server_info.get("status", "stable")
-            is_local_deployment = server_info.get("deployment") == DeploymentType.LOCAL
-
-            if not is_local_deployment:
-                # Add current (active) version first
-                versions.append(
-                    {
-                        "version": current_version,
-                        "proxy_pass_url": server_info.get("proxy_pass_url", ""),
-                        "status": current_status,
-                        "is_default": True,
-                    }
-                )
-
-                # Add other versions if they exist
-                other_version_ids = server_info.get("other_version_ids", [])
-                for version_id in other_version_ids:
-                    version_info = await server_service.get_server_info(version_id)
-                    if version_info:
-                        versions.append(
-                            {
-                                "version": version_info.get("version", "unknown"),
-                                "proxy_pass_url": version_info.get("proxy_pass_url", ""),
-                                "status": version_info.get("status", "stable"),
-                                "is_default": False,
-                            }
-                        )
+            versions = await _build_versions_list(server_info, current_version, current_status)
 
             # Issue #1026: prune the tool list to what this user can see and
             # use the same filtered list for both num_tools and tool_list so
@@ -793,30 +842,7 @@ async def register_service(
         if "security-pending-local" not in tag_list:
             tag_list.append("security-pending-local")
 
-    # Validate and normalize visibility value
-    from registry.utils.visibility import (
-        VALID_VISIBILITY_VALUES,
-        _normalize_visibility,
-    )
-
-    visibility = _normalize_visibility(visibility)
-    if visibility not in VALID_VISIBILITY_VALUES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid visibility value. Must be one of: {', '.join(VALID_VISIBILITY_VALUES)}",
-        )
-
-    # Process allowed_groups (comma-separated string to list)
-    allowed_groups_list = []
-    if allowed_groups:
-        allowed_groups_list = [g.strip() for g in allowed_groups.split(",") if g.strip()]
-
-    # Validate group-restricted requires allowed_groups
-    if visibility == "group-restricted" and not allowed_groups_list:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="group-restricted visibility requires at least one allowed_group",
-        )
+    visibility, allowed_groups_list = _validate_visibility_and_groups(visibility, allowed_groups)
 
     # Create server entry with auto-generated UUID
     from uuid import uuid4
@@ -1847,30 +1873,7 @@ async def edit_server_submit(
             ):
                 tag_list.append("security-pending-local")
 
-    # Validate and normalize visibility value
-    from registry.utils.visibility import (
-        VALID_VISIBILITY_VALUES,
-        _normalize_visibility,
-    )
-
-    visibility = _normalize_visibility(visibility)
-    if visibility not in VALID_VISIBILITY_VALUES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid visibility value. Must be one of: {', '.join(VALID_VISIBILITY_VALUES)}",
-        )
-
-    # Process allowed_groups (comma-separated string to list)
-    allowed_groups_list = []
-    if allowed_groups:
-        allowed_groups_list = [g.strip() for g in allowed_groups.split(",") if g.strip()]
-
-    # Validate group-restricted requires allowed_groups
-    if visibility == "group-restricted" and not allowed_groups_list:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="group-restricted visibility requires at least one allowed_group",
-        )
+    visibility, allowed_groups_list = _validate_visibility_and_groups(visibility, allowed_groups)
 
     # Prepare updated server data
     updated_server_entry: dict[str, Any] = {
@@ -2060,43 +2063,20 @@ async def get_server_details(
                 detail="You do not have access to this server",
             )
 
-    # Build versions list if this server has version routing enabled.
-    # Local (stdio) servers don't support multi-version routing — the
-    # ServerInfo validator forbids `versions` for them, so we mirror that on
-    # the response and skip the synthesis entirely.
-    if server_info.get("deployment") != DeploymentType.LOCAL:
-        versions: list[dict] = []
-        current_version = server_info.get("version", "v1.0.0")
-        current_status = server_info.get("status", "stable")
+    # Local (stdio) servers don't support multi-version routing — early-return
+    # avoids guarding the synthesis block below. _build_versions_list() also
+    # handles this (returns []), but skipping it here saves the work.
+    if server_info.get("deployment") == DeploymentType.LOCAL:
+        return server_info
 
-        # Add current (active) version first
-        versions.append(
-            {
-                "version": current_version,
-                "proxy_pass_url": server_info.get("proxy_pass_url", ""),
-                "status": current_status,
-                "is_default": True,
-            }
-        )
+    current_version = server_info.get("version", "v1.0.0")
+    current_status = server_info.get("status", "stable")
+    versions = await _build_versions_list(server_info, current_version, current_status)
 
-        # Add other versions if they exist
-        other_version_ids = server_info.get("other_version_ids", [])
-        for version_id in other_version_ids:
-            version_info = await server_service.get_server_info(version_id)
-            if version_info:
-                versions.append(
-                    {
-                        "version": version_info.get("version", "unknown"),
-                        "proxy_pass_url": version_info.get("proxy_pass_url", ""),
-                        "status": version_info.get("status", "stable"),
-                        "is_default": False,
-                    }
-                )
-
-        # Add versions to response if there are multiple versions
-        if len(versions) > 1 or server_info.get("version_group"):
-            server_info["versions"] = versions
-            server_info["default_version"] = current_version
+    # Add versions to response if there are multiple versions
+    if len(versions) > 1 or server_info.get("version_group"):
+        server_info["versions"] = versions
+        server_info["default_version"] = current_version
 
     return server_info
 

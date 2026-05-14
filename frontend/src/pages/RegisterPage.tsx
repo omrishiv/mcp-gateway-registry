@@ -13,6 +13,12 @@ import {
 } from '@heroicons/react/24/outline';
 import axios from 'axios';
 import { useAuth } from '../contexts/AuthContext';
+import {
+  type LocalRuntimeFormData,
+  initialLocalRuntime,
+  buildLocalRuntimeJson,
+} from '../utils/localRuntime';
+import LocalRuntimeFormPanel from '../components/LocalRuntimeFormPanel';
 
 
 // Toast notification component
@@ -58,25 +64,6 @@ const Toast: React.FC<ToastProps> = ({ message, type, onClose }) => {
 type RegistrationType = 'server' | 'agent';
 type RegistrationMode = 'form' | 'json';
 
-
-type LocalRuntimeFormType = 'npx' | 'docker' | 'uvx' | 'command';
-
-interface LocalRuntimeEnvRow {
-  key: string;
-  value: string;
-  required: boolean;
-}
-
-interface LocalRuntimeFormData {
-  type: LocalRuntimeFormType;
-  package: string;
-  version: string;
-  image_digest: string;
-  // argv-style list. Each entry is one arg; never comma-split — args may
-  // contain commas (docker --label=k=v,other, file paths, etc.).
-  argList: string[];
-  envRows: LocalRuntimeEnvRow[];
-}
 
 interface ServerFormData {
   name: string;
@@ -135,15 +122,6 @@ interface FormErrors {
   [key: string]: string;
 }
 
-
-const initialLocalRuntime: LocalRuntimeFormData = {
-  type: 'npx',
-  package: '',
-  version: '',
-  image_digest: '',
-  argList: [],
-  envRows: [],
-};
 
 const initialServerForm: ServerFormData = {
   name: '',
@@ -438,38 +416,11 @@ const RegisterPage: React.FC = () => {
 
     setLoading(true);
 
-    // Build local_runtime JSON for local deployments.
-    // The unified /api/register endpoint accepts local_runtime as a JSON-encoded
-    // form field (same convention as the existing metadata field).
-    let localRuntimeJson: string | null = null;
-    if (serverForm.deployment === 'local') {
-      const rt = serverForm.local_runtime;
-      const env: Record<string, string> = {};
-      const required_env: string[] = [];
-      for (const row of rt.envRows) {
-        if (!row.key.trim()) continue;
-        if (row.required) {
-          required_env.push(row.key.trim());
-        } else {
-          env[row.key.trim()] = row.value;
-        }
-      }
-      const args = rt.argList.filter(a => a.length > 0);
-      const local_runtime: Record<string, unknown> = {
-        type: rt.type,
-        package: rt.package.trim(),
-        args,
-        env,
-        required_env,
-      };
-      if (rt.type === 'docker' && rt.image_digest) {
-        local_runtime.image_digest = rt.image_digest;
-      }
-      if ((rt.type === 'npx' || rt.type === 'uvx') && rt.version) {
-        local_runtime.version = rt.version;
-      }
-      localRuntimeJson = JSON.stringify(local_runtime);
-    }
+    // Local deployments accept local_runtime as a JSON-encoded form field
+    // (same convention as metadata). See utils/localRuntime.ts.
+    const localRuntimeJson = serverForm.deployment === 'local'
+      ? buildLocalRuntimeJson(serverForm.local_runtime)
+      : null;
 
     try {
       const formData = new FormData();
@@ -696,238 +647,19 @@ const RegisterPage: React.FC = () => {
         )}
 
         {serverForm.deployment === 'local' && (
-          <div className="md:col-span-2 border border-purple-200 dark:border-purple-800 rounded-lg p-4 bg-purple-50/40 dark:bg-purple-900/10">
-            <h4 className="font-medium text-gray-900 dark:text-white mb-3">Launch Recipe</h4>
-            {serverForm.local_runtime.type === 'command' && (
-              <div className="mb-3 p-3 rounded-md bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 text-sm text-yellow-900 dark:text-yellow-100">
-                Warning: command type executes an arbitrary binary on every developer&apos;s machine.
-                Only register commands you trust.
-              </div>
-            )}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className={labelClass}>Runtime Type</label>
-                <select
-                  className={inputClass}
-                  value={serverForm.local_runtime.type}
-                  onChange={(e) => setServerForm(prev => ({
-                    ...prev,
-                    local_runtime: { ...prev.local_runtime, type: e.target.value as LocalRuntimeFormType },
-                  }))}
-                >
-                  <option value="npx">npx</option>
-                  <option value="docker">docker</option>
-                  <option value="uvx">uvx</option>
-                  <option value="command">command (admin-only)</option>
-                </select>
-              </div>
-              <div>
-                <label className={labelClass}>
-                  {serverForm.local_runtime.type === 'docker' ? 'Image Reference *'
-                    : serverForm.local_runtime.type === 'command' ? 'Command Path *'
-                    : 'Package Name *'}
-                </label>
-                <input
-                  type="text"
-                  className={`${inputClass} ${errors.local_runtime_package ? 'border-red-500' : ''}`}
-                  value={serverForm.local_runtime.package}
-                  onChange={(e) => setServerForm(prev => ({
-                    ...prev,
-                    local_runtime: { ...prev.local_runtime, package: e.target.value },
-                  }))}
-                  placeholder={
-                    serverForm.local_runtime.type === 'docker' ? 'acme/weather-mcp:1.2.0'
-                    : serverForm.local_runtime.type === 'command' ? '/usr/local/bin/my-mcp'
-                    : '@acme/weather-mcp'
-                  }
-                />
-                {errors.local_runtime_package && <p className={errorClass}>{errors.local_runtime_package}</p>}
-              </div>
-
-              {(serverForm.local_runtime.type === 'npx' || serverForm.local_runtime.type === 'uvx') && (
-                <div>
-                  <label className={labelClass}>Version Pin (recommended)</label>
-                  <input
-                    type="text"
-                    className={inputClass}
-                    value={serverForm.local_runtime.version}
-                    onChange={(e) => setServerForm(prev => ({
-                      ...prev,
-                      local_runtime: { ...prev.local_runtime, version: e.target.value },
-                    }))}
-                    placeholder="1.2.0"
-                  />
-                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    Unpinned packages are tagged &lsquo;unpinned-version&rsquo; for visibility.
-                  </p>
-                </div>
-              )}
-
-              {serverForm.local_runtime.type === 'docker' && (
-                <div>
-                  <label className={labelClass}>Image Digest (recommended)</label>
-                  <input
-                    type="text"
-                    className={`${inputClass} ${errors.local_runtime_image_digest ? 'border-red-500' : ''}`}
-                    value={serverForm.local_runtime.image_digest}
-                    onChange={(e) => setServerForm(prev => ({
-                      ...prev,
-                      local_runtime: { ...prev.local_runtime, image_digest: e.target.value },
-                    }))}
-                    placeholder="sha256:..."
-                  />
-                  {errors.local_runtime_image_digest && <p className={errorClass}>{errors.local_runtime_image_digest}</p>}
-                </div>
-              )}
-
-              <div className="md:col-span-2">
-                <label className={labelClass}>Args</label>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
-                  Argv-style list — one entry per argument. No shell interpolation.
-                  Args may contain commas, equals signs, etc. (e.g. <code>--label=k=v,w=x</code>).
-                </p>
-                {serverForm.local_runtime.argList.map((arg, idx) => (
-                  <div key={idx} className="flex gap-2 mb-2 items-center">
-                    <input
-                      type="text"
-                      className={`${inputClass} flex-1`}
-                      value={arg}
-                      onChange={(e) => {
-                        const next = [...serverForm.local_runtime.argList];
-                        next[idx] = e.target.value;
-                        setServerForm(prev => ({
-                          ...prev,
-                          local_runtime: { ...prev.local_runtime, argList: next },
-                        }));
-                      }}
-                      placeholder={`arg ${idx + 1}`}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const next = serverForm.local_runtime.argList.filter((_, i) => i !== idx);
-                        setServerForm(prev => ({
-                          ...prev,
-                          local_runtime: { ...prev.local_runtime, argList: next },
-                        }));
-                      }}
-                      className="text-red-500 hover:text-red-700 px-2"
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))}
-                <button
-                  type="button"
-                  className="mt-1 px-3 py-1 text-sm bg-purple-100 dark:bg-purple-800 text-purple-700 dark:text-purple-200 rounded hover:bg-purple-200"
-                  onClick={() => setServerForm(prev => ({
-                    ...prev,
-                    local_runtime: {
-                      ...prev.local_runtime,
-                      argList: [...prev.local_runtime.argList, ''],
-                    },
-                  }))}
-                >
-                  + Add arg
-                </button>
-              </div>
-
-              <div className="md:col-span-2">
-                <label className={labelClass}>Environment Variables</label>
-                <div className="mb-2 p-3 rounded-md bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-xs text-amber-900 dark:text-amber-100">
-                  <strong>Visibility note:</strong> values you put here are
-                  visible to every authenticated registry user (they need them
-                  to render the Connect modal), and may appear in process
-                  listings (<code>ps aux</code>, <code>/proc/&lt;pid&gt;/environ</code>)
-                  on developer machines once launched. Use literal values only
-                  for non-secret defaults (e.g. <code>LOG_LEVEL=info</code>).
-                  For secrets, use <code>${'$'}{'{VAR}'}</code> placeholders or
-                  mark the row &lsquo;required from user&rsquo; so the user
-                  supplies it at connect time.
-                </div>
-                {serverForm.local_runtime.envRows.length === 0 && (
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
-                    None. Add rows for env vars. Mark a row &lsquo;required from user&rsquo; for
-                    secrets the user provides at connect time.
-                  </p>
-                )}
-                {serverForm.local_runtime.envRows.map((row, idx) => (
-                  <div key={idx} className="flex gap-2 mb-2 items-center">
-                    <input
-                      type="text"
-                      className={`${inputClass} flex-1`}
-                      placeholder="KEY"
-                      value={row.key}
-                      onChange={(e) => {
-                        const rows = [...serverForm.local_runtime.envRows];
-                        rows[idx] = { ...rows[idx], key: e.target.value };
-                        setServerForm(prev => ({
-                          ...prev,
-                          local_runtime: { ...prev.local_runtime, envRows: rows },
-                        }));
-                      }}
-                    />
-                    <input
-                      type="text"
-                      className={`${inputClass} flex-1 ${row.required ? 'opacity-50' : ''}`}
-                      placeholder={row.required ? '(provided by user at connect)' : 'value or ${VAR}'}
-                      disabled={row.required}
-                      value={row.value}
-                      onChange={(e) => {
-                        const rows = [...serverForm.local_runtime.envRows];
-                        rows[idx] = { ...rows[idx], value: e.target.value };
-                        setServerForm(prev => ({
-                          ...prev,
-                          local_runtime: { ...prev.local_runtime, envRows: rows },
-                        }));
-                      }}
-                    />
-                    <label className="flex items-center gap-1 text-xs text-gray-700 dark:text-gray-300 whitespace-nowrap">
-                      <input
-                        type="checkbox"
-                        checked={row.required}
-                        onChange={(e) => {
-                          const rows = [...serverForm.local_runtime.envRows];
-                          rows[idx] = { ...rows[idx], required: e.target.checked, value: e.target.checked ? '' : rows[idx].value };
-                          setServerForm(prev => ({
-                            ...prev,
-                            local_runtime: { ...prev.local_runtime, envRows: rows },
-                          }));
-                        }}
-                      />
-                      required from user
-                    </label>
-                    <button
-                      type="button"
-                      className="text-red-500 hover:text-red-700 px-2"
-                      onClick={() => {
-                        const rows = serverForm.local_runtime.envRows.filter((_, i) => i !== idx);
-                        setServerForm(prev => ({
-                          ...prev,
-                          local_runtime: { ...prev.local_runtime, envRows: rows },
-                        }));
-                      }}
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))}
-                {errors.local_runtime_env && <p className={errorClass}>{errors.local_runtime_env}</p>}
-                <button
-                  type="button"
-                  className="mt-2 px-3 py-1 text-sm bg-purple-100 dark:bg-purple-800 text-purple-700 dark:text-purple-200 rounded hover:bg-purple-200"
-                  onClick={() => setServerForm(prev => ({
-                    ...prev,
-                    local_runtime: {
-                      ...prev.local_runtime,
-                      envRows: [...prev.local_runtime.envRows, { key: '', value: '', required: false }],
-                    },
-                  }))}
-                >
-                  + Add env var
-                </button>
-              </div>
-            </div>
+          <div className="md:col-span-2">
+            <LocalRuntimeFormPanel
+              runtime={serverForm.local_runtime}
+              onChange={(next) => setServerForm(prev => ({ ...prev, local_runtime: next }))}
+              errors={{
+                package: errors.local_runtime_package,
+                image_digest: errors.local_runtime_image_digest,
+                env: errors.local_runtime_env,
+              }}
+              inputClass={inputClass}
+              labelClass={labelClass}
+              errorClass={errorClass}
+            />
           </div>
         )}
 
