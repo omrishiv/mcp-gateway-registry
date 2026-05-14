@@ -1,9 +1,17 @@
 """Validation helpers for local-runtime registration.
 
-This module enforces server-side checks on LocalRuntime payloads at registration
-time. The checks are SOFT accidental-leak guards — they catch obvious mistakes
-(pasting a real secret value, forgetting to pin a Docker digest), not
-adversarial submitters.
+The leak detection in this module is BEST-EFFORT and NOT AUTHORITATIVE. It
+catches obvious accidental pastes — known secret prefixes (sk-, ghp_, AKIA,
+etc.) and long high-entropy strings — but a determined or unaware submitter
+can trivially bypass it (a low-entropy chosen password, a custom-format token,
+a secret embedded in a longer string). The user-facing visibility-note banner
+in the registration UI is the actual safeguard against secret exposure;
+this module is a sanity check, not a scrubber.
+
+Submitters should use ${VAR} placeholders or `required_env` for any value
+that should not be visible to other registry users — those forms bypass the
+leak check by design (placeholders are templates; required_env entries
+have no value to leak).
 """
 
 import logging
@@ -72,7 +80,13 @@ def _value_looks_like_secret(value: str) -> bool:
 
 
 def find_leaked_secrets(env: dict[str, str], args: list[str]) -> dict[str, list[str]]:
-    """Scan env values and args for literal-looking secrets.
+    """Heuristically scan env values and args for literal-looking secrets.
+
+    BEST-EFFORT only. Catches values that match known secret prefixes
+    (sk-, ghp_, AKIA, etc.) or look like long high-entropy random strings.
+    Does NOT catch low-entropy chosen credentials, secrets embedded in larger
+    strings, or custom-format tokens. See the module docstring for the
+    threat-model framing.
 
     Args:
         env: Environment variable dict (key -> value).
@@ -80,10 +94,11 @@ def find_leaked_secrets(env: dict[str, str], args: list[str]) -> dict[str, list[
 
     Returns:
         Dict with two keys:
-        - "env_keys": list of env keys whose values look like secrets
-        - "arg_indices": list of arg indices whose values look like secrets
+        - "env_keys": list of env keys whose values matched a heuristic
+        - "arg_indices": list of arg indices whose values matched a heuristic
 
-        Empty lists when no leaks detected.
+        Empty lists when no heuristic match. An empty result does NOT prove
+        the input is secret-free.
     """
     leaked_env_keys: list[str] = []
     leaked_arg_indices: list[str] = []

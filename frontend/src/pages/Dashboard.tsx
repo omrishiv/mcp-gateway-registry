@@ -26,6 +26,7 @@ import {
   buildLocalRuntimeJson,
 } from '../utils/localRuntime';
 import LocalRuntimeFormPanel from '../components/LocalRuntimeFormPanel';
+import type { LocalRuntime } from '../types/server';
 
 
 interface SyncMetadata {
@@ -36,17 +37,6 @@ interface SyncMetadata {
   is_read_only?: boolean;
   is_orphaned?: boolean;
   orphaned_at?: string;
-}
-
-interface LocalRuntime {
-  type: 'npx' | 'docker' | 'uvx' | 'command';
-  package: string;
-  args?: string[];
-  env?: Record<string, string>;
-  required_env?: string[];
-  image_digest?: string;
-  platforms?: string[];
-  version?: string;
 }
 
 interface Server {

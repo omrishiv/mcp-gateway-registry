@@ -30,6 +30,7 @@ import ServerDetailsModal from './ServerDetailsModal';
 import useEscapeKey from '../hooks/useEscapeKey';
 import { formatRelativeTime } from '../utils/dateUtils';
 import { useAuth } from '../contexts/AuthContext';
+import type { LocalRuntime } from '../types/server';
 
 interface ServerVersion {
   version: string;
@@ -49,17 +50,6 @@ interface SyncMetadata {
   is_read_only?: boolean;
   is_orphaned?: boolean;
   orphaned_at?: string;
-}
-
-export interface LocalRuntime {
-  type: 'npx' | 'docker' | 'uvx' | 'command';
-  package: string;
-  args?: string[];
-  env?: Record<string, string>;
-  required_env?: string[];
-  image_digest?: string;
-  platforms?: string[];
-  version?: string;
 }
 
 export interface Server {

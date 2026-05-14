@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import { useRegistryConfig } from './useRegistryConfig';
+import type { LocalRuntime } from '../types/server';
 
 interface ServerVersion {
   version: string;
@@ -33,16 +34,7 @@ interface Server {
   proxy_pass_url?: string;
   // Local-server fields
   deployment?: 'remote' | 'local';
-  local_runtime?: {
-    type: 'npx' | 'docker' | 'uvx' | 'command';
-    package: string;
-    args?: string[];
-    env?: Record<string, string>;
-    required_env?: string[];
-    image_digest?: string;
-    platforms?: string[];
-    version?: string;
-  };
+  local_runtime?: LocalRuntime;
   version?: string;
   versions?: ServerVersion[];
   default_version?: string;
