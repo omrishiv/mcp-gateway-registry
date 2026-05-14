@@ -1,4 +1,4 @@
-.PHONY: help test test-unit test-integration test-e2e test-fast test-coverage test-auth test-servers test-search test-health test-core install-dev lint format check-deps clean build-keycloak push-keycloak build-and-push-keycloak deploy-keycloak update-keycloak save-outputs view-logs view-logs-keycloak view-logs-registry view-logs-auth view-logs-follow list-images build push build-push generate-manifest validate-config publish-dockerhub publish-dockerhub-component publish-dockerhub-version publish-dockerhub-no-mirror publish-local compose-up-agents compose-down-agents compose-logs-agents build-agents push-agents
+.PHONY: help test test-unit test-integration test-e2e test-fast test-coverage test-auth test-servers test-search test-health test-core install-dev lint format check-deps clean build-keycloak push-keycloak build-and-push-keycloak deploy-keycloak update-keycloak save-outputs view-logs view-logs-keycloak view-logs-registry view-logs-auth view-logs-follow list-images build push build-push generate-manifest validate-config publish-dockerhub publish-dockerhub-component publish-dockerhub-version publish-dockerhub-no-mirror publish-local compose-up-agents compose-down-agents compose-logs-agents build-agents push-agents uv-update-locks
 
 # Default target
 help:
@@ -70,6 +70,10 @@ help:
 	@echo "  compose-logs-agents         Follow A2A agent logs in real-time"
 	@echo "  build-agents                Build both A2A agent images locally"
 	@echo "  push-agents                 Push both A2A agent images to ECR"
+	@echo ""
+	@echo "Dependency Management:"
+	@echo "  uv-update-locks             Refresh every uv.lock under the repo with a 7-day"
+	@echo "                              supply-chain quarantine (UV_EXCLUDE_NEWER=now-7d)"
 
 # Installation
 install-dev:
@@ -289,3 +293,29 @@ push-agents:
 	@$(MAKE) push IMAGE=flight_booking_agent
 	@$(MAKE) push IMAGE=travel_assistant_agent
 	@echo "Both agents pushed to ECR"
+
+# ========================================
+# Dependency Management
+# ========================================
+# Refresh every uv.lock in the repo while excluding any package version
+# published in the last 7 days (rolling supply-chain quarantine).
+# Override the window with UV_EXCLUDE_NEWER_DAYS=N.
+UV_EXCLUDE_NEWER_DAYS ?= 7
+
+uv-update-locks:
+	@set -e; \
+	if date -u -v-$(UV_EXCLUDE_NEWER_DAYS)d +%Y-%m-%dT%H:%M:%SZ >/dev/null 2>&1; then \
+		CUTOFF=$$(date -u -v-$(UV_EXCLUDE_NEWER_DAYS)d +%Y-%m-%dT%H:%M:%SZ); \
+	else \
+		CUTOFF=$$(date -u -d '$(UV_EXCLUDE_NEWER_DAYS) days ago' +%Y-%m-%dT%H:%M:%SZ); \
+	fi; \
+	export UV_EXCLUDE_NEWER=$$CUTOFF; \
+	echo "UV_EXCLUDE_NEWER=$$UV_EXCLUDE_NEWER ($(UV_EXCLUDE_NEWER_DAYS)-day quarantine)"; \
+	for lock in $$(find . -name uv.lock -not -path '*/.venv/*' -not -path '*/node_modules/*' | sort); do \
+		dir=$$(dirname $$lock); \
+		echo ""; \
+		echo "==> Updating $$dir"; \
+		(cd $$dir && uv lock --upgrade); \
+	done; \
+	echo ""; \
+	echo "All uv.lock files refreshed with cutoff $$UV_EXCLUDE_NEWER"
