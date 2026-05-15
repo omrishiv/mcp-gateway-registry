@@ -29,7 +29,6 @@ from urllib.parse import parse_qs, urlencode
 
 import requests
 from dotenv import load_dotenv
-from itsdangerous import URLSafeTimedSerializer
 
 # Configure logging
 logging.basicConfig(

@@ -1128,9 +1128,7 @@ class TestNginxProxiedAuth:
         assert context["groups"] == []
 
     @pytest.mark.asyncio
-    async def test_nginx_auth_uses_forwarded_x_groups(
-        self, mock_scopes_config: dict[str, Any]
-    ):
+    async def test_nginx_auth_uses_forwarded_x_groups(self, mock_scopes_config: dict[str, Any]):
         """X-Groups header is propagated verbatim into user_context."""
         mock_request = Mock(spec=Request)
         mock_request.url.path = "/api/test"

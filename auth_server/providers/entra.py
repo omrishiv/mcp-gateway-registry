@@ -94,9 +94,7 @@ class EntraIdProvider(AuthProvider):
         login_base_url = os.environ.get("ENTRA_LOGIN_BASE_URL", DEFAULT_ENTRA_LOGIN_BASE_URL)
         graph_override = os.environ.get("ENTRA_GRAPH_BASE_URL")
         self.graph_base_url = (
-            graph_override.rstrip("/")
-            if graph_override
-            else _infer_graph_base_url(login_base_url)
+            graph_override.rstrip("/") if graph_override else _infer_graph_base_url(login_base_url)
         )
 
         # Entra ID endpoints
@@ -415,9 +413,7 @@ class EntraIdProvider(AuthProvider):
         if graph_override:
             base = graph_override.rstrip("/")
         else:
-            login_base = os.environ.get(
-                "ENTRA_LOGIN_BASE_URL", DEFAULT_ENTRA_LOGIN_BASE_URL
-            )
+            login_base = os.environ.get("ENTRA_LOGIN_BASE_URL", DEFAULT_ENTRA_LOGIN_BASE_URL)
             base = _infer_graph_base_url(login_base)
         return f"{base}{cls.GRAPH_MEMBEROF_PATH}"
 
@@ -467,8 +463,7 @@ class EntraIdProvider(AuthProvider):
                     url = body.get("@odata.nextLink")
 
                 logger.info(
-                    f"Resolved {len(ids)} Entra group IDs via Graph memberOf "
-                    f"across {page} page(s)"
+                    f"Resolved {len(ids)} Entra group IDs via Graph memberOf across {page} page(s)"
                 )
         except httpx.HTTPStatusError as e:
             logger.warning(

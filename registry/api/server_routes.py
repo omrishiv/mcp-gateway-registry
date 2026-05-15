@@ -786,10 +786,7 @@ async def register_service(
         raw_headers=request.scope.get("headers", []),
     )
     if not gate_result.allowed:
-        logger.warning(
-            f"Registration gate denied server '{name}': "
-            f"{gate_result.error_message}"
-        )
+        logger.warning(f"Registration gate denied server '{name}': {gate_result.error_message}")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Registration denied by policy gate: {gate_result.error_message}",
@@ -1071,8 +1068,7 @@ async def internal_register_service(
     )
     if not gate_result.allowed:
         logger.warning(
-            f"Registration gate denied internal server '{name}': "
-            f"{gate_result.error_message}"
+            f"Registration gate denied internal server '{name}': {gate_result.error_message}"
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -1671,8 +1667,7 @@ async def edit_server_submit(
     )
     if not gate_result.allowed:
         logger.warning(
-            f"Registration gate denied server update '{name}': "
-            f"{gate_result.error_message}"
+            f"Registration gate denied server update '{name}': {gate_result.error_message}"
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -2496,10 +2491,7 @@ async def generate_user_token(
             if ".." in resource_id or "%" in resource_id:
                 raise HTTPException(
                     status_code=400,
-                    detail=(
-                        "resource.id must not contain '..' or "
-                        "percent-encoded characters"
-                    ),
+                    detail=("resource.id must not contain '..' or percent-encoded characters"),
                 )
             if any(ord(c) < 0x20 or ord(c) == 0x7F for c in resource_id):
                 raise HTTPException(
@@ -2535,9 +2527,7 @@ async def generate_user_token(
                 "create",
                 "resource_bound_token",
                 resource_id=f"{resource_type}:{resource_id}",
-                description=(
-                    f"Mint resource-bound token for {resource_type}:{resource_id}"
-                ),
+                description=(f"Mint resource-bound token for {resource_type}:{resource_id}"),
             )
         else:
             set_audit_action(
@@ -2972,10 +2962,7 @@ async def register_service_api(
         raw_headers=request.scope.get("headers", []),
     )
     if not gate_result.allowed:
-        logger.warning(
-            f"Registration gate denied server '{name}': "
-            f"{gate_result.error_message}"
-        )
+        logger.warning(f"Registration gate denied server '{name}': {gate_result.error_message}")
         raise HTTPException(
             status_code=403,
             detail=f"Registration denied by policy gate: {gate_result.error_message}",

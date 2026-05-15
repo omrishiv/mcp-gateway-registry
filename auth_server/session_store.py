@@ -20,66 +20,22 @@ Failure semantics:
 """
 
 import logging
-import os
 import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from motor.motor_asyncio import AsyncIOMotorCollection
 from pymongo import ASCENDING, ReadPreference, WriteConcern
+
+from registry.auth.session_crypto import decrypt_id_token, encrypt_id_token
 
 logger = logging.getLogger(__name__)
 
 COLLECTION_BASE_NAME: str = "oauth_sessions"
 SESSION_ID_BYTES: int = 32
-HKDF_INFO: bytes = b"mcp-gateway-session-id-token-encryption"
 
 _collection: AsyncIOMotorCollection | None = None
 _indexes_created: bool = False
-_aesgcm: AESGCM | None = None
-
-
-def _derive_token_encryption_key() -> bytes:
-    """Derive the AES-GCM key for id_token encryption from SECRET_KEY via HKDF.
-
-    SECRET_KEY is required by the auth server at startup; rotating it
-    invalidates stored id_tokens (acceptable — same blast radius as cookie
-    rotation today).
-    """
-    secret = os.environ.get("SECRET_KEY")
-    if not secret:
-        raise RuntimeError("SECRET_KEY required for session token encryption")
-    hkdf = HKDF(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=None,
-        info=HKDF_INFO,
-    )
-    return hkdf.derive(secret.encode("utf-8"))
-
-
-def _get_aesgcm() -> AESGCM:
-    """Lazy-init the AES-GCM cipher singleton."""
-    global _aesgcm
-    if _aesgcm is None:
-        _aesgcm = AESGCM(_derive_token_encryption_key())
-    return _aesgcm
-
-
-def _encrypt_id_token(token: str) -> bytes:
-    """Encrypt an id_token. Returns nonce || ciphertext."""
-    nonce = secrets.token_bytes(12)
-    ct = _get_aesgcm().encrypt(nonce, token.encode("utf-8"), associated_data=None)
-    return nonce + ct
-
-
-def _decrypt_id_token(blob: bytes) -> str:
-    """Decrypt an id_token blob produced by _encrypt_id_token."""
-    nonce, ct = blob[:12], blob[12:]
-    return _get_aesgcm().decrypt(nonce, ct, associated_data=None).decode("utf-8")
 
 
 async def _get_collection() -> AsyncIOMotorCollection:
@@ -136,10 +92,6 @@ async def _get_collection() -> AsyncIOMotorCollection:
                 expireAfterSeconds=0,
                 name="ttl_expires_at",
             )
-            await collection.create_index(
-                [("username", ASCENDING), ("expires_at", ASCENDING)],
-                name="idx_username_expires_at",
-            )
             _indexes_created = True
             logger.info(f"Created indexes for {collection_name} collection")
         except Exception as e:
@@ -174,8 +126,9 @@ async def create_session(
         provider: OAuth provider key (e.g. "keycloak", "entra").
         auth_method: Always "oauth2" today.
         max_age_seconds: Session lifetime — drives the TTL document field.
-        id_token: Optional OIDC id_token. Encrypted at rest. Pass None when
-            OAUTH_STORE_TOKENS_IN_SESSION is disabled.
+        id_token: Optional OIDC id_token, encrypted at rest. Required for
+            SSO logout via id_token_hint; only pass None when the IdP did
+            not return one.
 
     Returns:
         Opaque session_id to be embedded in the signed session cookie.
@@ -196,7 +149,7 @@ async def create_session(
         "expires_at": expires_at,
     }
     if id_token:
-        document["id_token_encrypted"] = _encrypt_id_token(id_token)
+        document["id_token_encrypted"] = encrypt_id_token(id_token)
 
     collection = await _get_collection()
     await collection.insert_one(document)
@@ -243,7 +196,7 @@ async def resolve_session(session_id: str) -> dict[str, Any] | None:
     encrypted = doc.get("id_token_encrypted")
     if encrypted:
         try:
-            result["id_token"] = _decrypt_id_token(encrypted)
+            result["id_token"] = decrypt_id_token(encrypted)
         except Exception as e:
             logger.warning(f"Failed to decrypt id_token for session: {e}")
 

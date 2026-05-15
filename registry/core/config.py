@@ -641,14 +641,10 @@ class Settings(BaseSettings):
         if v is None:
             return "json"
         if not isinstance(v, str):
-            raise ValueError(
-                f"APP_LOG_FILE_FORMAT must be a string, got {type(v).__name__}"
-            )
+            raise ValueError(f"APP_LOG_FILE_FORMAT must be a string, got {type(v).__name__}")
         normalized = v.strip().lower()
         if normalized not in ("json", "text"):
-            raise ValueError(
-                f"APP_LOG_FILE_FORMAT must be 'json' or 'text', got {v!r}"
-            )
+            raise ValueError(f"APP_LOG_FILE_FORMAT must be 'json' or 'text', got {v!r}")
         return normalized
 
     @field_validator("storage_backend", mode="before")

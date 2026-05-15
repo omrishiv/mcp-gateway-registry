@@ -1,8 +1,8 @@
 """Tests for CSRF token validation with Bearer token bypass."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from fastapi import HTTPException
 
 from registry.auth.csrf import (

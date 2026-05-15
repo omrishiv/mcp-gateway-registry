@@ -139,9 +139,7 @@ class TestFetchGroupsViaGraph:
     async def test_hard_cap_truncates(self, monkeypatch):
         monkeypatch.setattr(EntraIdProvider, "GROUP_FETCH_HARD_CAP", 5)
         page = {
-            "value": [
-                {"@odata.type": "#microsoft.graph.group", "id": f"g-{i}"} for i in range(10)
-            ]
+            "value": [{"@odata.type": "#microsoft.graph.group", "id": f"g-{i}"} for i in range(10)]
         }
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(return_value=_mock_response(page))

@@ -83,6 +83,7 @@ DEFAULT_TOKEN_LIFETIME_HOURS = 8
 user_token_generation_counts = {}
 MAX_TOKENS_PER_USER_PER_HOUR = int(os.environ.get("MAX_TOKENS_PER_USER_PER_HOUR", "100"))
 
+
 # MCP tools/list filter configuration (Issue #1026).
 #
 # Prefer the canonical registry.core.config.settings fields when they
@@ -116,11 +117,10 @@ def _read_mcp_proxy_max_body_bytes() -> int:
     try:
         candidate = int(raw)
     except ValueError:
-        logging.warning(
-            f"Invalid MCP_PROXY_MAX_BODY_BYTES={raw!r}; using default {default_bytes}"
-        )
+        logging.warning(f"Invalid MCP_PROXY_MAX_BODY_BYTES={raw!r}; using default {default_bytes}")
         return default_bytes
     return max(candidate, minimum_bytes)
+
 
 # Global scopes configuration (will be loaded during FastAPI startup)
 SCOPES_CONFIG = {}
@@ -133,15 +133,19 @@ _registry_static_token_requested: bool = (
 # Static API key for Registry API (must match Bearer token value when enabled)
 REGISTRY_API_TOKEN: str = os.environ.get("REGISTRY_API_TOKEN", "")
 
-# OAuth token storage in session cookies (disable for IdPs with large tokens)
-# Default: false - tokens are not used functionally and storing them risks cookie size limits
+# Legacy flag — historically gated whether OAuth `id_token` was kept for SSO
+# logout. Now a no-op: id_token is always stored server-side (encrypted at
+# rest with a SECRET_KEY-derived key) so it never reaches the browser cookie.
+# The flag is read only to surface a deprecation warning when operators still
+# set it, so old runbooks don't silently appear to work.
 OAUTH_STORE_TOKENS_IN_SESSION: bool = (
     os.environ.get("OAUTH_STORE_TOKENS_IN_SESSION", "false").lower() == "true"
 )
-
-logging.info(
-    f"OAUTH_STORE_TOKENS_IN_SESSION={'enabled' if OAUTH_STORE_TOKENS_IN_SESSION else 'disabled'}"
-)
+if "OAUTH_STORE_TOKENS_IN_SESSION" in os.environ:
+    logging.warning(
+        "OAUTH_STORE_TOKENS_IN_SESSION is deprecated and ignored — id_token is "
+        "always persisted in the server-side session store (encrypted)."
+    )
 
 # Issue #779: multiple static API keys with per-key groups.
 _REGISTRY_API_KEYS_RAW: str = os.environ.get("REGISTRY_API_KEYS", "").strip()
@@ -948,9 +952,7 @@ async def filter_tools_list_response(
     kept: list[dict] = []
 
     if not isinstance(tools_list, list):
-        logger.info(
-            f"filter_tools_list_response: server={server_name} before=0 after=0"
-        )
+        logger.info(f"filter_tools_list_response: server={server_name} before=0 after=0")
         return kept
 
     for tool in tools_list:
@@ -1176,9 +1178,7 @@ class ResourceBinding(BaseModel):
     # ``{"id": 123}`` into ``"123"``. Resource ids are compared
     # byte-for-byte against URL paths at the edge; a coerced numeric id
     # would silently mint a token nobody can actually use.
-    id: StrictStr = Field(
-        ..., min_length=1, description="Resource identifier (path or slug)"
-    )
+    id: StrictStr = Field(..., min_length=1, description="Resource identifier (path or slug)")
 
     @field_validator("id")
     @classmethod
@@ -1189,9 +1189,7 @@ class ResourceBinding(BaseModel):
         # truncation in C-backed URL parsers downstream and should never
         # appear in a legitimate resource id.
         if ".." in v or "%" in v:
-            raise ValueError(
-                "Resource id must not contain '..' or percent-encoded characters"
-            )
+            raise ValueError("Resource id must not contain '..' or percent-encoded characters")
         if any(ord(c) < 0x20 or ord(c) == 0x7F for c in v):
             raise ValueError("Resource id must not contain control characters")
         stripped = v.strip()
@@ -2232,9 +2230,7 @@ async def validate_request(request: Request):
                 )
 
             request_path = urlparse(original_url).path
-            if not check_resource_token_allowed(
-                request_path, root_path=REGISTRY_ROOT_PATH
-            ):
+            if not check_resource_token_allowed(request_path, root_path=REGISTRY_ROOT_PATH):
                 logger.warning(
                     f"Resource token for {hash_username(validation_result.get('username') or '')} "
                     f"rejected at blocked endpoint: {original_url}"
@@ -2251,16 +2247,10 @@ async def validate_request(request: Request):
             # Accept here, before classification, so resource-bound tokens
             # can verify themselves without tripping the "unclassifiable"
             # check below.
-            if is_resource_token_introspection_path(
-                request_path, root_path=REGISTRY_ROOT_PATH
-            ):
-                logger.info(
-                    f"Resource-bound token on introspection endpoint: {request_path}"
-                )
+            if is_resource_token_introspection_path(request_path, root_path=REGISTRY_ROOT_PATH):
+                logger.info(f"Resource-bound token on introspection endpoint: {request_path}")
             else:
-                classified = classify_request_url(
-                    request_path, root_path=REGISTRY_ROOT_PATH
-                )
+                classified = classify_request_url(request_path, root_path=REGISTRY_ROOT_PATH)
                 if classified is None:
                     logger.warning(
                         f"Resource token for "
@@ -2301,9 +2291,7 @@ async def validate_request(request: Request):
                         detail="Resource-bound token does not permit this request",
                         headers={"Connection": "close"},
                     )
-                logger.info(
-                    f"Resource-bound token match: {claim_type}:{normalized_claim_id}"
-                )
+                logger.info(f"Resource-bound token match: {claim_type}:{normalized_claim_id}")
         else:
             # Unknown ``token_kind`` value. Only this code is supposed to
             # mint self-signed tokens (and it emits "user" or "resource").
@@ -2667,9 +2655,7 @@ async def generate_user_token(
                 "exp": current_time + expires_in,
                 "description": request.description,
                 TOKEN_KIND_CLAIM: (
-                    TokenKind.RESOURCE.value
-                    if request.resource
-                    else TokenKind.USER.value
+                    TokenKind.RESOURCE.value if request.resource else TokenKind.USER.value
                 ),
             }
 
@@ -3354,9 +3340,7 @@ async def oauth2_callback(
                     from providers.entra import EntraIdProvider
 
                     if EntraIdProvider.has_group_overage(id_token_claims):
-                        logger.info(
-                            "Entra ID token signals group overage; resolving via Graph"
-                        )
+                        logger.info("Entra ID token signals group overage; resolving via Graph")
                         graph_groups = await EntraIdProvider.fetch_groups_via_graph(
                             token_data["access_token"]
                         )
@@ -3449,11 +3433,11 @@ async def oauth2_callback(
         # for IdPs that return large groups claims (e.g. Entra ID with many
         # group memberships) and keeps id_token off the client entirely.
         session_max_age = OAUTH2_CONFIG.get("session", {}).get("max_age_seconds", 28800)
-        # id_token is required for OIDC logout's id_token_hint, but we only
-        # persist it when OAUTH_STORE_TOKENS_IN_SESSION=true. With the flag
-        # disabled, IdP single-logout via id_token_hint is unavailable —
-        # acceptable trade-off documented on the flag.
-        id_token_to_store = token_data.get("id_token") if OAUTH_STORE_TOKENS_IN_SESSION else None
+        # id_token is always persisted server-side now: it is encrypted at rest
+        # via AES-GCM (key derived from SECRET_KEY) and never reaches the
+        # browser, so the original "credential leakage" reason for gating it
+        # behind OAUTH_STORE_TOKENS_IN_SESSION no longer applies. We need it
+        # for OIDC SSO logout (id_token_hint) regardless of the flag.
         from session_store import create_session
 
         session_id = await create_session(
@@ -3464,7 +3448,7 @@ async def oauth2_callback(
             provider=provider,
             auth_method="oauth2",
             max_age_seconds=session_max_age,
-            id_token=id_token_to_store,
+            id_token=token_data.get("id_token"),
         )
         registry_session = signer.dumps(session_id)
 
@@ -3787,8 +3771,7 @@ async def _read_bounded(
             raise HTTPException(
                 status_code=413,
                 detail=(
-                    f"Upstream tools/list response exceeded "
-                    f"{max_bytes} bytes; refusing to buffer."
+                    f"Upstream tools/list response exceeded {max_bytes} bytes; refusing to buffer."
                 ),
             )
         chunks.append(chunk)
@@ -3831,9 +3814,7 @@ async def mcp_proxy(
     """
     upstream_url = request.headers.get("X-Upstream-Url")
     if not upstream_url:
-        logger.warning(
-            f"mcp_proxy: missing X-Upstream-Url header for server={server_name}"
-        )
+        logger.warning(f"mcp_proxy: missing X-Upstream-Url header for server={server_name}")
         raise HTTPException(
             status_code=400,
             detail="Missing X-Upstream-Url header",
@@ -3868,8 +3849,7 @@ async def mcp_proxy(
     forward_headers = _forward_headers(dict(request.headers))
 
     logger.info(
-        f"mcp_proxy: server={server_name} method={incoming_method} "
-        f"filter_enabled={filter_enabled}"
+        f"mcp_proxy: server={server_name} method={incoming_method} filter_enabled={filter_enabled}"
     )
 
     try:
@@ -3885,9 +3865,7 @@ async def mcp_proxy(
                 # pathological upstream cannot DoS the proxy.
                 body_bytes = await _read_bounded(upstream_response, max_body_bytes)
                 status_code = upstream_response.status_code
-                content_type = upstream_response.headers.get(
-                    "content-type", "application/json"
-                )
+                content_type = upstream_response.headers.get("content-type", "application/json")
     except HTTPException:
         raise
     except httpx.TimeoutException as exc:
@@ -3921,8 +3899,7 @@ async def mcp_proxy(
         parsed = json.loads(body_bytes.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         logger.warning(
-            f"mcp_proxy: tools/list upstream returned non-JSON body "
-            f"for server={server_name}: {exc}"
+            f"mcp_proxy: tools/list upstream returned non-JSON body for server={server_name}: {exc}"
         )
         return JSONResponse(
             content=_safe_parse_body(body_bytes),
@@ -4007,9 +3984,7 @@ async def _audit_legacy_scopes_on_startup() -> int:
         try:
             rules = await scope_repo.get_server_scopes(scope_name)
         except Exception as exc:
-            logger.warning(
-                f"Legacy scope audit: get_server_scopes({scope_name}) failed: {exc}"
-            )
+            logger.warning(f"Legacy scope audit: get_server_scopes({scope_name}) failed: {exc}")
             continue
         for rule in rules or []:
             if not isinstance(rule, dict) or "server" not in rule:
@@ -4026,12 +4001,13 @@ async def _audit_legacy_scopes_on_startup() -> int:
                     "was intended)"
                 )
                 warnings_emitted += 1
-            elif isinstance(tools, list) and not tools and (
-                "tools/call" in methods or "all" in methods or "*" in methods
+            elif (
+                isinstance(tools, list)
+                and not tools
+                and ("tools/call" in methods or "all" in methods or "*" in methods)
             ):
                 logger.warning(
-                    f"empty_tools_list_with_call_method scope={scope_name} "
-                    f"server={server_name}"
+                    f"empty_tools_list_with_call_method scope={scope_name} server={server_name}"
                 )
                 warnings_emitted += 1
 

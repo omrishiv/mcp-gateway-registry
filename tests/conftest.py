@@ -98,9 +98,7 @@ def pytest_configure(config):
     # Set a fixed SECRET_KEY for tests. Application code now refuses to start without one;
     # production deployments must set this themselves so cookie signing is consistent
     # across replicas.
-    os.environ.setdefault(
-        "SECRET_KEY", "test-secret-key-for-testing-only-do-not-use-in-production"
-    )
+    os.environ.setdefault("SECRET_KEY", "test-secret-key-for-testing-only-do-not-use-in-production")
 
     print(
         "Test environment configured: DOCUMENTDB_HOST=localhost, STORAGE_BACKEND=mongodb-ce, DOCUMENTDB_DIRECT_CONNECTION=true, DOCUMENTDB_USE_TLS=false"
@@ -249,9 +247,7 @@ def test_settings(tmp_path: Path) -> Settings:
         documentdb_direct_connection=True,  # Use direct connection for single-node MongoDB
         # Use per-session isolated DB name set in pytest_configure to avoid
         # sharing state with the production "mcp_registry" database.
-        documentdb_database=os.environ.get(
-            "DOCUMENTDB_DATABASE", f"test_{uuid.uuid4().hex[:8]}"
-        ),
+        documentdb_database=os.environ.get("DOCUMENTDB_DATABASE", f"test_{uuid.uuid4().hex[:8]}"),
     )
 
     # Patch path properties to use temp directories

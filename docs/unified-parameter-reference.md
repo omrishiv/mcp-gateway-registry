@@ -120,7 +120,7 @@ Internal and external URLs for the auth server, plus internal JWT signing.
 | Auth server external URL | `AUTH_SERVER_EXTERNAL_URL` | — (from domain config) | `auth-server.app.externalUrl` | Public URL for browser redirects. |
 | Internal JWT issuer | (constant in code) | — | `auth-server.app.jwtIssuer` | `iss` claim on internal service JWTs. |
 | Internal JWT audience | (constant in code) | — | `auth-server.app.jwtAudience` | `aud` claim on internal service JWTs. |
-| App secret key **(secret)** | `SECRET_KEY` | (via `TF_VAR_*` / secrets manager) | `global.secretKey` (auto-generated if unset) | JWT signing + credential encryption. Rotating invalidates stored creds. |
+| App secret key **(secret)** | `SECRET_KEY` (required) | `secret_key` via `TF_VAR_*` / Secrets Manager (required) | `global.secretKey` (Helm chart auto-generates at install time if unset) | JWT signing + session-cookie signing + at-rest encryption of OAuth `id_token`. **Required** — auth_server and registry refuse to start without it (the previous per-replica random fallback caused `BadSignature` across replicas). Must be identical across all auth_server and registry replicas. Rotating invalidates stored creds and active sessions. |
 
 ---
 
@@ -324,7 +324,7 @@ Single URL; disables itself when unset.
 |-----------|-----------------|-----------------------|----------------------|---------|
 | Secure flag | `SESSION_COOKIE_SECURE` | `session_cookie_secure` | `auth-server.app.sessionCookieSecure` | Must be `true` in HTTPS, `false` on plain-HTTP localhost. |
 | Cookie domain | `SESSION_COOKIE_DOMAIN` | `session_cookie_domain` | `auth-server.app.sessionCookieDomain` | Leading dot for cross-subdomain; empty is safest. |
-| Store OAuth tokens in session | `OAUTH_STORE_TOKENS_IN_SESSION` | `oauth_store_tokens_in_session` | `auth-server.app.oauthStoreTokensInSession` | Disable for Entra (large tokens). |
+| Store OAuth tokens in session | `OAUTH_STORE_TOKENS_IN_SESSION` | `oauth_store_tokens_in_session` | `auth-server.app.oauthStoreTokensInSession` | **Deprecated / no-op.** Sessions are stored server-side and `id_token` is always persisted (encrypted at rest). Setting this variable logs a deprecation warning at startup. Safe to remove. |
 
 ---
 

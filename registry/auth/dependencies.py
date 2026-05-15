@@ -73,7 +73,7 @@ async def get_user_session_data(
     """Get the full session record for the authenticated user.
 
     The record contains username, email, name, groups, provider, auth_method,
-    and (when OAUTH_STORE_TOKENS_IN_SESSION=true) id_token. Loaded from the
+    and id_token (always, when the IdP returned one). Loaded from the
     server-side session store via the opaque session_id in the signed cookie.
     """
     data = await resolve_session_from_cookie(session)

@@ -8,50 +8,20 @@ raise from a transient store outage — callers translate that into 401.
 """
 
 import logging
-import os
 from datetime import UTC, datetime
 from typing import Any
 
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from motor.motor_asyncio import AsyncIOMotorCollection
 from pymongo import ReadPreference, WriteConcern
 
 from ..repositories.documentdb.client import get_collection_name, get_documentdb_client
+from .session_crypto import decrypt_id_token
 
 logger = logging.getLogger(__name__)
 
 COLLECTION_BASE_NAME: str = "oauth_sessions"
-HKDF_INFO: bytes = b"mcp-gateway-session-id-token-encryption"
 
 _collection: AsyncIOMotorCollection | None = None
-_aesgcm: AESGCM | None = None
-
-
-def _derive_token_encryption_key() -> bytes:
-    secret = os.environ.get("SECRET_KEY")
-    if not secret:
-        raise RuntimeError("SECRET_KEY required for session token encryption")
-    hkdf = HKDF(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=None,
-        info=HKDF_INFO,
-    )
-    return hkdf.derive(secret.encode("utf-8"))
-
-
-def _get_aesgcm() -> AESGCM:
-    global _aesgcm
-    if _aesgcm is None:
-        _aesgcm = AESGCM(_derive_token_encryption_key())
-    return _aesgcm
-
-
-def _decrypt_id_token(blob: bytes) -> str:
-    nonce, ct = blob[:12], blob[12:]
-    return _get_aesgcm().decrypt(nonce, ct, associated_data=None).decode("utf-8")
 
 
 async def _get_collection() -> AsyncIOMotorCollection:
@@ -109,7 +79,7 @@ async def resolve_session(session_id: str) -> dict[str, Any] | None:
     encrypted = doc.get("id_token_encrypted")
     if encrypted:
         try:
-            result["id_token"] = _decrypt_id_token(encrypted)
+            result["id_token"] = decrypt_id_token(encrypted)
         except Exception as e:
             logger.warning(f"Failed to decrypt id_token for session: {e}")
 
