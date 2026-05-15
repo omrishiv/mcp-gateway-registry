@@ -688,6 +688,13 @@ async def toggle_service_route(
     # Update FAISS metadata with new enabled state
     await faiss_service.add_or_update_service(service_path, server_info, new_state)
 
+    # Update DocumentDB search index with new enabled state so semantic search
+    # reflects the toggle immediately (pre-existing gap: toggle did not re-index).
+    from ..repositories.factory import get_search_repository
+
+    search_repo = get_search_repository()
+    await search_repo.index_server(service_path, server_info, new_state)
+
     # Regenerate Nginx configuration
     enabled_servers = {}
 
@@ -1576,6 +1583,12 @@ async def internal_toggle_service(
 
     # Update FAISS metadata with new enabled state
     await faiss_service.add_or_update_service(service_path, server_info, new_state)
+
+    # Update DocumentDB search index with new enabled state
+    from ..repositories.factory import get_search_repository
+
+    search_repo = get_search_repository()
+    await search_repo.index_server(service_path, server_info, new_state)
 
     # Regenerate Nginx configuration
     enabled_servers = {}
@@ -2987,8 +3000,8 @@ async def register_service_api(
     name: Annotated[str, Form()],
     description: Annotated[str, Form()],
     path: Annotated[str, Form()],
-    proxy_pass_url: Annotated[str, Form()],
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    proxy_pass_url: Annotated[str | None, Form()] = None,
     tags: Annotated[str, Form()] = "",
     num_tools: Annotated[int, Form()] = 0,
     license_str: Annotated[str, Form(alias="license")] = "N/A",
@@ -3010,51 +3023,39 @@ async def register_service_api(
     source_created_at: Annotated[str | None, Form()] = None,
     source_updated_at: Annotated[str | None, Form()] = None,
     external_tags: Annotated[str | None, Form()] = None,
+    deployment: Annotated[str, Form()] = "remote",
+    local_runtime: Annotated[str | None, Form()] = None,
 ):
-    """
-    Register a service via JWT Bearer Token authentication (External API).
+    """Register a service via JWT Bearer Token authentication (External API).
 
-    This endpoint provides the same functionality as POST /api/internal/register
-    but uses modern JWT Bearer token authentication via nginx headers, making it
-    suitable for external service-to-service communication.
+    Supports both deployment types:
+    - Remote (default): proxy_pass_url required, registry proxies HTTP requests.
+    - Local: local_runtime JSON required (admin-only). Registry stores the
+      launch recipe for stdio MCP servers; it does NOT execute the server.
 
     **Authentication:** JWT Bearer token (via nginx X-User header)
-    **Authorization:** Requires valid JWT token from auth system
+    **Authorization:** Requires valid JWT token. Local registration requires admin.
 
     **Request body (form data):**
     - `name` (required): Service name
     - `description` (required): Service description
     - `path` (required): Service path (e.g., /myservice)
-    - `proxy_pass_url` (required): Proxy URL (e.g., http://localhost:8000)
+    - `deployment` (optional): 'remote' (default) or 'local'
+    - `proxy_pass_url` (required for remote): Proxy URL (e.g., http://localhost:8000)
+    - `local_runtime` (required for local): JSON-encoded launch recipe
     - `tags` (optional): Comma-separated tags
     - `num_tools` (optional): Number of tools
     - `license` (optional): License name
     - `overwrite` (optional): Overwrite if exists (boolean, default true)
-    - `auth_provider` (optional): Auth provider name
-    - `auth_scheme` (optional): Auth scheme (none, bearer, api_key)
+    - `auth_scheme` (optional): Auth scheme (none, bearer, api_key). Forced to 'none' for local.
     - `auth_credential` (optional): Plaintext credential (encrypted before storage)
-    - `auth_header_name` (optional): Custom header name for API key auth
-    - `supported_transports` (optional): JSON array of transports
-    - `headers` (optional): JSON object of headers
-    - `tool_list_json` (optional): JSON array of tool definitions
-    - `mcp_endpoint` (optional): Full URL for custom MCP endpoint (overrides /mcp suffix)
-    - `sse_endpoint` (optional): Full URL for custom SSE endpoint (overrides /sse suffix)
-    - `version` (optional): Server version (e.g., v1.0.0, v2.0.0)
+    - `mcp_endpoint` (optional): Full URL for custom MCP endpoint (remote only)
+    - `sse_endpoint` (optional): Full URL for custom SSE endpoint (remote only)
+    - `metadata` (optional): JSON string of custom metadata
+    - `version` (optional): Server version (e.g., v1.0.0)
     - `status` (optional): Lifecycle status (active, deprecated, draft, beta)
-    - `provider_organization` (optional): Provider organization name
-    - `provider_url` (optional): Provider URL
-    - `source_created_at` (optional): Original creation timestamp (ISO format)
-    - `source_updated_at` (optional): Last update timestamp (ISO format)
-    - `external_tags` (optional): Comma-separated tags from external system
 
-    **Response:**
-    - `201 Created`: Service registered successfully
-    - `400 Bad Request`: Invalid input data
-    - `401 Unauthorized`: Missing or invalid JWT token
-    - `409 Conflict`: Service already exists with same version (different version auto-creates new version)
-    - `500 Internal Server Error`: Server error
-
-    **Example:**
+    **Example (remote):**
     ```bash
     curl -X POST https://registry.example.com/api/servers/register \\
       -H "Authorization: Bearer $JWT_TOKEN" \\
@@ -3063,20 +3064,61 @@ async def register_service_api(
       -F "path=/myservice" \\
       -F "proxy_pass_url=http://localhost:8000"
     ```
+
+    **Example (local):**
+    ```bash
+    curl -X POST https://registry.example.com/api/servers/register \\
+      -H "Authorization: Bearer $JWT_TOKEN" \\
+      -F "name=My Local MCP" \\
+      -F "description=Stdio MCP server" \\
+      -F "path=/my-local-mcp" \\
+      -F "deployment=local" \\
+      -F 'local_runtime={"type":"npx","package":"@acme/mcp","version":"1.0.0","args":[],"env":{},"required_env":["API_KEY"]}'
+    ```
     """
     # Set audit action for server registration
     set_audit_action(
         request, "create", "server", resource_id=path, description=f"Register server {name}"
     )
 
-    logger.info(
-        f"API register service request from user '{user_context.get('username')}' for service '{name}'"
-    )
-
-    # Implementation extracted from internal_register_service to avoid duplicating auth logic
-    # Auth is already validated by nginx_proxied_auth dependency
     from ..health.service import health_service
     from ..search.service import faiss_service
+    from ..utils.local_runtime_validation import (
+        add_unpinned_warning_tag,
+        parse_and_validate_local_runtime,
+        validate_deployment_shape,
+    )
+
+    if deployment not in ("remote", "local"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="deployment must be 'remote' or 'local'",
+        )
+
+    is_local = deployment == DeploymentType.LOCAL
+
+    # Admin check for local registration
+    if is_local:
+        if not user_context.get("is_admin"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Local server registration requires admin privileges",
+            )
+
+    logger.info(
+        f"API register service request from user '{user_context.get('username')}' "
+        f"for service '{name}' (deployment={deployment})"
+    )
+
+    # Shape validation + local_runtime parsing (shared with /api/register)
+    validate_deployment_shape(
+        is_local=is_local,
+        proxy_pass_url=proxy_pass_url,
+        local_runtime=local_runtime,
+    )
+    local_runtime_obj = (
+        parse_and_validate_local_runtime(local_runtime) if is_local else None
+    )
 
     # Validate path format
     if not path.startswith("/"):
@@ -3120,8 +3162,8 @@ async def register_service_api(
         except Exception as e:
             logger.warning(f"SERVERS REGISTER: Failed to parse tool_list_json: {e}")
 
-    # Validate auth_scheme
-    if auth_scheme not in VALID_AUTH_SCHEMES:
+    # Validate auth_scheme (remote only; local servers force auth_scheme=none)
+    if not is_local and auth_scheme not in VALID_AUTH_SCHEMES:
         return JSONResponse(
             status_code=400,
             content={
@@ -3130,34 +3172,47 @@ async def register_service_api(
             },
         )
 
+    # Local servers get supplementary tags pre-persist
+    if is_local and local_runtime_obj is not None:
+        tag_list = add_unpinned_warning_tag(local_runtime_obj.model_dump(), tag_list)
+        if "security-pending-local" not in tag_list:
+            tag_list.append("security-pending-local")
+
     # Create server entry with auto-generated UUID
     from uuid import uuid4
 
-    server_entry = {
+    server_entry: dict[str, Any] = {
         "id": str(uuid4()),
         "server_name": name,
         "description": description,
         "path": path,
-        "proxy_pass_url": proxy_pass_url,
-        "supported_transports": transports_list,
-        "auth_scheme": auth_scheme,
         "tags": tag_list,
         "num_tools": num_tools,
         "license": license_str,
         "tool_list": tool_list,
+        "deployment": deployment,
+        "registered_by": user_context.get("username"),
     }
 
-    # Add optional fields if provided
-    if auth_provider:
-        server_entry["auth_provider"] = auth_provider
-    if headers_list:
-        server_entry["headers"] = headers_list
-    if auth_header_name:
-        server_entry["auth_header_name"] = auth_header_name
-    if mcp_endpoint:
-        server_entry["mcp_endpoint"] = mcp_endpoint
-    if sse_endpoint:
-        server_entry["sse_endpoint"] = sse_endpoint
+    # Deployment-specific fields
+    if is_local:
+        server_entry["local_runtime"] = local_runtime_obj.model_dump()
+        server_entry["auth_scheme"] = "none"
+    else:
+        server_entry["proxy_pass_url"] = proxy_pass_url
+        server_entry["supported_transports"] = transports_list
+        server_entry["auth_scheme"] = auth_scheme
+        if auth_provider:
+            server_entry["auth_provider"] = auth_provider
+        if headers_list:
+            server_entry["headers"] = headers_list
+        if auth_header_name:
+            server_entry["auth_header_name"] = auth_header_name
+        if mcp_endpoint:
+            server_entry["mcp_endpoint"] = mcp_endpoint
+        if sse_endpoint:
+            server_entry["sse_endpoint"] = sse_endpoint
+
     if version:
         server_entry["version"] = version
     if status:
@@ -3296,10 +3351,13 @@ async def register_service_api(
                 f"Service registered successfully via API: {path} by user {user_context.get('username')}"
             )
 
-        # Security scanning if enabled (non-blocking — scan is non-fatal, don't block response)
-        asyncio.create_task(
-            _perform_security_scan_on_registration(path, proxy_pass_url, server_entry, headers_list)
-        )
+        # Security scanning (non-blocking). Skipped for local stdio servers.
+        if not is_local:
+            asyncio.create_task(
+                _perform_security_scan_on_registration(
+                    path, proxy_pass_url, server_entry, headers_list
+                )
+            )
 
         # Trigger async tasks for health check and FAISS sync
         asyncio.create_task(health_service.perform_immediate_health_check(path))
@@ -3538,6 +3596,12 @@ async def toggle_service_api(
 
     # Update FAISS metadata with new enabled state
     await faiss_service.add_or_update_service(path, server_info, new_state)
+
+    # Update DocumentDB search index with new enabled state
+    from ..repositories.factory import get_search_repository
+
+    search_repo = get_search_repository()
+    await search_repo.index_server(path, server_info, new_state)
 
     # Regenerate Nginx configuration
     enabled_servers = {}
