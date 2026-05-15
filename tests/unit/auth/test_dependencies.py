@@ -1094,21 +1094,23 @@ class TestNginxProxiedAuth:
     """Tests for nginx_proxied_auth dependency."""
 
     @pytest.mark.asyncio
-    async def test_nginx_auth_with_headers(self, mock_scopes_config: dict[str, Any]):
-        """Test nginx auth with X-User headers."""
-        # Arrange
+    async def test_nginx_auth_without_x_groups_keeps_groups_empty(
+        self, mock_scopes_config: dict[str, Any]
+    ):
+        """When X-Groups is absent, groups stay empty (#933).
+
+        Previously the proxied path synthesized "mcp-registry-admin" from a
+        scope heuristic when X-Groups was missing — granting admin to
+        non-admins on the proxied path while the cookie path correctly said
+        non-admin for the same user. The synthesis is now removed; admin
+        status is derived purely from scope-based ui_permissions.
+        """
         mock_request = Mock(spec=Request)
         mock_request.url.path = "/api/test"
         mock_request.method = "GET"
         mock_request.state = Mock()
-        mock_request.headers = {
-            "x-user": "nginx_user",
-            "x-username": "nginx_user",
-            "x-scopes": "mcp-servers-unrestricted/read mcp-servers-unrestricted/execute",
-            "x-auth-method": "keycloak",
-        }
+        mock_request.headers = {}
 
-        # Act
         context = await nginx_proxied_auth(
             request=mock_request,
             session=None,
@@ -1116,13 +1118,38 @@ class TestNginxProxiedAuth:
             x_username="nginx_user",
             x_scopes="mcp-servers-unrestricted/read mcp-servers-unrestricted/execute",
             x_auth_method="keycloak",
+            x_groups=None,
         )
 
-        # Assert
         assert context["username"] == "nginx_user"
         assert context["auth_method"] == "keycloak"
         assert "mcp-servers-unrestricted/read" in context["scopes"]
-        assert "mcp-registry-admin" in context["groups"]
+        # No synthesis: groups stay empty when X-Groups isn't forwarded.
+        assert context["groups"] == []
+
+    @pytest.mark.asyncio
+    async def test_nginx_auth_uses_forwarded_x_groups(
+        self, mock_scopes_config: dict[str, Any]
+    ):
+        """X-Groups header is propagated verbatim into user_context."""
+        mock_request = Mock(spec=Request)
+        mock_request.url.path = "/api/test"
+        mock_request.method = "GET"
+        mock_request.state = Mock()
+        mock_request.headers = {}
+
+        context = await nginx_proxied_auth(
+            request=mock_request,
+            session=None,
+            x_user="nginx_user",
+            x_username="nginx_user",
+            x_scopes="mcp-servers-unrestricted/read",
+            x_auth_method="keycloak",
+            x_groups="registry-admins developers",
+        )
+
+        assert context["username"] == "nginx_user"
+        assert context["groups"] == ["registry-admins", "developers"]
 
     @pytest.mark.asyncio
     async def test_nginx_auth_fallback_to_session_oauth2(
@@ -1197,15 +1224,19 @@ class TestNginxProxiedAuth:
     async def test_nginx_auth_oauth2_user_without_admin_scopes(
         self, mock_scopes_config: dict[str, Any]
     ):
-        """Test OAuth2 user without admin scopes gets user group."""
-        # Arrange
+        """Non-admin scopes → not admin, regardless of group synthesis.
+
+        Previously this test asserted the synthesized group "mcp-registry-user"
+        was injected. After the synthesis removal (#933), groups stay empty
+        when X-Groups isn't forwarded; what matters is that is_admin reflects
+        the scopes correctly via ui_permissions.
+        """
         mock_request = Mock(spec=Request)
         mock_request.url.path = "/api/test"
         mock_request.method = "GET"
         mock_request.state = Mock()
         mock_request.headers = {}
 
-        # Act
         context = await nginx_proxied_auth(
             request=mock_request,
             session=None,
@@ -1215,10 +1246,9 @@ class TestNginxProxiedAuth:
             x_auth_method="cognito",
         )
 
-        # Assert
         assert context["username"] == "oauth_user"
-        assert "mcp-registry-user" in context["groups"]
-        assert "mcp-registry-admin" not in context["groups"]
+        assert context["groups"] == []
+        assert context["is_admin"] is False
 
 
 # =============================================================================
@@ -1316,15 +1346,15 @@ class TestNetworkTrustedAuthMethod:
         After issue #779, network-trusted goes through the standard resolution
         path (hard-coded admin branch removed). The auth server now returns the
         full scope set including UI scope names (e.g. mcp-registry-admin) so
-        the registry can derive admin status via _user_is_admin.
+        the registry can derive admin status via _user_is_admin. After #933,
+        groups are not synthesized from scopes; admin status here is driven
+        by ui_permissions resolved from the mcp-registry-admin scope.
         """
-        # Arrange
         mock_request = Mock(spec=Request)
         mock_request.url.path = "/api/servers"
         mock_request.method = "GET"
         mock_request.headers = {}
 
-        # Act: scopes now include the UI scope name for admin resolution
         context = await nginx_proxied_auth(
             request=mock_request,
             session=None,
@@ -1334,12 +1364,11 @@ class TestNetworkTrustedAuthMethod:
             x_auth_method="network-trusted",
         )
 
-        # Assert
         assert context["username"] == "network-user"
         assert context["auth_method"] == "network-trusted"
-        assert "mcp-registry-admin" in context["groups"]
         assert "mcp-servers-unrestricted/read" in context["scopes"]
         assert "mcp-servers-unrestricted/execute" in context["scopes"]
+        # is_admin derives from scope→ui_permissions, not from synthesized groups.
         assert context["is_admin"] is True
 
     @pytest.mark.asyncio
@@ -1366,6 +1395,100 @@ class TestNetworkTrustedAuthMethod:
         # Assert
         assert context["username"] == "monitoring-script"
         assert context["is_admin"] is False
+
+
+# =============================================================================
+# REGRESSION: cookie path and proxied path must agree on is_admin (#933)
+# =============================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.auth
+class TestAuthPathsAgreeOnIsAdmin:
+    """Same user, same groups → same is_admin regardless of which dependency
+    resolved them. This is the core invariant #933 broke."""
+
+    @pytest.mark.asyncio
+    async def test_admin_user_is_admin_on_both_paths(
+        self,
+        mock_signer: URLSafeTimedSerializer,
+        mock_session_store,
+        mock_scopes_config: dict[str, Any],
+    ):
+        admin_groups = ["mcp-registry-admin"]
+
+        # Cookie path: enhanced_auth via session_store
+        mock_session_store.next_value = {
+            "session_id": "sid-1",
+            "username": "alice",
+            "auth_method": "oauth2",
+            "provider": "cognito",
+            "groups": admin_groups,
+        }
+        session_cookie = _make_session_cookie(mock_signer)
+        cookie_request = Mock(spec=Request)
+        cookie_request.state = Mock()
+        cookie_context = await enhanced_auth(request=cookie_request, session=session_cookie)
+
+        # Proxied path: nginx_proxied_auth with X-Groups + X-Scopes pre-computed
+        # by the auth_server (mirrors what /validate would forward).
+        proxied_request = Mock(spec=Request)
+        proxied_request.url.path = "/api/test"
+        proxied_request.method = "GET"
+        proxied_request.state = Mock()
+        proxied_request.headers = {}
+        proxied_context = await nginx_proxied_auth(
+            request=proxied_request,
+            session=None,
+            x_user="alice",
+            x_username="alice",
+            x_scopes="mcp-registry-admin",
+            x_auth_method="cognito",
+            x_groups=" ".join(admin_groups),
+        )
+
+        assert cookie_context["is_admin"] == proxied_context["is_admin"]
+        assert cookie_context["is_admin"] is True
+        assert cookie_context["ui_permissions"] == proxied_context["ui_permissions"]
+
+    @pytest.mark.asyncio
+    async def test_non_admin_is_not_admin_on_either_path(
+        self,
+        mock_signer: URLSafeTimedSerializer,
+        mock_session_store,
+        mock_scopes_config: dict[str, Any],
+    ):
+        user_groups = ["registry-users-lob1"]
+
+        mock_session_store.next_value = {
+            "session_id": "sid-2",
+            "username": "bob",
+            "auth_method": "oauth2",
+            "provider": "cognito",
+            "groups": user_groups,
+        }
+        session_cookie = _make_session_cookie(mock_signer)
+        cookie_request = Mock(spec=Request)
+        cookie_request.state = Mock()
+        cookie_context = await enhanced_auth(request=cookie_request, session=session_cookie)
+
+        proxied_request = Mock(spec=Request)
+        proxied_request.url.path = "/api/test"
+        proxied_request.method = "GET"
+        proxied_request.state = Mock()
+        proxied_request.headers = {}
+        proxied_context = await nginx_proxied_auth(
+            request=proxied_request,
+            session=None,
+            x_user="bob",
+            x_username="bob",
+            x_scopes="registry-users-lob1",
+            x_auth_method="cognito",
+            x_groups=" ".join(user_groups),
+        )
+
+        assert cookie_context["is_admin"] is False
+        assert proxied_context["is_admin"] is False
 
 
 # =============================================================================

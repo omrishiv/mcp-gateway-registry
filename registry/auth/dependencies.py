@@ -450,6 +450,74 @@ async def web_auth(
     return await get_current_user(session)
 
 
+async def _derive_user_context(
+    *,
+    username: str,
+    groups: list[str],
+    scopes: list[str],
+    auth_method: str,
+    provider: str,
+    session_id: str | None = None,
+    client_id: str = "",
+) -> dict[str, Any]:
+    """Build the canonical user_context dict from authenticated identity inputs.
+
+    Single source of truth for scope→ui_permissions→is_admin derivation. Both
+    `enhanced_auth` (cookie path) and `nginx_proxied_auth` (header path) call
+    this so a given (groups, scopes, auth_method) tuple produces the same
+    authorization result regardless of how the user was authenticated.
+
+    The two callers differ only in how they obtain `scopes`: the cookie path
+    derives scopes from `groups` via `map_cognito_groups_to_scopes`; the
+    header path uses pre-computed scopes forwarded from the auth_server in
+    `X-Scopes`. Both should equal each other for the same user — see #933.
+
+    `auth_method == "federation-static"` short-circuits to a no-access
+    context (federation static tokens get scoped access via separate routing,
+    not registry-side derivation).
+    """
+    if auth_method == "federation-static":
+        return {
+            "username": username,
+            "client_id": client_id,
+            "groups": groups,
+            "scopes": scopes,
+            "auth_method": auth_method,
+            "provider": provider,
+            "session_id": session_id,
+            "accessible_servers": [],
+            "accessible_tools": {},
+            "accessible_services": [],
+            "accessible_agents": [],
+            "ui_permissions": {},
+            "can_modify_servers": False,
+            "is_admin": False,
+        }
+
+    # Resolve servers + tools in a single scope-repo pass (Issue #1026).
+    access = await resolve_scope_access(scopes)
+    ui_permissions = await get_ui_permissions_for_user(scopes)
+
+    return {
+        "username": username,
+        "client_id": client_id,
+        "groups": groups,
+        "scopes": scopes,
+        "auth_method": auth_method,
+        "provider": provider,
+        # session_id is the opaque server-side identifier — used by template
+        # callers to mint CSRF tokens via generate_csrf_token(session_id).
+        "session_id": session_id,
+        "accessible_servers": access.servers,
+        "accessible_tools": access.tools,
+        "accessible_services": get_accessible_services_for_user(ui_permissions),
+        "accessible_agents": get_accessible_agents_for_user(ui_permissions),
+        "ui_permissions": ui_permissions,
+        "can_modify_servers": user_can_modify_servers(groups, scopes),
+        "is_admin": _user_is_admin(ui_permissions),
+    }
+
+
 async def enhanced_auth(
     request: Request,
     session: Annotated[str | None, Cookie(alias=settings.session_cookie_name)] = None,
@@ -475,39 +543,14 @@ async def enhanced_auth(
             f"OAuth2 user {username} has no groups! This user may not have proper group assignments."
         )
 
-    # Get UI permissions
-    ui_permissions = await get_ui_permissions_for_user(scopes)
-
-    # Resolve accessible servers + tools in one scope-repo pass (Issue #1026).
-    access = await resolve_scope_access(scopes)
-    accessible_servers = access.servers
-
-    # Get accessible services (from UI permissions)
-    accessible_services = get_accessible_services_for_user(ui_permissions)
-
-    # Get accessible agents (from UI permissions)
-    accessible_agents = get_accessible_agents_for_user(ui_permissions)
-
-    # Check modification permissions
-    can_modify = user_can_modify_servers(groups, scopes)
-
-    user_context = {
-        "username": username,
-        "groups": groups,
-        "scopes": scopes,
-        "auth_method": auth_method,
-        "provider": session_data.get("provider", "local"),
-        # session_id is the opaque server-side identifier — used by template
-        # callers to mint CSRF tokens via generate_csrf_token(session_id).
-        "session_id": session_data.get("session_id"),
-        "accessible_servers": accessible_servers,
-        "accessible_tools": access.tools,
-        "accessible_services": accessible_services,
-        "accessible_agents": accessible_agents,
-        "ui_permissions": ui_permissions,
-        "can_modify_servers": can_modify,
-        "is_admin": _user_is_admin(ui_permissions),
-    }
+    user_context = await _derive_user_context(
+        username=username,
+        groups=groups,
+        scopes=scopes,
+        auth_method=auth_method,
+        provider=session_data.get("provider", "local"),
+        session_id=session_data.get("session_id"),
+    )
 
     # Set user context on request state for audit logging middleware
     request.state.user_context = user_context
@@ -571,81 +614,35 @@ async def nginx_proxied_auth(
         # Parse scopes from space-separated header
         scopes = x_scopes.split() if x_scopes else []
 
-        # Parse groups from X-Groups header (set by auth server from JWT claims)
+        # Parse groups from X-Groups header (set by auth server from JWT claims).
+        # If X-Groups is missing, groups stay empty: admin status is then
+        # derived purely from scope-based ui_permissions (which the auth_server
+        # already computed when it set X-Scopes). Synthesizing groups from a
+        # scope heuristic — the previous behavior — granted admin to non-admins
+        # via the proxied path while the cookie path correctly said non-admin
+        # for the same user (#933).
         groups = x_groups.split() if x_groups else []
-
-        # If auth server did not forward groups, fall back to admin/user classification
-        if not groups and x_auth_method in [
-            "keycloak",
-            "entra",
-            "cognito",
-            "okta",
-            "auth0",
-            "network-trusted",
-            "federation-static",
-        ]:
-            if (
-                "mcp-servers-unrestricted/read" in scopes
-                and "mcp-servers-unrestricted/execute" in scopes
-            ):
-                groups = ["mcp-registry-admin"]
-            else:
-                groups = ["mcp-registry-user"]
 
         logger.info(
             f"nginx-proxied auth for user: {username}, method: {x_auth_method}, "
             f"groups: {groups}, scopes: {scopes}"
         )
 
-        if x_auth_method == "federation-static":
-            # Federation static token: scoped access to federation/peer endpoints only
-            accessible_servers = []
-            accessible_tools: dict[str, set[str]] = {}
-            accessible_services = []
-            accessible_agents = []
-            ui_permissions = {}
-            can_modify = False
-            is_admin = False
-        else:
-            # Standard resolution for all auth methods including network-trusted
-            # (Issue #779: network-trusted now carries per-key scopes from the
-            # auth server instead of hard-coded admin).
-            # Resolve servers + tools in a single scope-repo pass (Issue #1026).
-            access = await resolve_scope_access(scopes)
-            accessible_servers = access.servers
-            accessible_tools = access.tools
-
-            ui_permissions = await get_ui_permissions_for_user(scopes)
-
-            accessible_services = get_accessible_services_for_user(ui_permissions)
-
-            accessible_agents = get_accessible_agents_for_user(ui_permissions)
-
-            can_modify = user_can_modify_servers(groups, scopes)
-
-            is_admin = _user_is_admin(ui_permissions)
-
-        user_context = {
-            "username": username,
-            "client_id": x_client_id or "",
-            "groups": groups,
-            "scopes": scopes,
-            "auth_method": x_auth_method or "keycloak",
-            "provider": x_auth_method or "keycloak",  # Use actual auth method as provider
-            "accessible_servers": accessible_servers,
-            "accessible_tools": accessible_tools,
-            "accessible_services": accessible_services,
-            "accessible_agents": accessible_agents,
-            "ui_permissions": ui_permissions,
-            "can_modify_servers": can_modify,
-            "is_admin": is_admin,
-        }
+        user_context = await _derive_user_context(
+            username=username,
+            groups=groups,
+            scopes=scopes,
+            auth_method=x_auth_method or "keycloak",
+            provider=x_auth_method or "keycloak",
+            client_id=x_client_id or "",
+        )
 
         # Set user context on request state for audit logging middleware
         request.state.user_context = user_context
 
         logger.debug(
-            f"nginx-proxied auth context for {username} (is_admin={is_admin}): {user_context}"
+            f"nginx-proxied auth context for {username} "
+            f"(is_admin={user_context['is_admin']}): {user_context}"
         )
         return user_context
 
