@@ -106,6 +106,7 @@ Controls registry-vs-gateway integration and which tabs render in the UI. See [`
 | Show Virtual Servers tab | `SHOW_VIRTUAL_SERVERS_TAB` | `show_virtual_servers_tab` | `registry.app.showVirtualServersTab` | — |
 | Show Skills tab | `SHOW_SKILLS_TAB` | `show_skills_tab` | `registry.app.showSkillsTab` | — |
 | Show Agents tab | `SHOW_AGENTS_TAB` | `show_agents_tab` | `registry.app.showAgentsTab` | — |
+| UI title override | `UI_TITLE` | `ui_title` | `registry.app.uiTitle` | Custom title shown in the UI header, login, and logout. Empty defers to the deployment-mode default (`AI Gateway & Registry` or `AI Registry`). |
 | Disable built-in demo server | `DISABLE_AI_REGISTRY_TOOLS_SERVER` | `disable_ai_registry_tools_server` | `registry.app.disableAiRegistryToolsServer` | Prevent auto-registration of the built-in `airegistry-tools` demo server. |
 
 ---

@@ -247,6 +247,9 @@ module "mcp_gateway" {
   show_skills_tab          = var.show_skills_tab
   show_agents_tab          = var.show_agents_tab
 
+  # UI title override
+  ui_title = var.ui_title
+
   # Observability configuration
   enable_observability      = var.enable_observability
   metrics_service_image_uri = var.metrics_service_image_uri

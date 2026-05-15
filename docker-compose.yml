@@ -86,6 +86,8 @@ services:
       - SHOW_AGENTS_TAB=${SHOW_AGENTS_TAB:-true}
       # Coding assistants allowlist (comma-separated: cursor,roo-code,claude-code,kiro). Empty = show all.
       - CODING_ASSISTANTS=${CODING_ASSISTANTS:-}
+      # UI title override. Empty = deployment-mode-aware default.
+      - UI_TITLE=${UI_TITLE:-}
       - GATEWAY_ADDITIONAL_SERVER_NAMES=${GATEWAY_ADDITIONAL_SERVER_NAMES:-}
       # Registry Card Configuration
       - REGISTRY_URL=${REGISTRY_URL:-http://localhost}

@@ -312,12 +312,19 @@ async def _get_cached_stats() -> dict:
 
 @router.get("/api/version")
 async def get_version():
-    """Get application version.
+    """Get application version and unauthenticated UI metadata.
+
+    Includes ``ui_title`` so pre-auth pages (Login, Logout) can
+    render the operator-configured title without exposing the full /api/config
+    payload to unauthenticated callers.
 
     Returns:
-        Dictionary with version string
+        Dictionary with version string and ui_title.
     """
-    return {"version": __version__}
+    return {
+        "version": __version__,
+        "ui_title": settings.effective_ui_title,
+    }
 
 
 @router.get("/api/system/telemetry-detection")

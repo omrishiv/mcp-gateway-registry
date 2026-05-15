@@ -236,6 +236,12 @@ registry:
     # Example: "cursor,claude-code"
     codingAssistants: ""
 
+    # UI title override. Empty string defers to the deployment-mode
+    # default ("AI Gateway & Registry" for with-gateway, "AI Registry" for
+    # registry-only). Set to brand the deployment with your organization's
+    # product name (e.g., "Acme AI Portal").
+    uiTitle: ""
+
     # Federation OAuth2 authentication (alternative to static token)
     federationTokenEndpoint: ""
     federationClientId: ""

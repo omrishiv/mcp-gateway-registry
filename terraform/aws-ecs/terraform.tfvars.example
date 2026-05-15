@@ -735,6 +735,12 @@ deployment_mode = "registry-only"
 # show_skills_tab          = true
 # show_agents_tab          = true
 
+# UI title override. Empty string defers to the deployment-mode
+# default ('AI Gateway & Registry' for with-gateway, 'AI Registry' for
+# registry-only). Set this to brand the deployment with your organization's
+# product name.
+# ui_title = "Acme AI Portal"
+
 # ============================================================================
 # OBSERVABILITY CONFIGURATION (Metrics Pipeline)
 # ============================================================================

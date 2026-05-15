@@ -597,6 +597,31 @@ class Settings(BaseSettings):
         """Check if nginx updates should be performed."""
         return self.deployment_mode == DeploymentMode.WITH_GATEWAY
 
+    # UI Title Configuration
+    ui_title: str | None = Field(
+        default=None,
+        description=(
+            "Override for the UI title shown in the header, login, and logout pages. "
+            "When unset (or empty/whitespace-only), the title defaults to "
+            "'AI Gateway & Registry' for with-gateway mode and 'AI Registry' for "
+            "registry-only mode."
+        ),
+    )
+
+    @property
+    def effective_ui_title(self) -> str:
+        """Return the resolved UI title.
+
+        Reads ``self.deployment_mode``, which has already been auto-corrected by
+        ``_apply_mode_corrections`` in ``registry/main.py`` at startup, so this
+        property always sees the post-correction value.
+        """
+        if self.ui_title and self.ui_title.strip():
+            return self.ui_title
+        if self.deployment_mode == DeploymentMode.REGISTRY_ONLY:
+            return "AI Registry"
+        return "AI Gateway & Registry"
+
     # Storage Backend Configuration
     storage_backend: str = Field(
         default="file",
