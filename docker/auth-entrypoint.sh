@@ -3,6 +3,18 @@ set -e # Exit immediately if a command exits with a non-zero status.
 
 echo "Starting Auth Server Setup..."
 
+# SECRET_KEY is required. The application also enforces this at startup, but
+# checking here surfaces the misconfiguration as a shell error instead of a
+# Python traceback. Must match across all auth_server and registry replicas
+# or session cookies will fail with BadSignature.
+if [ -z "$SECRET_KEY" ]; then
+    echo "ERROR: SECRET_KEY environment variable is required but not set." >&2
+    echo "  Set it to a value at least 32 bytes long, identical across all" >&2
+    echo "  auth_server and registry replicas. Generate one with:" >&2
+    echo "    python3 -c 'import secrets; print(secrets.token_urlsafe(32))'" >&2
+    exit 1
+fi
+
 # --- DocumentDB CA Bundle Download ---
 if [[ "${DOCUMENTDB_HOST}" == *"docdb-elastic.amazonaws.com"* ]]; then
     echo "Detected DocumentDB Elastic cluster"

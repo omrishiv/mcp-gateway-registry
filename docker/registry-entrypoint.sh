@@ -119,9 +119,16 @@ if [ "$DEPLOYMENT_MODE" = "registry-only" ]; then
 fi
 echo "============================================================"
 
-# Generate secret key if not provided
+# SECRET_KEY is required. Auto-generating it per replica caused cross-replica
+# BadSignature errors (auth_server signed with key A, registry verified with
+# key B). Fail fast with a clear message so the operator does not chase a
+# Python traceback.
 if [ -z "$SECRET_KEY" ]; then
-    SECRET_KEY=$(python -c 'import secrets; print(secrets.token_hex(32))')
+    echo "ERROR: SECRET_KEY environment variable is required but not set." >&2
+    echo "  Set it to a value at least 32 bytes long, identical across all" >&2
+    echo "  auth_server and registry replicas. Generate one with:" >&2
+    echo "    python3 -c 'import secrets; print(secrets.token_urlsafe(32))'" >&2
+    exit 1
 fi
 
 # Create .env file for registry
