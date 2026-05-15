@@ -3351,7 +3351,7 @@ async def oauth2_callback(
                     # `hasgroups` or `_claim_names.groups`. Fall back to
                     # Microsoft Graph /me/memberOf so the user gets their
                     # real group set instead of an empty session (#929).
-                    from auth_server.providers.entra import EntraIdProvider
+                    from providers.entra import EntraIdProvider
 
                     if EntraIdProvider.has_group_overage(id_token_claims):
                         logger.info(
