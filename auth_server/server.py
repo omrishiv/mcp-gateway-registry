@@ -3345,6 +3345,24 @@ async def oauth2_callback(
                     if not groups:
                         groups = id_token_claims.get("roles", [])
 
+                    # Group overage: when a user is a member of more groups
+                    # than will fit in the token (Entra caps inline groups
+                    # around 150-200), Entra omits them and signals via
+                    # `hasgroups` or `_claim_names.groups`. Fall back to
+                    # Microsoft Graph /me/memberOf so the user gets their
+                    # real group set instead of an empty session (#929).
+                    from auth_server.providers.entra import EntraIdProvider
+
+                    if EntraIdProvider.has_group_overage(id_token_claims):
+                        logger.info(
+                            "Entra ID token signals group overage; resolving via Graph"
+                        )
+                        graph_groups = await EntraIdProvider.fetch_groups_via_graph(
+                            token_data["access_token"]
+                        )
+                        if graph_groups:
+                            groups = graph_groups
+
                     mapped_user = {
                         "username": id_token_claims.get("preferred_username")
                         or id_token_claims.get("email")

@@ -6,6 +6,7 @@ import time
 from typing import Any
 from urllib.parse import urlencode
 
+import httpx
 import jwt
 import requests
 
@@ -23,8 +24,39 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-# Default Entra ID login base URL
+# Default Entra ID login base URL. Sovereign clouds override via env:
+#   Public (default): https://login.microsoftonline.com
+#   US Gov:           https://login.microsoftonline.us
+#   China:            https://login.partner.microsoftonline.cn
 DEFAULT_ENTRA_LOGIN_BASE_URL = "https://login.microsoftonline.com"
+
+# Default Microsoft Graph base URL. Inferred from the login base URL via the
+# fixed sovereign-cloud mapping below; ENTRA_GRAPH_BASE_URL can override for
+# edge cases (e.g. a Graph proxy in front of the cluster). Operators on the
+# three documented sovereign clouds only need to set ENTRA_LOGIN_BASE_URL.
+DEFAULT_ENTRA_GRAPH_BASE_URL = "https://graph.microsoft.com"
+
+# Fixed Microsoft mapping from login host -> Graph host across sovereign clouds.
+# Documented at https://learn.microsoft.com/en-us/graph/deployments
+_LOGIN_TO_GRAPH_HOST: dict[str, str] = {
+    "login.microsoftonline.com": "https://graph.microsoft.com",
+    "login.microsoftonline.us": "https://graph.microsoft.us",
+    "login.partner.microsoftonline.cn": "https://microsoftgraph.chinacloudapi.cn",
+}
+
+
+def _infer_graph_base_url(login_base_url: str) -> str:
+    """Infer the Graph base URL from the configured login base URL.
+
+    Returns the matching Graph host for one of Microsoft's three documented
+    sovereign clouds. Unknown login hosts fall back to the public Graph
+    endpoint; operators should set ENTRA_GRAPH_BASE_URL explicitly in that
+    case (e.g. air-gapped or proxied deployments).
+    """
+    from urllib.parse import urlparse
+
+    host = urlparse(login_base_url).hostname or ""
+    return _LOGIN_TO_GRAPH_HOST.get(host, DEFAULT_ENTRA_GRAPH_BASE_URL)
 
 
 class EntraIdProvider(AuthProvider):
@@ -55,14 +87,23 @@ class EntraIdProvider(AuthProvider):
         self._jwks_cache_time: float = 0
         self._jwks_cache_ttl: int = 3600  # 1 hour
 
-        # Get login base URL from environment variable or use default
+        # Login base URL: explicit env override, defaulting to the public
+        # cloud. Graph base URL: explicit override (rare — for proxied
+        # deployments) takes precedence; otherwise inferred from the login
+        # base URL via the documented sovereign-cloud mapping.
         login_base_url = os.environ.get("ENTRA_LOGIN_BASE_URL", DEFAULT_ENTRA_LOGIN_BASE_URL)
+        graph_override = os.environ.get("ENTRA_GRAPH_BASE_URL")
+        self.graph_base_url = (
+            graph_override.rstrip("/")
+            if graph_override
+            else _infer_graph_base_url(login_base_url)
+        )
 
         # Entra ID endpoints
         base_url = f"{login_base_url}/{tenant_id}"
         self.auth_url = f"{base_url}/oauth2/v2.0/authorize"
         self.token_url = f"{base_url}/oauth2/v2.0/token"
-        self.userinfo_url = "https://graph.microsoft.com/oidc/userinfo"
+        self.userinfo_url = f"{self.graph_base_url}/oidc/userinfo"
         self.jwks_url = f"{base_url}/discovery/v2.0/keys"
         self.logout_url = f"{base_url}/oauth2/v2.0/logout"
 
@@ -329,6 +370,120 @@ class EntraIdProvider(AuthProvider):
         except requests.RequestException as e:
             logger.error(f"Failed to exchange code for token: {e}")
             raise ValueError(f"Token exchange failed: {e}")
+
+    # Path for the user's direct group memberships. Combined with the
+    # tenant's Graph base URL (varies by sovereign cloud) at call time. We
+    # use /me/memberOf rather than /me/getMemberObjects because memberOf
+    # works with the User.Read scope already granted by 'openid email profile';
+    # getMemberObjects requires Directory.Read.All / GroupMember.Read.All
+    # which would force a tenant admin to grant new consent.
+    GRAPH_MEMBEROF_PATH: str = "/v1.0/me/memberOf?$select=id"
+
+    # Hard cap so a misconfigured tenant cannot pull an unbounded list. 1000
+    # covers any realistic user; pages past this are dropped with a warning.
+    GROUP_FETCH_HARD_CAP: int = 1000
+
+    @staticmethod
+    def has_group_overage(claims: dict[str, Any]) -> bool:
+        """Detect Entra group-overage indicators in an ID token.
+
+        Entra signals overage in two ways:
+        - `hasgroups` claim set to True (v1.0 endpoint behavior)
+        - `_claim_names` dict containing key `groups` pointing to a Graph
+          endpoint (v2.0 endpoint behavior)
+
+        Either form means the inline `groups` claim is unreliable and the
+        caller should fall back to Microsoft Graph.
+        """
+        if claims.get("hasgroups") is True:
+            return True
+        claim_names = claims.get("_claim_names")
+        if isinstance(claim_names, dict) and "groups" in claim_names:
+            return True
+        return False
+
+    @classmethod
+    def _graph_memberof_url(cls) -> str:
+        """Build the full Graph /me/memberOf URL.
+
+        Resolves the base URL at call time using the same precedence as
+        __init__ (explicit ENTRA_GRAPH_BASE_URL override, otherwise inferred
+        from ENTRA_LOGIN_BASE_URL). Resolved per-call so sovereign-cloud
+        overrides set after module import are honored.
+        """
+        graph_override = os.environ.get("ENTRA_GRAPH_BASE_URL")
+        if graph_override:
+            base = graph_override.rstrip("/")
+        else:
+            login_base = os.environ.get(
+                "ENTRA_LOGIN_BASE_URL", DEFAULT_ENTRA_LOGIN_BASE_URL
+            )
+            base = _infer_graph_base_url(login_base)
+        return f"{base}{cls.GRAPH_MEMBEROF_PATH}"
+
+    @classmethod
+    async def fetch_groups_via_graph(cls, access_token: str) -> list[str]:
+        """Fetch the user's direct group object IDs from Microsoft Graph.
+
+        Used when the ID token signals group overage (see has_group_overage).
+        Calls GET /me/memberOf, follows @odata.nextLink for pagination, and
+        returns deduplicated group object IDs only (filters out directoryRole
+        and other directory-object types).
+
+        Returns [] on any HTTP/network failure so the caller can degrade
+        gracefully — the user ends up with whatever groups were inline (often
+        none in the overage case), which is the same as today's behavior.
+        """
+        ids: list[str] = []
+        seen: set[str] = set()
+        url: str | None = cls._graph_memberof_url()
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                page = 0
+                while url:
+                    page += 1
+                    response = await client.get(
+                        url, headers={"Authorization": f"Bearer {access_token}"}
+                    )
+                    response.raise_for_status()
+                    body = response.json()
+
+                    for item in body.get("value", []):
+                        if item.get("@odata.type") != "#microsoft.graph.group":
+                            continue
+                        gid = item.get("id")
+                        if not gid or gid in seen:
+                            continue
+                        seen.add(gid)
+                        ids.append(gid)
+                        if len(ids) >= cls.GROUP_FETCH_HARD_CAP:
+                            logger.warning(
+                                "Entra Graph group fetch hit hard cap "
+                                f"({cls.GROUP_FETCH_HARD_CAP}); truncating"
+                            )
+                            return ids
+
+                    url = body.get("@odata.nextLink")
+
+                logger.info(
+                    f"Resolved {len(ids)} Entra group IDs via Graph memberOf "
+                    f"across {page} page(s)"
+                )
+        except httpx.HTTPStatusError as e:
+            logger.warning(
+                f"Entra Graph memberOf returned {e.response.status_code}; "
+                "falling back to inline groups (may be empty)"
+            )
+            return []
+        except httpx.HTTPError as e:
+            logger.warning(f"Entra Graph memberOf request failed: {e}")
+            return []
+        except Exception as e:
+            logger.warning(f"Unexpected error during Entra Graph memberOf fetch: {e}")
+            return []
+
+        return ids
 
     def get_user_info(self, access_token: str) -> dict[str, Any]:
         """Get user information from Entra ID.
