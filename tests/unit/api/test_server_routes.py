@@ -1870,9 +1870,7 @@ class TestClearSecurityPendingLocal:
         mock_server_service.get_server_info.return_value = self.LOCAL_PENDING
         mock_server_service.is_service_enabled.return_value = True
 
-        response = test_client_admin.post(
-            "/api/clear-security-pending-local/local-srv"
-        )
+        response = test_client_admin.post("/api/clear-security-pending-local/local-srv")
         assert response.status_code == 200
         body = response.json()
         assert "security-pending-local" not in body["tags"]
@@ -1885,9 +1883,7 @@ class TestClearSecurityPendingLocal:
 
     def test_non_admin_rejected(self, test_client_regular, mock_server_service):
         mock_server_service.get_server_info.return_value = self.LOCAL_PENDING
-        response = test_client_regular.post(
-            "/api/clear-security-pending-local/local-srv"
-        )
+        response = test_client_regular.post("/api/clear-security-pending-local/local-srv")
         assert response.status_code == 403
 
     def test_404_for_unknown_server(self, test_client_admin, mock_server_service):
@@ -1916,9 +1912,7 @@ class TestClearSecurityPendingLocal:
             **self.LOCAL_PENDING,
             "tags": ["team:weather"],  # already cleared
         }
-        response = test_client_admin.post(
-            "/api/clear-security-pending-local/local-srv"
-        )
+        response = test_client_admin.post("/api/clear-security-pending-local/local-srv")
         assert response.status_code == 200
         # update_server NOT called — we short-circuit.
         mock_server_service.update_server.assert_not_called()

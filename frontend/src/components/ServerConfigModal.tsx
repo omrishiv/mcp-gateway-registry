@@ -313,11 +313,20 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
   const generateGooseConfig = useCallback(() => {
     const serverName = server.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
 
-    // Local (stdio) servers: emit Goose's stdio extension form.
+    // Local (stdio) servers: emit Goose's stdio extension form. Build the
+    // env block separately and concat — index-based splice into the lines
+    // array silently breaks if the surrounding lines are reordered.
     if (isLocal) {
       const spec = buildLocalLaunchSpec();
       if (!spec) {
         return `# No local_runtime configured for ${serverName}`;
+      }
+      const envBlock: string[] = [];
+      if (Object.keys(spec.env).length > 0) {
+        envBlock.push('    envs:');
+        for (const [k, v] of Object.entries(spec.env)) {
+          envBlock.push(`      ${k}: ${JSON.stringify(v)}`);
+        }
       }
       const lines = [
         'extensions:',
@@ -327,15 +336,10 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
         `    type: stdio`,
         `    cmd: ${spec.command}`,
         `    args: [${spec.args.map(a => JSON.stringify(a)).join(', ')}]`,
+        ...envBlock,
         `    enabled: true`,
         `    timeout: 300`,
       ];
-      if (Object.keys(spec.env).length > 0) {
-        lines.splice(7, 0, '    envs:');
-        for (const [k, v] of Object.entries(spec.env)) {
-          lines.splice(8, 0, `      ${k}: ${JSON.stringify(v)}`);
-        }
-      }
       return lines.join('\n');
     }
 

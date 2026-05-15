@@ -1,3 +1,4 @@
+import re
 from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID, uuid4
@@ -7,6 +8,8 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from registry.constants import DeploymentType, LocalRuntimeType, TransportType
 from registry.schemas.agent_models import AgentProvider
 from registry.schemas.registry_card import LifecycleStatus
+
+_IMAGE_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 class ServerVersion(BaseModel):
@@ -130,10 +133,6 @@ class LocalRuntime(BaseModel):
         if overlap:
             raise ValueError(f"required_env keys must not also appear in env: {sorted(overlap)}")
 
-        # image_digest format check (only when provided)
-        if self.image_digest is not None and not self.image_digest.startswith("sha256:"):
-            raise ValueError(f"image_digest must start with 'sha256:', got: {self.image_digest!r}")
-
         # platforms only meaningful for docker
         if self.platforms is not None and self.type != LocalRuntimeType.DOCKER:
             raise ValueError("platforms is only valid for docker runtime")
@@ -141,6 +140,14 @@ class LocalRuntime(BaseModel):
         # image_digest only meaningful for docker
         if self.image_digest is not None and self.type != LocalRuntimeType.DOCKER:
             raise ValueError("image_digest is only valid for docker runtime")
+
+        # image_digest format check (only when provided): require the full
+        # 'sha256:<64 hex>' shape so malformed digests fail at registration
+        # rather than silently propagating to clients.
+        if self.image_digest is not None and not _IMAGE_DIGEST_RE.fullmatch(self.image_digest):
+            raise ValueError(
+                f"image_digest must match 'sha256:<64 hex chars>', got: {self.image_digest!r}"
+            )
 
         return self
 

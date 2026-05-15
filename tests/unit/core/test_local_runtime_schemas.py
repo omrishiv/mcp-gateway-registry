@@ -35,11 +35,20 @@ class TestLocalRuntime:
             )
 
     def test_image_digest_must_be_sha256(self):
-        with pytest.raises(ValidationError, match="image_digest must start with 'sha256:'"):
+        with pytest.raises(ValidationError, match="image_digest must match 'sha256:<64 hex"):
             LocalRuntime(
                 type="docker",
                 package="acme/mcp:1.0",
                 image_digest="md5:abc",
+            )
+
+    def test_image_digest_must_be_full_64_hex(self):
+        """Truncated sha256 prefixes are rejected — full 64-hex-char digest required."""
+        with pytest.raises(ValidationError, match="image_digest must match 'sha256:<64 hex"):
+            LocalRuntime(
+                type="docker",
+                package="acme/mcp:1.0",
+                image_digest="sha256:abc",
             )
 
     def test_image_digest_only_valid_for_docker(self):
@@ -47,7 +56,7 @@ class TestLocalRuntime:
             LocalRuntime(
                 type="npx",
                 package="@acme/mcp",
-                image_digest="sha256:abc",
+                image_digest="sha256:" + "a" * 64,
             )
 
     def test_platforms_only_valid_for_docker(self):

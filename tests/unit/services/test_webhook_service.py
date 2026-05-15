@@ -265,7 +265,6 @@ class TestSendRegistrationWebhook:
                     "Invalid webhook URL scheme" in record.message for record in caplog.records
                 )
 
-
     @pytest.mark.asyncio
     async def test_local_runtime_env_redacted_in_payload(self):
         """local_runtime.env values must be masked before being

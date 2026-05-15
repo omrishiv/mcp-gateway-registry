@@ -87,6 +87,30 @@ def _build_scan_headers_from_credentials(
     return None
 
 
+def _normalize_health_status(raw_status: Any) -> Any:
+    """Normalize a raw health status to a clean enum value for API responses.
+
+    Local servers short-circuit (LOCAL is reported verbatim). Other strings
+    go through the legacy substring cascade for backward compatibility with
+    error messages baked into the status string. Non-string values pass
+    through unchanged.
+    """
+    if not isinstance(raw_status, str):
+        return raw_status
+    if raw_status == HealthStatus.LOCAL:
+        return HealthStatus.LOCAL
+    lower = raw_status.lower()
+    if "unhealthy" in lower or "error" in lower:
+        return "unhealthy"
+    if "healthy" in lower:
+        return "healthy"
+    if "disabled" in lower:
+        return "disabled"
+    if "checking" in lower:
+        return "unknown"
+    return raw_status
+
+
 def _validate_visibility_and_groups(
     visibility: str,
     allowed_groups: str | None,
@@ -355,27 +379,7 @@ async def read_root(
                 {**server_info, "is_enabled": is_enabled},
             )
 
-            # Normalize health status to enum values only (strip error messages).
-            # Local servers short-circuit: registry has nothing to probe, so the
-            # status is reported verbatim. Other statuses go through the legacy
-            # substring cascade for backward compatibility with error strings.
-            raw_status = health_data["status"]
-            if not isinstance(raw_status, str):
-                normalized_status = raw_status
-            elif raw_status == HealthStatus.LOCAL:
-                normalized_status = HealthStatus.LOCAL
-            else:
-                lower = raw_status.lower()
-                if "unhealthy" in lower or "error" in lower:
-                    normalized_status = "unhealthy"
-                elif "healthy" in lower:
-                    normalized_status = "healthy"
-                elif "disabled" in lower:
-                    normalized_status = "disabled"
-                elif "checking" in lower:
-                    normalized_status = "unknown"
-                else:
-                    normalized_status = raw_status
+            normalized_status = _normalize_health_status(health_data["status"])
 
             service_data.append(
                 {
@@ -503,27 +507,7 @@ async def get_servers_json(
                 {**server_info, "is_enabled": is_enabled},
             )
 
-            # Normalize health status to enum values only (strip error messages).
-            # Local servers short-circuit: registry has nothing to probe, so the
-            # status is reported verbatim. Other statuses go through the legacy
-            # substring cascade for backward compatibility with error strings.
-            raw_status = health_data["status"]
-            if not isinstance(raw_status, str):
-                normalized_status = raw_status
-            elif raw_status == HealthStatus.LOCAL:
-                normalized_status = HealthStatus.LOCAL
-            else:
-                lower = raw_status.lower()
-                if "unhealthy" in lower or "error" in lower:
-                    normalized_status = "unhealthy"
-                elif "healthy" in lower:
-                    normalized_status = "healthy"
-                elif "disabled" in lower:
-                    normalized_status = "disabled"
-                elif "checking" in lower:
-                    normalized_status = "unknown"
-                else:
-                    normalized_status = raw_status
+            normalized_status = _normalize_health_status(health_data["status"])
 
             # Build versions list if this server has other versions.
             # Local (stdio) servers don't support multi-version routing — the
@@ -823,9 +807,7 @@ async def register_service(
         proxy_pass_url=proxy_pass_url,
         local_runtime=local_runtime,
     )
-    local_runtime_obj = (
-        parse_and_validate_local_runtime(local_runtime) if is_local else None
-    )
+    local_runtime_obj = parse_and_validate_local_runtime(local_runtime) if is_local else None
 
     # Ensure path starts with a slash
     if not path.startswith("/"):
@@ -1344,6 +1326,7 @@ async def clear_security_pending_local(
     request: Request,
     service_path: str,
     user_context: Annotated[dict, Depends(enhanced_auth)],
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
     """Admin action: mark a local server as security-reviewed.
 
@@ -1383,14 +1366,16 @@ async def clear_security_pending_local(
 
     success = await server_service.update_server(service_path, updated_entry)
     if not success:
-        raise HTTPException(status_code=500, detail="Failed to update server")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update server",
+        )
 
     is_enabled = await server_service.is_service_enabled(service_path)
     await faiss_service.add_or_update_service(service_path, updated_entry, is_enabled)
 
     logger.info(
-        f"Cleared security-pending-local from '{service_path}' by user "
-        f"'{user_context['username']}'"
+        f"Cleared security-pending-local from '{service_path}' by user '{user_context['username']}'"
     )
 
     return {"message": "Tag cleared", "tags": tags}
@@ -1823,9 +1808,7 @@ async def edit_server_submit(
         proxy_pass_url=proxy_pass_url,
         local_runtime=local_runtime,
     )
-    local_runtime_obj = (
-        parse_and_validate_local_runtime(local_runtime) if is_local else None
-    )
+    local_runtime_obj = parse_and_validate_local_runtime(local_runtime) if is_local else None
 
     # Process tags
     tag_list = [tag.strip() for tag in tags.split(",") if tag.strip()]
@@ -3544,9 +3527,7 @@ async def toggle_service_api(
                 last_checked_dt,
             ) = await health_service.perform_immediate_health_check(path)
             last_checked_iso = last_checked_dt.isoformat() if last_checked_dt else None
-            logger.info(
-                f"Immediate health check for {path} completed. Status: {health_status}"
-            )
+            logger.info(f"Immediate health check for {path} completed. Status: {health_status}")
         except Exception as e:
             logger.error(f"ERROR during immediate health check for {path}: {e}")
             health_status = f"error: immediate check failed ({type(e).__name__})"

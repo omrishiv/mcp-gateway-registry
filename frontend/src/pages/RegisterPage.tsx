@@ -720,103 +720,108 @@ const RegisterPage: React.FC = () => {
           />
         </div>
 
-        {/* Backend Authentication */}
-        <div className="md:col-span-2 mt-4">
-          <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4 flex items-center">
-            <span className="bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-300 px-2 py-1 rounded text-xs mr-2">Optional</span>
-            Backend Authentication
-          </h3>
-          <p className="text-sm text-gray-500 dark:text-gray-400 -mt-2 mb-4">
-            Configure credentials the gateway will use when proxying requests to your backend MCP server.
-          </p>
-        </div>
+        {/* Backend Authentication and HTTP-only endpoints — remote deployments only.
+            Local stdio servers handle auth via env vars on the developer's
+            machine, and have no proxy URL for /mcp or /sse path overrides. */}
+        {serverForm.deployment === 'remote' && (
+          <>
+            <div className="md:col-span-2 mt-4">
+              <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4 flex items-center">
+                <span className="bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-300 px-2 py-1 rounded text-xs mr-2">Optional</span>
+                Backend Authentication
+              </h3>
+              <p className="text-sm text-gray-500 dark:text-gray-400 -mt-2 mb-4">
+                Configure credentials the gateway will use when proxying requests to your backend MCP server.
+              </p>
+            </div>
 
-        <div>
-          <label className={labelClass}>Authentication Scheme</label>
-          <select
-            className={inputClass}
-            value={serverForm.auth_scheme}
-            onChange={(e) => {
-              const newScheme = e.target.value;
-              setServerForm(prev => ({
-                ...prev,
-                auth_scheme: newScheme,
-                auth_credential: newScheme === 'none' ? '' : prev.auth_credential,
-                auth_header_name: newScheme === 'api_key' ? prev.auth_header_name : 'X-API-Key',
-              }));
-            }}
-          >
-            <option value="none">None</option>
-            <option value="bearer">Bearer Token</option>
-            <option value="api_key">API Key</option>
-          </select>
-        </div>
+            <div>
+              <label className={labelClass}>Authentication Scheme</label>
+              <select
+                className={inputClass}
+                value={serverForm.auth_scheme}
+                onChange={(e) => {
+                  const newScheme = e.target.value;
+                  setServerForm(prev => ({
+                    ...prev,
+                    auth_scheme: newScheme,
+                    auth_credential: newScheme === 'none' ? '' : prev.auth_credential,
+                    auth_header_name: newScheme === 'api_key' ? prev.auth_header_name : 'X-API-Key',
+                  }));
+                }}
+              >
+                <option value="none">None</option>
+                <option value="bearer">Bearer Token</option>
+                <option value="api_key">API Key</option>
+              </select>
+            </div>
 
-        {serverForm.auth_scheme !== 'none' && (
-          <div>
-            <label className={labelClass}>
-              {serverForm.auth_scheme === 'bearer' ? 'Bearer Token' : 'API Key'} *
-            </label>
-            <input
-              type="password"
-              className={inputClass}
-              value={serverForm.auth_credential}
-              onChange={(e) => setServerForm(prev => ({ ...prev, auth_credential: e.target.value }))}
-              placeholder={serverForm.auth_scheme === 'bearer' ? 'Enter bearer token' : 'Enter API key'}
-            />
-            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              This credential is stored securely and never displayed after saving.
-            </p>
-          </div>
+            {serverForm.auth_scheme !== 'none' && (
+              <div>
+                <label className={labelClass}>
+                  {serverForm.auth_scheme === 'bearer' ? 'Bearer Token' : 'API Key'} *
+                </label>
+                <input
+                  type="password"
+                  className={inputClass}
+                  value={serverForm.auth_credential}
+                  onChange={(e) => setServerForm(prev => ({ ...prev, auth_credential: e.target.value }))}
+                  placeholder={serverForm.auth_scheme === 'bearer' ? 'Enter bearer token' : 'Enter API key'}
+                />
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  This credential is stored securely and never displayed after saving.
+                </p>
+              </div>
+            )}
+
+            {serverForm.auth_scheme === 'api_key' && (
+              <div>
+                <label className={labelClass}>Header Name</label>
+                <input
+                  type="text"
+                  className={inputClass}
+                  value={serverForm.auth_header_name}
+                  onChange={(e) => setServerForm(prev => ({ ...prev, auth_header_name: e.target.value }))}
+                  placeholder="X-API-Key"
+                />
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  The HTTP header name used to send the API key (default: X-API-Key)
+                </p>
+              </div>
+            )}
+
+            <div className="md:col-span-2 mt-4">
+              <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4 flex items-center">
+                <span className="bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 px-2 py-1 rounded text-xs mr-2">Advanced</span>
+                Custom Endpoints
+              </h3>
+            </div>
+
+            <div>
+              <label className={labelClass}>MCP Endpoint (optional)</label>
+              <input
+                type="url"
+                className={inputClass}
+                value={serverForm.mcp_endpoint}
+                onChange={(e) => setServerForm(prev => ({ ...prev, mcp_endpoint: e.target.value }))}
+                placeholder="http://server.com/custom-mcp-path"
+              />
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Override default /mcp endpoint path</p>
+            </div>
+
+            <div>
+              <label className={labelClass}>SSE Endpoint (optional)</label>
+              <input
+                type="url"
+                className={inputClass}
+                value={serverForm.sse_endpoint}
+                onChange={(e) => setServerForm(prev => ({ ...prev, sse_endpoint: e.target.value }))}
+                placeholder="http://server.com/custom-sse-path"
+              />
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Override default /sse endpoint path</p>
+            </div>
+          </>
         )}
-
-        {serverForm.auth_scheme === 'api_key' && (
-          <div>
-            <label className={labelClass}>Header Name</label>
-            <input
-              type="text"
-              className={inputClass}
-              value={serverForm.auth_header_name}
-              onChange={(e) => setServerForm(prev => ({ ...prev, auth_header_name: e.target.value }))}
-              placeholder="X-API-Key"
-            />
-            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              The HTTP header name used to send the API key (default: X-API-Key)
-            </p>
-          </div>
-        )}
-
-        {/* Advanced Settings */}
-        <div className="md:col-span-2 mt-4">
-          <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4 flex items-center">
-            <span className="bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 px-2 py-1 rounded text-xs mr-2">Advanced</span>
-            Custom Endpoints & Metadata
-          </h3>
-        </div>
-
-        <div>
-          <label className={labelClass}>MCP Endpoint (optional)</label>
-          <input
-            type="url"
-            className={inputClass}
-            value={serverForm.mcp_endpoint}
-            onChange={(e) => setServerForm(prev => ({ ...prev, mcp_endpoint: e.target.value }))}
-            placeholder="http://server.com/custom-mcp-path"
-          />
-          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Override default /mcp endpoint path</p>
-        </div>
-
-        <div>
-          <label className={labelClass}>SSE Endpoint (optional)</label>
-          <input
-            type="url"
-            className={inputClass}
-            value={serverForm.sse_endpoint}
-            onChange={(e) => setServerForm(prev => ({ ...prev, sse_endpoint: e.target.value }))}
-            placeholder="http://server.com/custom-sse-path"
-          />
-          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Override default /sse endpoint path</p>
-        </div>
 
         <div className="md:col-span-2">
           <label className={labelClass}>Metadata (optional, JSON)</label>
