@@ -51,6 +51,43 @@ class TestLocalDeploymentShortCircuit:
 
 
 @pytest.mark.unit
+class TestGetServiceHealthDataFastLocal:
+    """The fast (cache-based) health-data lookup is the read path used by
+    list/dashboard endpoints. For local enabled servers, it must always report
+    LOCAL — the cached status from a prior session ('unknown', 'checking',
+    etc.) should not leak through, otherwise a freshly toggled-on local
+    server briefly shows 'checking' even though it never gets probed."""
+
+    def test_local_enabled_overrides_stale_cache(self):
+        service = HealthMonitoringService()
+        # Stale cache from a previous session.
+        service.server_health_status["/local-srv"] = "checking"
+        server_info = {
+            "is_enabled": True,
+            "deployment": "local",
+            "local_runtime": {"type": "npx", "package": "@acme/mcp"},
+        }
+
+        result = service._get_service_health_data_fast("/local-srv", server_info)
+
+        assert result["status"] == HealthStatus.LOCAL
+        assert service.server_health_status["/local-srv"] == HealthStatus.LOCAL
+
+    def test_local_disabled_takes_disabled_branch(self):
+        """Disabled wins over local — the disabled branch fires first."""
+        service = HealthMonitoringService()
+        server_info = {
+            "is_enabled": False,
+            "deployment": "local",
+            "local_runtime": {"type": "npx", "package": "@acme/mcp"},
+        }
+
+        result = service._get_service_health_data_fast("/local-srv", server_info)
+
+        assert result["status"] == "disabled"
+
+
+@pytest.mark.unit
 @pytest.mark.asyncio
 class TestPerformImmediateHealthCheckLocal:
     """toggling a local server ON triggers

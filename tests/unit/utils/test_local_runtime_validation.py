@@ -1,12 +1,17 @@
 """Tests for the env-leak guard and unpinned-version warning."""
 
+import json
+
 import pytest
+from fastapi import HTTPException
 
 from registry.utils.local_runtime_validation import (
     _shannon_entropy,
     _value_looks_like_secret,
     add_unpinned_warning_tag,
     find_leaked_secrets,
+    parse_and_validate_local_runtime,
+    validate_deployment_shape,
 )
 
 
@@ -138,3 +143,116 @@ class TestShannonEntropy:
     def test_random_string_high_entropy(self):
         # Mixed characters
         assert _shannon_entropy("aB3xY9kL7mN2") > 3.0
+
+
+@pytest.mark.unit
+class TestValidateDeploymentShape:
+    """The shape validator runs before the (heavier) LocalRuntime parse to
+    fail fast on obvious mismatches between deployment and the form fields."""
+
+    def test_local_requires_local_runtime(self):
+        with pytest.raises(HTTPException) as exc:
+            validate_deployment_shape(is_local=True, proxy_pass_url=None, local_runtime=None)
+        assert exc.value.status_code == 400
+        assert "requires local_runtime" in exc.value.detail
+
+    def test_local_rejects_proxy_pass_url(self):
+        with pytest.raises(HTTPException) as exc:
+            validate_deployment_shape(
+                is_local=True,
+                proxy_pass_url="http://upstream",
+                local_runtime='{"type":"npx","package":"x"}',
+            )
+        assert exc.value.status_code == 400
+        assert "must not set proxy_pass_url" in exc.value.detail
+
+    def test_local_happy_path(self):
+        # Valid local payload — no exception raised.
+        validate_deployment_shape(
+            is_local=True, proxy_pass_url=None, local_runtime='{"type":"npx"}'
+        )
+
+    def test_remote_requires_proxy_pass_url(self):
+        with pytest.raises(HTTPException) as exc:
+            validate_deployment_shape(is_local=False, proxy_pass_url=None, local_runtime=None)
+        assert exc.value.status_code == 400
+        assert "proxy_pass_url is required" in exc.value.detail
+
+    def test_remote_rejects_local_runtime(self):
+        with pytest.raises(HTTPException) as exc:
+            validate_deployment_shape(
+                is_local=False,
+                proxy_pass_url="http://upstream",
+                local_runtime='{"type":"npx"}',
+            )
+        assert exc.value.status_code == 400
+        assert "local_runtime is only valid" in exc.value.detail
+
+    def test_remote_happy_path(self):
+        validate_deployment_shape(
+            is_local=False, proxy_pass_url="http://upstream", local_runtime=None
+        )
+
+
+@pytest.mark.unit
+class TestParseAndValidateLocalRuntime:
+    """Parses the JSON form field into a LocalRuntime and runs the env-leak
+    guard. Both failure modes (parse error, leak detection) raise HTTPException
+    with structured detail, while the happy path returns the parsed model."""
+
+    def test_invalid_json_raises_400(self):
+        with pytest.raises(HTTPException) as exc:
+            parse_and_validate_local_runtime("not-json")
+        assert exc.value.status_code == 400
+        assert "Invalid local_runtime" in exc.value.detail
+
+    def test_schema_violation_raises_400(self):
+        # Missing required fields → Pydantic ValidationError → wrapped as 400.
+        with pytest.raises(HTTPException) as exc:
+            parse_and_validate_local_runtime(json.dumps({"type": "npx"}))
+        assert exc.value.status_code == 400
+        assert "Invalid local_runtime" in exc.value.detail
+
+    def test_leak_in_env_raises_structured_400(self):
+        payload = json.dumps(
+            {
+                "type": "npx",
+                "package": "@acme/mcp",
+                "env": {"OPENAI_KEY": "sk-proj-realsecret"},
+            }
+        )
+        with pytest.raises(HTTPException) as exc:
+            parse_and_validate_local_runtime(payload)
+        assert exc.value.status_code == 400
+        detail = exc.value.detail
+        assert isinstance(detail, dict)
+        assert "OPENAI_KEY" in detail["env_keys"]
+        assert detail["arg_indices"] == []
+        assert "${VAR}" in detail["hint"]
+
+    def test_leak_in_args_raises_structured_400(self):
+        payload = json.dumps(
+            {
+                "type": "npx",
+                "package": "@acme/mcp",
+                "args": ["--token", "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+            }
+        )
+        with pytest.raises(HTTPException) as exc:
+            parse_and_validate_local_runtime(payload)
+        assert exc.value.detail["arg_indices"] == ["1"]
+
+    def test_happy_path_returns_parsed_runtime(self):
+        payload = json.dumps(
+            {
+                "type": "npx",
+                "package": "@acme/mcp",
+                "version": "1.0.0",
+                "env": {"LOG_LEVEL": "info"},
+                "required_env": ["API_KEY"],
+            }
+        )
+        rt = parse_and_validate_local_runtime(payload)
+        assert rt.type == "npx"
+        assert rt.package == "@acme/mcp"
+        assert rt.required_env == ["API_KEY"]

@@ -974,6 +974,46 @@ class TestHelperFunctions:
         assert len(filtered) == 1
         assert filtered[0]["path"] == "/no-visibility"
 
+    def test_filter_by_visibility_excludes_local_servers_unconditionally(self) -> None:
+        """Push-side gate: deployment='local' is dropped regardless of visibility.
+
+        The recipe (env / args) must never go over the wire to peers — the
+        opposite side controls storage via sync_local_servers, but we don't
+        even transmit. The filter applies before visibility checks: a public
+        local server still gets dropped.
+        """
+        items = [
+            {"visibility": "public", "deployment": "remote", "path": "/remote-pub"},
+            {"visibility": "public", "deployment": "local", "path": "/local-pub"},
+            {
+                "visibility": "group-restricted",
+                "allowed_groups": ["finance"],
+                "deployment": "local",
+                "path": "/local-restricted",
+            },
+        ]
+
+        # Even with the matching peer group, the local server is filtered out.
+        filtered = federation_export_routes._filter_by_visibility(items, ["finance"])
+
+        paths = [item["path"] for item in filtered]
+        assert "/remote-pub" in paths
+        assert "/local-pub" not in paths
+        assert "/local-restricted" not in paths
+
+    def test_filter_by_visibility_local_excluded_with_no_deployment_field_remote_default(
+        self,
+    ) -> None:
+        """Items lacking a deployment field default to 'remote' and are kept."""
+        items = [
+            {"visibility": "public", "path": "/legacy-no-deployment"},
+        ]
+
+        filtered = federation_export_routes._filter_by_visibility(items, [])
+
+        assert len(filtered) == 1
+        assert filtered[0]["path"] == "/legacy-no-deployment"
+
     def test_filter_by_generation_filters_correctly(self) -> None:
         """Test _filter_by_generation() filters items correctly."""
         items = [
