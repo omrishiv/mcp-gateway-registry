@@ -212,10 +212,6 @@ module "ecs_service_auth" {
           value = var.session_cookie_domain
         },
         {
-          name  = "OAUTH_STORE_TOKENS_IN_SESSION"
-          value = tostring(var.oauth_store_tokens_in_session)
-        },
-        {
           name  = "REGISTRY_STATIC_TOKEN_AUTH_ENABLED"
           value = tostring(var.registry_static_token_auth_enabled)
         },
@@ -954,10 +950,6 @@ module "ecs_service_registry" {
         {
           name  = "SHOW_AGENTS_TAB"
           value = tostring(var.show_agents_tab)
-        },
-        {
-          name  = "OAUTH_STORE_TOKENS_IN_SESSION"
-          value = tostring(var.oauth_store_tokens_in_session)
         },
         {
           name  = "REGISTRY_STATIC_TOKEN_AUTH_ENABLED"

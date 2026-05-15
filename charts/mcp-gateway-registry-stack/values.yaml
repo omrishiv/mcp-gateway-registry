@@ -383,7 +383,6 @@ auth-server:
     # Session cookie Domain attribute. See registry.app.sessionCookieDomain
     # above for guidance — keep these two in sync.
     sessionCookieDomain: ""
-    oauthStoreTokensInSession: false  # Store OAuth tokens in session (default: false)
     # Internal JWT configuration
     jwtIssuer: "mcp-auth-server"  # Issuer claim for internal JWT tokens
     jwtAudience: "mcp-registry"  # Audience claim for internal JWT tokens

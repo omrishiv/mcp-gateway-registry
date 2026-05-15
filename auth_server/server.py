@@ -133,20 +133,6 @@ _registry_static_token_requested: bool = (
 # Static API key for Registry API (must match Bearer token value when enabled)
 REGISTRY_API_TOKEN: str = os.environ.get("REGISTRY_API_TOKEN", "")
 
-# Legacy flag — historically gated whether OAuth `id_token` was kept for SSO
-# logout. Now a no-op: id_token is always stored server-side (encrypted at
-# rest with a SECRET_KEY-derived key) so it never reaches the browser cookie.
-# The flag is read only to surface a deprecation warning when operators still
-# set it, so old runbooks don't silently appear to work.
-OAUTH_STORE_TOKENS_IN_SESSION: bool = (
-    os.environ.get("OAUTH_STORE_TOKENS_IN_SESSION", "false").lower() == "true"
-)
-if "OAUTH_STORE_TOKENS_IN_SESSION" in os.environ:
-    logging.warning(
-        "OAUTH_STORE_TOKENS_IN_SESSION is deprecated and ignored — id_token is "
-        "always persisted in the server-side session store (encrypted)."
-    )
-
 # Issue #779: multiple static API keys with per-key groups.
 _REGISTRY_API_KEYS_RAW: str = os.environ.get("REGISTRY_API_KEYS", "").strip()
 
@@ -3433,11 +3419,8 @@ async def oauth2_callback(
         # for IdPs that return large groups claims (e.g. Entra ID with many
         # group memberships) and keeps id_token off the client entirely.
         session_max_age = OAUTH2_CONFIG.get("session", {}).get("max_age_seconds", 28800)
-        # id_token is always persisted server-side now: it is encrypted at rest
-        # via AES-GCM (key derived from SECRET_KEY) and never reaches the
-        # browser, so the original "credential leakage" reason for gating it
-        # behind OAUTH_STORE_TOKENS_IN_SESSION no longer applies. We need it
-        # for OIDC SSO logout (id_token_hint) regardless of the flag.
+        # id_token is encrypted at rest server-side and required for OIDC SSO
+        # logout (id_token_hint).
         from session_store import create_session
 
         session_id = await create_session(

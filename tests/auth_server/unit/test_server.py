@@ -6,7 +6,6 @@ rate limiting, and helper functions.
 """
 
 import logging
-import os
 import time
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -1831,39 +1830,14 @@ class TestStaticTokenFallthrough:
 
 
 # =============================================================================
-# OAUTH TOKEN STORAGE CONFIGURATION TESTS
-# =============================================================================
-
-
-class TestOAuthTokenStorageConfiguration:
-    """Verify OAUTH_STORE_TOKENS_IN_SESSION is treated as a deprecated no-op.
-
-    Sessions are now server-side and id_token is always persisted (encrypted).
-    Setting the env var must not change runtime behavior — only emit a warning.
-    """
-
-    def test_flag_is_parsed_but_does_not_gate_id_token_persistence(self, monkeypatch):
-        """Even when OAUTH_STORE_TOKENS_IN_SESSION=false, callers must still
-        pass id_token to create_session — the flag is no-op for SSO logout."""
-        monkeypatch.setenv("OAUTH_STORE_TOKENS_IN_SESSION", "false")
-        # Re-evaluate the flag the same way the module does at import.
-        flag = os.environ.get("OAUTH_STORE_TOKENS_IN_SESSION", "false").lower() == "true"
-        assert flag is False
-        # The contract this test locks in: id_token persistence is no longer
-        # gated on this flag. (If a future change re-introduces the gate, the
-        # oauth2_callback integration test below will fail.)
-
-
-# =============================================================================
-# OAUTH2 CALLBACK TOKEN STORAGE INTEGRATION TESTS
+# OAUTH2 CALLBACK SESSION STORAGE INTEGRATION TESTS
 # =============================================================================
 
 
 class TestOAuth2CallbackTokenStorage:
     """The browser cookie always carries only an opaque session_id — never
     user data, groups, or tokens. id_token is always persisted server-side
-    (encrypted) so SSO logout via id_token_hint keeps working regardless of
-    the legacy `OAUTH_STORE_TOKENS_IN_SESSION` flag.
+    (encrypted) so SSO logout via id_token_hint keeps working.
     """
 
     # Cookie ceiling: we sign an opaque 32-byte session_id; the resulting
@@ -1871,7 +1845,7 @@ class TestOAuth2CallbackTokenStorage:
     # point of the server-side store is to keep the cookie small.
     COOKIE_SIZE_CEILING_BYTES = 512
 
-    def _call_oauth2_callback(self, store_tokens: bool) -> tuple[dict, str]:
+    def _call_oauth2_callback(self) -> tuple[dict, str]:
         """Drive the real oauth2_callback endpoint with create_session mocked.
 
         Returns (kwargs, session_cookie_value) so tests can assert what would
@@ -1907,7 +1881,6 @@ class TestOAuth2CallbackTokenStorage:
         client = TestClient(app, raise_server_exceptions=False)
 
         with (
-            patch("auth_server.server.OAUTH_STORE_TOKENS_IN_SESSION", store_tokens),
             patch(
                 "auth_server.server.exchange_code_for_token",
                 new_callable=AsyncMock,
@@ -1944,22 +1917,17 @@ class TestOAuth2CallbackTokenStorage:
 
         return captured, session_cookie
 
-    def test_id_token_persisted_regardless_of_legacy_flag(self):
-        """id_token is always passed to the session store. The legacy
-        OAUTH_STORE_TOKENS_IN_SESSION flag must not gate it (regression
-        guard for SSO logout via id_token_hint).
+    def test_id_token_persisted_in_session_store(self):
+        """id_token is always passed to the session store (regression guard
+        for SSO logout via id_token_hint). access_token / refresh_token are
+        never stored.
         """
-        for store_tokens in (False, True):
-            kwargs, _cookie = self._call_oauth2_callback(store_tokens=store_tokens)
-            assert kwargs["username"] == "testuser"
-            assert kwargs["auth_method"] == "oauth2"
-            assert kwargs["id_token"] == "mock-id-token", (
-                f"id_token must be persisted regardless of "
-                f"OAUTH_STORE_TOKENS_IN_SESSION={store_tokens}"
-            )
-            # Credentials other than id_token are never stored.
-            assert "access_token" not in kwargs
-            assert "refresh_token" not in kwargs
+        kwargs, _cookie = self._call_oauth2_callback()
+        assert kwargs["username"] == "testuser"
+        assert kwargs["auth_method"] == "oauth2"
+        assert kwargs["id_token"] == "mock-id-token"
+        assert "access_token" not in kwargs
+        assert "refresh_token" not in kwargs
 
     def test_session_cookie_stays_well_under_size_ceiling(self):
         """The whole point of the server-side store is a small cookie.
@@ -1968,10 +1936,7 @@ class TestOAuth2CallbackTokenStorage:
         session_id, not a serialized payload of user/groups/id_token. If a
         future change reintroduces inline user data, this test catches it.
         """
-        # Use the heavier branch: even when "tokens enabled" was historically
-        # the path that bloated the cookie, with the server-side store the
-        # cookie carries only a session_id either way.
-        _kwargs, cookie = self._call_oauth2_callback(store_tokens=True)
+        _kwargs, cookie = self._call_oauth2_callback()
         assert len(cookie) < self.COOKIE_SIZE_CEILING_BYTES, (
             f"Session cookie is {len(cookie)} bytes; expected < "
             f"{self.COOKIE_SIZE_CEILING_BYTES}. The server-side session store "

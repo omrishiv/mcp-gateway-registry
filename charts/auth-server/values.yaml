@@ -33,7 +33,6 @@ app:
   # to scope the cookie tighter, or to a different parent
   # (".team.example.com") if this stack lives under a subdomain.
   sessionCookieDomain: ""
-  oauthStoreTokensInSession: false  # Store OAuth tokens in session (default: false)
 
   # Internal JWT configuration for service-to-service tokens
   jwtIssuer: "mcp-auth-server"  # Issuer claim for internal JWT tokens

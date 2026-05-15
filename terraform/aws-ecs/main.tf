@@ -164,9 +164,6 @@ module "mcp_gateway" {
   auth0_m2m_client_secret    = var.auth0_m2m_client_secret
   auth0_management_api_token = var.auth0_management_api_token
 
-  # OAuth token storage
-  oauth_store_tokens_in_session = var.oauth_store_tokens_in_session
-
   # Registry static token auth
   registry_static_token_auth_enabled = var.registry_static_token_auth_enabled
   registry_api_token                 = var.registry_api_token

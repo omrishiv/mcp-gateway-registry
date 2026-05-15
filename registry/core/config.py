@@ -76,7 +76,6 @@ class Settings(BaseSettings):
     auth_server_url: str = "http://localhost:8888"
     auth_server_external_url: str = "http://localhost:8888"  # External URL for OAuth redirects
     auth_provider: str = "cognito"  # Auth provider: cognito, keycloak, entra, github
-    oauth_store_tokens_in_session: bool = False  # Store OAuth tokens in session cookies
     registry_static_token_auth_enabled: bool = False  # Enable static token auth (IdP-independent)
     registry_api_token: str = ""  # Static API token for registry access
     registry_api_keys: str = ""  # Multi-key static tokens JSON (Issue #779)
