@@ -95,10 +95,9 @@ def pytest_configure(config):
     # (dedicated gate tests mock settings directly)
     os.environ["REGISTRATION_GATE_ENABLED"] = "false"
 
-    # Set a fixed SECRET_KEY for tests. Application code now refuses to start without one;
-    # production deployments must set this themselves so cookie signing is consistent
-    # across replicas.
-    os.environ.setdefault("SECRET_KEY", "test-secret-key-for-testing-only-do-not-use-in-production")
+    # NOTE: SECRET_KEY is set at module-import time near the top of this
+    # conftest, because Settings() is constructed during import and refuses
+    # to start without one — pytest_configure runs too late for that path.
 
     print(
         "Test environment configured: DOCUMENTDB_HOST=localhost, STORAGE_BACKEND=mongodb-ce, DOCUMENTDB_DIRECT_CONNECTION=true, DOCUMENTDB_USE_TLS=false"
@@ -162,6 +161,15 @@ def _setup_auto_mocking() -> None:
 
 # Execute auto-mocking setup
 _setup_auto_mocking()
+
+
+# SECRET_KEY must be set before importing registry.core.config, because
+# Settings() is constructed at module-import time and refuses to start
+# without one. pytest_configure() runs AFTER conftest import, so setting it
+# there is too late.
+os.environ.setdefault(
+    "SECRET_KEY", "test-secret-key-for-testing-only-do-not-use-in-production"
+)
 
 
 # Now we can safely import registry modules
