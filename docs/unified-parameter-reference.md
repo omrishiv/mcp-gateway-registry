@@ -493,7 +493,7 @@ Used by `registry` and `mcpgw` services.
 | Excluded loggers | `APP_LOG_EXCLUDED_LOGGERS` | `app_log_excluded_loggers` | `*.app.appLogExcludedLoggers` | Comma-separated. |
 | App log dir | `APP_LOG_DIR` | `app_log_dir` | `*.app.appLogDir` | Absolute path; empty uses backend default. |
 | File format | `APP_LOG_FILE_FORMAT` | `app_log_file_format` | `*.app.appLogFileFormat` | `json` (default, JSONL) or `text`. |
-| Console format | `APP_LOG_CONSOLE_FORMAT` | `app_log_console_format` | `*.app.appLogConsoleFormat` | `text` (default, human-readable) or `json` (same JSONL schema as file format). |
+| Console format | `APP_LOG_CONSOLE_FORMAT` | `app_log_console_format` | `*.app.appLogConsoleFormat` | `json` (default, same JSONL schema as file format, ideal for log-agent scraping) or `text` (human-readable). |
 
 ---
 

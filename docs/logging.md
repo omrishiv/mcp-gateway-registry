@@ -41,7 +41,7 @@ All parameters use the `APP_LOG_` prefix. The centralized (MongoDB) storage para
 |-----------|-------------|---------|
 | `APP_LOG_DIR` | Directory where service `.log` files are written. Must be an absolute path; `..` segments are rejected. Empty uses the per-environment default. See [logging-standard.md](logging-standard.md). | `""` (resolves to `/var/log/containers/ai-registry` in containers, `./logs` in local dev) |
 | `APP_LOG_FILE_FORMAT` | On-disk format for service log files: `json` (JSON Lines, Splunk-friendly, see [logging-standard.md](logging-standard.md)) or `text` (legacy comma-separated). Console/stdout format is not affected. | `json` |
-| `APP_LOG_CONSOLE_FORMAT` | STDOUT/console format: `text` (human-readable comma-separated, default) or `json` (same JSONL schema as `APP_LOG_FILE_FORMAT=json`). Use `json` when a log agent or sidecar scrapes container stdout. | `text` |
+| `APP_LOG_CONSOLE_FORMAT` | STDOUT/console format: `json` (same JSONL schema as `APP_LOG_FILE_FORMAT=json`, default for log-agent / sidecar scraping) or `text` (human-readable comma-separated). | `json` |
 | `APP_LOG_CENTRALIZED_ENABLED` | Write application logs to MongoDB/DocumentDB for centralized retrieval | `true` |
 | `APP_LOG_CENTRALIZED_TTL_DAYS` | Days to retain log entries before automatic deletion | `1` |
 | `APP_LOG_MAX_BYTES` | Maximum size per log file in bytes before rotation | `52428800` (50 MB) |
@@ -67,7 +67,7 @@ APP_LOG_CENTRALIZED_TTL_DAYS=1
 # On-disk log file path and format (see docs/logging-standard.md)
 APP_LOG_DIR=/var/log/containers/ai-registry
 APP_LOG_FILE_FORMAT=json
-APP_LOG_CONSOLE_FORMAT=text
+APP_LOG_CONSOLE_FORMAT=json
 
 # Optional overrides
 APP_LOG_MAX_BYTES=52428800
@@ -94,7 +94,7 @@ app_log_centralized_ttl_days = 1
 # On-disk log file path and format (see docs/logging-standard.md)
 app_log_dir            = ""        # empty = /var/log/containers/ai-registry
 app_log_file_format    = "json"    # "json" (default) or "text" (legacy)
-app_log_console_format = "text"    # "text" (default) or "json" (JSONL stdout)
+app_log_console_format = "json"    # "json" (default, JSONL stdout) or "text" (human-readable)
 
 # Optional overrides
 app_log_max_bytes         = 52428800
@@ -119,7 +119,7 @@ registry:
     # On-disk log file path and format (see docs/logging-standard.md)
     appLogDir: ""              # empty = /var/log/containers/ai-registry
     appLogFileFormat: "json"   # "json" (default) or "text" (legacy)
-    appLogConsoleFormat: "text" # "text" (default) or "json" (JSONL stdout)
+    appLogConsoleFormat: "json" # "json" (default, JSONL stdout) or "text" (human-readable)
     appLogMaxBytes: "52428800"
     appLogBackupCount: "5"
     appLogMongodbBufferSize: "50"

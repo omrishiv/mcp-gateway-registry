@@ -479,13 +479,13 @@ class Settings(BaseSettings):
         ),
     )
     app_log_console_format: str = Field(
-        default="text",
+        default="json",
         description=(
-            "Format for STDOUT/console output. 'text' (default) emits the "
-            "human-readable comma-separated format so `docker logs` / "
-            "`kubectl logs` stay skimmable. 'json' emits the same JSON "
-            "Lines schema as APP_LOG_FILE_FORMAT=json so a sidecar/agent "
-            "scraping STDOUT receives structured records."
+            "Format for STDOUT/console output. 'json' (default) emits the "
+            "same JSON Lines schema as APP_LOG_FILE_FORMAT=json so a "
+            "sidecar/agent scraping STDOUT receives structured records. "
+            "'text' emits the human-readable comma-separated format if you "
+            "want `docker logs` / `kubectl logs` to stay skimmable."
         ),
     )
 

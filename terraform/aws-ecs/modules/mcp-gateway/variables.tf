@@ -970,9 +970,9 @@ variable "app_log_file_format" {
 }
 
 variable "app_log_console_format" {
-  description = "STDOUT/console format: 'text' (default) or 'json' (JSONL stdout for log-agent scraping)."
+  description = "STDOUT/console format: 'json' (default, JSONL stdout for log-agent scraping) or 'text' (human-readable)."
   type        = string
-  default     = "text"
+  default     = "json"
 }
 
 # =============================================================================

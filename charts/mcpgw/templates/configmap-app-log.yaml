@@ -12,7 +12,7 @@ data:
   # not write to MongoDB. Keep this in sync with that module's os.getenv calls.
   APP_LOG_DIR: {{ .Values.app.appLogDir | default "" | quote }}
   APP_LOG_FILE_FORMAT: {{ .Values.app.appLogFileFormat | default "json" | quote }}
-  APP_LOG_CONSOLE_FORMAT: {{ .Values.app.appLogConsoleFormat | default "text" | quote }}
+  APP_LOG_CONSOLE_FORMAT: {{ .Values.app.appLogConsoleFormat | default "json" | quote }}
   APP_LOG_LEVEL: {{ .Values.app.appLogLevel | default "INFO" | quote }}
   APP_LOG_MAX_BYTES: {{ .Values.app.appLogMaxBytes | default "52428800" | quote }}
   APP_LOG_BACKUP_COUNT: {{ .Values.app.appLogBackupCount | default "5" | quote }}

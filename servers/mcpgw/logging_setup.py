@@ -105,13 +105,13 @@ def _resolve_file_format() -> str:
 
 def _resolve_console_format() -> str:
     """Read APP_LOG_CONSOLE_FORMAT from env; accept only 'json' or 'text'."""
-    raw = os.getenv("APP_LOG_CONSOLE_FORMAT", "text").strip().lower()
+    raw = os.getenv("APP_LOG_CONSOLE_FORMAT", "json").strip().lower()
     if raw not in ("json", "text"):
         logging.getLogger(__name__).warning(
-            "APP_LOG_CONSOLE_FORMAT=%r is invalid; falling back to 'text'",
+            "APP_LOG_CONSOLE_FORMAT=%r is invalid; falling back to 'json'",
             raw,
         )
-        return "text"
+        return "json"
     return raw
 
 
