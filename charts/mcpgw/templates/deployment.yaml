@@ -49,6 +49,8 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           envFrom:
+            - configMapRef:
+                name: mcpgw-app-log-config
             - secretRef:
                 name: {{ .Values.app.existingSecret | default .Values.app.envSecretName }}
             {{- if .Values.global.sharedSecretName }}

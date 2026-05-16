@@ -79,15 +79,19 @@ tests:
             configMapRef:
               name: my-external-config
               optional: true
-      # Order: chart-managed mcpgw-secret is envFrom[0]; user entries are last.
+      # Order: chart-managed mcpgw-app-log-config is envFrom[0],
+      # mcpgw-secret is envFrom[1]; user entries are last.
       - equal:
-          path: spec.template.spec.containers[0].envFrom[0].secretRef.name
-          value: mcpgw-secret
+          path: spec.template.spec.containers[0].envFrom[0].configMapRef.name
+          value: mcpgw-app-log-config
       - equal:
           path: spec.template.spec.containers[0].envFrom[1].secretRef.name
+          value: mcpgw-secret
+      - equal:
+          path: spec.template.spec.containers[0].envFrom[2].secretRef.name
           value: my-external-secrets
       - equal:
-          path: spec.template.spec.containers[0].envFrom[2].configMapRef.name
+          path: spec.template.spec.containers[0].envFrom[3].configMapRef.name
           value: my-external-config
 
   - it: fails when extraEnv contains a reserved name (HOST)

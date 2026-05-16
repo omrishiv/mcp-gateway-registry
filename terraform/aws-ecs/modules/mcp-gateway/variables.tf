@@ -969,6 +969,12 @@ variable "app_log_file_format" {
   default     = "json"
 }
 
+variable "app_log_console_format" {
+  description = "STDOUT/console format: 'json' (default, JSONL stdout for log-agent scraping) or 'text' (human-readable)."
+  type        = string
+  default     = "json"
+}
+
 # =============================================================================
 # TOOL-LEVEL ACCESS CONTROL (Issue #1026)
 # =============================================================================

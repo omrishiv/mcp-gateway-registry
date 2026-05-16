@@ -341,6 +341,10 @@ module "ecs_service_auth" {
           name  = "APP_LOG_FILE_FORMAT"
           value = var.app_log_file_format
         },
+        {
+          name  = "APP_LOG_CONSOLE_FORMAT"
+          value = var.app_log_console_format
+        },
         # Tool-level access control (issue #1026)
         {
           name  = "MCP_TOOLS_LIST_FILTER_ENABLED"
@@ -921,6 +925,10 @@ module "ecs_service_registry" {
         {
           name  = "APP_LOG_FILE_FORMAT"
           value = var.app_log_file_format
+        },
+        {
+          name  = "APP_LOG_CONSOLE_FORMAT"
+          value = var.app_log_console_format
         },
         # Tool-level access control (issue #1026)
         {
@@ -1536,6 +1544,10 @@ module "ecs_service_mcpgw" {
         {
           name  = "APP_LOG_FILE_FORMAT"
           value = var.app_log_file_format
+        },
+        {
+          name  = "APP_LOG_CONSOLE_FORMAT"
+          value = var.app_log_console_format
         },
         {
           name  = "APP_LOG_LEVEL"

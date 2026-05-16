@@ -145,6 +145,7 @@ app:
   # file path for code-path consistency with Docker Compose deployments.
   appLogDir: ""                    # Empty uses backend default: /var/log/containers/ai-registry
   appLogFileFormat: "json"         # "json" (default, Splunk-friendly) or "text" (legacy comma-separated)
+  appLogConsoleFormat: "json"      # "json" (default, structured logging) or "text" (human-readable)
 
   # Tool-level access control (issue #1026)
   mcpToolsListFilterEnabled: true   # Registry-side awareness of the MCP tools/list filter (also read by auth-server)

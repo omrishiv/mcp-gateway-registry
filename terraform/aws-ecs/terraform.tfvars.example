@@ -538,9 +538,14 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 
 # On-disk format for service .log files: 'json' (JSON Lines per
 # docs/logging-standard.md) or 'text' (legacy comma-separated).
-# Console/stdout format is unaffected.
 # Default: "json"
 # app_log_file_format = "json"
+
+# STDOUT/console format: 'json' (default, same JSONL schema as
+# app_log_file_format=json, ideal for log agent / sidecar scraping container
+# stdout) or 'text' (human-readable comma-separated).
+# Default: "json"
+# app_log_console_format = "json"
 
 # ============================================================================
 # TOOL-LEVEL ACCESS CONTROL (Issue #1026)

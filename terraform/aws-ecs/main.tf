@@ -231,6 +231,7 @@ module "mcp_gateway" {
   app_log_excluded_loggers     = var.app_log_excluded_loggers
   app_log_dir                  = var.app_log_dir
   app_log_file_format          = var.app_log_file_format
+  app_log_console_format       = var.app_log_console_format
 
   # Tool-level access control (issue #1026)
   mcp_tools_list_filter_enabled = var.mcp_tools_list_filter_enabled
