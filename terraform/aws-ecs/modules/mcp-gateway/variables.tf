@@ -1031,6 +1031,12 @@ variable "show_agents_tab" {
   default     = true
 }
 
+variable "ui_title" {
+  description = "Override for the UI title. Empty string defers to the deployment-mode default ('AI Gateway & Registry' for with-gateway, 'AI Registry' for registry-only)."
+  type        = string
+  default     = ""
+}
+
 # =============================================================================
 # OBSERVABILITY CONFIGURATION (Metrics Pipeline)
 # =============================================================================

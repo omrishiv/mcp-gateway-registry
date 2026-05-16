@@ -45,6 +45,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("show_virtual_servers_tab", "Show Virtual MCP Servers Tab", False),
             ("show_skills_tab", "Show Skills Tab", False),
             ("show_agents_tab", "Show Agents Tab", False),
+            ("effective_ui_title", "UI Title", False),
         ],
     },
     "storage": {
@@ -631,6 +632,7 @@ async def get_config() -> dict[str, Any]:
         "registration_gate_enabled": settings.registration_gate_enabled,
         "asset_lifecycle_statuses": [s.value for s in LifecycleStatus],
         "coding_assistants": settings.coding_assistants_list,
+        "ui_title": settings.effective_ui_title,
         "features": {
             "mcp_servers": (
                 settings.registry_mode in (RegistryMode.FULL, RegistryMode.MCP_SERVERS_ONLY)

@@ -956,6 +956,10 @@ module "ecs_service_registry" {
           value = tostring(var.show_agents_tab)
         },
         {
+          name  = "UI_TITLE"
+          value = var.ui_title
+        },
+        {
           name  = "OAUTH_STORE_TOKENS_IN_SESSION"
           value = tostring(var.oauth_store_tokens_in_session)
         },

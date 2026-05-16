@@ -1,9 +1,15 @@
 import React, { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { CheckCircleIcon } from '@heroicons/react/24/outline';
+import { useUiTitle } from '../hooks/useUiTitle';
 
 const Logout: React.FC = () => {
   const navigate = useNavigate();
+  const uiTitle = useUiTitle();
+
+  useEffect(() => {
+    document.title = uiTitle;
+  }, [uiTitle]);
 
   useEffect(() => {
     // Auto redirect to login after 5 seconds
@@ -52,7 +58,7 @@ const Logout: React.FC = () => {
 
         <div className="mt-6 text-center">
           <p className="text-xs text-gray-500 dark:text-gray-400">
-            AI Gateway & Registry - Secure Access Management
+            {uiTitle} - Secure Access Management
           </p>
         </div>
       </div>

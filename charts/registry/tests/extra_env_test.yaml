@@ -44,10 +44,10 @@ tests:
                 name: my-secret
                 key: my-key
       # Order: chart-managed feature flags come first (DEPLOYMENT_MODE is
-      # env[0]); CODING_ASSISTANTS is env[6]; the tool-level access
-      # control pair (issue #1026) is env[7]/env[8];
-      # KEYCLOAK_ADMIN_PASSWORD (conditional on keycloak provider) is
-      # env[9]; user extraEnv entries are appended at the end.
+      # env[0]); CODING_ASSISTANTS is env[6]; UI_TITLE is
+      # env[7]; the tool-level access control pair (issue #1026) is
+      # env[8]/env[9]; KEYCLOAK_ADMIN_PASSWORD (conditional on keycloak
+      # provider) is env[10]; user extraEnv entries are appended at the end.
       #
       # NOTE: The indices below assume global.authProvider.type=keycloak
       # (set at the suite level) and awsRegistry.federationEnabled=false.
@@ -66,18 +66,21 @@ tests:
           value: CODING_ASSISTANTS
       - equal:
           path: spec.template.spec.containers[0].env[7].name
-          value: MCP_TOOLS_LIST_FILTER_ENABLED
+          value: UI_TITLE
       - equal:
           path: spec.template.spec.containers[0].env[8].name
-          value: TOOL_FILTER_AUDIT_LOG_LEVEL
+          value: MCP_TOOLS_LIST_FILTER_ENABLED
       - equal:
           path: spec.template.spec.containers[0].env[9].name
-          value: KEYCLOAK_ADMIN_PASSWORD
+          value: TOOL_FILTER_AUDIT_LOG_LEVEL
       - equal:
           path: spec.template.spec.containers[0].env[10].name
-          value: MY_FLAG
+          value: KEYCLOAK_ADMIN_PASSWORD
       - equal:
           path: spec.template.spec.containers[0].env[11].name
+          value: MY_FLAG
+      - equal:
+          path: spec.template.spec.containers[0].env[12].name
           value: MY_SECRET_VAR
 
   - it: appends extraEnvFrom entries after chart-managed envFrom sources
@@ -177,6 +180,34 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "\"REGISTRATION_GATE_OAUTH2_CLIENT_SECRET\" is a reserved variable"
+
+  - it: fails when extraEnv contains UI_TITLE
+    set:
+      extraEnv:
+        - name: UI_TITLE
+          value: "Acme"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"UI_TITLE\" is a reserved variable"
+
+  - it: emits empty UI_TITLE by default
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: UI_TITLE
+            value: ""
+
+  - it: emits UI_TITLE override when app.uiTitle is set
+    set:
+      app:
+        uiTitle: "Acme AI Portal"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: UI_TITLE
+            value: "Acme AI Portal"
 
   - it: fails on duplicate names within extraEnv
     set:

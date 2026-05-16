@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
+import { useUiTitle } from '../hooks/useUiTitle';
 
 interface OAuthProvider {
   name: string;
@@ -14,6 +15,11 @@ const Login: React.FC = () => {
   const [oauthProviders, setOauthProviders] = useState<OAuthProvider[]>([]);
   const [authServerUrl, setAuthServerUrl] = useState<string>('');
   const [searchParams] = useSearchParams();
+  const uiTitle = useUiTitle();
+
+  useEffect(() => {
+    document.title = uiTitle;
+  }, [uiTitle]);
 
   useEffect(() => {
     console.log('[Login] Component mounted, fetching OAuth providers...');
@@ -73,7 +79,7 @@ const Login: React.FC = () => {
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
       <div className="sm:mx-auto sm:w-full sm:max-w-md">
         <h2 className="text-center text-3xl font-bold text-gray-900 dark:text-white">
-          Sign in to AI Gateway & Registry
+          Sign in to {uiTitle}
         </h2>
         <p className="mt-2 text-center text-sm text-gray-600 dark:text-gray-400">
           Access your AI management dashboard

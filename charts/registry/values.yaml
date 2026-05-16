@@ -125,6 +125,12 @@ app:
   # Example: "cursor,claude-code"
   codingAssistants: ""
 
+  # UI title override. Empty string defers to the deployment-mode
+  # default ("AI Gateway & Registry" for with-gateway, "AI Registry" for
+  # registry-only). Set to brand the deployment with your organization's
+  # product name (e.g., "Acme AI Portal").
+  uiTitle: ""
+
   # Application Log Configuration (centralized log rotation and retrieval)
   appLogMaxBytes: "52428800"       # Max size per log file before rotation (default 50 MB)
   appLogBackupCount: "5"           # Number of rotated backup log files to keep

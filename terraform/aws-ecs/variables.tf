@@ -1055,6 +1055,19 @@ variable "show_agents_tab" {
   default     = true
 }
 
+variable "ui_title" {
+  description = <<-EOT
+    Override for the UI title shown in the header, login, and logout pages.
+    When unset (empty string), the title defaults based on deployment_mode:
+    - with-gateway  -> "AI Gateway & Registry"
+    - registry-only -> "AI Registry"
+    Set this to brand the deployment with your organization's product name
+    (e.g., "Acme AI Portal").
+  EOT
+  type        = string
+  default     = ""
+}
+
 # =============================================================================
 # OBSERVABILITY CONFIGURATION (Metrics Pipeline)
 # =============================================================================
