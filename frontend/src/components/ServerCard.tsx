@@ -23,11 +23,14 @@ import StarRatingWidget from './StarRatingWidget';
 import VersionBadge from './VersionBadge';
 import VersionSelectorModal from './VersionSelectorModal';
 import DeleteConfirmation from './DeleteConfirmation';
+import ConfirmModal from './ConfirmModal';
 import StatusBadge from './StatusBadge';
 import { ANSBadge } from './ANSBadge';
 import ServerDetailsModal from './ServerDetailsModal';
 import useEscapeKey from '../hooks/useEscapeKey';
 import { formatRelativeTime } from '../utils/dateUtils';
+import { useAuth } from '../contexts/AuthContext';
+import type { LocalRuntime } from '../types/server';
 
 interface ServerVersion {
   version: string;
@@ -59,10 +62,14 @@ export interface Server {
   last_checked_time?: string;
   usersCount?: number;
   rating_details?: Array<{ user: string; rating: number }>;
-  status?: 'healthy' | 'healthy-auth-expired' | 'unhealthy' | 'unknown';
+  status?: 'healthy' | 'healthy-auth-expired' | 'unhealthy' | 'unknown' | 'local';
   num_tools?: number;
   proxy_pass_url?: string;
   mcp_endpoint?: string;
+  // Local-server fields
+  deployment?: 'remote' | 'local';
+  local_runtime?: LocalRuntime;
+  registered_by?: string | null;
   // Version routing fields
   version?: string;  // Current active version
   versions?: ServerVersion[];
@@ -159,6 +166,8 @@ const formatTimeSince = (timestamp: string | null | undefined): string | null =>
 };
 
 const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, onEdit, canModify, canHealthCheck = true, canToggle = true, canDelete, onRefreshSuccess, onShowToast, onServerUpdate, onDelete, authToken }) => {
+  const { user } = useAuth();
+  const isAdmin = user?.is_admin === true;
   const [tools, setTools] = useState<Tool[]>([]);
   const [loadingTools, setLoadingTools] = useState(false);
   const [showTools, setShowTools] = useState(false);
@@ -171,6 +180,8 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [expandedDescriptions, setExpandedDescriptions] = useState<Set<number>>(new Set());
+  const [showClearSecurityPendingConfirm, setShowClearSecurityPendingConfirm] = useState(false);
+  const [clearingSecurityPending, setClearingSecurityPending] = useState(false);
 
   const closeToolsModal = useCallback(() => {
     setShowTools(false);
@@ -179,8 +190,11 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
   useEscapeKey(closeToolsModal, showTools);
   useEscapeKey(() => setShowDeleteConfirm(false), showDeleteConfirm);
 
-  // Fetch security scan status on mount to show correct icon color
+  // Fetch security scan status on mount to show correct icon color.
+  // Local (stdio) servers are never auto-scanned (no HTTP endpoint to probe);
+  // skip the request — it would 404 anyway.
   useEffect(() => {
+    if (server.deployment === 'local') return;
     const fetchSecurityScan = async () => {
       try {
         const headers = authToken ? { Authorization: `Bearer ${authToken}` } : undefined;
@@ -194,9 +208,13 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
       }
     };
     fetchSecurityScan();
-  }, [server.path, authToken]);
+  }, [server.path, server.deployment, authToken]);
 
   const getStatusIcon = () => {
+    // Local servers: registry doesn't health-check, so show a neutral indicator.
+    if (server.deployment === 'local' || server.status === 'local') {
+      return <span className="text-emerald-500 text-xs font-mono">stdio</span>;
+    }
     switch (server.status) {
       case 'healthy':
         return <CheckCircleIcon className="h-4 w-4 text-green-500" />;
@@ -210,6 +228,9 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
   };
 
   const getStatusColor = () => {
+    if (server.deployment === 'local' || server.status === 'local') {
+      return 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400';
+    }
     switch (server.status) {
       case 'healthy':
         return 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400';
@@ -253,9 +274,10 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
       // Update just this server instead of triggering global refresh
       if (onServerUpdate && response.data) {
         const updates: Partial<Server> = {
-          status: response.data.status === 'healthy' ? 'healthy' : 
+          status: response.data.status === 'healthy' ? 'healthy' :
                   response.data.status === 'healthy-auth-expired' ? 'healthy-auth-expired' :
-                  response.data.status === 'unhealthy' ? 'unhealthy' : 'unknown',
+                  response.data.status === 'unhealthy' ? 'unhealthy' :
+                  response.data.status === 'local' ? 'local' : 'unknown',
           last_checked_time: response.data.last_checked_iso,
           num_tools: response.data.num_tools
         };
@@ -350,7 +372,47 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
     }
   }, [server.path, authToken, onServerUpdate]);
 
+  const handleClearSecurityPending = useCallback(async () => {
+    if (clearingSecurityPending) return;
+    setClearingSecurityPending(true);
+    try {
+      const cleanPath = server.path.replace(/^\/+/, '');
+      await axios.post(`/api/clear-security-pending-local/${cleanPath}`);
+      onShowToast?.('Marked as security-reviewed', 'success');
+      if (onServerUpdate) {
+        onServerUpdate(server.path, {
+          tags: (server.tags || []).filter(t => t !== 'security-pending-local'),
+        });
+      }
+      setShowClearSecurityPendingConfirm(false);
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { detail?: string } } };
+      onShowToast?.(e.response?.data?.detail || 'Failed to clear tag', 'error');
+    } finally {
+      setClearingSecurityPending(false);
+    }
+  }, [server.path, server.tags, clearingSecurityPending, onServerUpdate, onShowToast]);
+
   const getSecurityIconState = () => {
+    // Local (stdio) servers can't be auto-scanned. Their security state is
+    // signalled by the security-pending-local tag instead:
+    //   tag present  → amber (admin manual review still owed)
+    //   tag absent   → green (admin has reviewed and cleared)
+    if (server.deployment === 'local') {
+      if (server.tags?.includes('security-pending-local')) {
+        return {
+          Icon: ShieldExclamationIcon,
+          color: 'text-amber-500 dark:text-amber-400',
+          title: 'Pending manual security review (local server)',
+        };
+      }
+      return {
+        Icon: ShieldCheckIcon,
+        color: 'text-green-500 dark:text-green-400',
+        title: 'Local server marked as security-reviewed',
+      };
+    }
+
     // Gray: no scan result yet
     if (!securityScanResult) {
       return { Icon: ShieldCheckIcon, color: 'text-gray-400 dark:text-gray-500', title: 'View security scan results' };
@@ -376,6 +438,10 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
 
   // Check if this server has security pending
   const isSecurityPending = server.tags?.includes('security-pending');
+  const isSecurityPendingLocal = server.tags?.includes('security-pending-local');
+
+  // Local (stdio) deployment — no HTTP endpoint, so health/scan paths skip it.
+  const isLocal = server.deployment === 'local';
 
   // Check if this is a federated server from a peer registry using sync_metadata
   const isFederatedServer = server.sync_metadata?.is_federated === true;
@@ -417,6 +483,14 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                 {server.lifecycle_status && server.lifecycle_status !== 'active' && (
                   <StatusBadge status={server.lifecycle_status} />
                 )}
+                {server.deployment === 'local' && (
+                  <span
+                    className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-emerald-100 to-teal-100 text-emerald-700 dark:from-emerald-900/30 dark:to-teal-900/30 dark:text-emerald-300 rounded-full flex-shrink-0 border border-emerald-200 dark:border-emerald-600"
+                    title="Local (stdio) — runs on your machine via launch recipe"
+                  >
+                    LOCAL
+                  </span>
+                )}
                 {server.official && (
                   <span className="px-2 py-0.5 text-xs font-semibold bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300 rounded-full flex-shrink-0">
                     OFFICIAL
@@ -437,6 +511,25 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                   <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-amber-100 to-orange-100 text-amber-700 dark:from-amber-900/30 dark:to-orange-900/30 dark:text-amber-300 rounded-full flex-shrink-0 border border-amber-200 dark:border-amber-600">
                     SECURITY PENDING
                   </span>
+                )}
+                {isSecurityPendingLocal && (
+                  isAdmin ? (
+                    <button
+                      type="button"
+                      onClick={() => setShowClearSecurityPendingConfirm(true)}
+                      className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-amber-100 to-orange-100 text-amber-700 dark:from-amber-900/30 dark:to-orange-900/30 dark:text-amber-300 rounded-full flex-shrink-0 border border-amber-200 dark:border-amber-600 hover:from-amber-200 hover:to-orange-200 transition"
+                      title="Click to mark as security-reviewed (admin only)"
+                    >
+                      SECURITY PENDING (LOCAL) ×
+                    </button>
+                  ) : (
+                    <span
+                      className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-amber-100 to-orange-100 text-amber-700 dark:from-amber-900/30 dark:to-orange-900/30 dark:text-amber-300 rounded-full flex-shrink-0 border border-amber-200 dark:border-amber-600"
+                      title="Pending security review by an admin (local server)"
+                    >
+                      SECURITY PENDING (LOCAL)
+                    </span>
+                  )
                 )}
                 {/* ANS badge moved to trust bar below description */}
                 {/* Registry source badge - only show for federated (peer registry) items */}
@@ -638,7 +731,9 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
               
               <div className="flex items-center gap-2">
                 <div className={`w-3 h-3 rounded-full ${
-                  server.status === 'healthy' 
+                  isLocal
+                    ? 'bg-emerald-400 shadow-lg shadow-emerald-400/30'
+                    : server.status === 'healthy'
                     ? 'bg-emerald-400 shadow-lg shadow-emerald-400/30'
                     : server.status === 'healthy-auth-expired'
                     ? 'bg-orange-400 shadow-lg shadow-orange-400/30'
@@ -646,8 +741,16 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                     ? 'bg-red-400 shadow-lg shadow-red-400/30'
                     : 'bg-amber-400 shadow-lg shadow-amber-400/30'
                 }`} />
-                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                  {server.status === 'healthy' ? 'Healthy' : 
+                <span
+                  className="text-sm font-medium text-gray-700 dark:text-gray-300"
+                  title={
+                    isLocal
+                      ? 'Runs on the developer’s machine via stdio launch recipe — registry does not health-check'
+                      : undefined
+                  }
+                >
+                  {isLocal ? 'Local' :
+                   server.status === 'healthy' ? 'Healthy' :
                    server.status === 'healthy-auth-expired' ? 'Healthy (Auth Expired)' :
                    server.status === 'unhealthy' ? 'Unhealthy' : 'Unknown'}
                 </span>
@@ -677,8 +780,11 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                 ) : null;
               })()}
 
-              {/* Refresh Button - only show if user has health_check_service permission */}
-              {canHealthCheck && (
+              {/* Refresh Button — only show if the user has health_check_service
+                  permission AND the server has something to refresh. Local
+                  (stdio) servers have no HTTP endpoint to probe, so refresh
+                  is a no-op for them — hide the button entirely. */}
+              {canHealthCheck && !isLocal && (
                 <button
                   onClick={handleRefreshHealth}
                   disabled={loadingRefresh}
@@ -819,9 +925,34 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
         onClose={() => setShowSecurityScan(false)}
         loading={loadingSecurityScan}
         scanResult={securityScanResult}
-        onRescan={canModify ? handleRescan : undefined}
-        canRescan={canModify}
+        // Local (stdio) servers can't be scanned — registry has no HTTP
+        // endpoint to probe. They carry the security-pending-local tag for
+        // manual review instead.
+        onRescan={canModify && !isLocal ? handleRescan : undefined}
+        canRescan={canModify && !isLocal}
+        unscannableReason={
+          isLocal
+            ? 'Local (stdio) servers cannot be scanned automatically — the registry has no HTTP endpoint to probe. These servers carry the “security-pending-local” tag and require manual review of the launch recipe (package, args, env) before being marked as reviewed.'
+            : undefined
+        }
         onShowToast={onShowToast}
+      />
+
+      <ConfirmModal
+        isOpen={showClearSecurityPendingConfirm}
+        onClose={() => setShowClearSecurityPendingConfirm(false)}
+        onConfirm={handleClearSecurityPending}
+        title={`Mark "${server.name}" as security-reviewed?`}
+        message={
+          'Local servers are not auto-scanned because the registry has no HTTP ' +
+          'endpoint to probe. Clearing this tag asserts that you have manually ' +
+          'reviewed the launch recipe (package, args, env) and consider it safe ' +
+          'for distribution to developers.'
+        }
+        confirmLabel="Mark as reviewed"
+        cancelLabel="Cancel"
+        loadingLabel="Marking..."
+        isLoading={clearingSecurityPending}
       />
 
       <VersionSelectorModal

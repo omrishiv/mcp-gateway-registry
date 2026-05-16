@@ -54,12 +54,20 @@ async def send_registration_webhook(
 
     This is fire-and-forget: failures are logged but never raised.
 
+    The card payload is run through sanitize_payload (the same sanitizer the
+    registration gate uses) before transmission. This strips top-level
+    credential fields and masks local_runtime.env values + args, which are
+    considered sensitive when sent to an external endpoint.
+
     Args:
         event_type: One of "registration" (add) or "deletion" (remove).
         registration_type: One of "server", "agent", or "skill".
         card_data: The full card JSON as a dictionary.
         performed_by: Username of the operator who performed the action.
     """
+    # Local import to avoid a circular dep at module load time.
+    from .registration_gate_service import sanitize_payload
+
     webhook_url = settings.registration_webhook_url
     if not webhook_url:
         return
@@ -79,7 +87,7 @@ async def send_registration_webhook(
         "registration_type": registration_type,
         "timestamp": datetime.now(UTC).isoformat(),
         "performed_by": performed_by,
-        "card": card_data,
+        "card": sanitize_payload(card_data) if isinstance(card_data, dict) else card_data,
     }
 
     headers = _build_auth_headers()

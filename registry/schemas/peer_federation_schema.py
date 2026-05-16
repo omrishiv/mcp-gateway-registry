@@ -214,6 +214,16 @@ class PeerRegistryConfig(BaseModel):
         description="Tags to filter by when sync_mode is 'tag_filter'",
     )
 
+    sync_local_servers: bool = Field(
+        default=False,
+        description=(
+            "Whether to accept deployment='local' servers from this peer. "
+            "Local servers are executable launch recipes that run on developer "
+            "machines — only enable for trusted peers. Default False is the "
+            "safe choice; existing peers continue to behave identically."
+        ),
+    )
+
     # Scheduling
     sync_interval_minutes: int = Field(
         default=DEFAULT_SYNC_INTERVAL_MINUTES,

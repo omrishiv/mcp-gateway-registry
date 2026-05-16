@@ -62,6 +62,7 @@ const FederationPeerForm: React.FC<FederationPeerFormProps> = ({
     whitelist_agents: [],
     tag_filters: [],
     sync_interval_minutes: 60,
+    sync_local_servers: false,
     federation_token: '',
   });
 
@@ -86,6 +87,7 @@ const FederationPeerForm: React.FC<FederationPeerFormProps> = ({
         whitelist_agents: peer.whitelist_agents || [],
         tag_filters: peer.tag_filters || [],
         sync_interval_minutes: peer.sync_interval_minutes,
+        sync_local_servers: peer.sync_local_servers ?? false,
         federation_token: '', // Don't populate token for security
       });
 
@@ -557,6 +559,28 @@ const FederationPeerForm: React.FC<FederationPeerFormProps> = ({
             <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
               How often to sync from this peer (5-1440 minutes)
             </p>
+          </div>
+
+          {/* Accept local (stdio) servers from this peer */}
+          <div className="md:col-span-2">
+            <label className="flex items-start gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                name="sync_local_servers"
+                checked={!!formData.sync_local_servers}
+                onChange={handleChange}
+                className="mt-1 h-4 w-4 rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+              />
+              <span className="text-sm">
+                <span className="font-medium text-gray-700 dark:text-gray-300">
+                  Sync local (stdio) servers from this peer
+                </span>
+                <span className="block text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                  Local servers are executable launch recipes that run on developer machines.
+                  Only enable for trusted peers. Default: off.
+                </span>
+              </span>
+            </label>
           </div>
         </div>
 

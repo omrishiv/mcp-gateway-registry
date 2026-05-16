@@ -15,6 +15,7 @@ export interface PeerRegistry {
   whitelist_agents: string[];
   tag_filters: string[];
   sync_interval_minutes: number;
+  sync_local_servers?: boolean;
   federation_token?: string | null;
   expected_client_id?: string | null;
   expected_issuer?: string | null;
@@ -69,6 +70,7 @@ export interface PeerFormData {
   whitelist_agents: string[];
   tag_filters: string[];
   sync_interval_minutes: number;
+  sync_local_servers?: boolean;
   federation_token?: string;
 }
 

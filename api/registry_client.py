@@ -93,6 +93,18 @@ class InternalServiceRegistration(BaseModel):
         None,
         description="Plaintext auth credential (Bearer token or API key). Encrypted before storage.",
     )
+    deployment: str | None = Field(
+        None,
+        description="Deployment model: 'remote' (HTTP, default) or 'local' (stdio launch recipe).",
+    )
+    local_runtime: dict[str, Any] | None = Field(
+        None,
+        description=(
+            "Stdio launch recipe for deployment='local'. Dict matching the LocalRuntime "
+            "schema (type, package, args, env, required_env, version, image_digest, platforms). "
+            "Serialized as a JSON-encoded form field on the wire."
+        ),
+    )
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -1598,6 +1610,11 @@ class RegistryClient:
         if "metadata" in data and isinstance(data["metadata"], dict):
             data["metadata"] = json.dumps(data["metadata"])
 
+        # Convert local_runtime dict to JSON string for form encoding (the
+        # backend register/edit endpoints accept a JSON-encoded form field).
+        if "local_runtime" in data and isinstance(data["local_runtime"], dict):
+            data["local_runtime"] = json.dumps(data["local_runtime"])
+
         response = self._make_request(method="POST", endpoint="/api/servers/register", data=data)
 
         logger.info(f"Service registered successfully: {registration.service_path}")
@@ -3086,9 +3103,7 @@ class RegistryClient:
         Raises:
             requests.HTTPError: If not authorized (403), already exists (400), or request fails
         """
-        logger.info(
-            f"Creating Keycloak group: {name} (create_in_idp={create_in_idp})"
-        )
+        logger.info(f"Creating Keycloak group: {name} (create_in_idp={create_in_idp})")
 
         data: dict[str, Any] = {
             "name": name,
@@ -4412,7 +4427,6 @@ class RegistryClient:
             method="DELETE",
             endpoint=f"/api/iam/m2m-clients/{quote(client_id, safe='')}",
         )
-
 
     # -------------------------------------------------------------------------
     # Application Logs (admin-only, issue #886)

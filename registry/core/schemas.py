@@ -1,11 +1,15 @@
+import re
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from registry.constants import DeploymentType, LocalRuntimeType, TransportType
 from registry.schemas.agent_models import AgentProvider
 from registry.schemas.registry_card import LifecycleStatus
+
+_IMAGE_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 class ServerVersion(BaseModel):
@@ -28,6 +32,124 @@ class ServerVersion(BaseModel):
     description: str | None = Field(
         default=None, description="Version-specific description (if different from main)"
     )
+
+
+def _validate_deployment_invariants(obj: Any) -> None:
+    """Enforce remote-vs-local field invariants on a server-like object.
+
+    Used by ServerInfo's @model_validator. The object must expose:
+    deployment, local_runtime, proxy_pass_url, mcp_endpoint, sse_endpoint,
+    auth_scheme. `versions` (multi-version routing) is checked via getattr so
+    callers that don't have such a field don't need to define one.
+
+    For deployment='local' the helper also forces transport='stdio' and
+    supported_transports=['stdio'] on the object.
+    """
+    if obj.deployment == DeploymentType.LOCAL:
+        if obj.local_runtime is None:
+            raise ValueError("deployment='local' requires local_runtime")
+        if obj.proxy_pass_url is not None:
+            raise ValueError("deployment='local' must not set proxy_pass_url")
+        if obj.mcp_endpoint is not None:
+            raise ValueError("deployment='local' must not set mcp_endpoint")
+        if obj.sse_endpoint is not None:
+            raise ValueError("deployment='local' must not set sse_endpoint")
+        if obj.auth_scheme not in ("none", ""):
+            raise ValueError(
+                "deployment='local' must use auth_scheme='none' "
+                "(local servers handle auth via env vars on the user's machine)"
+            )
+        if getattr(obj, "versions", None) is not None:
+            raise ValueError("deployment='local' does not support multi-version routing")
+        obj.transport = TransportType.STDIO
+        obj.supported_transports = [TransportType.STDIO]
+    else:
+        # deployment == "remote"
+        if obj.local_runtime is not None:
+            raise ValueError("deployment='remote' must not set local_runtime")
+        if not obj.proxy_pass_url:
+            raise ValueError("deployment='remote' requires proxy_pass_url")
+
+
+class LocalRuntime(BaseModel):
+    """How to launch a local (stdio) MCP server on a developer's machine.
+
+    The registry stores the recipe; it does NOT run the server. Health checks
+    do not apply. The recipe is emitted as IDE config (Claude Code, Cursor, etc.)
+    via the Connect modal.
+    """
+
+    type: Literal["npx", "docker", "uvx", "command"] = Field(
+        ...,
+        description=(
+            "Launcher type. npx/uvx: package name. docker: image ref. "
+            "command: raw executable path (admin-only, highest trust)."
+        ),
+    )
+    package: str = Field(
+        ...,
+        min_length=1,
+        description="Package name, image reference, or command path depending on `type`.",
+    )
+    args: list[str] = Field(
+        default_factory=list,
+        description="Argv-style arguments passed to the launcher (no shell interpolation).",
+    )
+    env: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Environment variables. Values may be literal or ${VAR} placeholders. "
+            "Literal-looking secrets are rejected at registration time."
+        ),
+    )
+    required_env: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Env var names the user MUST provide at connect time. MUST NOT overlap with `env` keys."
+        ),
+    )
+
+    # docker-only
+    image_digest: str | None = Field(
+        default=None,
+        description="Pinned image digest, e.g. 'sha256:abc...'. Encouraged for supply-chain hardening.",
+    )
+    platforms: list[str] | None = Field(
+        default=None,
+        description="Supported platforms, e.g. ['linux/amd64', 'linux/arm64'].",
+    )
+
+    # npx/uvx-only
+    version: str | None = Field(
+        default=None,
+        description="Package version pin, e.g. '1.2.0'. Encouraged.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_runtime_consistency(self) -> "LocalRuntime":
+        """Validate runtime fields and required_env disjointness from env."""
+        # required_env keys must not overlap with env keys (kiro round-1 feedback)
+        overlap = set(self.required_env) & set(self.env.keys())
+        if overlap:
+            raise ValueError(f"required_env keys must not also appear in env: {sorted(overlap)}")
+
+        # platforms only meaningful for docker
+        if self.platforms is not None and self.type != LocalRuntimeType.DOCKER:
+            raise ValueError("platforms is only valid for docker runtime")
+
+        # image_digest only meaningful for docker
+        if self.image_digest is not None and self.type != LocalRuntimeType.DOCKER:
+            raise ValueError("image_digest is only valid for docker runtime")
+
+        # image_digest format check (only when provided): require the full
+        # 'sha256:<64 hex>' shape so malformed digests fail at registration
+        # rather than silently propagating to clients.
+        if self.image_digest is not None and not _IMAGE_DIGEST_RE.fullmatch(self.image_digest):
+            raise ValueError(
+                f"image_digest must match 'sha256:<64 hex chars>', got: {self.image_digest!r}"
+            )
+
+        return self
 
 
 class ServerInfo(BaseModel):
@@ -162,6 +284,26 @@ class ServerInfo(BaseModel):
         default_factory=list,
         description="Tags from external/source system (separate from local tags)",
     )
+    deployment: Literal["remote", "local"] = Field(
+        default=DeploymentType.REMOTE,
+        description=(
+            "Deployment model: 'remote' (HTTP-reachable, registry proxies) or "
+            "'local' (stdio, runs on developer's machine via launch recipe)."
+        ),
+    )
+    local_runtime: LocalRuntime | None = Field(
+        default=None,
+        description="Launch recipe. Required when deployment='local', forbidden otherwise.",
+    )
+    registered_by: str | None = Field(
+        default=None,
+        description=(
+            "Username of the user who registered this server. Audit trail; "
+            "load-bearing for local servers (executable recipe approval). "
+            "Records the ORIGINAL registrant only — edits do not update this "
+            "field. The general audit log captures who last touched the entry."
+        ),
+    )
 
     @field_validator("visibility")
     @classmethod
@@ -188,6 +330,12 @@ class ServerInfo(BaseModel):
                 organization=settings.registry_organization_name,
                 url=settings.registry_url,
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_deployment_consistency(self) -> "ServerInfo":
+        """Enforce remote/local field invariants. See _validate_deployment_invariants."""
+        _validate_deployment_invariants(self)
         return self
 
 

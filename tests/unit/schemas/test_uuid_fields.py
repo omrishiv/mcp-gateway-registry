@@ -81,6 +81,7 @@ class TestServerInfoUUID:
         server = ServerInfo(
             server_name="test-server",
             path="/test/server",
+            proxy_pass_url="http://test",
         )
 
         assert isinstance(server.id, UUID)
@@ -91,11 +92,13 @@ class TestServerInfoUUID:
         server1 = ServerInfo(
             server_name="test-server",
             path="/test/server",
+            proxy_pass_url="http://test",
         )
 
         server2 = ServerInfo(
             server_name="test-server",
             path="/test/server",
+            proxy_pass_url="http://test",
         )
 
         assert server1.id != server2.id
@@ -105,6 +108,7 @@ class TestServerInfoUUID:
         server = ServerInfo(
             server_name="test-server",
             path="/test/server",
+            proxy_pass_url="http://test",
         )
 
         json_data = server.model_dump(mode="json")
@@ -232,6 +236,7 @@ class TestUUIDBackwardsCompatibility:
             "server_name": "old-server",
             "path": "/old/server",
             "description": "Old server without UUID",
+            "proxy_pass_url": "http://test",
         }
 
         # Should auto-generate UUID

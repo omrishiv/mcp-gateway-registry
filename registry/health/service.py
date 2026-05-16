@@ -8,7 +8,7 @@ from time import time
 import httpx
 from fastapi import WebSocket
 
-from registry.constants import HealthStatus
+from registry.constants import DeploymentType, HealthStatus
 
 from ..core.config import settings
 from ..core.endpoint_utils import get_endpoint_url_from_server_info
@@ -404,8 +404,21 @@ class HealthMonitoringService:
     ) -> bool:
         """Check a single service and return True if status changed."""
 
-        proxy_pass_url = server_info.get("proxy_pass_url")
         previous_status = self.server_health_status.get(service_path, HealthStatus.UNKNOWN)
+
+        # Local (stdio) servers run on the user's machine — registry has nothing
+        # to probe. Don't update last_check_time: there's no real check, and
+        # showing "checked just now" misleads operators. Defensively clear any
+        # stale timestamp from a previous remote→local conversion (the edit
+        # endpoint blocks type changes today, but direct DB manipulation could
+        # leave one behind).
+        if server_info.get("deployment") == DeploymentType.LOCAL:
+            new_status = HealthStatus.LOCAL
+            self.server_health_status[service_path] = new_status
+            self.server_last_check_time.pop(service_path, None)
+            return previous_status != new_status
+
+        proxy_pass_url = server_info.get("proxy_pass_url")
         new_status = previous_status
 
         try:
@@ -1170,6 +1183,16 @@ class HealthMonitoringService:
         if not server_info:
             return "error: server not registered", None
 
+        # Local (stdio) servers have no HTTP endpoint to probe. Mirror the
+        # background-loop short-circuit so toggling a local server
+        # ON doesn't return a misleading 'missing proxy URL' error and doesn't
+        # stamp last_check_time (the check never happened). Defensively clear
+        # any stale timestamp from a previous remote→local conversion.
+        if server_info.get("deployment") == DeploymentType.LOCAL:
+            self.server_health_status[service_path] = HealthStatus.LOCAL
+            self.server_last_check_time.pop(service_path, None)
+            return HealthStatus.LOCAL, None
+
         proxy_pass_url = server_info.get("proxy_pass_url")
 
         # Record check time
@@ -1275,10 +1298,19 @@ class HealthMonitoringService:
 
         # Quick enabled check from server_info
         is_enabled = server_info.get("is_enabled", False)
+        is_local = server_info.get("deployment") == DeploymentType.LOCAL
 
         if not is_enabled:
             status = "disabled"
             self.server_health_status[service_path] = "disabled"
+        elif is_local:
+            # Local (stdio) servers: registry has nothing to probe. Always
+            # report LOCAL when enabled, regardless of cached transitional
+            # state ('checking', 'unknown', etc.). Without this,
+            # disable→enable transitions briefly show 'checking' for a server
+            # that's never actually checked.
+            status = HealthStatus.LOCAL
+            self.server_health_status[service_path] = status
         else:
             # Use cached status, only update if transitioning from disabled
             cached_status = self.server_health_status.get(service_path, "unknown")

@@ -14,6 +14,8 @@ interface ConfirmModalProps {
   message: string;
   confirmLabel?: string;
   cancelLabel?: string;
+  /** Label shown on the confirm button while `isLoading` is true. Defaults to "Removing..." for backward compatibility with the original delete-only callsites. */
+  loadingLabel?: string;
   isDestructive?: boolean;
   isLoading?: boolean;
 }
@@ -34,6 +36,7 @@ const ConfirmModal: React.FC<ConfirmModalProps> = ({
   message,
   confirmLabel = 'Confirm',
   cancelLabel = 'Cancel',
+  loadingLabel = 'Removing...',
   isDestructive = false,
   isLoading = false,
 }) => {
@@ -79,7 +82,7 @@ const ConfirmModal: React.FC<ConfirmModalProps> = ({
                 : 'bg-purple-600 hover:bg-purple-700'
             }`}
           >
-            {isLoading ? 'Removing...' : confirmLabel}
+            {isLoading ? loadingLabel : confirmLabel}
           </button>
         </div>
       </div>

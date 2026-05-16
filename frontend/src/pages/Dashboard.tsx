@@ -21,6 +21,12 @@ import VirtualServerForm from '../components/VirtualServerForm';
 import DiscoverTab from '../components/DiscoverTab';
 import axios from 'axios';
 import { getBaseURL } from '../utils/basePath';
+import {
+  buildLocalRuntimeForm,
+  buildLocalRuntimeJson,
+} from '../utils/localRuntime';
+import LocalRuntimeFormPanel from '../components/LocalRuntimeFormPanel';
+import type { LocalRuntime } from '../types/server';
 
 
 interface SyncMetadata {
@@ -43,7 +49,7 @@ interface Server {
   last_checked_time?: string;
   usersCount?: number;
   rating?: number;
-  status?: 'healthy' | 'healthy-auth-expired' | 'unhealthy' | 'unknown';
+  status?: 'healthy' | 'healthy-auth-expired' | 'unhealthy' | 'unknown' | 'local';
   num_tools?: number;
   proxy_pass_url?: string;
   license?: string;
@@ -52,6 +58,10 @@ interface Server {
   sync_metadata?: SyncMetadata;
   auth_scheme?: string;
   auth_header_name?: string;
+  // Local-server fields
+  deployment?: 'remote' | 'local';
+  local_runtime?: LocalRuntime;
+  registered_by?: string | null;
 }
 
 interface Agent {
@@ -192,6 +202,16 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     auth_credential: '',
     auth_header_name: 'X-API-Key',
     status: 'active' as 'active' | 'draft' | 'deprecated' | 'beta',
+    // Local-server fields
+    deployment: 'remote' as 'remote' | 'local',
+    local_runtime: {
+      type: 'npx' as 'npx' | 'docker' | 'uvx' | 'command',
+      package: '',
+      version: '',
+      image_digest: '',
+      argList: [] as string[],
+      envRows: [] as { key: string; value: string; required: boolean }[],
+    },
   });
   const [editLoading, setEditLoading] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -401,7 +421,9 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
       enabled: a.enabled,
       tags: a.tags,
       rating: a.rating,
-      status: a.status,
+      // Agents are A2A entities (HTTP-only) — 'local' is a server-only status.
+      // Map it to 'unknown' if it ever leaks through.
+      status: a.status === 'local' ? 'unknown' : a.status,
       last_checked_time: a.last_checked_time,
       usersCount: a.usersCount,
       url: '',  // Will be populated if needed
@@ -1005,10 +1027,16 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
   };
 
   const handleEditServer = useCallback(async (server: Server) => {
+    // buildLocalRuntimeForm() handles the populate-from-stored-dict path
+    // (returns fresh defaults for remote servers / undefined input).
+
     try {
       // Fetch full server details including proxy_pass_url and tags
       const response = await axios.get(`/api/server_details${server.path}`);
       const serverDetails = response.data;
+
+      const deployment = (serverDetails.deployment || server.deployment || 'remote') as 'remote' | 'local';
+      const localRuntimeRaw = serverDetails.local_runtime || server.local_runtime;
 
       setEditingServer(server);
       setEditForm({
@@ -1025,15 +1053,18 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         auth_credential: '',
         auth_header_name: serverDetails.auth_header_name || 'X-API-Key',
         status: serverDetails.status || 'active',
+        deployment,
+        local_runtime: buildLocalRuntimeForm(localRuntimeRaw),
       });
     } catch (error) {
       console.error('Failed to fetch server details:', error);
       // Fallback to basic server data
+      const deployment = (server.deployment || 'remote') as 'remote' | 'local';
       setEditingServer(server);
       setEditForm({
         name: server.name,
         path: server.path,
-        proxyPass: '',
+        proxyPass: server.proxy_pass_url || '',
         description: server.description || '',
         tags: server.tags || [],
         license: 'N/A',
@@ -1044,6 +1075,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         auth_credential: '',
         auth_header_name: server.auth_header_name || 'X-API-Key',
         status: (server as any).status || 'active',
+        deployment,
+        local_runtime: buildLocalRuntimeForm(server.local_runtime),
       });
     }
   }, []);
@@ -1117,34 +1150,58 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
   const handleSaveEdit = async () => {
     if (editLoading || !editingServer) return;
 
+    const isLocal = editForm.deployment === 'local';
+
+    if (isLocal && !editForm.local_runtime.package.trim()) {
+      const rt = editForm.local_runtime;
+      showToast(
+        rt.type === 'docker' ? 'Image reference is required'
+        : rt.type === 'command' ? 'Command path is required'
+        : 'Package name is required',
+        'error',
+      );
+      return;
+    }
+
+    const localRuntimeJson = isLocal
+      ? buildLocalRuntimeJson(editForm.local_runtime)
+      : null;
+
     try {
       setEditLoading(true);
 
       const params = new URLSearchParams();
       params.append('name', editForm.name);
       params.append('description', editForm.description);
-      params.append('proxy_pass_url', editForm.proxyPass);
       params.append('tags', editForm.tags.join(','));
       params.append('license', editForm.license);
       params.append('num_tools', editForm.num_tools.toString());
-      if (editForm.mcp_endpoint) {
-        params.append('mcp_endpoint', editForm.mcp_endpoint);
+      params.append('deployment', editForm.deployment);
+      params.append('status', editForm.status);
+
+      if (isLocal) {
+        params.append('local_runtime', localRuntimeJson!);
+      } else {
+        params.append('proxy_pass_url', editForm.proxyPass);
+        if (editForm.mcp_endpoint) {
+          params.append('mcp_endpoint', editForm.mcp_endpoint);
+        }
+        if (editForm.auth_scheme !== 'none') {
+          params.append('auth_scheme', editForm.auth_scheme);
+          if (editForm.auth_credential) {
+            params.append('auth_credential', editForm.auth_credential);
+          }
+          if (editForm.auth_scheme === 'api_key' && editForm.auth_header_name) {
+            params.append('auth_header_name', editForm.auth_header_name);
+          }
+        } else {
+          params.append('auth_scheme', 'none');
+        }
       }
+
       if (editForm.metadata) {
         params.append('metadata', editForm.metadata);
       }
-      if (editForm.auth_scheme !== 'none') {
-        params.append('auth_scheme', editForm.auth_scheme);
-        if (editForm.auth_credential) {
-          params.append('auth_credential', editForm.auth_credential);
-        }
-        if (editForm.auth_scheme === 'api_key' && editForm.auth_header_name) {
-          params.append('auth_header_name', editForm.auth_header_name);
-        }
-      } else {
-        params.append('auth_scheme', 'none');
-      }
-      params.append('status', editForm.status);
 
       // Use the correct edit endpoint with the server path
       await axios.post(`/api/edit${editingServer.path}`, params, {
@@ -1162,7 +1219,12 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
       notifyDataChanged();
     } catch (error: any) {
       console.error('Failed to update server:', error);
-      showToast(error.response?.data?.detail || 'Failed to update server', 'error');
+      const detail = error.response?.data?.detail;
+      const message =
+        typeof detail === 'string' ? detail
+        : detail && typeof detail === 'object' ? JSON.stringify(detail)
+        : 'Failed to update server';
+      showToast(message, 'error');
     } finally {
       setEditLoading(false);
     }
@@ -2887,7 +2949,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
       {/* Edit Server Modal */}
       {editingServer && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
               Edit Server: {editingServer.name}
             </h3>
@@ -2912,19 +2974,39 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                 />
               </div>
 
+              {/* Deployment type indicator (read-only — switching types is unusual
+                  enough to require re-registration). */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                  Proxy Pass URL *
+                  Deployment
                 </label>
-                <input
-                  type="url"
-                  value={editForm.proxyPass}
-                  onChange={(e) => setEditForm(prev => ({ ...prev, proxyPass: e.target.value }))}
-                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
-                  placeholder="http://localhost:8080"
-                  required
-                />
+                <div className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-900 text-gray-700 dark:text-gray-300">
+                  {editForm.deployment === 'local' ? 'Local (stdio)' : 'Remote (HTTP)'}
+                </div>
               </div>
+
+              {editForm.deployment === 'remote' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
+                    Proxy Pass URL *
+                  </label>
+                  <input
+                    type="url"
+                    value={editForm.proxyPass}
+                    onChange={(e) => setEditForm(prev => ({ ...prev, proxyPass: e.target.value }))}
+                    className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
+                    placeholder="http://localhost:8080"
+                    required
+                  />
+                </div>
+              )}
+
+              {editForm.deployment === 'local' && (
+                <LocalRuntimeFormPanel
+                  runtime={editForm.local_runtime}
+                  onChange={(next) => setEditForm(prev => ({ ...prev, local_runtime: next }))}
+                />
+              )}
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
@@ -2996,18 +3078,20 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                 />
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                  MCP Endpoint (optional)
-                </label>
-                <input
-                  type="url"
-                  value={editForm.mcp_endpoint}
-                  onChange={(e) => setEditForm(prev => ({ ...prev, mcp_endpoint: e.target.value }))}
-                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
-                  placeholder="Custom MCP endpoint URL (overrides default)"
-                />
-              </div>
+              {editForm.deployment === 'remote' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
+                    MCP Endpoint (optional)
+                  </label>
+                  <input
+                    type="url"
+                    value={editForm.mcp_endpoint}
+                    onChange={(e) => setEditForm(prev => ({ ...prev, mcp_endpoint: e.target.value }))}
+                    className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
+                    placeholder="Custom MCP endpoint URL (overrides default)"
+                  />
+                </div>
+              )}
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
@@ -3022,70 +3106,73 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                 />
               </div>
 
-              {/* Backend Authentication */}
-              <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
-                <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">
-                  Backend Authentication
-                </h4>
+              {/* Backend Authentication — only meaningful for remote servers.
+                  Local servers handle auth via env vars on the user's machine. */}
+              {editForm.deployment === 'remote' && (
+                <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
+                  <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">
+                    Backend Authentication
+                  </h4>
 
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                      Authentication Scheme
-                    </label>
-                    <select
-                      value={editForm.auth_scheme}
-                      onChange={(e) => {
-                        const newScheme = e.target.value;
-                        setEditForm(prev => ({
-                          ...prev,
-                          auth_scheme: newScheme,
-                          auth_credential: newScheme === 'none' ? '' : prev.auth_credential,
-                          auth_header_name: newScheme === 'api_key' ? prev.auth_header_name : 'X-API-Key',
-                        }));
-                      }}
-                      className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
-                    >
-                      <option value="none">None</option>
-                      <option value="bearer">Bearer Token</option>
-                      <option value="api_key">API Key</option>
-                    </select>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
+                        Authentication Scheme
+                      </label>
+                      <select
+                        value={editForm.auth_scheme}
+                        onChange={(e) => {
+                          const newScheme = e.target.value;
+                          setEditForm(prev => ({
+                            ...prev,
+                            auth_scheme: newScheme,
+                            auth_credential: newScheme === 'none' ? '' : prev.auth_credential,
+                            auth_header_name: newScheme === 'api_key' ? prev.auth_header_name : 'X-API-Key',
+                          }));
+                        }}
+                        className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
+                      >
+                        <option value="none">None</option>
+                        <option value="bearer">Bearer Token</option>
+                        <option value="api_key">API Key</option>
+                      </select>
+                    </div>
+
+                    {editForm.auth_scheme !== 'none' && (
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
+                          {editForm.auth_scheme === 'bearer' ? 'Bearer Token' : 'API Key'}
+                        </label>
+                        <input
+                          type="password"
+                          value={editForm.auth_credential}
+                          onChange={(e) => setEditForm(prev => ({ ...prev, auth_credential: e.target.value }))}
+                          className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
+                          placeholder="Leave blank to keep current credential"
+                        />
+                        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                          Leave blank to keep the existing credential unchanged.
+                        </p>
+                      </div>
+                    )}
+
+                    {editForm.auth_scheme === 'api_key' && (
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
+                          Header Name
+                        </label>
+                        <input
+                          type="text"
+                          value={editForm.auth_header_name}
+                          onChange={(e) => setEditForm(prev => ({ ...prev, auth_header_name: e.target.value }))}
+                          className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
+                          placeholder="X-API-Key"
+                        />
+                      </div>
+                    )}
                   </div>
-
-                  {editForm.auth_scheme !== 'none' && (
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                        {editForm.auth_scheme === 'bearer' ? 'Bearer Token' : 'API Key'}
-                      </label>
-                      <input
-                        type="password"
-                        value={editForm.auth_credential}
-                        onChange={(e) => setEditForm(prev => ({ ...prev, auth_credential: e.target.value }))}
-                        className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
-                        placeholder="Leave blank to keep current credential"
-                      />
-                      <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                        Leave blank to keep the existing credential unchanged.
-                      </p>
-                    </div>
-                  )}
-
-                  {editForm.auth_scheme === 'api_key' && (
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                        Header Name
-                      </label>
-                      <input
-                        type="text"
-                        value={editForm.auth_header_name}
-                        onChange={(e) => setEditForm(prev => ({ ...prev, auth_header_name: e.target.value }))}
-                        className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
-                        placeholder="X-API-Key"
-                      />
-                    </div>
-                  )}
                 </div>
-              </div>
+              )}
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">

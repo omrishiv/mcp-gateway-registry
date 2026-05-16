@@ -16,7 +16,7 @@ from urllib.parse import unquote
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from ..auth.dependencies import nginx_proxied_auth
-from ..constants import REGISTRY_CONSTANTS
+from ..constants import REGISTRY_CONSTANTS, DeploymentType
 from ..health.service import health_service
 from ..repositories.factory import get_registry_card_repository
 from ..schemas.anthropic_schema import ErrorResponse, ServerList, ServerResponse
@@ -87,6 +87,14 @@ async def list_servers(
     filtered_servers = []
 
     for path, server_info in all_servers.items():
+        # The Anthropic-compatible API is a remote-discovery surface (HTTP
+        # transport, URL-based connect). Local stdio servers are not network
+        # endpoints, so they don't belong here — emitting them would produce
+        # malformed entries with empty proxy_pass_url and the wrong transport
+        # type.
+        if server_info.get("deployment") == DeploymentType.LOCAL:
+            continue
+
         # Fetch enabled status before health check to avoid race condition (Issue #612)
         is_enabled = await server_service.is_service_enabled(path)
 
@@ -165,6 +173,12 @@ async def list_server_versions(
 
     if not server_info:
         logger.warning(f"Server not found: {lookup_path}")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Server not found")
+
+    # Local (stdio) servers are out of scope for the Anthropic-compatible API
+    # (it's a remote-discovery surface). Return 404 rather than emit a
+    # malformed entry.
+    if server_info.get("deployment") == DeploymentType.LOCAL:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Server not found")
 
     # Use the actual path from server_info (has correct trailing slash)
@@ -259,6 +273,12 @@ async def get_server_version(
 
     if not server_info:
         logger.warning(f"Server not found: {lookup_path}")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Server not found")
+
+    # Local (stdio) servers are out of scope for the Anthropic-compatible API
+    # (it's a remote-discovery surface). Return 404 rather than emit a
+    # malformed entry.
+    if server_info.get("deployment") == DeploymentType.LOCAL:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Server not found")
 
     # Use the actual path from server_info (has correct trailing slash)

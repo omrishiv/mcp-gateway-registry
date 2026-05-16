@@ -578,6 +578,8 @@ def cmd_register(args: argparse.Namespace) -> int:
             name=config.get("server_name") or config.get("name"),
             description=config.get("description"),
             proxy_pass_url=config.get("proxy_pass_url"),
+            deployment=config.get("deployment"),
+            local_runtime=config.get("local_runtime"),
             version=config.get("version"),
             status=config.get("status"),
             auth_provider=config.get("auth_provider"),
@@ -1119,6 +1121,11 @@ def cmd_server_get(args: argparse.Namespace) -> int:
             "version": server.version,
             "versions": server.versions,
             "license": server.license,
+            # Local-server fields. ServerDetailResponse uses extra='allow', so
+            # these surface via the extra-attrs lookup even though they aren't
+            # declared as model fields.
+            "deployment": getattr(server, "deployment", None) or "remote",
+            "local_runtime": getattr(server, "local_runtime", None),
         }
         print(json.dumps(output, indent=2, default=str))
         return 0
@@ -4552,12 +4559,16 @@ def cmd_logs(args: argparse.Namespace) -> int:
         if getattr(args, "json", False):
             print(json.dumps(result.model_dump(), indent=2))
         else:
-            print(f"Total: {result.total_count}  (showing {len(result.entries)}, "
-                  f"offset={result.offset}, has_next={result.has_next})")
+            print(
+                f"Total: {result.total_count}  (showing {len(result.entries)}, "
+                f"offset={result.offset}, has_next={result.has_next})"
+            )
             print("-" * 100)
             for entry in result.entries:
-                print(f"[{entry.timestamp}] {entry.level:<8} {entry.service}/{entry.hostname} "
-                      f"{entry.logger}:{entry.lineno}  {entry.message}")
+                print(
+                    f"[{entry.timestamp}] {entry.level:<8} {entry.service}/{entry.hostname} "
+                    f"{entry.logger}:{entry.lineno}  {entry.message}"
+                )
 
         return 0
 
@@ -5589,9 +5600,7 @@ Examples:
     # Application Log Commands (issue #886)
     # ==========================================
 
-    logs_parser = subparsers.add_parser(
-        "logs", help="Query application logs (admin only)"
-    )
+    logs_parser = subparsers.add_parser("logs", help="Query application logs (admin only)")
     logs_parser.add_argument("--service", help="Filter by service name")
     logs_parser.add_argument(
         "--level",

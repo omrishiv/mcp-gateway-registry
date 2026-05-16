@@ -13,6 +13,12 @@ import {
 } from '@heroicons/react/24/outline';
 import axios from 'axios';
 import { useAuth } from '../contexts/AuthContext';
+import {
+  type LocalRuntimeFormData,
+  initialLocalRuntime,
+  buildLocalRuntimeJson,
+} from '../utils/localRuntime';
+import LocalRuntimeFormPanel from '../components/LocalRuntimeFormPanel';
 
 
 // Toast notification component
@@ -63,6 +69,7 @@ interface ServerFormData {
   name: string;
   description: string;
   path: string;
+  deployment: 'remote' | 'local';
   proxy_pass_url: string;
   tags: string;
   visibility: string;
@@ -78,6 +85,7 @@ interface ServerFormData {
   provider_url: string;
   source_created_at: string;
   source_updated_at: string;
+  local_runtime: LocalRuntimeFormData;
 }
 
 
@@ -119,6 +127,7 @@ const initialServerForm: ServerFormData = {
   name: '',
   description: '',
   path: '',
+  deployment: 'remote',
   proxy_pass_url: '',
   tags: '',
   visibility: 'public',
@@ -134,6 +143,7 @@ const initialServerForm: ServerFormData = {
   provider_url: '',
   source_created_at: '',
   source_updated_at: '',
+  local_runtime: initialLocalRuntime,
 };
 
 
@@ -224,13 +234,34 @@ const RegisterPage: React.FC = () => {
       newErrors.path = 'Path must start with /';
     }
 
-    if (!serverForm.proxy_pass_url.trim()) {
-      newErrors.proxy_pass_url = 'Proxy URL is required';
+    if (serverForm.deployment === 'remote') {
+      if (!serverForm.proxy_pass_url.trim()) {
+        newErrors.proxy_pass_url = 'Proxy URL is required for remote servers';
+      } else {
+        try {
+          new URL(serverForm.proxy_pass_url);
+        } catch {
+          newErrors.proxy_pass_url = 'Invalid URL format';
+        }
+      }
     } else {
-      try {
-        new URL(serverForm.proxy_pass_url);
-      } catch {
-        newErrors.proxy_pass_url = 'Invalid URL format';
+      // Local deployment validation
+      const rt = serverForm.local_runtime;
+      if (!rt.package.trim()) {
+        newErrors.local_runtime_package =
+          rt.type === 'docker' ? 'Image reference is required'
+          : rt.type === 'command' ? 'Command path is required'
+          : 'Package name is required';
+      }
+      if (rt.image_digest && !rt.image_digest.startsWith('sha256:')) {
+        newErrors.local_runtime_image_digest = "image_digest must start with 'sha256:'";
+      }
+      // required_env keys must not also appear in env values
+      const envKeys = new Set(rt.envRows.filter(r => !r.required).map(r => r.key));
+      const overlap = rt.envRows.filter(r => r.required && envKeys.has(r.key));
+      if (overlap.length > 0) {
+        newErrors.local_runtime_env =
+          'A row cannot be both "required from user" and have a literal value with the same key';
       }
     }
 
@@ -385,30 +416,43 @@ const RegisterPage: React.FC = () => {
 
     setLoading(true);
 
+    // Local deployments accept local_runtime as a JSON-encoded form field
+    // (same convention as metadata). See utils/localRuntime.ts.
+    const localRuntimeJson = serverForm.deployment === 'local'
+      ? buildLocalRuntimeJson(serverForm.local_runtime)
+      : null;
+
     try {
       const formData = new FormData();
       formData.append('name', serverForm.name);
       formData.append('description', serverForm.description);
       formData.append('path', serverForm.path);
-      formData.append('proxy_pass_url', serverForm.proxy_pass_url);
+      formData.append('deployment', serverForm.deployment);
+      if (localRuntimeJson) {
+        formData.append('local_runtime', localRuntimeJson);
+      }
+      // Remote-only fields — local servers must not include these.
+      if (serverForm.deployment === 'remote') {
+        formData.append('proxy_pass_url', serverForm.proxy_pass_url);
+        if (serverForm.mcp_endpoint) {
+          formData.append('mcp_endpoint', serverForm.mcp_endpoint);
+        }
+        if (serverForm.sse_endpoint) {
+          formData.append('sse_endpoint', serverForm.sse_endpoint);
+        }
+        if (serverForm.auth_scheme !== 'none') {
+          formData.append('auth_scheme', serverForm.auth_scheme);
+          if (serverForm.auth_credential) {
+            formData.append('auth_credential', serverForm.auth_credential);
+          }
+          if (serverForm.auth_scheme === 'api_key' && serverForm.auth_header_name) {
+            formData.append('auth_header_name', serverForm.auth_header_name);
+          }
+        }
+      }
       formData.append('tags', serverForm.tags);
-      if (serverForm.mcp_endpoint) {
-        formData.append('mcp_endpoint', serverForm.mcp_endpoint);
-      }
-      if (serverForm.sse_endpoint) {
-        formData.append('sse_endpoint', serverForm.sse_endpoint);
-      }
       if (serverForm.metadata) {
         formData.append('metadata', serverForm.metadata);
-      }
-      if (serverForm.auth_scheme !== 'none') {
-        formData.append('auth_scheme', serverForm.auth_scheme);
-        if (serverForm.auth_credential) {
-          formData.append('auth_credential', serverForm.auth_credential);
-        }
-        if (serverForm.auth_scheme === 'api_key' && serverForm.auth_header_name) {
-          formData.append('auth_header_name', serverForm.auth_header_name);
-        }
       }
 
       // Add new lifecycle and federation fields
@@ -557,17 +601,67 @@ const RegisterPage: React.FC = () => {
         </div>
 
         <div className="md:col-span-2">
-          <label className={labelClass}>Proxy URL *</label>
-          <input
-            type="url"
-            required
-            className={`${inputClass} ${errors.proxy_pass_url ? 'border-red-500' : ''}`}
-            value={serverForm.proxy_pass_url}
-            onChange={(e) => setServerForm(prev => ({ ...prev, proxy_pass_url: e.target.value }))}
-            placeholder="http://localhost:8080"
-          />
-          {errors.proxy_pass_url && <p className={errorClass}>{errors.proxy_pass_url}</p>}
+          <label className={labelClass}>Deployment Type *</label>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className={`flex-1 px-4 py-2 rounded-md border ${
+                serverForm.deployment === 'remote'
+                  ? 'bg-purple-600 text-white border-purple-600'
+                  : 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600'
+              }`}
+              onClick={() => setServerForm(prev => ({ ...prev, deployment: 'remote' }))}
+            >
+              Remote (HTTP)
+            </button>
+            <button
+              type="button"
+              className={`flex-1 px-4 py-2 rounded-md border ${
+                serverForm.deployment === 'local'
+                  ? 'bg-purple-600 text-white border-purple-600'
+                  : 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600'
+              }`}
+              onClick={() => setServerForm(prev => ({ ...prev, deployment: 'local', auth_scheme: 'none' }))}
+            >
+              Local (stdio)
+            </button>
+          </div>
+          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            Local servers run on the developer&apos;s machine via a launch recipe (npx, docker, uvx, command).
+            Registry stores the recipe — it does NOT execute the server.
+          </p>
         </div>
+
+        {serverForm.deployment === 'remote' && (
+          <div className="md:col-span-2">
+            <label className={labelClass}>Proxy URL *</label>
+            <input
+              type="url"
+              className={`${inputClass} ${errors.proxy_pass_url ? 'border-red-500' : ''}`}
+              value={serverForm.proxy_pass_url}
+              onChange={(e) => setServerForm(prev => ({ ...prev, proxy_pass_url: e.target.value }))}
+              placeholder="http://localhost:8080"
+            />
+            {errors.proxy_pass_url && <p className={errorClass}>{errors.proxy_pass_url}</p>}
+          </div>
+        )}
+
+        {serverForm.deployment === 'local' && (
+          <div className="md:col-span-2">
+            <LocalRuntimeFormPanel
+              runtime={serverForm.local_runtime}
+              onChange={(next) => setServerForm(prev => ({ ...prev, local_runtime: next }))}
+              errors={{
+                package: errors.local_runtime_package,
+                image_digest: errors.local_runtime_image_digest,
+                env: errors.local_runtime_env,
+              }}
+              inputClass={inputClass}
+              labelClass={labelClass}
+              errorClass={errorClass}
+            />
+          </div>
+        )}
 
         <div className="md:col-span-2">
           <label className={labelClass}>Description *</label>
@@ -626,103 +720,108 @@ const RegisterPage: React.FC = () => {
           />
         </div>
 
-        {/* Backend Authentication */}
-        <div className="md:col-span-2 mt-4">
-          <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4 flex items-center">
-            <span className="bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-300 px-2 py-1 rounded text-xs mr-2">Optional</span>
-            Backend Authentication
-          </h3>
-          <p className="text-sm text-gray-500 dark:text-gray-400 -mt-2 mb-4">
-            Configure credentials the gateway will use when proxying requests to your backend MCP server.
-          </p>
-        </div>
+        {/* Backend Authentication and HTTP-only endpoints — remote deployments only.
+            Local stdio servers handle auth via env vars on the developer's
+            machine, and have no proxy URL for /mcp or /sse path overrides. */}
+        {serverForm.deployment === 'remote' && (
+          <>
+            <div className="md:col-span-2 mt-4">
+              <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4 flex items-center">
+                <span className="bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-300 px-2 py-1 rounded text-xs mr-2">Optional</span>
+                Backend Authentication
+              </h3>
+              <p className="text-sm text-gray-500 dark:text-gray-400 -mt-2 mb-4">
+                Configure credentials the gateway will use when proxying requests to your backend MCP server.
+              </p>
+            </div>
 
-        <div>
-          <label className={labelClass}>Authentication Scheme</label>
-          <select
-            className={inputClass}
-            value={serverForm.auth_scheme}
-            onChange={(e) => {
-              const newScheme = e.target.value;
-              setServerForm(prev => ({
-                ...prev,
-                auth_scheme: newScheme,
-                auth_credential: newScheme === 'none' ? '' : prev.auth_credential,
-                auth_header_name: newScheme === 'api_key' ? prev.auth_header_name : 'X-API-Key',
-              }));
-            }}
-          >
-            <option value="none">None</option>
-            <option value="bearer">Bearer Token</option>
-            <option value="api_key">API Key</option>
-          </select>
-        </div>
+            <div>
+              <label className={labelClass}>Authentication Scheme</label>
+              <select
+                className={inputClass}
+                value={serverForm.auth_scheme}
+                onChange={(e) => {
+                  const newScheme = e.target.value;
+                  setServerForm(prev => ({
+                    ...prev,
+                    auth_scheme: newScheme,
+                    auth_credential: newScheme === 'none' ? '' : prev.auth_credential,
+                    auth_header_name: newScheme === 'api_key' ? prev.auth_header_name : 'X-API-Key',
+                  }));
+                }}
+              >
+                <option value="none">None</option>
+                <option value="bearer">Bearer Token</option>
+                <option value="api_key">API Key</option>
+              </select>
+            </div>
 
-        {serverForm.auth_scheme !== 'none' && (
-          <div>
-            <label className={labelClass}>
-              {serverForm.auth_scheme === 'bearer' ? 'Bearer Token' : 'API Key'} *
-            </label>
-            <input
-              type="password"
-              className={inputClass}
-              value={serverForm.auth_credential}
-              onChange={(e) => setServerForm(prev => ({ ...prev, auth_credential: e.target.value }))}
-              placeholder={serverForm.auth_scheme === 'bearer' ? 'Enter bearer token' : 'Enter API key'}
-            />
-            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              This credential is stored securely and never displayed after saving.
-            </p>
-          </div>
+            {serverForm.auth_scheme !== 'none' && (
+              <div>
+                <label className={labelClass}>
+                  {serverForm.auth_scheme === 'bearer' ? 'Bearer Token' : 'API Key'} *
+                </label>
+                <input
+                  type="password"
+                  className={inputClass}
+                  value={serverForm.auth_credential}
+                  onChange={(e) => setServerForm(prev => ({ ...prev, auth_credential: e.target.value }))}
+                  placeholder={serverForm.auth_scheme === 'bearer' ? 'Enter bearer token' : 'Enter API key'}
+                />
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  This credential is stored securely and never displayed after saving.
+                </p>
+              </div>
+            )}
+
+            {serverForm.auth_scheme === 'api_key' && (
+              <div>
+                <label className={labelClass}>Header Name</label>
+                <input
+                  type="text"
+                  className={inputClass}
+                  value={serverForm.auth_header_name}
+                  onChange={(e) => setServerForm(prev => ({ ...prev, auth_header_name: e.target.value }))}
+                  placeholder="X-API-Key"
+                />
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  The HTTP header name used to send the API key (default: X-API-Key)
+                </p>
+              </div>
+            )}
+
+            <div className="md:col-span-2 mt-4">
+              <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4 flex items-center">
+                <span className="bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 px-2 py-1 rounded text-xs mr-2">Advanced</span>
+                Custom Endpoints
+              </h3>
+            </div>
+
+            <div>
+              <label className={labelClass}>MCP Endpoint (optional)</label>
+              <input
+                type="url"
+                className={inputClass}
+                value={serverForm.mcp_endpoint}
+                onChange={(e) => setServerForm(prev => ({ ...prev, mcp_endpoint: e.target.value }))}
+                placeholder="http://server.com/custom-mcp-path"
+              />
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Override default /mcp endpoint path</p>
+            </div>
+
+            <div>
+              <label className={labelClass}>SSE Endpoint (optional)</label>
+              <input
+                type="url"
+                className={inputClass}
+                value={serverForm.sse_endpoint}
+                onChange={(e) => setServerForm(prev => ({ ...prev, sse_endpoint: e.target.value }))}
+                placeholder="http://server.com/custom-sse-path"
+              />
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Override default /sse endpoint path</p>
+            </div>
+          </>
         )}
-
-        {serverForm.auth_scheme === 'api_key' && (
-          <div>
-            <label className={labelClass}>Header Name</label>
-            <input
-              type="text"
-              className={inputClass}
-              value={serverForm.auth_header_name}
-              onChange={(e) => setServerForm(prev => ({ ...prev, auth_header_name: e.target.value }))}
-              placeholder="X-API-Key"
-            />
-            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              The HTTP header name used to send the API key (default: X-API-Key)
-            </p>
-          </div>
-        )}
-
-        {/* Advanced Settings */}
-        <div className="md:col-span-2 mt-4">
-          <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4 flex items-center">
-            <span className="bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 px-2 py-1 rounded text-xs mr-2">Advanced</span>
-            Custom Endpoints & Metadata
-          </h3>
-        </div>
-
-        <div>
-          <label className={labelClass}>MCP Endpoint (optional)</label>
-          <input
-            type="url"
-            className={inputClass}
-            value={serverForm.mcp_endpoint}
-            onChange={(e) => setServerForm(prev => ({ ...prev, mcp_endpoint: e.target.value }))}
-            placeholder="http://server.com/custom-mcp-path"
-          />
-          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Override default /mcp endpoint path</p>
-        </div>
-
-        <div>
-          <label className={labelClass}>SSE Endpoint (optional)</label>
-          <input
-            type="url"
-            className={inputClass}
-            value={serverForm.sse_endpoint}
-            onChange={(e) => setServerForm(prev => ({ ...prev, sse_endpoint: e.target.value }))}
-            placeholder="http://server.com/custom-sse-path"
-          />
-          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Override default /sse endpoint path</p>
-        </div>
 
         <div className="md:col-span-2">
           <label className={labelClass}>Metadata (optional, JSON)</label>

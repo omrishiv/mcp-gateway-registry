@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import os
-from typing import Annotated
+from typing import Annotated, Any
 
 import httpx
 from fastapi import APIRouter, Cookie, Depends, Form, HTTPException, Query, Request, status
@@ -15,7 +15,7 @@ from ..auth.csrf import generate_csrf_token, verify_csrf_token_flexible
 from ..auth.dependencies import enhanced_auth, nginx_proxied_auth
 from ..auth.internal import validate_internal_auth
 from ..auth.tool_filter import filter_tools_for_user
-from ..constants import VALID_AUTH_SCHEMES
+from ..constants import VALID_AUTH_SCHEMES, DeploymentType, HealthStatus
 from ..core.config import DeploymentMode, settings
 from ..core.schemas import AuthCredentialUpdateRequest
 from ..services.registration_gate_service import check_registration_gate
@@ -85,6 +85,105 @@ def _build_scan_headers_from_credentials(
         return json.dumps(headers_dict)
 
     return None
+
+
+def _normalize_health_status(raw_status: Any) -> Any:
+    """Normalize a raw health status to a clean enum value for API responses.
+
+    Local servers short-circuit (LOCAL is reported verbatim). Other strings
+    go through the legacy substring cascade for backward compatibility with
+    error messages baked into the status string. Non-string values pass
+    through unchanged.
+    """
+    if not isinstance(raw_status, str):
+        return raw_status
+    if raw_status == HealthStatus.LOCAL:
+        return HealthStatus.LOCAL
+    lower = raw_status.lower()
+    if "unhealthy" in lower or "error" in lower:
+        return "unhealthy"
+    if "healthy" in lower:
+        return "healthy"
+    if "disabled" in lower:
+        return "disabled"
+    if "checking" in lower:
+        return "unknown"
+    return raw_status
+
+
+def _validate_visibility_and_groups(
+    visibility: str,
+    allowed_groups: str | None,
+) -> tuple[str, list[str]]:
+    """Validate visibility and parse allowed_groups for register/edit endpoints.
+
+    Normalizes visibility, raises HTTPException(400) on invalid values, parses
+    the comma-separated allowed_groups string into a list, and enforces that
+    'group-restricted' visibility carries at least one group.
+
+    Returns:
+        Tuple of (normalized visibility, parsed allowed_groups list).
+    """
+    from ..utils.visibility import VALID_VISIBILITY_VALUES, _normalize_visibility
+
+    normalized = _normalize_visibility(visibility)
+    if normalized not in VALID_VISIBILITY_VALUES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid visibility value. Must be one of: {', '.join(VALID_VISIBILITY_VALUES)}",
+        )
+
+    allowed_groups_list: list[str] = []
+    if allowed_groups:
+        allowed_groups_list = [g.strip() for g in allowed_groups.split(",") if g.strip()]
+
+    if normalized == "group-restricted" and not allowed_groups_list:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="group-restricted visibility requires at least one allowed_group",
+        )
+
+    return normalized, allowed_groups_list
+
+
+async def _build_versions_list(
+    server_info: dict,
+    current_version: str,
+    current_status: str,
+) -> list[dict]:
+    """Build the multi-version routing list for a server response.
+
+    Local (stdio) servers can't have multiple versions — the ServerInfo
+    validator forbids it — so this returns an empty list for them. Callers
+    typically expose the result as `versions if len(versions) > 1 else None`,
+    which resolves to None for both single-version remote servers and all
+    local servers.
+    """
+    if server_info.get("deployment") == DeploymentType.LOCAL:
+        return []
+
+    versions: list[dict] = [
+        {
+            "version": current_version,
+            "proxy_pass_url": server_info.get("proxy_pass_url", ""),
+            "status": current_status,
+            "is_default": True,
+        }
+    ]
+
+    for version_id in server_info.get("other_version_ids", []):
+        version_info = await server_service.get_server_info(version_id)
+        if version_info:
+            versions.append(
+                {
+                    "version": version_info.get("version", "unknown"),
+                    "proxy_pass_url": version_info.get("proxy_pass_url", ""),
+                    "status": version_info.get("status", "stable"),
+                    "is_default": False,
+                }
+            )
+
+    return versions
 
 
 async def _perform_security_scan_on_registration(
@@ -280,23 +379,7 @@ async def read_root(
                 {**server_info, "is_enabled": is_enabled},
             )
 
-            # Normalize health status to enum values only (strip error messages)
-            raw_status = health_data["status"]
-            if isinstance(raw_status, str):
-                if "unhealthy" in raw_status.lower():
-                    normalized_status = "unhealthy"
-                elif "healthy" in raw_status.lower():
-                    normalized_status = "healthy"
-                elif "disabled" in raw_status.lower():
-                    normalized_status = "disabled"
-                elif "checking" in raw_status.lower():
-                    normalized_status = "unknown"
-                elif "error" in raw_status.lower():
-                    normalized_status = "unhealthy"
-                else:
-                    normalized_status = raw_status
-            else:
-                normalized_status = raw_status
+            normalized_status = _normalize_health_status(health_data["status"])
 
             service_data.append(
                 {
@@ -424,52 +507,15 @@ async def get_servers_json(
                 {**server_info, "is_enabled": is_enabled},
             )
 
-            # Normalize health status to enum values only (strip error messages)
-            raw_status = health_data["status"]
-            if isinstance(raw_status, str):
-                if "unhealthy" in raw_status.lower():
-                    normalized_status = "unhealthy"
-                elif "healthy" in raw_status.lower():
-                    normalized_status = "healthy"
-                elif "disabled" in raw_status.lower():
-                    normalized_status = "disabled"
-                elif "checking" in raw_status.lower():
-                    normalized_status = "unknown"
-                elif "error" in raw_status.lower():
-                    normalized_status = "unhealthy"
-                else:
-                    normalized_status = raw_status
-            else:
-                normalized_status = raw_status
+            normalized_status = _normalize_health_status(health_data["status"])
 
-            # Build versions list if this server has other versions
-            versions = []
+            # Build versions list if this server has other versions.
+            # Local (stdio) servers don't support multi-version routing — the
+            # ServerInfo validator forbids `versions` for them, so the response
+            # mirrors that: no synthesized versions block.
             current_version = server_info.get("version", "v1.0.0")
             current_status = server_info.get("status", "stable")
-
-            # Add current (active) version first
-            versions.append(
-                {
-                    "version": current_version,
-                    "proxy_pass_url": server_info.get("proxy_pass_url", ""),
-                    "status": current_status,
-                    "is_default": True,
-                }
-            )
-
-            # Add other versions if they exist
-            other_version_ids = server_info.get("other_version_ids", [])
-            for version_id in other_version_ids:
-                version_info = await server_service.get_server_info(version_id)
-                if version_info:
-                    versions.append(
-                        {
-                            "version": version_info.get("version", "unknown"),
-                            "proxy_pass_url": version_info.get("proxy_pass_url", ""),
-                            "status": version_info.get("status", "stable"),
-                            "is_default": False,
-                        }
-                    )
+            versions = await _build_versions_list(server_info, current_version, current_status)
 
             # Issue #1026: prune the tool list to what this user can see and
             # use the same filtered list for both num_tools and tool_list so
@@ -527,6 +573,10 @@ async def get_servers_json(
                     "ans_metadata": server_info.get("ans_metadata"),
                     "num_stars": server_info.get("num_stars", 0),
                     "rating_details": server_info.get("rating_details", []),
+                    # Local-server fields
+                    "deployment": server_info.get("deployment", "remote"),
+                    "local_runtime": server_info.get("local_runtime"),
+                    "registered_by": server_info.get("registered_by"),
                 }
             )
 
@@ -610,28 +660,40 @@ async def toggle_service_route(
         f"Toggled '{server_name}' ({service_path}) to {new_state} by user '{user_context['username']}'"
     )
 
-    # If enabling, perform immediate health check
-    status = "disabled"
+    # If enabling, perform immediate health check.
+    # Note: avoid shadowing fastapi.status (imported at module level) — use
+    # health_status as the local variable so future raise HTTPException calls
+    # below can still use status.HTTP_*.
+    health_status = "disabled"
     last_checked_iso = None
     if new_state:
         logger.info(f"Performing immediate health check for {service_path} upon toggle ON...")
         try:
             (
-                status,
+                health_status,
                 last_checked_dt,
             ) = await health_service.perform_immediate_health_check(service_path)
             last_checked_iso = last_checked_dt.isoformat() if last_checked_dt else None
-            logger.info(f"Immediate health check for {service_path} completed. Status: {status}")
+            logger.info(
+                f"Immediate health check for {service_path} completed. Status: {health_status}"
+            )
         except Exception as e:
             logger.error(f"ERROR during immediate health check for {service_path}: {e}")
-            status = f"error: immediate check failed ({type(e).__name__})"
+            health_status = f"error: immediate check failed ({type(e).__name__})"
     else:
         # When disabling, set status to disabled
-        status = "disabled"
+        health_status = "disabled"
         logger.info(f"Service {service_path} toggled OFF. Status set to disabled.")
 
     # Update FAISS metadata with new enabled state
     await faiss_service.add_or_update_service(service_path, server_info, new_state)
+
+    # Update DocumentDB search index with new enabled state so semantic search
+    # reflects the toggle immediately (pre-existing gap: toggle did not re-index).
+    from ..repositories.factory import get_search_repository
+
+    search_repo = get_search_repository()
+    await search_repo.index_server(service_path, server_info, new_state)
 
     # Regenerate Nginx configuration
     enabled_servers = {}
@@ -652,7 +714,7 @@ async def toggle_service_route(
             "message": f"Toggle request for {service_path} processed.",
             "service_path": service_path,
             "new_enabled_state": new_state,
-            "status": status,
+            "status": health_status,
             "last_checked_iso": last_checked_iso,
             "num_tools": server_info.get("num_tools", 0),
         },
@@ -665,7 +727,7 @@ async def register_service(
     name: Annotated[str, Form()],
     description: Annotated[str, Form()],
     path: Annotated[str, Form()],
-    proxy_pass_url: Annotated[str, Form()],
+    proxy_pass_url: Annotated[str | None, Form()] = None,
     tags: Annotated[str, Form()] = "",
     num_tools: Annotated[int, Form()] = 0,
     license_str: Annotated[str, Form(alias="license")] = "N/A",
@@ -682,28 +744,77 @@ async def register_service(
     provider_url: Annotated[str | None, Form()] = None,
     source_created_at: Annotated[str | None, Form()] = None,
     source_updated_at: Annotated[str | None, Form()] = None,
+    deployment: Annotated[str, Form()] = "remote",
+    local_runtime: Annotated[str | None, Form()] = None,
     user_context: Annotated[dict, Depends(enhanced_auth)] = None,
 ):
-    """Register a new service (requires register_service UI permission)."""
+    """Register a new service (requires register_service UI permission).
+
+    Supports both deployment types:
+    - Remote (default): proxy_pass_url required, registry proxies HTTP requests.
+    - Local: local_runtime JSON required (admin-only). Registry stores
+      the launch recipe for stdio MCP servers; it does NOT execute the server.
+
+    The local_runtime field is a JSON-encoded string (same convention as metadata):
+        {"type": "npx", "package": "@acme/mcp", "version": "1.0.0",
+         "args": [...], "env": {...}, "required_env": [...]}
+    """
     from ..core.nginx_service import nginx_service
     from ..health.service import health_service
     from ..search.service import faiss_service
+    from ..utils.local_runtime_validation import (
+        add_unpinned_warning_tag,
+        parse_and_validate_local_runtime,
+        validate_deployment_shape,
+    )
 
-    # Check if user has register_service permission for any service
-    ui_permissions = user_context.get("ui_permissions", {})
-    register_permissions = ui_permissions.get("register_service", [])
-
-    if not register_permissions:
-        logger.warning(
-            f"User {user_context['username']} attempted to register service without register_service permission"
-        )
+    if deployment not in ("remote", "local"):
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have permission to register new services",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="deployment must be 'remote' or 'local'",
         )
 
-    logger.info(f"Service registration request from user '{user_context['username']}'")
-    logger.info(f"Name: {name}, Path: {path}, URL: {proxy_pass_url}")
+    is_local = deployment == DeploymentType.LOCAL
+
+    # Permission check
+    if is_local:
+        # Local registration distributes executable launch recipes to developer
+        # machines
+        if not user_context.get("is_admin"):
+            logger.warning(
+                f"User {user_context['username']} attempted local registration without admin"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Local server registration requires admin privileges",
+            )
+    else:
+        # Standard remote permission check.
+        ui_permissions = user_context.get("ui_permissions", {})
+        register_permissions = ui_permissions.get("register_service", [])
+        if not register_permissions:
+            logger.warning(
+                f"User {user_context['username']} attempted to register service without "
+                f"register_service permission"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to register new services",
+            )
+
+    logger.info(
+        f"Service registration request from user '{user_context['username']}' "
+        f"(deployment={deployment})"
+    )
+
+    # Shape validation + local_runtime parsing are shared with /edit. See
+    # registry/utils/local_runtime_validation.py.
+    validate_deployment_shape(
+        is_local=is_local,
+        proxy_pass_url=proxy_pass_url,
+        local_runtime=local_runtime,
+    )
+    local_runtime_obj = parse_and_validate_local_runtime(local_runtime) if is_local else None
 
     # Ensure path starts with a slash
     if not path.startswith("/"):
@@ -712,53 +823,43 @@ async def register_service(
     # Process tags
     tag_list = [tag.strip() for tag in tags.split(",") if tag.strip()]
 
-    # Validate and normalize visibility value
-    from registry.utils.visibility import (
-        VALID_VISIBILITY_VALUES,
-        _normalize_visibility,
-    )
+    # Local servers get supplementary tags pre-persist:
+    # - unpinned-version: warning for missing version pin / image digest.
+    # - security-pending-local: registry skips automated scan for stdio servers.
+    if is_local and local_runtime_obj is not None:
+        tag_list = add_unpinned_warning_tag(local_runtime_obj.model_dump(), tag_list)
+        if "security-pending-local" not in tag_list:
+            tag_list.append("security-pending-local")
 
-    visibility = _normalize_visibility(visibility)
-    if visibility not in VALID_VISIBILITY_VALUES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid visibility value. Must be one of: {', '.join(VALID_VISIBILITY_VALUES)}",
-        )
-
-    # Process allowed_groups (comma-separated string to list)
-    allowed_groups_list = []
-    if allowed_groups:
-        allowed_groups_list = [g.strip() for g in allowed_groups.split(",") if g.strip()]
-
-    # Validate group-restricted requires allowed_groups
-    if visibility == "group-restricted" and not allowed_groups_list:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="group-restricted visibility requires at least one allowed_group",
-        )
+    visibility, allowed_groups_list = _validate_visibility_and_groups(visibility, allowed_groups)
 
     # Create server entry with auto-generated UUID
     from uuid import uuid4
 
-    server_entry = {
+    server_entry: dict[str, Any] = {
         "id": str(uuid4()),
         "server_name": name,
         "description": description,
         "path": path,
-        "proxy_pass_url": proxy_pass_url,
         "tags": tag_list,
         "num_tools": num_tools,
         "license": license_str,
         "tool_list": [],
         "visibility": visibility,
         "allowed_groups": allowed_groups_list,
+        "deployment": deployment,
+        "registered_by": user_context["username"],
     }
 
-    # Add custom endpoint fields if provided
-    if mcp_endpoint:
-        server_entry["mcp_endpoint"] = mcp_endpoint
-    if sse_endpoint:
-        server_entry["sse_endpoint"] = sse_endpoint
+    # Deployment-specific fields
+    if is_local:
+        server_entry["local_runtime"] = local_runtime_obj.model_dump()
+    else:
+        server_entry["proxy_pass_url"] = proxy_pass_url
+        if mcp_endpoint:
+            server_entry["mcp_endpoint"] = mcp_endpoint
+        if sse_endpoint:
+            server_entry["sse_endpoint"] = sse_endpoint
 
     # Add metadata if provided (expects JSON string)
     if metadata:
@@ -782,30 +883,30 @@ async def register_service(
         raw_headers=request.scope.get("headers", []),
     )
     if not gate_result.allowed:
-        logger.warning(
-            f"Registration gate denied server '{name}': "
-            f"{gate_result.error_message}"
-        )
+        logger.warning(f"Registration gate denied server '{name}': {gate_result.error_message}")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Registration denied by policy gate: {gate_result.error_message}",
         )
 
-    # Add auth fields
-    if auth_scheme and auth_scheme in VALID_AUTH_SCHEMES:
-        server_entry["auth_scheme"] = auth_scheme
-    if auth_header_name:
-        server_entry["auth_header_name"] = auth_header_name
-    if auth_credential and auth_scheme != "none":
-        server_entry["auth_credential"] = auth_credential
-        try:
-            encrypt_credential_in_server_dict(server_entry)
-        except Exception as e:
-            logger.error(f"Failed to encrypt credential: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to encrypt credential",
-            )
+    # Auth fields — local servers must use auth_scheme='none' (validated by ServerInfo).
+    if is_local:
+        server_entry["auth_scheme"] = "none"
+    else:
+        if auth_scheme and auth_scheme in VALID_AUTH_SCHEMES:
+            server_entry["auth_scheme"] = auth_scheme
+        if auth_header_name:
+            server_entry["auth_header_name"] = auth_header_name
+        if auth_credential and auth_scheme != "none":
+            server_entry["auth_credential"] = auth_credential
+            try:
+                encrypt_credential_in_server_dict(server_entry)
+            except Exception as e:
+                logger.error(f"Failed to encrypt credential: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to encrypt credential",
+                )
 
     # Add lifecycle and federation fields
     if service_status:
@@ -888,8 +989,12 @@ async def register_service(
     # Broadcast health status update to WebSocket clients
     await health_service.broadcast_health_update(path)
 
-    # Security scanning if enabled (non-blocking — scan is non-fatal, don't block response)
-    asyncio.create_task(_perform_security_scan_on_registration(path, proxy_pass_url, server_entry))
+    # Security scanning (non-blocking, non-fatal). Skipped for local stdio servers —
+    # they're already tagged 'security-pending-local' before persist.
+    if not is_local:
+        asyncio.create_task(
+            _perform_security_scan_on_registration(path, proxy_pass_url, server_entry)
+        )
 
     # Registration webhook (Issue #742)
     asyncio.create_task(
@@ -1067,8 +1172,7 @@ async def internal_register_service(
     )
     if not gate_result.allowed:
         logger.warning(
-            f"Registration gate denied internal server '{name}': "
-            f"{gate_result.error_message}"
+            f"Registration gate denied internal server '{name}': {gate_result.error_message}"
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -1222,6 +1326,66 @@ async def internal_register_service(
             "service": server_entry,
         },
     )
+
+
+@router.post("/clear-security-pending-local/{service_path:path}")
+async def clear_security_pending_local(
+    request: Request,
+    service_path: str,
+    user_context: Annotated[dict, Depends(enhanced_auth)],
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
+):
+    """Admin action: mark a local server as security-reviewed.
+
+    Removes the `security-pending-local` tag from a local server. Local
+    servers can't be auto-scanned (no HTTP endpoint), so the tag is added at
+    registration and persists until an admin manually clears it. This
+    endpoint provides a discoverable way to do that — the alternative is
+    editing the tags string via the edit form.
+    """
+    from ..search.service import faiss_service
+
+    if not user_context.get("is_admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Clearing security-pending-local requires admin privileges",
+        )
+
+    if not service_path.startswith("/"):
+        service_path = "/" + service_path
+
+    server_info = await server_service.get_server_info(service_path)
+    if not server_info:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Server not found")
+
+    if server_info.get("deployment") != DeploymentType.LOCAL:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="security-pending-local only applies to local servers",
+        )
+
+    tags = list(server_info.get("tags", []))
+    if "security-pending-local" not in tags:
+        return {"message": "Tag not present; nothing to do", "tags": tags}
+
+    tags = [t for t in tags if t != "security-pending-local"]
+    updated_entry = {**server_info, "tags": tags}
+
+    success = await server_service.update_server(service_path, updated_entry)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update server",
+        )
+
+    is_enabled = await server_service.is_service_enabled(service_path)
+    await faiss_service.add_or_update_service(service_path, updated_entry, is_enabled)
+
+    logger.info(
+        f"Cleared security-pending-local from '{service_path}' by user '{user_context['username']}'"
+    )
+
+    return {"message": "Tag cleared", "tags": tags}
 
 
 @router.post("/internal/remove")
@@ -1420,6 +1584,12 @@ async def internal_toggle_service(
     # Update FAISS metadata with new enabled state
     await faiss_service.add_or_update_service(service_path, server_info, new_state)
 
+    # Update DocumentDB search index with new enabled state
+    from ..repositories.factory import get_search_repository
+
+    search_repo = get_search_repository()
+    await search_repo.index_server(service_path, server_info, new_state)
+
     # Regenerate Nginx configuration
     enabled_servers = {}
 
@@ -1536,13 +1706,14 @@ async def edit_server_submit(
     request: Request,
     service_path: str,
     name: Annotated[str, Form()],
-    proxy_pass_url: Annotated[str, Form()],
     user_context: Annotated[dict, Depends(enhanced_auth)],
+    proxy_pass_url: Annotated[str | None, Form()] = None,
     description: Annotated[str, Form()] = "",
     tags: Annotated[str, Form()] = "",
     num_tools: Annotated[int, Form()] = 0,
     license_str: Annotated[str, Form(alias="license")] = "N/A",
     mcp_endpoint: Annotated[str | None, Form()] = None,
+    sse_endpoint: Annotated[str | None, Form()] = None,
     metadata: Annotated[str | None, Form()] = None,
     visibility: Annotated[str, Form()] = "public",
     allowed_groups: Annotated[str | None, Form()] = None,
@@ -1550,12 +1721,25 @@ async def edit_server_submit(
     auth_scheme: Annotated[str, Form()] = "none",
     auth_credential: Annotated[str | None, Form()] = None,
     auth_header_name: Annotated[str | None, Form()] = None,
+    deployment: Annotated[str | None, Form()] = None,
+    local_runtime: Annotated[str | None, Form()] = None,
     _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
-    """Handle server edit form submission (requires modify_service UI permission)."""
+    """Handle server edit form submission (requires modify_service UI permission).
+
+    Local servers (deployment='local') are edited the same way: pass
+    `deployment=local` and `local_runtime` as a JSON-encoded string. Local edits
+    require admin privileges, mirroring the registration gate. If `deployment`
+    is omitted, the existing server's deployment is preserved.
+    """
     from ..auth.dependencies import user_has_ui_permission_for_service
     from ..core.nginx_service import nginx_service
     from ..search.service import faiss_service
+    from ..utils.local_runtime_validation import (
+        add_unpinned_warning_tag,
+        parse_and_validate_local_runtime,
+        validate_deployment_shape,
+    )
 
     if not service_path.startswith("/"):
         service_path = "/" + service_path
@@ -1567,80 +1751,155 @@ async def edit_server_submit(
 
     service_name = server_info["server_name"]
 
-    # Check if user has modify_service permission for this specific service
-    if not user_has_ui_permission_for_service(
-        "modify_service", service_name, user_context.get("ui_permissions", {})
-    ):
-        logger.warning(
-            f"User {user_context['username']} attempted to edit service {service_name} without modify_service permission"
-        )
+    # Validate deployment value if provided.
+    if deployment is not None and deployment not in ("remote", "local"):
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"You do not have permission to modify {service_name}",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="deployment must be 'remote' or 'local'",
         )
 
-    # For non-admin users, check if they have access to this specific server
-    if not user_context["is_admin"]:
-        if not await server_service.user_can_access_server_path(
-            service_path, user_context["accessible_servers"]
-        ):
+    # Resolve effective deployment: explicit field wins, else preserve existing.
+    existing_deployment = server_info.get("deployment", "remote")
+    effective_deployment = deployment or existing_deployment
+    is_local = effective_deployment == DeploymentType.LOCAL
+
+    # Reject deployment-type changes on edit. Switching remote↔local is a
+    # fundamental shape change (proxy_pass_url ↔ local_runtime, transport,
+    # auth, nginx route lifecycle, audit-trail provenance). Force re-register.
+    if deployment is not None and deployment != existing_deployment:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Cannot change deployment from '{existing_deployment}' to "
+                f"'{deployment}' on edit. Delete and re-register the server."
+            ),
+        )
+
+    # Permission check
+    if is_local:
+        # Local edits distribute executable launch recipes — admin-only.
+        if not user_context.get("is_admin"):
             logger.warning(
-                f"User {user_context['username']} attempted to edit service {service_path} without access"
+                f"User {user_context['username']} attempted to edit local server "
+                f"{service_path} without admin privileges"
             )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="You do not have access to edit this server",
+                detail="Editing local servers requires admin privileges",
             )
+    else:
+        # Remote edit — standard modify_service permission check.
+        if not user_has_ui_permission_for_service(
+            "modify_service", service_name, user_context.get("ui_permissions", {})
+        ):
+            logger.warning(
+                f"User {user_context['username']} attempted to edit service "
+                f"{service_name} without modify_service permission"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"You do not have permission to modify {service_name}",
+            )
+
+        # For non-admin users, also check per-server access.
+        if not user_context["is_admin"]:
+            if not await server_service.user_can_access_server_path(
+                service_path, user_context["accessible_servers"]
+            ):
+                logger.warning(
+                    f"User {user_context['username']} attempted to edit service "
+                    f"{service_path} without access"
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You do not have access to edit this server",
+                )
+
+    # Shape validation + local_runtime parsing are shared with /register.
+    validate_deployment_shape(
+        is_local=is_local,
+        proxy_pass_url=proxy_pass_url,
+        local_runtime=local_runtime,
+    )
+    local_runtime_obj = parse_and_validate_local_runtime(local_runtime) if is_local else None
 
     # Process tags
     tag_list = [tag.strip() for tag in tags.split(",") if tag.strip()]
 
-    # Validate and normalize visibility value
-    from registry.utils.visibility import (
-        VALID_VISIBILITY_VALUES,
-        _normalize_visibility,
-    )
+    # Maintain local-server tags on edit. Re-evaluate unpinned-version against
+    # the new runtime. Reset the security review (re-add security-pending-local)
+    # whenever the launch recipe content has materially changed — the admin's
+    # prior approval was for the OLD recipe. If the recipe is unchanged
+    # (e.g. cosmetic edits to description/tags/status), preserve the previous
+    # review state.
+    if is_local and local_runtime_obj is not None:
+        # Drop the stale unpinned-version tag; it will be re-added if still
+        # applicable to the new runtime.
+        tag_list = [t for t in tag_list if t != "unpinned-version"]
+        tag_list = add_unpinned_warning_tag(local_runtime_obj.model_dump(), tag_list)
 
-    visibility = _normalize_visibility(visibility)
-    if visibility not in VALID_VISIBILITY_VALUES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid visibility value. Must be one of: {', '.join(VALID_VISIBILITY_VALUES)}",
-        )
+        existing_tags = list(server_info.get("tags", []) or [])
+        # Round-trip the existing recipe through LocalRuntime so the comparison
+        # is field-for-field with the new one (defaults filled in identically,
+        # field order normalized). Fall back to "changed" if the stored shape
+        # is malformed — safer to force a re-review than to skip one.
+        from ..core.schemas import LocalRuntime  # local import: avoids cycles
 
-    # Process allowed_groups (comma-separated string to list)
-    allowed_groups_list = []
-    if allowed_groups:
-        allowed_groups_list = [g.strip() for g in allowed_groups.split(",") if g.strip()]
+        existing_raw = server_info.get("local_runtime") or {}
+        try:
+            existing_normalized = LocalRuntime.model_validate(existing_raw).model_dump()
+        except Exception:
+            existing_normalized = None
+        new_runtime = local_runtime_obj.model_dump()
+        recipe_changed = existing_normalized != new_runtime
 
-    # Validate group-restricted requires allowed_groups
-    if visibility == "group-restricted" and not allowed_groups_list:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="group-restricted visibility requires at least one allowed_group",
-        )
+        if recipe_changed:
+            # Force a fresh manual review — clear any previous "reviewed" state.
+            if "security-pending-local" not in tag_list:
+                tag_list.append("security-pending-local")
+            logger.info(
+                f"Local-runtime recipe for {service_path} changed on edit; "
+                "re-adding security-pending-local for fresh admin review."
+            )
+        else:
+            # Recipe unchanged — preserve whatever review state existed before.
+            if (
+                "security-pending-local" in existing_tags
+                and "security-pending-local" not in tag_list
+            ):
+                tag_list.append("security-pending-local")
+
+    visibility, allowed_groups_list = _validate_visibility_and_groups(visibility, allowed_groups)
 
     # Prepare updated server data
-    updated_server_entry = {
+    updated_server_entry: dict[str, Any] = {
         "server_name": name,
         "description": description,
         "path": service_path,
-        "proxy_pass_url": proxy_pass_url,
         "tags": tag_list,
         "num_tools": num_tools,
         "license": license_str,
-        "tool_list": [],  # Keep existing or initialize
+        "tool_list": server_info.get("tool_list", []),
         "visibility": visibility,
         "allowed_groups": allowed_groups_list,
+        "deployment": effective_deployment,
+        # Preserve audit trail; edits don't reset it.
+        "registered_by": server_info.get("registered_by"),
     }
+
+    # Deployment-specific fields
+    if is_local:
+        updated_server_entry["local_runtime"] = local_runtime_obj.model_dump()
+    else:
+        updated_server_entry["proxy_pass_url"] = proxy_pass_url
+        if mcp_endpoint:
+            updated_server_entry["mcp_endpoint"] = mcp_endpoint
+        if sse_endpoint:
+            updated_server_entry["sse_endpoint"] = sse_endpoint
 
     # Add optional status if provided
     if service_status:
         updated_server_entry["status"] = service_status
-
-    # Add optional mcp_endpoint if provided
-    if mcp_endpoint:
-        updated_server_entry["mcp_endpoint"] = mcp_endpoint
 
     # Parse and add metadata if provided
     if metadata:
@@ -1664,34 +1923,37 @@ async def edit_server_submit(
     )
     if not gate_result.allowed:
         logger.warning(
-            f"Registration gate denied server update '{name}': "
-            f"{gate_result.error_message}"
+            f"Registration gate denied server update '{name}': {gate_result.error_message}"
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Registration denied by policy gate: {gate_result.error_message}",
         )
 
-    # Handle auth fields for edit
-    if auth_scheme and auth_scheme in VALID_AUTH_SCHEMES:
-        updated_server_entry["auth_scheme"] = auth_scheme
-    if auth_header_name:
-        updated_server_entry["auth_header_name"] = auth_header_name
-    if auth_credential and auth_scheme != "none":
-        updated_server_entry["auth_credential"] = auth_credential
-        try:
-            encrypt_credential_in_server_dict(updated_server_entry)
-        except Exception as e:
-            logger.error(f"Failed to encrypt credential: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to encrypt credential",
-            )
-    elif auth_scheme == "none":
-        # Clear credentials when switching to no auth
+    # Handle auth fields for edit. Local servers must use auth_scheme='none'
+    # (validated by ServerInfo); we forcibly clear any submitted auth fields.
+    if is_local:
         updated_server_entry["auth_scheme"] = "none"
         updated_server_entry.pop("auth_credential_encrypted", None)
         updated_server_entry.pop("auth_header_name", None)
+    elif auth_scheme and auth_scheme in VALID_AUTH_SCHEMES:
+        updated_server_entry["auth_scheme"] = auth_scheme
+        if auth_header_name:
+            updated_server_entry["auth_header_name"] = auth_header_name
+        if auth_credential and auth_scheme != "none":
+            updated_server_entry["auth_credential"] = auth_credential
+            try:
+                encrypt_credential_in_server_dict(updated_server_entry)
+            except Exception as e:
+                logger.error(f"Failed to encrypt credential: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to encrypt credential",
+                )
+        elif auth_scheme == "none":
+            # Clear credentials when switching to no auth
+            updated_server_entry.pop("auth_credential_encrypted", None)
+            updated_server_entry.pop("auth_header_name", None)
 
     # Update server
     success = await server_service.update_server(service_path, updated_server_entry)
@@ -1797,34 +2059,15 @@ async def get_server_details(
                 detail="You do not have access to this server",
             )
 
-    # Build versions list if this server has version routing enabled
-    versions = []
+    # Local (stdio) servers don't support multi-version routing — early-return
+    # avoids guarding the synthesis block below. _build_versions_list() also
+    # handles this (returns []), but skipping it here saves the work.
+    if server_info.get("deployment") == DeploymentType.LOCAL:
+        return server_info
+
     current_version = server_info.get("version", "v1.0.0")
     current_status = server_info.get("status", "stable")
-
-    # Add current (active) version first
-    versions.append(
-        {
-            "version": current_version,
-            "proxy_pass_url": server_info.get("proxy_pass_url", ""),
-            "status": current_status,
-            "is_default": True,
-        }
-    )
-
-    # Add other versions if they exist
-    other_version_ids = server_info.get("other_version_ids", [])
-    for version_id in other_version_ids:
-        version_info = await server_service.get_server_info(version_id)
-        if version_info:
-            versions.append(
-                {
-                    "version": version_info.get("version", "unknown"),
-                    "proxy_pass_url": version_info.get("proxy_pass_url", ""),
-                    "status": version_info.get("status", "stable"),
-                    "is_default": False,
-                }
-            )
+    versions = await _build_versions_list(server_info, current_version, current_status)
 
     # Add versions to response if there are multiple versions
     if len(versions) > 1 or server_info.get("version_group"):
@@ -2055,6 +2298,18 @@ async def refresh_service(service_path: str, user_context: Annotated[dict, Depen
     if not is_enabled:
         raise HTTPException(status_code=400, detail="Cannot refresh disabled service")
 
+    # Local (stdio) servers have no HTTP endpoint to refresh against. Mirror
+    # the health-service short-circuit and return LOCAL immediately rather
+    # than the misleading "no proxy URL" 500.
+    if server_info.get("deployment") == DeploymentType.LOCAL:
+        return {
+            "message": f"Service {service_path} is local — no remote check performed",
+            "service_path": service_path,
+            "status": HealthStatus.LOCAL,
+            "last_checked_iso": None,
+            "num_tools": server_info.get("num_tools", 0),
+        }
+
     proxy_pass_url = server_info.get("proxy_pass_url")
     if not proxy_pass_url:
         raise HTTPException(status_code=500, detail="Service has no proxy URL configured")
@@ -2064,10 +2319,15 @@ async def refresh_service(service_path: str, user_context: Annotated[dict, Depen
     )
 
     try:
-        # Perform immediate health check
-        status, last_checked_dt = await health_service.perform_immediate_health_check(service_path)
+        # Perform immediate health check. Use health_status to avoid shadowing
+        # fastapi.status (imported at module level).
+        health_status, last_checked_dt = await health_service.perform_immediate_health_check(
+            service_path
+        )
         last_checked_iso = last_checked_dt.isoformat() if last_checked_dt else None
-        logger.info(f"Manual refresh health check for {service_path} completed. Status: {status}")
+        logger.info(
+            f"Manual refresh health check for {service_path} completed. Status: {health_status}"
+        )
 
         # Regenerate Nginx config after manual refresh
         logger.info(f"Regenerating Nginx config after manual refresh for {service_path}...")
@@ -2096,7 +2356,7 @@ async def refresh_service(service_path: str, user_context: Annotated[dict, Depen
     return {
         "message": f"Service {service_path} refreshed successfully",
         "service_path": service_path,
-        "status": status,
+        "status": health_status,
         "last_checked_iso": last_checked_iso,
         "num_tools": server_info.get("num_tools", 0),
     }
@@ -2489,10 +2749,7 @@ async def generate_user_token(
             if ".." in resource_id or "%" in resource_id:
                 raise HTTPException(
                     status_code=400,
-                    detail=(
-                        "resource.id must not contain '..' or "
-                        "percent-encoded characters"
-                    ),
+                    detail=("resource.id must not contain '..' or percent-encoded characters"),
                 )
             if any(ord(c) < 0x20 or ord(c) == 0x7F for c in resource_id):
                 raise HTTPException(
@@ -2528,9 +2785,7 @@ async def generate_user_token(
                 "create",
                 "resource_bound_token",
                 resource_id=f"{resource_type}:{resource_id}",
-                description=(
-                    f"Mint resource-bound token for {resource_type}:{resource_id}"
-                ),
+                description=(f"Mint resource-bound token for {resource_type}:{resource_id}"),
             )
         else:
             set_audit_action(
@@ -2745,8 +3000,8 @@ async def register_service_api(
     name: Annotated[str, Form()],
     description: Annotated[str, Form()],
     path: Annotated[str, Form()],
-    proxy_pass_url: Annotated[str, Form()],
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    proxy_pass_url: Annotated[str | None, Form()] = None,
     tags: Annotated[str, Form()] = "",
     num_tools: Annotated[int, Form()] = 0,
     license_str: Annotated[str, Form(alias="license")] = "N/A",
@@ -2768,51 +3023,39 @@ async def register_service_api(
     source_created_at: Annotated[str | None, Form()] = None,
     source_updated_at: Annotated[str | None, Form()] = None,
     external_tags: Annotated[str | None, Form()] = None,
+    deployment: Annotated[str, Form()] = "remote",
+    local_runtime: Annotated[str | None, Form()] = None,
 ):
-    """
-    Register a service via JWT Bearer Token authentication (External API).
+    """Register a service via JWT Bearer Token authentication (External API).
 
-    This endpoint provides the same functionality as POST /api/internal/register
-    but uses modern JWT Bearer token authentication via nginx headers, making it
-    suitable for external service-to-service communication.
+    Supports both deployment types:
+    - Remote (default): proxy_pass_url required, registry proxies HTTP requests.
+    - Local: local_runtime JSON required (admin-only). Registry stores the
+      launch recipe for stdio MCP servers; it does NOT execute the server.
 
     **Authentication:** JWT Bearer token (via nginx X-User header)
-    **Authorization:** Requires valid JWT token from auth system
+    **Authorization:** Requires valid JWT token. Local registration requires admin.
 
     **Request body (form data):**
     - `name` (required): Service name
     - `description` (required): Service description
     - `path` (required): Service path (e.g., /myservice)
-    - `proxy_pass_url` (required): Proxy URL (e.g., http://localhost:8000)
+    - `deployment` (optional): 'remote' (default) or 'local'
+    - `proxy_pass_url` (required for remote): Proxy URL (e.g., http://localhost:8000)
+    - `local_runtime` (required for local): JSON-encoded launch recipe
     - `tags` (optional): Comma-separated tags
     - `num_tools` (optional): Number of tools
     - `license` (optional): License name
     - `overwrite` (optional): Overwrite if exists (boolean, default true)
-    - `auth_provider` (optional): Auth provider name
-    - `auth_scheme` (optional): Auth scheme (none, bearer, api_key)
+    - `auth_scheme` (optional): Auth scheme (none, bearer, api_key). Forced to 'none' for local.
     - `auth_credential` (optional): Plaintext credential (encrypted before storage)
-    - `auth_header_name` (optional): Custom header name for API key auth
-    - `supported_transports` (optional): JSON array of transports
-    - `headers` (optional): JSON object of headers
-    - `tool_list_json` (optional): JSON array of tool definitions
-    - `mcp_endpoint` (optional): Full URL for custom MCP endpoint (overrides /mcp suffix)
-    - `sse_endpoint` (optional): Full URL for custom SSE endpoint (overrides /sse suffix)
-    - `version` (optional): Server version (e.g., v1.0.0, v2.0.0)
+    - `mcp_endpoint` (optional): Full URL for custom MCP endpoint (remote only)
+    - `sse_endpoint` (optional): Full URL for custom SSE endpoint (remote only)
+    - `metadata` (optional): JSON string of custom metadata
+    - `version` (optional): Server version (e.g., v1.0.0)
     - `status` (optional): Lifecycle status (active, deprecated, draft, beta)
-    - `provider_organization` (optional): Provider organization name
-    - `provider_url` (optional): Provider URL
-    - `source_created_at` (optional): Original creation timestamp (ISO format)
-    - `source_updated_at` (optional): Last update timestamp (ISO format)
-    - `external_tags` (optional): Comma-separated tags from external system
 
-    **Response:**
-    - `201 Created`: Service registered successfully
-    - `400 Bad Request`: Invalid input data
-    - `401 Unauthorized`: Missing or invalid JWT token
-    - `409 Conflict`: Service already exists with same version (different version auto-creates new version)
-    - `500 Internal Server Error`: Server error
-
-    **Example:**
+    **Example (remote):**
     ```bash
     curl -X POST https://registry.example.com/api/servers/register \\
       -H "Authorization: Bearer $JWT_TOKEN" \\
@@ -2821,20 +3064,61 @@ async def register_service_api(
       -F "path=/myservice" \\
       -F "proxy_pass_url=http://localhost:8000"
     ```
+
+    **Example (local):**
+    ```bash
+    curl -X POST https://registry.example.com/api/servers/register \\
+      -H "Authorization: Bearer $JWT_TOKEN" \\
+      -F "name=My Local MCP" \\
+      -F "description=Stdio MCP server" \\
+      -F "path=/my-local-mcp" \\
+      -F "deployment=local" \\
+      -F 'local_runtime={"type":"npx","package":"@acme/mcp","version":"1.0.0","args":[],"env":{},"required_env":["API_KEY"]}'
+    ```
     """
     # Set audit action for server registration
     set_audit_action(
         request, "create", "server", resource_id=path, description=f"Register server {name}"
     )
 
-    logger.info(
-        f"API register service request from user '{user_context.get('username')}' for service '{name}'"
-    )
-
-    # Implementation extracted from internal_register_service to avoid duplicating auth logic
-    # Auth is already validated by nginx_proxied_auth dependency
     from ..health.service import health_service
     from ..search.service import faiss_service
+    from ..utils.local_runtime_validation import (
+        add_unpinned_warning_tag,
+        parse_and_validate_local_runtime,
+        validate_deployment_shape,
+    )
+
+    if deployment not in ("remote", "local"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="deployment must be 'remote' or 'local'",
+        )
+
+    is_local = deployment == DeploymentType.LOCAL
+
+    # Admin check for local registration
+    if is_local:
+        if not user_context.get("is_admin"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Local server registration requires admin privileges",
+            )
+
+    logger.info(
+        f"API register service request from user '{user_context.get('username')}' "
+        f"for service '{name}' (deployment={deployment})"
+    )
+
+    # Shape validation + local_runtime parsing (shared with /api/register)
+    validate_deployment_shape(
+        is_local=is_local,
+        proxy_pass_url=proxy_pass_url,
+        local_runtime=local_runtime,
+    )
+    local_runtime_obj = (
+        parse_and_validate_local_runtime(local_runtime) if is_local else None
+    )
 
     # Validate path format
     if not path.startswith("/"):
@@ -2878,8 +3162,8 @@ async def register_service_api(
         except Exception as e:
             logger.warning(f"SERVERS REGISTER: Failed to parse tool_list_json: {e}")
 
-    # Validate auth_scheme
-    if auth_scheme not in VALID_AUTH_SCHEMES:
+    # Validate auth_scheme (remote only; local servers force auth_scheme=none)
+    if not is_local and auth_scheme not in VALID_AUTH_SCHEMES:
         return JSONResponse(
             status_code=400,
             content={
@@ -2888,34 +3172,47 @@ async def register_service_api(
             },
         )
 
+    # Local servers get supplementary tags pre-persist
+    if is_local and local_runtime_obj is not None:
+        tag_list = add_unpinned_warning_tag(local_runtime_obj.model_dump(), tag_list)
+        if "security-pending-local" not in tag_list:
+            tag_list.append("security-pending-local")
+
     # Create server entry with auto-generated UUID
     from uuid import uuid4
 
-    server_entry = {
+    server_entry: dict[str, Any] = {
         "id": str(uuid4()),
         "server_name": name,
         "description": description,
         "path": path,
-        "proxy_pass_url": proxy_pass_url,
-        "supported_transports": transports_list,
-        "auth_scheme": auth_scheme,
         "tags": tag_list,
         "num_tools": num_tools,
         "license": license_str,
         "tool_list": tool_list,
+        "deployment": deployment,
+        "registered_by": user_context.get("username"),
     }
 
-    # Add optional fields if provided
-    if auth_provider:
-        server_entry["auth_provider"] = auth_provider
-    if headers_list:
-        server_entry["headers"] = headers_list
-    if auth_header_name:
-        server_entry["auth_header_name"] = auth_header_name
-    if mcp_endpoint:
-        server_entry["mcp_endpoint"] = mcp_endpoint
-    if sse_endpoint:
-        server_entry["sse_endpoint"] = sse_endpoint
+    # Deployment-specific fields
+    if is_local:
+        server_entry["local_runtime"] = local_runtime_obj.model_dump()
+        server_entry["auth_scheme"] = "none"
+    else:
+        server_entry["proxy_pass_url"] = proxy_pass_url
+        server_entry["supported_transports"] = transports_list
+        server_entry["auth_scheme"] = auth_scheme
+        if auth_provider:
+            server_entry["auth_provider"] = auth_provider
+        if headers_list:
+            server_entry["headers"] = headers_list
+        if auth_header_name:
+            server_entry["auth_header_name"] = auth_header_name
+        if mcp_endpoint:
+            server_entry["mcp_endpoint"] = mcp_endpoint
+        if sse_endpoint:
+            server_entry["sse_endpoint"] = sse_endpoint
+
     if version:
         server_entry["version"] = version
     if status:
@@ -2965,10 +3262,7 @@ async def register_service_api(
         raw_headers=request.scope.get("headers", []),
     )
     if not gate_result.allowed:
-        logger.warning(
-            f"Registration gate denied server '{name}': "
-            f"{gate_result.error_message}"
-        )
+        logger.warning(f"Registration gate denied server '{name}': {gate_result.error_message}")
         raise HTTPException(
             status_code=403,
             detail=f"Registration denied by policy gate: {gate_result.error_message}",
@@ -3057,10 +3351,13 @@ async def register_service_api(
                 f"Service registered successfully via API: {path} by user {user_context.get('username')}"
             )
 
-        # Security scanning if enabled (non-blocking — scan is non-fatal, don't block response)
-        asyncio.create_task(
-            _perform_security_scan_on_registration(path, proxy_pass_url, server_entry, headers_list)
-        )
+        # Security scanning (non-blocking). Skipped for local stdio servers.
+        if not is_local:
+            asyncio.create_task(
+                _perform_security_scan_on_registration(
+                    path, proxy_pass_url, server_entry, headers_list
+                )
+            )
 
         # Trigger async tasks for health check and FAISS sync
         asyncio.create_task(health_service.perform_immediate_health_check(path))
@@ -3276,28 +3573,35 @@ async def toggle_service_api(
         f"Toggled '{server_info['server_name']}' ({path}) to {new_state} by user '{user_context.get('username')}'"
     )
 
-    # If enabling, perform immediate health check
-    status = "disabled"
+    # If enabling, perform immediate health check. Use health_status to avoid
+    # shadowing fastapi.status (imported at module level).
+    health_status = "disabled"
     last_checked_iso = None
     if new_state:
         logger.info(f"Performing immediate health check for {path} upon toggle ON...")
         try:
             (
-                status,
+                health_status,
                 last_checked_dt,
             ) = await health_service.perform_immediate_health_check(path)
             last_checked_iso = last_checked_dt.isoformat() if last_checked_dt else None
-            logger.info(f"Immediate health check for {path} completed. Status: {status}")
+            logger.info(f"Immediate health check for {path} completed. Status: {health_status}")
         except Exception as e:
             logger.error(f"ERROR during immediate health check for {path}: {e}")
-            status = f"error: immediate check failed ({type(e).__name__})"
+            health_status = f"error: immediate check failed ({type(e).__name__})"
     else:
         # When disabling, set status to disabled
-        status = "disabled"
+        health_status = "disabled"
         logger.info(f"Service {path} toggled OFF. Status set to disabled.")
 
     # Update FAISS metadata with new enabled state
     await faiss_service.add_or_update_service(path, server_info, new_state)
+
+    # Update DocumentDB search index with new enabled state
+    from ..repositories.factory import get_search_repository
+
+    search_repo = get_search_repository()
+    await search_repo.index_server(path, server_info, new_state)
 
     # Regenerate Nginx configuration
     enabled_servers = {}
@@ -3318,7 +3622,7 @@ async def toggle_service_api(
             "message": f"Toggle request for {path} processed.",
             "service_path": path,
             "new_enabled_state": new_state,
-            "status": status,
+            "status": health_status,
             "last_checked_iso": last_checked_iso,
             "num_tools": server_info.get("num_tools", 0),
         },

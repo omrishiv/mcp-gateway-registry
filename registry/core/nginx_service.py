@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from registry.constants import REGISTRY_CONSTANTS, HealthStatus
+from registry.constants import REGISTRY_CONSTANTS, DeploymentType, HealthStatus
 
 from .config import settings
 from .metrics import NGINX_UPDATES_SKIPPED
@@ -343,6 +343,10 @@ class NginxConfigService:
                 from ..health.service import health_service
 
                 for path, server_info in servers.items():
+                    # Local servers don't get nginx routes
+                    if server_info.get("deployment") == DeploymentType.LOCAL:
+                        logger.debug(f"Skipping local server {path} from nginx config")
+                        continue
                     proxy_pass_url = server_info.get("proxy_pass_url")
                     if proxy_pass_url:
                         # Check if server is healthy (including auth-expired which is still reachable)
