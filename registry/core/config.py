@@ -476,6 +476,16 @@ class Settings(BaseSettings):
             "affected by this setting."
         ),
     )
+    app_log_console_format: str = Field(
+        default="json",
+        description=(
+            "Format for STDOUT/console output. 'json' (default) emits the "
+            "same JSON Lines schema as APP_LOG_FILE_FORMAT=json so a "
+            "sidecar/agent scraping STDOUT receives structured records. "
+            "'text' emits the human-readable comma-separated format if you "
+            "want `docker logs` / `kubectl logs` to stay skimmable."
+        ),
+    )
 
     # Audit Logging Configuration
     audit_log_enabled: bool = True  # Enable/disable audit logging globally
@@ -595,6 +605,31 @@ class Settings(BaseSettings):
         """Check if nginx updates should be performed."""
         return self.deployment_mode == DeploymentMode.WITH_GATEWAY
 
+    # UI Title Configuration
+    ui_title: str | None = Field(
+        default=None,
+        description=(
+            "Override for the UI title shown in the header, login, and logout pages. "
+            "When unset (or empty/whitespace-only), the title defaults to "
+            "'AI Gateway & Registry' for with-gateway mode and 'AI Registry' for "
+            "registry-only mode."
+        ),
+    )
+
+    @property
+    def effective_ui_title(self) -> str:
+        """Return the resolved UI title.
+
+        Reads ``self.deployment_mode``, which has already been auto-corrected by
+        ``_apply_mode_corrections`` in ``registry/main.py`` at startup, so this
+        property always sees the post-correction value.
+        """
+        if self.ui_title and self.ui_title.strip():
+            return self.ui_title
+        if self.deployment_mode == DeploymentMode.REGISTRY_ONLY:
+            return "AI Registry"
+        return "AI Gateway & Registry"
+
     # Storage Backend Configuration
     storage_backend: str = Field(
         default="file",
@@ -644,6 +679,26 @@ class Settings(BaseSettings):
         normalized = v.strip().lower()
         if normalized not in ("json", "text"):
             raise ValueError(f"APP_LOG_FILE_FORMAT must be 'json' or 'text', got {v!r}")
+        return normalized
+
+    @field_validator("app_log_console_format", mode="before")
+    @classmethod
+    def _validate_app_log_console_format(
+        cls,
+        v: str,
+    ) -> str:
+        """Accept only 'text' (default, human-readable) or 'json' (JSONL)."""
+        if v is None:
+            return "text"
+        if not isinstance(v, str):
+            raise ValueError(
+                f"APP_LOG_CONSOLE_FORMAT must be a string, got {type(v).__name__}"
+            )
+        normalized = v.strip().lower()
+        if normalized not in ("json", "text"):
+            raise ValueError(
+                f"APP_LOG_CONSOLE_FORMAT must be 'json' or 'text', got {v!r}"
+            )
         return normalized
 
     @field_validator("storage_backend", mode="before")

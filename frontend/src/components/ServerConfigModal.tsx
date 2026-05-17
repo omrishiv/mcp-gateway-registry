@@ -65,17 +65,56 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
   // While config is loading, default to with-gateway behavior (safer default)
   const isRegistryOnly = !configLoading && registryConfig?.deployment_mode === 'registry-only';
 
-  // Fetch JWT token when modal opens (only in gateway mode)
-  // We intentionally only depend on isOpen and isRegistryOnly to fetch once per modal open
+  // Custom headers from connect-config endpoint
+  const [customHeaders, setCustomHeaders] = useState<Array<{name: string; value: string}>>([]);
+  const [connectConfigError, setConnectConfigError] = useState<string | null>(null);
+
+  // Fetch JWT token when modal opens (only in gateway mode, and only for remote servers).
+  // Local stdio servers don't go through the gateway — no token needed.
   useEffect(() => {
-    if (isOpen && !isRegistryOnly) {
+    if (isOpen && !isRegistryOnly && server.deployment !== 'local') {
       // Reset token state when modal opens
       setJwtToken(null);
       setTokenError(null);
       fetchJwtToken();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, isRegistryOnly]);
+  }, [isOpen, isRegistryOnly, server.deployment]);
+
+  // Fetch custom headers when modal opens
+  useEffect(() => {
+    if (!isOpen) return;
+    setConnectConfigError(null);
+    setCustomHeaders([]);
+    const serverPath = server.path.replace(/^\/+/, '');
+    // Fetch CSRF token first, then include it as header for the GET request
+    // (required by verify_csrf_token_header_only for cookie-authenticated sessions)
+    axios
+      .get('/api/auth/csrf-token')
+      .then(csrfResp => {
+        const csrfToken = csrfResp.data?.csrf_token;
+        const headers: Record<string, string> = {};
+        if (csrfToken) {
+          headers['X-CSRF-Token'] = csrfToken;
+        }
+        return axios.get(`/api/servers/${serverPath}/connect-config`, { headers });
+      })
+      .then(resp => {
+        setCustomHeaders(resp.data.custom_headers ?? []);
+        if (resp.data.decrypt_failures > 0) {
+          setConnectConfigError(
+            `${resp.data.decrypt_failures} custom header(s) could not be decrypted.`
+          );
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to fetch connect config", err);
+        setConnectConfigError(
+          "Could not load custom headers for this server. " +
+          "The copied configuration may be missing headers your server requires."
+        );
+      });
+  }, [isOpen, server.path]);
 
   const fetchJwtToken = async () => {
     setTokenLoading(true);
@@ -121,8 +160,84 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     }
   };
 
+  const isLocal = server.deployment === 'local';
+
+  const buildLocalLaunchSpec = useCallback(() => {
+    const rt = server.local_runtime;
+    if (!rt) return null;
+
+    const env: Record<string, string> = { ...(rt.env ?? {}) };
+    // Show literal placeholders for required_env keys the user hasn't filled in.
+    for (const k of rt.required_env ?? []) {
+      if (!(k in env)) env[k] = '<your-value>';
+    }
+
+    switch (rt.type) {
+      case 'docker': {
+        // For docker, env must be passed into the container with -e flags.
+        // The top-level `env` map only sets vars on the host docker CLI process —
+        // it does NOT propagate inside the container. So we expand both literal
+        // env entries and required_env into -e flags on the docker run command.
+        const args = ['run', '-i', '--rm'];
+        for (const [k, v] of Object.entries(rt.env ?? {})) {
+          args.push('-e', `${k}=${v}`);
+        }
+        for (const k of rt.required_env ?? []) {
+          // -e KEY (no value) tells docker to inherit the host env var of that
+          // name — letting the IDE pass the user-supplied secret through.
+          args.push('-e', k);
+        }
+        const imageRef = rt.image_digest ? `${rt.package}@${rt.image_digest}` : rt.package;
+        args.push(imageRef, ...(rt.args ?? []));
+        // The IDE-visible `env` block carries placeholders for required keys so
+        // users know what to fill in; literal values are already in the args.
+        const ideEnv: Record<string, string> = {};
+        for (const k of rt.required_env ?? []) {
+          ideEnv[k] = '<your-value>';
+        }
+        return { command: 'docker', args, env: ideEnv };
+      }
+      case 'npx': {
+        const pkg = rt.version ? `${rt.package}@${rt.version}` : rt.package;
+        return { command: 'npx', args: ['-y', pkg, ...(rt.args ?? [])], env };
+      }
+      case 'uvx': {
+        const pkg = rt.version ? `${rt.package}@${rt.version}` : rt.package;
+        return { command: 'uvx', args: [pkg, ...(rt.args ?? [])], env };
+      }
+      case 'command':
+      default:
+        return { command: rt.package, args: rt.args ?? [], env };
+    }
+  }, [server.local_runtime]);
+
   const generateMCPConfig = useCallback(() => {
     const serverName = server.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+
+    // Local (stdio) servers: emit a launch recipe shaped per IDE.
+    if (isLocal) {
+      const spec = buildLocalLaunchSpec();
+      if (!spec) {
+        return { mcpServers: { [serverName]: { error: 'No local_runtime configured' } } };
+      }
+      switch (selectedIDE) {
+        case 'roo-code':
+          return {
+            mcpServers: {
+              [serverName]: { type: 'stdio', ...spec, disabled: false },
+            },
+          };
+        case 'kiro':
+          return {
+            mcpServers: {
+              [serverName]: { ...spec, disabled: false, autoApprove: [] },
+            },
+          };
+        default:
+          // Cursor, Claude Code: identical command/args/env shape.
+          return { mcpServers: { [serverName]: spec } };
+      }
+    }
 
     // URL determination with fallback chain:
     // 1. mcp_endpoint (custom override) - always takes precedence
@@ -150,12 +265,14 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     // Use actual JWT token if available, otherwise show placeholder
     const authToken = jwtToken || '[YOUR_GATEWAY_AUTH_TOKEN]';
 
-    // Build headers object with both gateway auth and server auth (if applicable)
+    // Build headers object: custom first, then auth_scheme, then gateway auth
     const buildHeaders = () => {
       const headers: Record<string, string> = {};
 
-      // Add gateway authentication header
-      headers['X-Authorization'] = `Bearer ${authToken}`;
+      // Custom headers go first so auth_scheme and gateway auth overwrite collisions
+      for (const h of customHeaders) {
+        headers[h.name] = h.value;
+      }
 
       // Add server authentication headers if server requires auth
       if (server.auth_scheme && server.auth_scheme !== 'none') {
@@ -166,6 +283,9 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
           headers[headerName] = '[YOUR_API_KEY]';
         }
       }
+
+      // Add gateway authentication header last - cannot be overridden
+      headers['X-Authorization'] = `Bearer ${authToken}`;
 
       return headers;
     };
@@ -232,10 +352,40 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
           },
         };
     }
-  }, [server.name, server.path, server.proxy_pass_url, server.mcp_endpoint, server.auth_scheme, server.auth_header_name, selectedIDE, isRegistryOnly, jwtToken]);
+  }, [server.name, server.path, server.proxy_pass_url, server.mcp_endpoint, server.auth_scheme, server.auth_header_name, selectedIDE, isRegistryOnly, jwtToken, customHeaders]);
 
   const generateGooseConfig = useCallback(() => {
     const serverName = server.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+
+    // Local (stdio) servers: emit Goose's stdio extension form. Build the
+    // env block separately and concat — index-based splice into the lines
+    // array silently breaks if the surrounding lines are reordered.
+    if (isLocal) {
+      const spec = buildLocalLaunchSpec();
+      if (!spec) {
+        return `# No local_runtime configured for ${serverName}`;
+      }
+      const envBlock: string[] = [];
+      if (Object.keys(spec.env).length > 0) {
+        envBlock.push('    envs:');
+        for (const [k, v] of Object.entries(spec.env)) {
+          envBlock.push(`      ${k}: ${JSON.stringify(v)}`);
+        }
+      }
+      const lines = [
+        'extensions:',
+        `  ${serverName}:`,
+        `    name: ${serverName}`,
+        `    description: ${server.description}`,
+        `    type: stdio`,
+        `    cmd: ${spec.command}`,
+        `    args: [${spec.args.map(a => JSON.stringify(a)).join(', ')}]`,
+        ...envBlock,
+        `    enabled: true`,
+        `    timeout: 300`,
+      ];
+      return lines.join('\n');
+    }
 
     let url: string;
     if (server.mcp_endpoint) {
@@ -252,8 +402,9 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     const authToken = jwtToken || '[YOUR_GATEWAY_AUTH_TOKEN]';
 
     const headerLines: string[] = [];
-    if (includeAuthHeaders) {
-      headerLines.push(`      X-Authorization: Bearer ${authToken}`);
+    // Custom headers first
+    for (const h of customHeaders) {
+      headerLines.push(`      ${h.name}: ${h.value}`);
     }
     if (server.auth_scheme && server.auth_scheme !== 'none') {
       if (server.auth_scheme === 'bearer') {
@@ -262,6 +413,9 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
         const headerName = server.auth_header_name || 'X-API-Key';
         headerLines.push(`      ${headerName}: [YOUR_API_KEY]`);
       }
+    }
+    if (includeAuthHeaders) {
+      headerLines.push(`      X-Authorization: Bearer ${authToken}`);
     }
 
     const lines = [
@@ -280,10 +434,27 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     lines.push('    timeout: 300');
 
     return lines.join('\n');
-  }, [server.name, server.mcp_endpoint, server.proxy_pass_url, server.auth_scheme, server.description, server.path, server.auth_header_name, isRegistryOnly, jwtToken]);
+  }, [server.name, server.mcp_endpoint, server.proxy_pass_url, server.auth_scheme, server.description, server.path, server.auth_header_name, isRegistryOnly, jwtToken, customHeaders]);
 
   const generateClaudeCodeCommand = useCallback(() => {
     const serverName = server.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+
+    // Local (stdio) servers: emit `claude mcp add` with stdio transport.
+    if (isLocal) {
+      const spec = buildLocalLaunchSpec();
+      if (!spec) {
+        return `# No local_runtime configured for ${serverName}`;
+      }
+      const envFlags = Object.entries(spec.env)
+        .map(([k, v]) => `-e ${k}=${JSON.stringify(v)}`)
+        .join(' ');
+      const argsStr = spec.args.map(a => JSON.stringify(a)).join(' ');
+      let command = `claude mcp add ${serverName}`;
+      if (envFlags) command += ` ${envFlags}`;
+      command += ` -- ${spec.command}`;
+      if (argsStr) command += ` ${argsStr}`;
+      return command;
+    }
 
     // URL determination (same logic as generateMCPConfig)
     let url: string;
@@ -303,23 +474,28 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     // Build command with headers
     let command = `claude mcp add --transport http ${serverName} ${url}`;
 
-    if (includeAuthHeaders) {
-      // Add gateway auth header
-      command += ` \\\n  --header "X-Authorization: Bearer ${authToken}"`;
+    // Custom headers first
+    for (const h of customHeaders) {
+      command += ` \\\n  --header "${h.name}: ${h.value}"`;
+    }
 
-      // Add server auth header if applicable
-      if (server.auth_scheme && server.auth_scheme !== 'none') {
-        if (server.auth_scheme === 'bearer') {
-          command += ` \\\n  --header "Authorization: Bearer [YOUR_SERVER_AUTH_TOKEN]"`;
-        } else if (server.auth_scheme === 'api_key') {
-          const headerName = server.auth_header_name || 'X-API-Key';
-          command += ` \\\n  --header "${headerName}: [YOUR_API_KEY]"`;
-        }
+    // Server auth header
+    if (server.auth_scheme && server.auth_scheme !== 'none') {
+      if (server.auth_scheme === 'bearer') {
+        command += ` \\\n  --header "Authorization: Bearer [YOUR_SERVER_AUTH_TOKEN]"`;
+      } else if (server.auth_scheme === 'api_key') {
+        const headerName = server.auth_header_name || 'X-API-Key';
+        command += ` \\\n  --header "${headerName}: [YOUR_API_KEY]"`;
       }
     }
 
+    // Gateway auth header last
+    if (includeAuthHeaders) {
+      command += ` \\\n  --header "X-Authorization: Bearer ${authToken}"`;
+    }
+
     return command;
-  }, [server.name, server.path, server.proxy_pass_url, server.mcp_endpoint, server.auth_scheme, server.auth_header_name, isRegistryOnly, jwtToken]);
+  }, [server.name, server.path, server.proxy_pass_url, server.mcp_endpoint, server.auth_scheme, server.auth_header_name, isRegistryOnly, jwtToken, customHeaders]);
 
 
   const copyConfigToClipboard = useCallback(async () => {
@@ -409,7 +585,28 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
             </ol>
           </div>
 
-          {!isRegistryOnly ? (
+          {isLocal ? (
+            <div className="bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg p-4">
+              <h4 className="font-medium text-purple-900 dark:text-purple-100 mb-2">Local Server</h4>
+              <p className="text-sm text-purple-800 dark:text-purple-200">
+                This server runs on your machine via stdio. The configuration below
+                is a launch recipe — no gateway authentication needed.
+              </p>
+              {server.local_runtime?.required_env && server.local_runtime.required_env.length > 0 && (
+                <div className="mt-3 p-3 rounded bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800">
+                  <p className="text-sm text-yellow-900 dark:text-yellow-100">
+                    <strong>Action required:</strong> replace{' '}
+                    <code className="bg-yellow-100 dark:bg-yellow-800 px-1 rounded">&lt;your-value&gt;</code>{' '}
+                    in the <code className="bg-yellow-100 dark:bg-yellow-800 px-1 rounded">env</code> block
+                    for these keys before pasting into your IDE config:{' '}
+                    <code className="bg-yellow-100 dark:bg-yellow-800 px-1 rounded">
+                      {server.local_runtime.required_env.join(', ')}
+                    </code>
+                  </p>
+                </div>
+              )}
+            </div>
+          ) : !isRegistryOnly ? (
             <div className={`border rounded-lg p-4 ${
               jwtToken
                 ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'

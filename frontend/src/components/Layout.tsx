@@ -12,6 +12,7 @@ import {
 import Sidebar from './Sidebar';
 import UptimeDisplay from './UptimeDisplay';
 import { useServerStats } from '../hooks/useServerStats';
+import { useUiTitle } from '../hooks/useUiTitle';
 import { useAuth } from '../contexts/AuthContext';
 import logo from '../assets/logo.png';
 
@@ -24,8 +25,13 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   const [version, setVersion] = useState<string | null>(null);
   const { user, logout } = useAuth();
   const { stats, activeFilter, setActiveFilter } = useServerStats();
+  const uiTitle = useUiTitle();
   const [availableTags, setAvailableTags] = useState<string[]>([]);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+
+  useEffect(() => {
+    document.title = uiTitle;
+  }, [uiTitle]);
 
   const handleTagSelect = useCallback((tag: string) => {
     setSelectedTags(prev =>
@@ -87,11 +93,11 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
                 <Link to="/" className="flex items-center hover:opacity-80 transition-opacity">
                   <img
                     src={logo}
-                    alt="AI Gateway & Registry Logo"
+                    alt="Logo"
                     className="h-8 w-8 dark:brightness-0 dark:invert"
                   />
                   <span className="ml-2 text-xl font-bold text-gray-900 dark:text-white">
-                    AI Gateway & Registry
+                    {uiTitle}
                   </span>
                 </Link>
               </div>

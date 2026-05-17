@@ -911,6 +911,17 @@ variable "app_log_file_format" {
   }
 }
 
+variable "app_log_console_format" {
+  description = "STDOUT/console format: 'json' (default, structured JSON Lines, same schema as app_log_file_format=json) or 'text' (human-readable comma-separated). JSON is the default since log agents / sidecars typically scrape container stdout."
+  type        = string
+  default     = "json"
+
+  validation {
+    condition     = contains(["json", "text"], var.app_log_console_format)
+    error_message = "app_log_console_format must be one of: 'json', 'text'"
+  }
+}
+
 # =============================================================================
 # TOOL-LEVEL ACCESS CONTROL (Issue #1026)
 # =============================================================================
@@ -1043,6 +1054,19 @@ variable "show_agents_tab" {
   description = "Show the Agents tab in the UI. AND-ed with registry_mode."
   type        = bool
   default     = true
+}
+
+variable "ui_title" {
+  description = <<-EOT
+    Override for the UI title shown in the header, login, and logout pages.
+    When unset (empty string), the title defaults based on deployment_mode:
+    - with-gateway  -> "AI Gateway & Registry"
+    - registry-only -> "AI Registry"
+    Set this to brand the deployment with your organization's product name
+    (e.g., "Acme AI Portal").
+  EOT
+  type        = string
+  default     = ""
 }
 
 # =============================================================================

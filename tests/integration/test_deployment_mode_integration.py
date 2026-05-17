@@ -85,6 +85,9 @@ class TestDeploymentModeIntegration:
         assert "agents" in data["features"]
         assert "skills" in data["features"]
         assert "federation" in data["features"]
+        assert "ui_title" in data
+        assert isinstance(data["ui_title"], str)
+        assert data["ui_title"]  # non-empty
 
     def test_health_includes_deployment_mode(self, integration_client):
         """Health endpoint should include deployment mode info."""
@@ -94,6 +97,16 @@ class TestDeploymentModeIntegration:
         assert "deployment_mode" in data
         assert "registry_mode" in data
         assert "nginx_updates_enabled" in data
+
+    def test_version_endpoint_returns_ui_title(self, integration_client):
+        """Version endpoint surfaces ui_title for unauthenticated pre-login pages."""
+        response = integration_client.get("/api/version")
+        assert response.status_code == 200
+        data = response.json()
+        assert "version" in data
+        assert "ui_title" in data
+        assert isinstance(data["ui_title"], str)
+        assert data["ui_title"]  # non-empty (effective_ui_title always returns a value)
 
     def test_server_registration_works_in_registry_only(self, integration_client, mock_auth_admin):
         """Server registration should not 500 in registry-only mode."""

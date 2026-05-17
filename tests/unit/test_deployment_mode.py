@@ -89,6 +89,123 @@ class TestNginxUpdatesEnabled:
         assert settings.nginx_updates_enabled is False
 
 
+# =============================================================================
+# TEST CLASS: Effective UI Title
+# =============================================================================
+
+
+@pytest.mark.unit
+class TestEffectiveUiTitle:
+    """Test effective_ui_title property — UI_TITLE override and mode-aware default."""
+
+    def test_unset_with_gateway_default(self):
+        """Unset UI_TITLE + with-gateway -> 'AI Gateway & Registry'."""
+        settings = Settings(deployment_mode=DeploymentMode.WITH_GATEWAY, ui_title=None)
+        assert settings.effective_ui_title == "AI Gateway & Registry"
+
+    def test_unset_registry_only_default(self):
+        """Unset UI_TITLE + registry-only -> 'AI Registry'."""
+        settings = Settings(deployment_mode=DeploymentMode.REGISTRY_ONLY, ui_title=None)
+        assert settings.effective_ui_title == "AI Registry"
+
+    def test_override_with_gateway(self):
+        """Set UI_TITLE wins over with-gateway default."""
+        settings = Settings(
+            deployment_mode=DeploymentMode.WITH_GATEWAY, ui_title="Acme Portal"
+        )
+        assert settings.effective_ui_title == "Acme Portal"
+
+    def test_override_registry_only(self):
+        """Set UI_TITLE wins over registry-only default."""
+        settings = Settings(
+            deployment_mode=DeploymentMode.REGISTRY_ONLY, ui_title="Contoso Agent Registry"
+        )
+        assert settings.effective_ui_title == "Contoso Agent Registry"
+
+    def test_empty_string_treated_as_unset(self):
+        """Empty UI_TITLE falls back to deployment-mode default."""
+        settings = Settings(deployment_mode=DeploymentMode.WITH_GATEWAY, ui_title="")
+        assert settings.effective_ui_title == "AI Gateway & Registry"
+
+    def test_whitespace_only_treated_as_unset(self):
+        """Whitespace-only UI_TITLE falls back to deployment-mode default."""
+        settings = Settings(deployment_mode=DeploymentMode.REGISTRY_ONLY, ui_title="   ")
+        assert settings.effective_ui_title == "AI Registry"
+
+
+# =============================================================================
+# TEST CLASS: /api/version exposes ui_title
+# =============================================================================
+
+
+@pytest.mark.unit
+class TestVersionEndpointUiTitle:
+    """End-to-end check that /api/version surfaces effective_ui_title.
+
+    /api/version is unauthenticated by design (whitelisted in nginx and at
+    FastAPI), so Login/Logout can render the operator-configured title before
+    the user has a session. Guards against regressions that move ui_title back
+    behind auth.
+    """
+
+    def _patched_client(
+        self,
+        monkeypatch,
+        deployment_mode: DeploymentMode,
+        ui_title: str | None,
+    ):
+        from fastapi.testclient import TestClient
+
+        from registry.api import system_routes
+        from registry.core import config as config_module
+        from registry.main import app
+
+        settings = Settings(deployment_mode=deployment_mode, ui_title=ui_title)
+        # system_routes.py imports `settings` directly at module load, so we
+        # patch both the source-of-truth and the route module's binding.
+        monkeypatch.setattr(config_module, "settings", settings)
+        monkeypatch.setattr(system_routes, "settings", settings)
+        return TestClient(app)
+
+    def test_registry_only_default_returns_ai_registry(self, monkeypatch):
+        """DEPLOYMENT_MODE=registry-only, UI_TITLE unset -> 'AI Registry'."""
+        client = self._patched_client(monkeypatch, DeploymentMode.REGISTRY_ONLY, None)
+        response = client.get("/api/version")
+        assert response.status_code == 200
+        assert response.json()["ui_title"] == "AI Registry"
+
+    def test_with_gateway_default_returns_full_title(self, monkeypatch):
+        """DEPLOYMENT_MODE=with-gateway, UI_TITLE unset -> 'AI Gateway & Registry'."""
+        client = self._patched_client(monkeypatch, DeploymentMode.WITH_GATEWAY, None)
+        response = client.get("/api/version")
+        assert response.status_code == 200
+        assert response.json()["ui_title"] == "AI Gateway & Registry"
+
+    def test_override_wins_over_mode_default(self, monkeypatch):
+        """UI_TITLE='Acme Portal' is returned regardless of deployment_mode."""
+        client = self._patched_client(
+            monkeypatch, DeploymentMode.REGISTRY_ONLY, "Acme Portal"
+        )
+        response = client.get("/api/version")
+        assert response.status_code == 200
+        assert response.json()["ui_title"] == "Acme Portal"
+
+    def test_endpoint_is_unauthenticated(self):
+        """/api/version must be reachable without an Authorization header.
+
+        Critical invariant: Login is unauthenticated, so its
+        source for ui_title must also be unauthenticated.
+        """
+        from fastapi.testclient import TestClient
+
+        from registry.main import app
+
+        client = TestClient(app)
+        response = client.get("/api/version")  # no auth header
+        assert response.status_code == 200
+        assert "ui_title" in response.json()
+
+
 from unittest.mock import MagicMock, patch
 
 # =============================================================================

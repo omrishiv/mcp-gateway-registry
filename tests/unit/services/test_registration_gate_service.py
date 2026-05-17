@@ -42,6 +42,7 @@ ASYNCIO_SLEEP_PATH = "registry.services.registration_gate_service.asyncio.sleep"
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_raw_headers(
     headers: dict[str, str],
 ) -> list[tuple[bytes, bytes]]:
@@ -53,10 +54,7 @@ def _make_raw_headers(
     Returns:
         List of (name_bytes, value_bytes) tuples.
     """
-    return [
-        (k.encode("latin-1"), v.encode("latin-1"))
-        for k, v in headers.items()
-    ]
+    return [(k.encode("latin-1"), v.encode("latin-1")) for k, v in headers.items()]
 
 
 def _make_mock_settings(
@@ -372,6 +370,61 @@ class TestSanitizePayload:
 
         assert result == {}
 
+    def test_local_runtime_env_values_redacted(self):
+        """env values inside local_runtime are masked before being
+        sent to external gate webhooks. Keys are preserved so the gate can
+        reason about which env vars exist; values are not."""
+        payload = {
+            "name": "my-local",
+            "deployment": "local",
+            "local_runtime": {
+                "type": "npx",
+                "package": "@acme/mcp",
+                "env": {"LOG_LEVEL": "info", "DATABASE_URL": "postgres://u:p@h/db"},
+                "required_env": ["API_KEY"],
+            },
+        }
+
+        result = _sanitize_payload(payload)
+
+        rt = result["local_runtime"]
+        # Env keys are preserved (the gate may want to reason about them).
+        assert set(rt["env"].keys()) == {"LOG_LEVEL", "DATABASE_URL"}
+        # But values are masked.
+        assert all(v == "<redacted>" for v in rt["env"].values())
+        # required_env (just key names) flows through unchanged.
+        assert rt["required_env"] == ["API_KEY"]
+        # Other local_runtime fields are preserved.
+        assert rt["type"] == "npx"
+        assert rt["package"] == "@acme/mcp"
+
+    def test_local_runtime_args_redacted(self):
+        """args may also leak credentials in pathological cases
+        (admin pasted a secret into an arg). Values are masked; arg count is
+        preserved so the gate can reason about shape."""
+        payload = {
+            "deployment": "local",
+            "local_runtime": {
+                "type": "npx",
+                "package": "@acme/mcp",
+                "args": ["--api-key", "sk-proj-realsecret", "--verbose"],
+                "env": {},
+            },
+        }
+        result = _sanitize_payload(payload)
+        rt = result["local_runtime"]
+        assert rt["args"] == ["<redacted>", "<redacted>", "<redacted>"]
+        assert len(rt["args"]) == 3
+
+    def test_local_runtime_without_env_unchanged(self):
+        """local_runtime entries without env still serialize cleanly."""
+        payload = {
+            "deployment": "local",
+            "local_runtime": {"type": "npx", "package": "@acme/mcp"},
+        }
+        result = _sanitize_payload(payload)
+        assert result["local_runtime"] == {"type": "npx", "package": "@acme/mcp"}
+
 
 # ===========================================================================
 # _build_auth_headers tests
@@ -483,10 +536,12 @@ class TestExtractRequestHeaders:
 
     def test_converts_raw_asgi_headers(self):
         """Raw byte tuples are decoded to string dict."""
-        raw = _make_raw_headers({
-            "host": "example.com",
-            "content-type": "application/json",
-        })
+        raw = _make_raw_headers(
+            {
+                "host": "example.com",
+                "content-type": "application/json",
+            }
+        )
 
         result = _extract_request_headers(raw)
 
@@ -495,10 +550,12 @@ class TestExtractRequestHeaders:
 
     def test_filters_authorization_header(self):
         """The 'authorization' header is excluded."""
-        raw = _make_raw_headers({
-            "authorization": "Bearer secret-token",
-            "host": "example.com",
-        })
+        raw = _make_raw_headers(
+            {
+                "authorization": "Bearer secret-token",
+                "host": "example.com",
+            }
+        )
 
         result = _extract_request_headers(raw)
 
@@ -507,10 +564,12 @@ class TestExtractRequestHeaders:
 
     def test_filters_cookie_header(self):
         """The 'cookie' header is excluded."""
-        raw = _make_raw_headers({
-            "cookie": "session=abc123",
-            "accept": "application/json",
-        })
+        raw = _make_raw_headers(
+            {
+                "cookie": "session=abc123",
+                "accept": "application/json",
+            }
+        )
 
         result = _extract_request_headers(raw)
 
@@ -519,10 +578,12 @@ class TestExtractRequestHeaders:
 
     def test_filters_csrf_token_header(self):
         """The 'x-csrf-token' header is excluded."""
-        raw = _make_raw_headers({
-            "x-csrf-token": "csrf-value",
-            "user-agent": "test-client",
-        })
+        raw = _make_raw_headers(
+            {
+                "x-csrf-token": "csrf-value",
+                "user-agent": "test-client",
+            }
+        )
 
         result = _extract_request_headers(raw)
 
@@ -531,13 +592,15 @@ class TestExtractRequestHeaders:
 
     def test_filters_multiple_sensitive_headers(self):
         """All sensitive headers are excluded simultaneously."""
-        raw = _make_raw_headers({
-            "authorization": "Bearer tok",
-            "cookie": "sess=123",
-            "x-csrf-token": "csrf",
-            "host": "example.com",
-            "x-request-id": "req-001",
-        })
+        raw = _make_raw_headers(
+            {
+                "authorization": "Bearer tok",
+                "cookie": "sess=123",
+                "x-csrf-token": "csrf",
+                "host": "example.com",
+                "x-request-id": "req-001",
+            }
+        )
 
         result = _extract_request_headers(raw)
 
@@ -592,10 +655,7 @@ class TestIsGateConfigured:
             mock_settings.registration_gate_url = ""
 
             assert _is_gate_configured() is False
-            assert any(
-                "no URL is configured" in record.message
-                for record in caplog.records
-            )
+            assert any("no URL is configured" in record.message for record in caplog.records)
 
     def test_returns_true_when_enabled_and_url_set(self):
         """Gate is configured when enabled and URL is present."""
@@ -817,11 +877,13 @@ class TestCheckRegistrationGate:
                 operation="register",
                 source_api="/api/v1/agents",
                 registration_payload={"name": "agent1"},
-                raw_headers=_make_raw_headers({
-                    "host": "localhost",
-                    "authorization": "Bearer secret-token",
-                    "x-request-id": "req-001",
-                }),
+                raw_headers=_make_raw_headers(
+                    {
+                        "host": "localhost",
+                        "authorization": "Bearer secret-token",
+                        "x-request-id": "req-001",
+                    }
+                ),
             )
 
             call_kwargs = mock_client.post.call_args
@@ -1105,11 +1167,13 @@ class TestAcquireOAuth2Token:
         """Happy path: token endpoint returns 200 with access_token."""
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json = MagicMock(return_value={
-            "access_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9",
-            "token_type": "Bearer",
-            "expires_in": 3600,
-        })
+        mock_response.json = MagicMock(
+            return_value={
+                "access_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9",
+                "token_type": "Bearer",
+                "expires_in": 3600,
+            }
+        )
 
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(return_value=mock_response)
@@ -1128,10 +1192,12 @@ class TestAcquireOAuth2Token:
         """Scope parameter is included in form data when set."""
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json = MagicMock(return_value={
-            "access_token": "token123",
-            "token_type": "Bearer",
-        })
+        mock_response.json = MagicMock(
+            return_value={
+                "access_token": "token123",
+                "token_type": "Bearer",
+            }
+        )
 
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(return_value=mock_response)
@@ -1156,9 +1222,11 @@ class TestAcquireOAuth2Token:
         """Scope parameter is omitted when config is empty."""
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json = MagicMock(return_value={
-            "access_token": "token123",
-        })
+        mock_response.json = MagicMock(
+            return_value={
+                "access_token": "token123",
+            }
+        )
 
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(return_value=mock_response)
@@ -1201,10 +1269,12 @@ class TestAcquireOAuth2Token:
         """200 response without access_token field returns None."""
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json = MagicMock(return_value={
-            "token_type": "Bearer",
-            "expires_in": 3600,
-        })
+        mock_response.json = MagicMock(
+            return_value={
+                "token_type": "Bearer",
+                "expires_in": 3600,
+            }
+        )
 
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(return_value=mock_response)
@@ -1392,7 +1462,4 @@ class TestRegistrationGateAuthTypeOAuth2:
 
     def test_oauth2_client_credentials_enum_value(self):
         """Enum contains the new oauth2_client_credentials value."""
-        assert (
-            RegistrationGateAuthType.OAUTH2_CLIENT_CREDENTIALS
-            == "oauth2_client_credentials"
-        )
+        assert RegistrationGateAuthType.OAUTH2_CLIENT_CREDENTIALS == "oauth2_client_credentials"

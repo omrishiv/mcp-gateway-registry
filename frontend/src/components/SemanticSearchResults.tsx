@@ -1306,6 +1306,10 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
             enabled: configServer.is_enabled ?? true,
             tags: configServer.tags,
             num_tools: configServer.num_tools,
+            proxy_pass_url: configServer.proxy_pass_url,
+            mcp_endpoint: configServer.mcp_endpoint,
+            deployment: configServer.deployment,
+            local_runtime: configServer.local_runtime,
           } as Server
         }
         isOpen

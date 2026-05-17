@@ -8,7 +8,7 @@ global:
   image:
     # Container registry (host + optional namespace), e.g. "public.ecr.aws/p3v1o3c6"
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.23.0
+    tag: 1.24.0
     pullPolicy: IfNotPresent
 
   # When installing chart from repository, add --set global.chartVersion=$(git rev-parse HEAD) to add the git hash to a configmap for debugging
@@ -236,6 +236,12 @@ registry:
     # Example: "cursor,claude-code"
     codingAssistants: ""
 
+    # UI title override. Empty string defers to the deployment-mode
+    # default ("AI Gateway & Registry" for with-gateway, "AI Registry" for
+    # registry-only). Set to brand the deployment with your organization's
+    # product name (e.g., "Acme AI Portal").
+    uiTitle: ""
+
     # Federation OAuth2 authentication (alternative to static token)
     federationTokenEndpoint: ""
     federationClientId: ""
@@ -308,6 +314,7 @@ registry:
       # Log file path and format (issue #987). Propagated to auth-server via YAML anchor.
       appLogDir: ""                    # Empty uses backend default: /var/log/containers/ai-registry
       appLogFileFormat: "json"         # "json" (default, Splunk-friendly) or "text" (legacy comma-separated)
+      appLogConsoleFormat: "json"      # "json" (default, structured logging) or "text" (human-readable)
 
     # Tool-level access control (issue #1026)
     mcpToolsListFilterEnabled: true    # Registry-side awareness of the MCP tools/list filter (also read by auth-server)
@@ -366,6 +373,12 @@ mcpgw:
   enabled: true # Set to true to deploy the MCPGW MCP server
   app:
     replicas: 1
+
+    # Application Log Configuration — reuses the &appLogConfig anchor from
+    # registry.app so all three services share the same logging settings.
+    # mcpgw only consumes a subset (no MongoDB writer); extra keys merged in
+    # by the anchor are ignored by charts/mcpgw/templates/configmap-app-log.yaml.
+    <<: *appLogConfig
 
   nodeSelector: {}
 

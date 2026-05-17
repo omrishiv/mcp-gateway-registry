@@ -15,6 +15,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from ..auth.dependencies import nginx_proxied_auth
+from ..constants import DeploymentType
 from ..core.config import settings
 from ..repositories.factory import get_security_scan_repository
 from ..schemas.peer_federation_schema import FederationExportResponse
@@ -169,6 +170,10 @@ def _filter_by_visibility(
 
     Filtering rules:
     - Federated items (synced from another peer): NEVER included (chain prevention)
+    - deployment=local: NEVER included (push-side gate; local servers distribute
+      executable launch recipes — opt-in must be explicit on the consuming side
+      AND we don't transmit recipes over the wire to peers that haven't opted
+      in.)
     - visibility=public: Always included (default if not specified)
     - visibility=group-restricted: Include only if peer is in allowed_groups
     - visibility=private: NEVER included (also matches legacy "internal")
@@ -183,6 +188,7 @@ def _filter_by_visibility(
     filtered = []
     peer_group_set = set(peer_groups)
     federated_count = 0
+    local_count = 0
 
     for item in items:
         # Chain prevention: Never re-export items synced from another peer
@@ -190,6 +196,13 @@ def _filter_by_visibility(
         # re-exported from B to C
         if _is_federated_item(item):
             federated_count += 1
+            continue
+
+        # Push-side local-server gate. The consumer's sync_local_servers flag
+        # controls whether they STORE the recipe; this filter prevents the
+        # recipe (with env / args) from going over the wire at all.
+        if _get_item_attr(item, "deployment", "remote") == DeploymentType.LOCAL:
+            local_count += 1
             continue
 
         # Default to "public" if visibility not specified (backwards compatibility)
@@ -213,7 +226,8 @@ def _filter_by_visibility(
 
     logger.debug(
         f"Filtered {len(items)} items to {len(filtered)} based on visibility. "
-        f"Excluded {federated_count} federated items (chain prevention). "
+        f"Excluded {federated_count} federated items (chain prevention) and "
+        f"{local_count} local servers (push-side gate). "
         f"Peer groups: {peer_groups}"
     )
 

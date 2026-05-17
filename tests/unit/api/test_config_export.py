@@ -50,3 +50,31 @@ class TestConfigExport:
             assert "None" not in stripped, f"Found Python 'None' in: {stripped}"
             assert "True" not in stripped, f"Found Python 'True' in: {stripped}"
             assert "False" not in stripped, f"Found Python 'False' in: {stripped}"
+
+    def test_export_env_includes_resolved_ui_title(self):
+        """exports surface the resolved title via the @property.
+
+        CONFIG_GROUPS uses 'effective_ui_title' as the field name; this guards
+        against a regression that switches it back to 'ui_title' and would emit
+        the raw (often None) value instead of the deployment-mode-aware default.
+        """
+        output = _export_as_env(include_sensitive=False)
+        assert "EFFECTIVE_UI_TITLE=" in output
+        # The value must be a real string, not 'None' or empty.
+        for line in output.splitlines():
+            if line.startswith("EFFECTIVE_UI_TITLE="):
+                value = line.split("=", 1)[1]
+                assert value, "ui_title must always resolve to a non-empty string"
+                assert value != "None"
+                break
+        else:
+            raise AssertionError("EFFECTIVE_UI_TITLE not found in env export")
+
+    def test_export_json_includes_resolved_ui_title(self):
+        """JSON export under the deployment group has a resolved ui_title."""
+        output = _export_as_json(include_sensitive=False)
+        parsed = json.loads(output)
+        deployment_group = parsed["configuration"].get("deployment", {})
+        assert "effective_ui_title" in deployment_group
+        assert deployment_group["effective_ui_title"]
+        assert deployment_group["effective_ui_title"] != "None"

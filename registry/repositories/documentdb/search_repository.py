@@ -1254,6 +1254,8 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                         "mcp_endpoint": server_metadata.get("mcp_endpoint"),
                         "sse_endpoint": server_metadata.get("sse_endpoint"),
                         "supported_transports": server_metadata.get("supported_transports", []),
+                        "deployment": server_metadata.get("deployment", "remote"),
+                        "local_runtime": server_metadata.get("local_runtime"),
                     }
                     grouped_results["servers"].append(result_entry)
 
@@ -1909,6 +1911,8 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                         "mcp_endpoint": server_metadata.get("mcp_endpoint"),
                         "sse_endpoint": server_metadata.get("sse_endpoint"),
                         "supported_transports": server_metadata.get("supported_transports", []),
+                        "deployment": server_metadata.get("deployment", "remote"),
+                        "local_runtime": server_metadata.get("local_runtime"),
                     }
                     grouped_results["servers"].append(result_entry)
 

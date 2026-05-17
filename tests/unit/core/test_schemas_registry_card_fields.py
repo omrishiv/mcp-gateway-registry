@@ -20,6 +20,7 @@ class TestServerInfoRegistryCardFields:
             path="test/server",
             description="Test server",
             version="1.0.0",
+            proxy_pass_url="http://test",
         )
         assert server.status == LifecycleStatus.ACTIVE
 
@@ -31,6 +32,7 @@ class TestServerInfoRegistryCardFields:
             description="Test server",
             version="1.0.0",
             status=LifecycleStatus.DEPRECATED,
+            proxy_pass_url="http://test",
         )
         assert server.status == LifecycleStatus.DEPRECATED
 
@@ -50,6 +52,7 @@ class TestServerInfoRegistryCardFields:
                 description="Test server",
                 version="1.0.0",
                 status=status,
+                proxy_pass_url="http://test",
             )
             assert server.status == status
 
@@ -60,6 +63,7 @@ class TestServerInfoRegistryCardFields:
             path="test/server",
             description="Test server",
             version="1.0.0",
+            proxy_pass_url="http://test",
         )
 
         # Provider should be auto-populated from settings
@@ -81,6 +85,7 @@ class TestServerInfoRegistryCardFields:
             description="Test server",
             version="1.0.0",
             provider=custom_provider,
+            proxy_pass_url="http://test",
         )
 
         assert server.provider == custom_provider
@@ -94,6 +99,7 @@ class TestServerInfoRegistryCardFields:
             path="test/server",
             description="Test server",
             version="1.0.0",
+            proxy_pass_url="http://test",
         )
 
         assert server.source_created_at is None
@@ -111,6 +117,7 @@ class TestServerInfoRegistryCardFields:
             version="1.0.0",
             source_created_at=created,
             source_updated_at=updated,
+            proxy_pass_url="http://test",
         )
 
         assert server.source_created_at == created
@@ -123,6 +130,7 @@ class TestServerInfoRegistryCardFields:
             path="test/server",
             description="Test server",
             version="1.0.0",
+            proxy_pass_url="http://test",
         )
 
         assert server.external_tags == []
@@ -135,6 +143,7 @@ class TestServerInfoRegistryCardFields:
             description="Test server",
             version="1.0.0",
             external_tags=["federated", "external", "verified"],
+            proxy_pass_url="http://test",
         )
 
         assert server.external_tags == ["federated", "external", "verified"]
@@ -159,6 +168,7 @@ class TestServerInfoRegistryCardFields:
             source_created_at=created,
             source_updated_at=updated,
             external_tags=["tag1", "tag2"],
+            proxy_pass_url="http://test",
         )
 
         assert server.status == LifecycleStatus.BETA
@@ -186,6 +196,7 @@ class TestServerInfoRegistryCardFields:
             source_created_at=created,
             source_updated_at=updated,
             external_tags=["federated"],
+            proxy_pass_url="http://test",
         )
 
         json_data = server.model_dump(mode="json")
@@ -211,6 +222,7 @@ class TestServerInfoRegistryCardFields:
             "description": "Old server without registry card fields",
             "version": "1.0.0",
             "tags": ["old"],
+            "proxy_pass_url": "http://test",
         }
 
         # Should load successfully with defaults

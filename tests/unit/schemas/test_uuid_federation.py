@@ -24,6 +24,7 @@ class TestFederatedUUIDPreservation:
             "path": "/federated/server",
             "description": "Server from peer registry",
             "external_tags": ["federated"],
+            "proxy_pass_url": "http://test",
         }
 
         # Load the data
@@ -40,6 +41,7 @@ class TestFederatedUUIDPreservation:
             "path": "/federated/server",
             "description": "Server from old peer registry",
             "external_tags": ["federated"],
+            "proxy_pass_url": "http://test",
         }
 
         # Load the data
@@ -131,6 +133,7 @@ class TestFederatedUUIDPreservation:
             "server_name": "federated-server",
             "path": "/federated/server",
             "description": "Server from old peer",
+            "proxy_pass_url": "http://test",
         }
 
         # First sync
@@ -151,6 +154,7 @@ class TestFederatedUUIDPreservation:
             server_name="test-server",
             path="/test/server",
             external_tags=["federated"],
+            proxy_pass_url="http://test",
         )
 
         # Serialize to JSON

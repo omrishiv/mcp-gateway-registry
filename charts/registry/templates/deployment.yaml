@@ -91,6 +91,8 @@ spec:
               value: {{ .Values.app.showAgentsTab | default true | quote }}
             - name: CODING_ASSISTANTS
               value: {{ .Values.app.codingAssistants | default "" | quote }}
+            - name: UI_TITLE
+              value: {{ .Values.app.uiTitle | default "" | quote }}
             # Tool-level access control (issue #1026)
             - name: MCP_TOOLS_LIST_FILTER_ENABLED
               value: {{ .Values.app.mcpToolsListFilterEnabled | toString | quote }}

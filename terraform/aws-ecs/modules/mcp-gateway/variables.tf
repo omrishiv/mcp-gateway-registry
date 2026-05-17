@@ -963,6 +963,12 @@ variable "app_log_file_format" {
   default     = "json"
 }
 
+variable "app_log_console_format" {
+  description = "STDOUT/console format: 'json' (default, JSONL stdout for log-agent scraping) or 'text' (human-readable)."
+  type        = string
+  default     = "json"
+}
+
 # =============================================================================
 # TOOL-LEVEL ACCESS CONTROL (Issue #1026)
 # =============================================================================
@@ -1023,6 +1029,12 @@ variable "show_agents_tab" {
   description = "Show the Agents tab in the UI. AND-ed with registry_mode."
   type        = bool
   default     = true
+}
+
+variable "ui_title" {
+  description = "Override for the UI title. Empty string defers to the deployment-mode default ('AI Gateway & Registry' for with-gateway, 'AI Registry' for registry-only)."
+  type        = string
+  default     = ""
 }
 
 # =============================================================================

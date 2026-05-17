@@ -3,7 +3,7 @@ global:
   image:
     # Container registry (host + optional namespace). Shared default across subcharts.
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.23.0
+    tag: 1.24.0
     pullPolicy: IfNotPresent
 
 # Per-service image configuration
@@ -53,6 +53,16 @@ app:
   githubAppPrivateKeyExistingSecretKey: "GITHUB_APP_PRIVATE_KEY"
   githubExtraHosts: ""
   githubApiBaseUrl: "https://api.github.com"
+
+  # Application Log Configuration
+  # mcpgw uses a smaller subset than registry/auth-server (no MongoDB writer);
+  # see servers/mcpgw/logging_setup.py for the env vars actually consumed.
+  appLogDir: ""                    # Empty uses backend default: /var/log/containers/ai-registry
+  appLogFileFormat: "json"         # "json" (default, Splunk-friendly) or "text" (legacy comma-separated)
+  appLogConsoleFormat: "json"      # "json" (default, structured logging) or "text" (human-readable)
+  appLogLevel: "INFO"              # Application log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+  appLogMaxBytes: "52428800"       # Max size per log file before rotation (default 50 MB)
+  appLogBackupCount: "5"           # Number of rotated backup log files to keep
 
 # Service configuration
 service:

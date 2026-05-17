@@ -8,7 +8,7 @@ from time import time
 import httpx
 from fastapi import WebSocket
 
-from registry.constants import HealthStatus
+from registry.constants import DeploymentType, HealthStatus
 
 from ..core.config import settings
 from ..core.endpoint_utils import get_endpoint_url_from_server_info
@@ -392,7 +392,8 @@ class HealthMonitoringService:
                     server_info = await server_service.get_server_info(path)
                     if server_info:
                         enabled_servers[path] = server_info
-                await nginx_service.generate_config_async(enabled_servers)
+                async with nginx_service.reload_lock:
+                    await nginx_service.generate_config_async(enabled_servers)
                 logger.info("Nginx configuration regenerated due to health status changes")
             except Exception as e:
                 logger.error(
@@ -404,8 +405,21 @@ class HealthMonitoringService:
     ) -> bool:
         """Check a single service and return True if status changed."""
 
-        proxy_pass_url = server_info.get("proxy_pass_url")
         previous_status = self.server_health_status.get(service_path, HealthStatus.UNKNOWN)
+
+        # Local (stdio) servers run on the user's machine — registry has nothing
+        # to probe. Don't update last_check_time: there's no real check, and
+        # showing "checked just now" misleads operators. Defensively clear any
+        # stale timestamp from a previous remote→local conversion (the edit
+        # endpoint blocks type changes today, but direct DB manipulation could
+        # leave one behind).
+        if server_info.get("deployment") == DeploymentType.LOCAL:
+            new_status = HealthStatus.LOCAL
+            self.server_health_status[service_path] = new_status
+            self.server_last_check_time.pop(service_path, None)
+            return previous_status != new_status
+
+        proxy_pass_url = server_info.get("proxy_pass_url")
         new_status = previous_status
 
         try:
@@ -496,6 +510,19 @@ class HealthMonitoringService:
                 if isinstance(header_dict, dict):
                     headers.update(header_dict)
                     logger.debug(f"Added server headers: {header_dict}")
+
+        # Custom headers go first; auth_scheme below overwrites name collisions
+        encrypted_custom = server_info.get("custom_headers_encrypted")
+        if encrypted_custom:
+            from ..utils.credential_encryption import decrypt_custom_headers
+
+            decrypted = decrypt_custom_headers(encrypted_custom)
+            for entry in decrypted:
+                headers[entry["name"]] = entry["value"]
+            logger.debug(
+                f"Merged {len(decrypted)} custom headers into health check "
+                f"(names only): {[e['name'] for e in decrypted]}"
+            )
 
         # Inject auth header from encrypted credentials (if present)
         auth_scheme = server_info.get("auth_scheme", "none")
@@ -1170,6 +1197,16 @@ class HealthMonitoringService:
         if not server_info:
             return "error: server not registered", None
 
+        # Local (stdio) servers have no HTTP endpoint to probe. Mirror the
+        # background-loop short-circuit so toggling a local server
+        # ON doesn't return a misleading 'missing proxy URL' error and doesn't
+        # stamp last_check_time (the check never happened). Defensively clear
+        # any stale timestamp from a previous remote→local conversion.
+        if server_info.get("deployment") == DeploymentType.LOCAL:
+            self.server_health_status[service_path] = HealthStatus.LOCAL
+            self.server_last_check_time.pop(service_path, None)
+            return HealthStatus.LOCAL, None
+
         proxy_pass_url = server_info.get("proxy_pass_url")
 
         # Record check time
@@ -1255,7 +1292,8 @@ class HealthMonitoringService:
                     server_info = await server_service.get_server_info(path)
                     if server_info:
                         enabled_servers[path] = server_info
-                await nginx_service.generate_config_async(enabled_servers)
+                async with nginx_service.reload_lock:
+                    await nginx_service.generate_config_async(enabled_servers)
                 logger.info(
                     f"Nginx configuration regenerated due to status change for {service_path}: {previous_status} -> {current_status}"
                 )
@@ -1275,10 +1313,19 @@ class HealthMonitoringService:
 
         # Quick enabled check from server_info
         is_enabled = server_info.get("is_enabled", False)
+        is_local = server_info.get("deployment") == DeploymentType.LOCAL
 
         if not is_enabled:
             status = "disabled"
             self.server_health_status[service_path] = "disabled"
+        elif is_local:
+            # Local (stdio) servers: registry has nothing to probe. Always
+            # report LOCAL when enabled, regardless of cached transitional
+            # state ('checking', 'unknown', etc.). Without this,
+            # disable→enable transitions briefly show 'checking' for a server
+            # that's never actually checked.
+            status = HealthStatus.LOCAL
+            self.server_health_status[service_path] = status
         else:
             # Use cached status, only update if transitioning from disabled
             cached_status = self.server_health_status.get(service_path, "unknown")

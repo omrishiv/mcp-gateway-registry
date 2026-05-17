@@ -4,6 +4,7 @@ import { useSemanticSearch } from '../hooks/useSemanticSearch';
 import SemanticSearchResults from './SemanticSearchResults';
 import DiscoverListRow from './DiscoverListRow';
 import type { Server } from './ServerCard';
+import type { Agent } from './AgentCard';
 import type { Skill } from '../types/skill';
 import type { VirtualServerInfo } from '../types/virtualServer';
 
@@ -17,17 +18,17 @@ const MAX_FEATURED = 4;
 
 interface DiscoverTabProps {
   servers: Server[];
-  agents: Server[];
+  agents: Agent[];
   skills: Skill[];
   virtualServers: VirtualServerInfo[];
   externalServers: Server[];
-  externalAgents: Server[];
+  externalAgents: Agent[];
   loading: boolean;
   onServerToggle: (path: string, enabled: boolean) => void;
   onServerEdit?: (server: Server) => void;
   onServerDelete?: (path: string) => Promise<void>;
   onAgentToggle: (path: string, enabled: boolean) => void;
-  onAgentEdit?: (agent: Server) => void;
+  onAgentEdit?: (agent: Agent) => void;
   onAgentDelete?: (path: string) => Promise<void>;
   onSkillToggle: (path: string, enabled: boolean) => void;
   onSkillEdit?: (skill: Skill) => void;
@@ -55,10 +56,13 @@ function _getAverageRating(
 
 
 /**
- * Sort servers by average rating (descending), then alphabetically by name.
+ * Sort items by average rating (descending), then alphabetically by name.
+ * Accepts both Server and Agent (both have rating_details + name).
  */
-function _sortServersByRating(servers: Server[]): Server[] {
-  return [...servers].sort((a, b) => {
+function _sortServersByRating<T extends { name: string; rating_details?: Array<{ user: string; rating: number }> }>(
+  items: T[],
+): T[] {
+  return [...items].sort((a, b) => {
     const ratingDiff = _getAverageRating(b.rating_details) - _getAverageRating(a.rating_details);
     if (ratingDiff !== 0) return ratingDiff;
     return a.name.localeCompare(b.name);
@@ -183,11 +187,11 @@ function _virtualServerMatchesKeyword(
  */
 function _getFeaturedItems(
   servers: Server[],
-  agents: Server[],
+  agents: Agent[],
   skills: Skill[],
   virtualServers: VirtualServerInfo[],
   externalServers: Server[],
-  externalAgents: Server[],
+  externalAgents: Agent[],
   keywordFilter: string
 ) {
   // Filter enabled items

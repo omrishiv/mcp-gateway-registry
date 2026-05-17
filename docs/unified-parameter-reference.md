@@ -106,6 +106,7 @@ Controls registry-vs-gateway integration and which tabs render in the UI. See [`
 | Show Virtual Servers tab | `SHOW_VIRTUAL_SERVERS_TAB` | `show_virtual_servers_tab` | `registry.app.showVirtualServersTab` | — |
 | Show Skills tab | `SHOW_SKILLS_TAB` | `show_skills_tab` | `registry.app.showSkillsTab` | — |
 | Show Agents tab | `SHOW_AGENTS_TAB` | `show_agents_tab` | `registry.app.showAgentsTab` | — |
+| UI title override | `UI_TITLE` | `ui_title` | `registry.app.uiTitle` | Custom title shown in the UI header, login, and logout. Empty defers to the deployment-mode default (`AI Gateway & Registry` or `AI Registry`). |
 | Disable built-in demo server | `DISABLE_AI_REGISTRY_TOOLS_SERVER` | `disable_ai_registry_tools_server` | `registry.app.disableAiRegistryToolsServer` | Prevent auto-registration of the built-in `airegistry-tools` demo server. |
 
 ---
@@ -489,6 +490,9 @@ Used by `registry` and `mcpgw` services.
 | Flush interval (s) | `APP_LOG_MONGODB_FLUSH_INTERVAL_SECONDS` | — | `*.app.appLogMongodbFlushIntervalSeconds` | — |
 | App log level | `APP_LOG_LEVEL` | `app_log_level` | `*.app.appLogLevel` | `DEBUG`, `INFO`, etc. |
 | Excluded loggers | `APP_LOG_EXCLUDED_LOGGERS` | `app_log_excluded_loggers` | `*.app.appLogExcludedLoggers` | Comma-separated. |
+| App log dir | `APP_LOG_DIR` | `app_log_dir` | `*.app.appLogDir` | Absolute path; empty uses backend default. |
+| File format | `APP_LOG_FILE_FORMAT` | `app_log_file_format` | `*.app.appLogFileFormat` | `json` (default, JSONL) or `text`. |
+| Console format | `APP_LOG_CONSOLE_FORMAT` | `app_log_console_format` | `*.app.appLogConsoleFormat` | `json` (default, same JSONL schema as file format, ideal for log-agent scraping) or `text` (human-readable). |
 
 ---
 

@@ -228,6 +228,7 @@ module "mcp_gateway" {
   app_log_excluded_loggers     = var.app_log_excluded_loggers
   app_log_dir                  = var.app_log_dir
   app_log_file_format          = var.app_log_file_format
+  app_log_console_format       = var.app_log_console_format
 
   # Tool-level access control (issue #1026)
   mcp_tools_list_filter_enabled = var.mcp_tools_list_filter_enabled
@@ -243,6 +244,9 @@ module "mcp_gateway" {
   show_virtual_servers_tab = var.show_virtual_servers_tab
   show_skills_tab          = var.show_skills_tab
   show_agents_tab          = var.show_agents_tab
+
+  # UI title override
+  ui_title = var.ui_title
 
   # Observability configuration
   enable_observability      = var.enable_observability

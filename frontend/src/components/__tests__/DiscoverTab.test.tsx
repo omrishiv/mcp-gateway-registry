@@ -1,6 +1,7 @@
 import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 import DiscoverTab from '../DiscoverTab';
+import type { Skill } from '../../types/skill';
 
 
 // Mock useSemanticSearch hook
@@ -16,7 +17,7 @@ jest.mock('../../hooks/useSemanticSearch', () => ({
 
 // Mock DiscoverListRow to simplify testing
 jest.mock('../DiscoverListRow', () => {
-  const MockListRow = (props) => (
+  const MockListRow = (props: { type: string; item: { path: string; name: string } }) => (
     <div data-testid={`list-row-${props.type}-${props.item.path}`}>
       {props.item.name}
     </div>
@@ -26,7 +27,7 @@ jest.mock('../DiscoverListRow', () => {
 });
 
 jest.mock('../SemanticSearchResults', () => {
-  const MockSearchResults = (props) => (
+  const MockSearchResults = (props: { query: string }) => (
     <div data-testid="semantic-search-results">
       Search results for: {props.query}
     </div>
@@ -46,7 +47,7 @@ const makeServer = (overrides = {}) => ({
 });
 
 
-const makeSkill = (overrides = {}) => ({
+const makeSkill = (overrides: Partial<Skill> = {}): Skill => ({
   name: 'Test Skill',
   path: '/test-skill/',
   skill_md_url: '',

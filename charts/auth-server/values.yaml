@@ -3,7 +3,7 @@ global:
   image:
     # Container registry (host + optional namespace). Shared default across subcharts.
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.23.0
+    tag: 1.24.0
     pullPolicy: IfNotPresent
 
 # Per-service image configuration
@@ -63,6 +63,7 @@ app:
   # Log file path and format (issue #987).
   appLogDir: ""                    # Empty uses backend default: /var/log/containers/ai-registry
   appLogFileFormat: "json"         # "json" (default, Splunk-friendly) or "text" (legacy comma-separated)
+  appLogConsoleFormat: "json"      # "json" (default, structured logging) or "text" (human-readable)
 
   # Tool-level access control (issue #1026)
   mcpToolsListFilterEnabled: true   # Filter MCP tools/list JSON-RPC responses against per-user tool allowlist
