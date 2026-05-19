@@ -92,7 +92,7 @@ WORKDIR /app
 
 # Create non-root user EARLY for security (CIS Docker Benchmark 4.1)
 # This allows us to use --chown in COPY commands, avoiding slow chown -R later
-RUN groupadd -g 1000 appuser && useradd -u 1000 -g appuser appuser
+RUN groupadd -g 1000 appuser && useradd -u 1000 -g appuser -m appuser
 
 # Copy Python virtual environment from backend builder (large but stable layer)
 # Use --chown to set ownership during copy (much faster than chown -R afterward)
