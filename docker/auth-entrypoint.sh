@@ -117,4 +117,11 @@ BIND_HOST="${BIND_HOST:-0.0.0.0}"
 echo "Starting Auth Server (host=$BIND_HOST)..."
 cd /app
 source .venv/bin/activate
-exec uvicorn server:app --host "$BIND_HOST" --port 8888 --proxy-headers --forwarded-allow-ips='*'
+if [ -n "${OTEL_EXPORTER_OTLP_ENDPOINT}" ] && command -v opentelemetry-instrument >/dev/null 2>&1; then
+    echo "Using OTEL_EXPORTER_OTLP_ENDPOINT at ${OTEL_EXPORTER_OTLP_ENDPOINT}"
+    UVICORN_CMD="opentelemetry-instrument uvicorn server:app --host $BIND_HOST --port 8888 --proxy-headers --forwarded-allow-ips=*"
+else
+    echo "OTEL_EXPORTER_OTLP_ENDPOINT not found, not using OTEL"
+    UVICORN_CMD="uvicorn server:app --host $BIND_HOST --port 8888 --proxy-headers --forwarded-allow-ips=*"
+fi
+exec $UVICORN_CMD

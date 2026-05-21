@@ -271,7 +271,7 @@ echo "Processing MCP Server configuration files..."
 for i in $(seq 1 99); do
     env_var_name="MCP_SERVER${i}_AUTH_TOKEN"
     env_var_value=$(eval echo \$$env_var_name)
-    
+
     if [ ! -z "$env_var_value" ]; then
         echo "Found $env_var_name, substituting in server JSON files..."
         # Replace the literal environment variable name with its value in all JSON files
@@ -294,7 +294,14 @@ BIND_HOST="${BIND_HOST:-0.0.0.0}"
 echo "Starting MCP Registry in the background..."
 cd /app
 source /app/.venv/bin/activate
-uvicorn registry.main:app --host "$BIND_HOST" --port 7860 --proxy-headers --forwarded-allow-ips='*' &
+if [ -n "${OTEL_EXPORTER_OTLP_ENDPOINT}" ] && command -v opentelemetry-instrument >/dev/null 2>&1; then
+    echo "Using OTEL_EXPORTER_OTLP_ENDPOINT at ${OTEL_EXPORTER_OTLP_ENDPOINT}"
+    UVICORN_CMD="opentelemetry-instrument uvicorn registry.main:app --host $BIND_HOST --port 7860 --proxy-headers --forwarded-allow-ips=*"
+else
+    echo "OTEL_EXPORTER_OTLP_ENDPOINT not found, not using OTEL"
+    UVICORN_CMD="uvicorn registry.main:app --host $BIND_HOST --port 7860 --proxy-headers --forwarded-allow-ips=*"
+fi
+$UVICORN_CMD &
 UVICORN_PID=$!
 echo "MCP Registry started (PID=$UVICORN_PID, host=$BIND_HOST)."
 
@@ -386,4 +393,3 @@ fi
 
 # Keep the container running indefinitely
 tail -f /dev/null
-

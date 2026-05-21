@@ -43,9 +43,8 @@ RUN pip install --no-cache-dir uv==0.11.14 && \
 COPY pyproject.toml /app/pyproject.toml
 COPY uv.lock        /app/uv.lock
 
-# Install dependencies from uv.lock. --locked fails the build if the
-# lock is out of sync with pyproject.toml.
-RUN uv sync --locked --no-dev
+# Install dependencies from uv.lock. --frozen uses uv.lock as the source of truth.
+RUN uv sync --frozen --no-dev
 
 # Copy only the application source directories needed (NOT the entire repo)
 COPY registry/ /app/registry/
