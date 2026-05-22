@@ -62,8 +62,19 @@ git log {base_tag}..HEAD --oneline --no-merges
 # Merge commits (to extract PR numbers)
 git log {base_tag}..HEAD --oneline --grep="Merge pull request"
 
-# Contributors
+# Contributors -- direct authors of commits on main
+# WARNING: this misses co-authors of squash-merged PRs (Step 4 #10 explains).
 git log {base_tag}..HEAD --format="%aN" | sort | uniq -c | sort -rn
+
+# Contributors -- per-PR commit authors (catches squash-merge co-authors)
+# Squash merges collapse N branch commits into 1 commit on main authored by
+# the merger, so `git log` above will not show the actual code authors.
+# `gh pr view --json commits` returns the original branch commits with their
+# authors intact, which is the only reliable way to credit everyone.
+for pr in $(git log {base_tag}..HEAD --oneline --grep="Merge pull request\|(#[0-9]\+)$" | grep -oE "#[0-9]+" | tr -d '#' | sort -u); do
+  gh pr view $pr --json number,author,commits \
+    --jq '"PR #\(.number) | opener: \(.author.login) | commit_authors: \([.commits[].authors[].name] | unique | join(", "))"' 2>/dev/null
+done
 
 # Env var changes
 git diff {base_tag}..HEAD -- .env.example
@@ -128,7 +139,26 @@ Analyze all commits and PRs to categorize them:
    bodies), and supplement with manually-closed issues whose `closedAt` is
    between the base-tag commit date and HEAD. De-duplicate by issue number.
 
-10. **Contributors**: Unique contributor list from git log.
+10. **Contributors**: Build the union of TWO sources, because neither alone is
+    complete:
+    - **Direct authors on main**: `git log {base_tag}..HEAD --format="%aN"` --
+      catches anyone who pushed commits directly or whose PR was rebase/merge-
+      committed.
+    - **Per-PR commit authors**: for every merged PR in this release, run
+      `gh pr view <num> --json commits --jq '[.commits[].authors[].name] | unique'`
+      and union the results -- catches co-authors of **squash-merged** PRs,
+      whose branch commits get collapsed into a single commit on main authored
+      by the merger. Without this step, every contributor on a squash-merged
+      branch except the merger is silently dropped.
+
+    Then for each unique contributor name, resolve to a GitHub username by
+    looking up a PR they appeared on:
+    - If they opened a PR: `gh pr view <num> --json author --jq .author.login`.
+    - If they were a co-author only (no PR opened): `gh pr view <num> --json commits --jq '.commits[].authors[] | select(.name == "<Display Name>") | .login'`
+      (the per-commit `authors` array carries the GitHub login).
+    - As a final fallback verify with `gh api users/<candidate>`; a 404 means
+      the guess is wrong. **Never synthesize a username from a display name**
+      ("Amit Arora" -> "amitarora" was wrong; the actual login is `aarora79`).
 
 ### Step 5: Write Release Notes
 
@@ -302,8 +332,12 @@ Thank you to all contributors for this release:
 
 - **{Full Name}** ([@{github_username}](https://github.com/{github_username}))
 
-{List all contributors from git log, sorted by commit count descending.
-Map known email addresses to GitHub usernames where possible.}
+{List all contributors from the UNION of (a) direct authors on main and
+(b) per-PR commit authors via `gh pr view --json commits` (Step 4 #10).
+Resolve every GitHub username from a real PR -- via `.author.login` if they
+opened a PR, or via `.commits[].authors[].login` if they were a co-author
+only. Never synthesize usernames from display names. Sort by commit count
+descending.}
 
 ---
 
@@ -383,6 +417,8 @@ Once the user confirms the release notes are ready:
 - **Always verify Helm Chart.yaml diffs** to detect dependency additions/removals -- these are the most common breaking changes for EKS users.
 - **Always check the full `charts/` tree diff**, not just `Chart.yaml`. If ANY file under `charts/` changed between base and HEAD, the upgrade instructions MUST include `helm dependency build` and `helm dependency update` for stack-chart consumers. The packaged `.tgz` subcharts inside `charts/mcp-gateway-registry-stack/charts/` are gitignored and only repackage when those commands run -- a plain `git pull` + `helm upgrade` will silently use stale subcharts.
 - **DockerHub image list** should match the components defined in `scripts/publish_containers.sh` in the `COMPONENTS` array. Read this file to get the current list rather than hardcoding.
+- **Always credit squash-merge co-authors.** `git log {base}..HEAD` only sees the squashed commit's single author, so co-authors on the source branch get dropped. Always also iterate every merged PR with `gh pr view <num> --json commits --jq '[.commits[].authors[].name] | unique'` and union the results into the contributor list.
+- **Never synthesize GitHub usernames from display names.** Resolve every login from a real PR (`gh pr view <num> --json author` for openers, or `.commits[].authors[].login` for co-authors), and verify uncertain ones with `gh api users/<candidate>` (404 = wrong guess). Past mistakes: "Amit Arora" -> `amitarora` (wrong; actual: `aarora79`); "Nathan Fernandes Pedroza" -> `nathanfernandes` (wrong; actual: `nathanzilgo`).
 
 ## Example Usage
 
