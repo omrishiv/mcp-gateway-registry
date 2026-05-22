@@ -27,6 +27,7 @@ import {
 } from '../utils/localRuntime';
 import LocalRuntimeFormPanel from '../components/LocalRuntimeFormPanel';
 import type { LocalRuntime } from '../types/server';
+import Pagination from '../components/Pagination';
 
 
 interface SyncMetadata {
@@ -225,6 +226,19 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
 
   // View filter state
   const [viewFilter, setViewFilter] = useState<'discover' | 'servers' | 'agents' | 'skills' | 'virtual' | 'external'>('discover');
+
+  // Pagination state (per entity type)
+  const PAGE_SIZE = 50;
+  const [serverPage, setServerPage] = useState(0);
+  const [agentPage, setAgentPage] = useState(0);
+  const [skillPage, setSkillPage] = useState(0);
+
+  // Reset pagination when filters or search change
+  useEffect(() => {
+    setServerPage(0);
+    setAgentPage(0);
+    setSkillPage(0);
+  }, [activeFilter, selectedTags, viewFilter]);
 
   // Reset viewFilter to 'discover' when the active tab is hidden by config
   useEffect(() => {
@@ -827,6 +841,16 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
 
     return filtered;
   }, [skills, activeFilter, selectedTags, matchesSelectedTags, parsedSearch, matchesHashTags]);
+
+  // Paginated slice of skills (servers/agents paginate inline in the render)
+  const paginatedSkills = useMemo(() => {
+    const start = skillPage * PAGE_SIZE;
+    return filteredSkills.slice(start, start + PAGE_SIZE);
+  }, [filteredSkills, skillPage]);
+
+  const serverTotalPages = Math.ceil(filteredServers.length / PAGE_SIZE);
+  const agentTotalPages = Math.ceil(filteredAgents.length / PAGE_SIZE);
+  const skillTotalPages = Math.ceil(filteredSkills.length / PAGE_SIZE);
 
   // Filter virtual servers based on activeFilter, searchTerm, and selectedTags
   const filteredVirtualServers = useMemo(() => {
@@ -1829,6 +1853,18 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
               )}
             </div>
 
+            {serverTotalPages > 1 && (
+              <div className="flex justify-center mb-4">
+                <Pagination
+                  currentPage={serverPage}
+                  totalPages={serverTotalPages}
+                  totalItems={filteredServers.length}
+                  pageSize={PAGE_SIZE}
+                  onPageChange={setServerPage}
+                />
+              </div>
+            )}
+
             {filteredServers.length === 0 ? (
               <div className="text-center py-12 bg-gray-50 dark:bg-gray-800 rounded-lg">
                 <div className="text-gray-400 text-lg mb-2">No servers found</div>
@@ -1899,7 +1935,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                             gap: 'clamp(1.5rem, 3vw, 2.5rem)'
                           }}
                         >
-                          {filteredRegistryServers.map((server) => (
+                          {filteredRegistryServers.slice(serverPage * PAGE_SIZE, (serverPage + 1) * PAGE_SIZE).map((server) => (
                             <ServerCard
                               key={server.path}
                               server={server}
@@ -1992,7 +2028,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                               gap: 'clamp(1.5rem, 3vw, 2.5rem)'
                             }}
                           >
-                            {filteredRegistryServers.map((server) => (
+                            {filteredRegistryServers.slice(serverPage * PAGE_SIZE, (serverPage + 1) * PAGE_SIZE).map((server) => (
                               <ServerCard
                                 key={server.path}
                                 server={server}
@@ -2032,6 +2068,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
             )}
           </div>
         )}
+
 
       {/* Agents Section - Grouped by Registry */}
       {registryConfig?.features.agents !== false &&
@@ -2091,6 +2128,18 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                 </div>
               )}
             </div>
+
+            {agentTotalPages > 1 && (
+              <div className="flex justify-center mb-4">
+                <Pagination
+                  currentPage={agentPage}
+                  totalPages={agentTotalPages}
+                  totalItems={filteredAgents.length}
+                  pageSize={PAGE_SIZE}
+                  onPageChange={setAgentPage}
+                />
+              </div>
+            )}
 
             {agentsError ? (
               <div className="text-center py-12 bg-red-50 dark:bg-red-900/20 rounded-lg border border-red-200 dark:border-red-800">
@@ -2160,7 +2209,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                             gap: 'clamp(1.5rem, 3vw, 2.5rem)'
                           }}
                         >
-                          {filteredRegistryAgents.map((agent) => (
+                          {filteredRegistryAgents.slice(agentPage * PAGE_SIZE, (agentPage + 1) * PAGE_SIZE).map((agent) => (
                             <AgentCard
                               key={agent.path}
                               agent={agent}
@@ -2242,7 +2291,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                               gap: 'clamp(1.5rem, 3vw, 2.5rem)'
                             }}
                           >
-                            {filteredRegistryAgents.map((agent) => (
+                            {filteredRegistryAgents.slice(agentPage * PAGE_SIZE, (agentPage + 1) * PAGE_SIZE).map((agent) => (
                               <AgentCard
                                 key={agent.path}
                                 agent={agent}
@@ -2275,6 +2324,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
           </div>
         )}
 
+
       {/* Agent Skills Section */}
       {registryConfig?.features.skills !== false &&
         (viewFilter === 'skills') && (
@@ -2293,6 +2343,18 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                 </button>
               )}
             </div>
+
+            {skillTotalPages > 1 && (
+              <div className="flex justify-center mb-4">
+                <Pagination
+                  currentPage={skillPage}
+                  totalPages={skillTotalPages}
+                  totalItems={filteredSkills.length}
+                  pageSize={PAGE_SIZE}
+                  onPageChange={setSkillPage}
+                />
+              </div>
+            )}
 
             {skillsError ? (
               <div className="text-center py-12 bg-red-50 dark:bg-red-900/20 rounded-lg border border-red-200 dark:border-red-800">
@@ -2329,7 +2391,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                   gap: 'clamp(1.5rem, 3vw, 2.5rem)'
                 }}
               >
-                {filteredSkills.map((skill) => (
+                {paginatedSkills.map((skill) => (
                   <SkillCard
                     key={skill.path}
                     skill={skill}
@@ -2348,6 +2410,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
             )}
           </div>
         )}
+
 
       {/* Virtual MCP Servers Section */}
       {registryConfig?.features.virtual_servers !== false &&
