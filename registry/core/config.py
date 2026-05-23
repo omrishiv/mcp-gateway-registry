@@ -239,7 +239,11 @@ class Settings(BaseSettings):
     )
     github_extra_hosts: str = Field(
         default="",
-        description="Comma-separated extra GitHub hosts for auth (e.g. github.mycompany.com,raw.github.mycompany.com)",
+        description=(
+            "Comma-separated extra GitHub hosts (e.g. github.mycompany.com,raw.github.mycompany.com). "
+            "Hosts here receive GitHub auth headers AND bypass the SKILL.md SSRF private-IP check, "
+            "so GHES instances on internal networks remain reachable. Keep the list tight."
+        ),
     )
     github_api_base_url: str = Field(
         default="https://api.github.com",

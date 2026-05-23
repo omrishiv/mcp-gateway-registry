@@ -12,6 +12,7 @@ import ipaddress
 import logging
 import socket
 from datetime import UTC, datetime
+from functools import lru_cache
 from typing import (
     Any,
 )
@@ -19,6 +20,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from ..core.config import settings
 from ..exceptions import (
     SkillUrlValidationError,
 )
@@ -57,8 +59,11 @@ logger = logging.getLogger(__name__)
 # Constants
 URL_VALIDATION_TIMEOUT: int = 10
 
-# Trusted domains that skip IP validation (SSRF protection allowlist)
-TRUSTED_DOMAINS: frozenset = frozenset(
+# Built-in trusted domains that skip IP validation (SSRF protection allowlist).
+# Enterprise GitHub hosts are merged in at runtime from settings.github_extra_hosts
+# via _trusted_domains() so GHES instances on private IPs are reachable for
+# SKILL.md fetches (matches the host allowlist used by the GitHub auth provider).
+_DEFAULT_TRUSTED_DOMAINS: frozenset = frozenset(
     {
         "github.com",
         "gitlab.com",
@@ -66,6 +71,19 @@ TRUSTED_DOMAINS: frozenset = frozenset(
         "bitbucket.org",
     }
 )
+
+
+@lru_cache(maxsize=1)
+def _trusted_domains() -> frozenset[str]:
+    """Return SSRF allowlist: built-in defaults plus configured GHES hosts.
+
+    Reads settings.github_extra_hosts (the same setting that authorises auth
+    header injection) so a single config knob covers both trust decisions.
+    Cached because settings are immutable per-process.
+    """
+    extra_raw = settings.github_extra_hosts or ""
+    extra = frozenset(h.strip().lower() for h in extra_raw.split(",") if h.strip())
+    return _DEFAULT_TRUSTED_DOMAINS | extra
 
 
 def _is_private_ip(
@@ -112,7 +130,9 @@ def _is_safe_url(
     2. Does not resolve to a private/loopback/link-local IP address
     3. Does not target cloud metadata endpoints
 
-    Trusted domains (github.com, gitlab.com, etc.) skip the IP check.
+    Trusted domains (github.com, gitlab.com, etc., plus any host configured
+    via settings.github_extra_hosts) skip the IP check so GHES instances on
+    private networks remain reachable.
 
     Args:
         url: URL to validate
@@ -135,7 +155,7 @@ def _is_safe_url(
 
         # Check if hostname is in trusted domains allowlist
         hostname_lower = hostname.lower()
-        if hostname_lower in TRUSTED_DOMAINS:
+        if hostname_lower in _trusted_domains():
             logger.debug(f"SSRF protection: Trusted domain '{hostname_lower}'")
             return True
 
