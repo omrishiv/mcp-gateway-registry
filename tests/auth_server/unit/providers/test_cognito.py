@@ -4,12 +4,27 @@ Unit tests for auth_server/providers/cognito.py
 Currently scoped to the RFC 8414 metadata exposure added in issue #989. The
 broader Cognito provider has historically been exercised via integration
 tests; we add unit coverage here as new surface lands.
+
+Note on URL assertions: we parse URLs with `urllib.parse.urlsplit` and compare
+the hostname exactly rather than using substring `in` or `startswith` checks,
+because CodeQL flags substring URL checks under py/incomplete-url-substring-sanitization.
+The parsed-host comparison is also a stricter test.
 """
+
+from urllib.parse import urlsplit
 
 import pytest
 
 
 pytestmark = [pytest.mark.unit, pytest.mark.auth]
+
+
+def _hostname_of(url: str) -> str:
+    """Return the host part of a URL, validating scheme and host explicitly."""
+    parsed = urlsplit(url)
+    assert parsed.scheme == "https", f"Expected https URL, got: {url}"
+    assert parsed.hostname, f"URL has no hostname: {url}"
+    return parsed.hostname
 
 
 class TestCognitoAuthorizationServerMetadata:
@@ -31,18 +46,11 @@ class TestCognitoAuthorizationServerMetadata:
         metadata = provider.authorization_server_metadata()
 
         assert metadata["issuer"] == "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_abc123"
-        assert metadata["authorization_endpoint"].startswith(
-            "https://my-app.auth.us-east-1.amazoncognito.com/"
-        )
-        assert metadata["token_endpoint"].startswith(
-            "https://my-app.auth.us-east-1.amazoncognito.com/"
-        )
-        assert metadata["userinfo_endpoint"].startswith(
-            "https://my-app.auth.us-east-1.amazoncognito.com/"
-        )
-        assert metadata["end_session_endpoint"].startswith(
-            "https://my-app.auth.us-east-1.amazoncognito.com/"
-        )
+        cognito_domain_host = "my-app.auth.us-east-1.amazoncognito.com"
+        assert _hostname_of(metadata["authorization_endpoint"]) == cognito_domain_host
+        assert _hostname_of(metadata["token_endpoint"]) == cognito_domain_host
+        assert _hostname_of(metadata["userinfo_endpoint"]) == cognito_domain_host
+        assert _hostname_of(metadata["end_session_endpoint"]) == cognito_domain_host
         # JWKS stays on the cognito-idp host
         assert (
             metadata["jwks_uri"]
@@ -63,8 +71,14 @@ class TestCognitoAuthorizationServerMetadata:
 
         metadata = provider.authorization_server_metadata()
 
-        # Auto-derived domain strips the underscore from the user pool id
-        assert "us-west-2xyz789.auth.us-west-2.amazoncognito.com" in metadata["token_endpoint"]
+        # Auto-derived domain strips the underscore from the user pool id.
+        # Parse the URL and compare hostname exactly, not as a substring,
+        # so the test catches host-spoofing variants and so CodeQL's
+        # py/incomplete-url-substring-sanitization rule is satisfied.
+        assert (
+            _hostname_of(metadata["token_endpoint"])
+            == "us-west-2xyz789.auth.us-west-2.amazoncognito.com"
+        )
         assert metadata["issuer"] == "https://cognito-idp.us-west-2.amazonaws.com/us-west-2_xyz789"
 
     def test_authorization_server_issuer_returns_cognito_idp_url(self):
