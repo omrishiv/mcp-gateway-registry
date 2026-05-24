@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 
 from ..auth.oauth_metadata import (
     build_canonical_resource_url,
+    build_prm_resource_field,
     build_resource_documentation_url,
     derive_supported_scopes,
     enforce_https,
@@ -387,13 +388,19 @@ async def get_oauth_protected_resource() -> JSONResponse:
     server protects this gateway and which scopes it recognizes.
 
     Per the MCP 2025-06-18 authorization spec, MCP servers MUST publish
-    this document. The `resource` field MUST match the `resource_metadata`
-    URL embedded in 401 `WWW-Authenticate` headers byte-for-byte.
+    this document.
+
+    The `resource` field defaults to the canonical gateway URL but can be
+    overridden via `mcp_prm_resource_override` for IdPs (e.g. Entra v2) that
+    require a specific audience identifier. The `resource_metadata` URL in
+    WWW-Authenticate headers always points at the canonical gateway URL,
+    since it must be fetchable by the discovery client.
 
     Public endpoint - no authentication required.
     """
-    resource = build_canonical_resource_url(settings.registry_url)
-    enforce_https(resource, https_required=settings.mcp_https_required)
+    canonical_url = build_canonical_resource_url(settings.registry_url)
+    enforce_https(canonical_url, https_required=settings.mcp_https_required)
+    resource = build_prm_resource_field(settings.registry_url)
 
     try:
         provider = _get_active_auth_provider()

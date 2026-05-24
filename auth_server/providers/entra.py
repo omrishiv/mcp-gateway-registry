@@ -183,13 +183,22 @@ class EntraIdProvider(AuthProvider):
                     f"Invalid issuer: {token_issuer}. Expected one of: {self.valid_issuers}"
                 )
 
-            # Validate and decode token with the correct issuer
+            # Validate and decode token with the correct issuer.
+            # Accepted audience formats:
+            #   - bare client_id (default Entra format)
+            #   - api://<client_id> (default Application ID URI)
+            #   - operator-configured Application ID URI (e.g. the gateway URL),
+            #     read from ENTRA_APPLICATION_ID_URI when present
+            accepted_audiences = [self.client_id, f"api://{self.client_id}"]
+            app_id_uri = os.environ.get("ENTRA_APPLICATION_ID_URI")
+            if app_id_uri:
+                accepted_audiences.append(app_id_uri.rstrip("/"))
             claims = jwt.decode(
                 token,
                 signing_key,
                 algorithms=["RS256"],
                 issuer=token_issuer,
-                audience=[self.client_id, f"api://{self.client_id}"],  # Accept both formats
+                audience=accepted_audiences,
                 options={"verify_exp": True, "verify_iat": True, "verify_aud": True},
             )
 

@@ -453,6 +453,7 @@ class TestOAuthProtectedResourceEndpoint:
         mock_settings.registry_url = "https://gw.example.com"
         mock_settings.mcp_https_required = True
         mock_settings.mcp_resource_documentation_url = None
+        mock_settings.mcp_advertised_scopes = ""
 
         with (
             patch(

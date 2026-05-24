@@ -78,9 +78,13 @@ def enforce_https(
 async def derive_supported_scopes() -> list[str]:
     """Build the `scopes_supported` array for the PRM document.
 
-    Pulls from the same scopes config used by the auth server's authorization
-    decisions (DocumentDB-backed in production, YAML-backed in local dev). The
-    result is the stable-sorted union of:
+    When `mcp_advertised_scopes` is set, returns that explicit list (split on
+    whitespace). Useful when the IdP performs RFC 7591 DCR and rejects scopes
+    that don't exist in its realm.
+
+    Otherwise pulls from the same scopes config used by the auth server's
+    authorization decisions (DocumentDB-backed in production, YAML-backed in
+    local dev). The result is the stable-sorted union of:
 
       * scope names defined in the registry (entries other than the
         `group_mappings` and `UI-Scopes` keys)
@@ -92,6 +96,11 @@ async def derive_supported_scopes() -> list[str]:
     Returns:
         Stable-sorted, deduplicated list of scope name strings.
     """
+    override = getattr(settings, "mcp_advertised_scopes", "") or ""
+    if override.strip():
+        # Preserve operator-specified order so it is byte-stable across requests.
+        return [s for s in override.split() if s]
+
     config = await reload_scopes_config()
 
     scope_names: set[str] = set()
@@ -107,6 +116,31 @@ async def derive_supported_scopes() -> list[str]:
                 scope_names.update(mapped_scopes)
 
     return sorted(scope_names)
+
+
+def build_prm_resource_field(registry_url: str) -> str:
+    """Return the value of the `resource` field in the PRM document (RFC 9728).
+
+    By default this is the canonical gateway URL (RFC 8707-compliant). Some IdPs
+    (notably Entra v2) require the `resource` parameter sent on /authorize to
+    match the audience identifier used by the requested scope, e.g.
+    `api://<entra-app-id>`, not the gateway's HTTPS URL. Operators can set
+    `mcp_prm_resource_override` to advertise the IdP-specific resource ID.
+
+    The `resource_metadata` URL embedded in WWW-Authenticate 401s remains
+    derived from the gateway's HTTPS URL regardless, since it has to be
+    fetchable by the discovery client.
+
+    Args:
+        registry_url: Configured public URL of this gateway.
+
+    Returns:
+        Either the override value or the canonical resource URL.
+    """
+    override = getattr(settings, "mcp_prm_resource_override", None)
+    if override:
+        return override.rstrip("/")
+    return build_canonical_resource_url(registry_url)
 
 
 def build_resource_documentation_url() -> str:

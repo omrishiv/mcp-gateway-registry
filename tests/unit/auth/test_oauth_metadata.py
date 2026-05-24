@@ -97,6 +97,16 @@ class TestBuildWWWAuthenticateHeader:
 class TestDeriveSupportedScopes:
     """derive_supported_scopes() builds the PRM `scopes_supported` array."""
 
+    @pytest.fixture(autouse=True)
+    def _no_scope_override(self):
+        """By default these tests cover the no-override path.
+
+        The TestAdvertisedScopesOverride class below covers the override path.
+        """
+        with patch("registry.auth.oauth_metadata.settings") as mock_settings:
+            mock_settings.mcp_advertised_scopes = ""
+            yield
+
     @pytest.mark.asyncio
     async def test_unions_scope_names_and_group_mappings(self):
         config = {
@@ -148,6 +158,89 @@ class TestDeriveSupportedScopes:
             scopes = await derive_supported_scopes()
 
         assert scopes == ["mcp-admin", "mcp-read"]
+
+
+class TestAdvertisedScopesOverride:
+    """`mcp_advertised_scopes` setting overrides what derive_supported_scopes() returns.
+
+    Operators set this when the IdP performs RFC 7591 DCR and would reject
+    registration requests containing scope names it doesn't recognize."""
+
+    @pytest.mark.asyncio
+    async def test_override_replaces_dynamic_scopes(self):
+        """When the override is set, scopes from the registry config are ignored."""
+        config = {
+            "group_mappings": {"g1": ["mcp-admin"]},
+            "mcp-admin": [],
+        }
+        with (
+            patch("registry.auth.oauth_metadata.settings") as mock_settings,
+            patch(
+                "registry.auth.oauth_metadata.reload_scopes_config",
+                return_value=config,
+            ),
+        ):
+            mock_settings.mcp_advertised_scopes = "openid profile email offline_access"
+
+            scopes = await derive_supported_scopes()
+
+        assert scopes == ["openid", "profile", "email", "offline_access"]
+
+    @pytest.mark.asyncio
+    async def test_override_preserves_caller_order(self):
+        """Operators may want a specific order; the override doesn't sort."""
+        with (
+            patch("registry.auth.oauth_metadata.settings") as mock_settings,
+            patch(
+                "registry.auth.oauth_metadata.reload_scopes_config",
+                return_value={"group_mappings": {}},
+            ),
+        ):
+            mock_settings.mcp_advertised_scopes = "zeta alpha mu"
+
+            scopes = await derive_supported_scopes()
+
+        assert scopes == ["zeta", "alpha", "mu"]
+
+    @pytest.mark.asyncio
+    async def test_empty_override_falls_back_to_dynamic(self):
+        """Empty string is not an override; the registry config is still used."""
+        config = {
+            "group_mappings": {},
+            "mcp-admin": [],
+        }
+        with (
+            patch("registry.auth.oauth_metadata.settings") as mock_settings,
+            patch(
+                "registry.auth.oauth_metadata.reload_scopes_config",
+                return_value=config,
+            ),
+        ):
+            mock_settings.mcp_advertised_scopes = ""
+
+            scopes = await derive_supported_scopes()
+
+        assert scopes == ["mcp-admin"]
+
+    @pytest.mark.asyncio
+    async def test_whitespace_only_override_falls_back_to_dynamic(self):
+        """Whitespace-only override is treated as unset."""
+        config = {
+            "group_mappings": {},
+            "mcp-admin": [],
+        }
+        with (
+            patch("registry.auth.oauth_metadata.settings") as mock_settings,
+            patch(
+                "registry.auth.oauth_metadata.reload_scopes_config",
+                return_value=config,
+            ),
+        ):
+            mock_settings.mcp_advertised_scopes = "   "
+
+            scopes = await derive_supported_scopes()
+
+        assert scopes == ["mcp-admin"]
 
 
 class TestBuildResourceDocumentationUrl:

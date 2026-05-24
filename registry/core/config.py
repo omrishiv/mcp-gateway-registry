@@ -197,6 +197,28 @@ class Settings(BaseSettings):
             "Defaults to <registry_url>/docs/oauth when unset."
         ),
     )
+    mcp_prm_resource_override: str | None = Field(
+        default=None,
+        description=(
+            "Override value for the `resource` field in the PRM document. "
+            "Useful for IdPs (e.g. Entra v2) that require the `resource` parameter "
+            "on /authorize to match the audience identifier of the requested scope, "
+            "such as `api://<entra-app-id>`. When unset, the PRM `resource` field "
+            "is the canonical gateway URL (RFC 8707-compliant default)."
+        ),
+    )
+    mcp_advertised_scopes: str = Field(
+        default="",
+        description=(
+            "Space-separated override for the `scopes_supported` array in the PRM "
+            "document. When set, only these scopes are advertised to discovery "
+            "clients. Useful when the IdP performs RFC 7591 DCR and rejects "
+            "registration requests containing scope names it doesn't recognize. "
+            "Example: `openid email profile offline_access`. "
+            "When unset, all scopes from the registry's authorization config are "
+            "advertised (default)."
+        ),
+    )
 
     # OpenTelemetry / OTLP settings (metrics-service)
     otel_otlp_endpoint: str | None = None  # OTLP HTTP endpoint (e.g. https://otlp.example.com)

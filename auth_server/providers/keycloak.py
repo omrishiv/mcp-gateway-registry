@@ -71,7 +71,9 @@ class KeycloakProvider(AuthProvider):
         self.userinfo_url = f"{self.realm_url}/protocol/openid-connect/userinfo"
         self.jwks_url = f"{self.realm_url}/protocol/openid-connect/certs"
         self.logout_url = f"{self.external_realm_url}/protocol/openid-connect/logout"
-        self.config_url = f"{self.realm_url}/.well-known/openid_configuration"
+        # Keycloak 25+ serves the spec-correct hyphenated form; the older
+        # underscore form is no longer routed.
+        self.config_url = f"{self.realm_url}/.well-known/openid-configuration"
 
         logger.debug(
             f"Initialized Keycloak provider for realm '{realm}' at {keycloak_url} (external: {self.keycloak_external_url})"
