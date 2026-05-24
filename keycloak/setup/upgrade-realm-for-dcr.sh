@@ -299,9 +299,9 @@ main() {
     echo "  - Allowed Client Scopes policy widened to all realm scopes"
     echo "  - Trusted Hosts policy: IP check OFF, URI check ON, 'localhost' trusted"
     echo ""
-    echo "Existing DCR'd clients will get the groups claim on their next /authorize"
-    echo "round-trip. New DCR registrations are unaffected by these changes for clients"
-    echo "that already complete registration successfully."
+    echo "Existing DCR'd clients will get the groups+audience claims on their next"
+    echo "/authorize round-trip. New DCR registrations are unaffected by these changes"
+    echo "for clients that already complete registration successfully."
 }
 
 main "$@"

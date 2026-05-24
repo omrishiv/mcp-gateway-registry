@@ -623,7 +623,6 @@ Captured here so future hardening passes have a checklist:
 | Issue | Risk | Fix path |
 | --- | --- | --- |
 | Anonymous DCR for MCP clients | A caller already inside the network perimeter can mint unlimited DCR records (no escalation; gated by IdP login + per-user scopes), polluting the realm's clients table | nginx `limit_req_zone` on the registration endpoint as a stopgap, OR migrate to CIMD on Keycloak 26.6+ which eliminates DCR entirely |
-| Realm-default `mcp-servers-unrestricted/*` scope grants made earlier in development | None today (groups-mapping shadows them); but a future regression that re-enables `scope`-claim-based gating would silently elevate all DCR'd clients | One-time admin-API call to remove from realm-default-default and from existing DCR'd clients |
 | Old DCR'd clients accumulate in the realm | DB bloat, no security impact (public clients with no `client_secret` and no privileged scopes) | Janitor process, Keycloak `Client Registration Token Expiration` policy, or supersession by CIMD |
 
 ### Pointers when something breaks
