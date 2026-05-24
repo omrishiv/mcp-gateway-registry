@@ -610,6 +610,187 @@ setup_groups_mapper() {
     fi
 }
 
+# =============================================================================
+# Dynamic Client Registration (RFC 7591) support
+# =============================================================================
+# Three configuration changes are needed so that MCP clients (Claude Code,
+# Claude.ai connectors, Cursor, etc.) can register themselves dynamically and
+# receive tokens that carry the user's groups for per-user authorization at
+# the gateway:
+#
+# 1. setup_dcr_groups_mapper() - attach the Groups protocol mapper to the
+#    `basic` client-scope. `basic` is auto-attached to every client (including
+#    DCR'd ones), so this is the only reliable place to put a mapper that runs
+#    for clients we don't pre-create.
+#
+# 2. configure_dcr_allowed_scopes() - widen the anonymous DCR
+#    "Allowed Client Scopes" policy to accept all realm client-scopes. Without
+#    this, DCR rejects registrations that name any non-default scope.
+#
+# 3. configure_dcr_trusted_hosts() - relax the anonymous DCR "Trusted Hosts"
+#    policy so MCP clients running on diverse cloud egress IPs (Claude Code's
+#    cloud listener, etc.) can register. The client-URI check stays on with
+#    `localhost` allowed for the OAuth callback redirect URI.
+
+setup_dcr_groups_mapper() {
+    local token=$1
+
+    echo "Attaching Groups protocol mapper to the 'basic' client-scope..."
+
+    # Find the 'basic' client-scope id
+    local basic_scope_id=$(curl -s -H "Authorization: Bearer ${token}" \
+        "${KEYCLOAK_URL}/admin/realms/${REALM}/client-scopes" | \
+        jq -r '.[] | select(.name=="basic") | .id')
+
+    if [ -z "$basic_scope_id" ] || [ "$basic_scope_id" = "null" ]; then
+        echo -e "${RED}Error: Could not find 'basic' client-scope${NC}"
+        return 1
+    fi
+
+    # Check if a 'groups' mapper already exists on this scope (idempotency)
+    local existing=$(curl -s -H "Authorization: Bearer ${token}" \
+        "${KEYCLOAK_URL}/admin/realms/${REALM}/client-scopes/${basic_scope_id}" | \
+        jq -r '.protocolMappers[]? | select(.name=="groups") | .id')
+
+    if [ -n "$existing" ] && [ "$existing" != "null" ]; then
+        echo -e "${YELLOW}Groups mapper already attached to 'basic' scope. Skipping.${NC}"
+        return 0
+    fi
+
+    local groups_mapper_json='{
+        "name": "groups",
+        "protocol": "openid-connect",
+        "protocolMapper": "oidc-group-membership-mapper",
+        "consentRequired": false,
+        "config": {
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "groups",
+            "userinfo.token.claim": "true"
+        }
+    }'
+
+    local response=$(curl -s -o /dev/null -w "%{http_code}" \
+        -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/client-scopes/${basic_scope_id}/protocol-mappers/models" \
+        -H "Authorization: Bearer ${token}" \
+        -H "Content-Type: application/json" \
+        -d "$groups_mapper_json")
+
+    if [ "$response" = "201" ]; then
+        echo -e "${GREEN}Groups mapper attached to 'basic' scope. DCR'd clients will now receive groups in tokens.${NC}"
+    else
+        echo -e "${RED}Failed to attach Groups mapper to 'basic'. HTTP status: ${response}${NC}"
+        return 1
+    fi
+}
+
+configure_dcr_allowed_scopes() {
+    local token=$1
+
+    echo "Configuring anonymous-DCR 'Allowed Client Scopes' policy..."
+
+    # Find the anonymous-subType "Allowed Client Scopes" policy
+    local components=$(curl -s -H "Authorization: Bearer ${token}" \
+        "${KEYCLOAK_URL}/admin/realms/${REALM}/components?type=org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy")
+
+    local policy_id=$(echo "$components" | \
+        jq -r '.[] | select(.name=="Allowed Client Scopes" and .subType=="anonymous") | .id')
+
+    if [ -z "$policy_id" ] || [ "$policy_id" = "null" ]; then
+        echo -e "${RED}Error: Could not find anonymous 'Allowed Client Scopes' policy${NC}"
+        return 1
+    fi
+
+    # Get the union of all realm client-scope NAMES
+    local all_scope_names=$(curl -s -H "Authorization: Bearer ${token}" \
+        "${KEYCLOAK_URL}/admin/realms/${REALM}/client-scopes" | \
+        jq -c '[.[].name]')
+
+    # Build the updated policy body. Keep `allow-default-scopes` true so the
+    # built-in OIDC scopes still pass; explicitly include every realm scope
+    # so DCR doesn't reject registry-internal scope names.
+    local policy_json=$(jq -n \
+        --arg name "Allowed Client Scopes" \
+        --arg providerId "allowed-client-templates" \
+        --arg providerType "org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy" \
+        --arg parentId "$(echo "$components" | jq -r '.[] | select(.name=="Allowed Client Scopes" and .subType=="anonymous") | .parentId')" \
+        --arg subType "anonymous" \
+        --argjson allowedScopes "$all_scope_names" \
+        '{
+            name: $name,
+            providerId: $providerId,
+            providerType: $providerType,
+            parentId: $parentId,
+            subType: $subType,
+            config: {
+                "allow-default-scopes": ["true"],
+                "allowed-client-scopes": $allowedScopes
+            }
+        }')
+
+    local response=$(curl -s -o /dev/null -w "%{http_code}" \
+        -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/components/${policy_id}" \
+        -H "Authorization: Bearer ${token}" \
+        -H "Content-Type: application/json" \
+        -d "$policy_json")
+
+    if [ "$response" = "204" ]; then
+        echo -e "${GREEN}Allowed Client Scopes policy updated to permit all realm scopes.${NC}"
+    else
+        echo -e "${RED}Failed to update Allowed Client Scopes policy. HTTP status: ${response}${NC}"
+        return 1
+    fi
+}
+
+configure_dcr_trusted_hosts() {
+    local token=$1
+
+    echo "Configuring anonymous-DCR 'Trusted Hosts' policy..."
+
+    local components=$(curl -s -H "Authorization: Bearer ${token}" \
+        "${KEYCLOAK_URL}/admin/realms/${REALM}/components?type=org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy")
+
+    local policy_id=$(echo "$components" | \
+        jq -r '.[] | select(.name=="Trusted Hosts" and .subType=="anonymous") | .id')
+    local parent_id=$(echo "$components" | \
+        jq -r '.[] | select(.name=="Trusted Hosts" and .subType=="anonymous") | .parentId')
+
+    if [ -z "$policy_id" ] || [ "$policy_id" = "null" ]; then
+        echo -e "${RED}Error: Could not find anonymous 'Trusted Hosts' policy${NC}"
+        return 1
+    fi
+
+    # Disable the IP-must-match check (MCP clients run from diverse cloud IPs).
+    # Keep the URI-must-match check on, with `localhost` as the trusted host
+    # since OAuth callback URIs are http://localhost:<port>/callback.
+    local policy_json='{
+        "name": "Trusted Hosts",
+        "providerId": "trusted-hosts",
+        "providerType": "org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy",
+        "parentId": "'"$parent_id"'",
+        "subType": "anonymous",
+        "config": {
+            "host-sending-registration-request-must-match": ["false"],
+            "client-uris-must-match": ["true"],
+            "trusted-hosts": ["localhost"]
+        }
+    }'
+
+    local response=$(curl -s -o /dev/null -w "%{http_code}" \
+        -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/components/${policy_id}" \
+        -H "Authorization: Bearer ${token}" \
+        -H "Content-Type: application/json" \
+        -d "$policy_json")
+
+    if [ "$response" = "204" ]; then
+        echo -e "${GREEN}Trusted Hosts policy relaxed: IP check off, URI check on with 'localhost' allowed.${NC}"
+    else
+        echo -e "${RED}Failed to update Trusted Hosts policy. HTTP status: ${response}${NC}"
+        return 1
+    fi
+}
+
 # Main execution
 main() {
     # Get script directory and find .env file
@@ -668,6 +849,13 @@ main() {
         setup_client_secrets "$TOKEN"
         setup_groups_mapper "$TOKEN"
         setup_m2m_scopes "$TOKEN"
+
+        # MCP DCR support: groups mapper on `basic` scope (covers DCR'd
+        # clients), Allowed Client Scopes widened, Trusted Hosts relaxed
+        # for cloud-egress MCP clients.
+        setup_dcr_groups_mapper "$TOKEN"
+        configure_dcr_allowed_scopes "$TOKEN"
+        configure_dcr_trusted_hosts "$TOKEN"
     else
         exit 1
     fi
