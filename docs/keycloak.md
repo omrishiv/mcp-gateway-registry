@@ -429,7 +429,7 @@ Operators may want a janitor process to clean these up; out of scope here.
 
 | Scope | Type for DCR'd clients | Mappers attached | Purpose |
 | --- | --- | --- | --- |
-| `basic` | default-default | `sub`, `auth_time`, **`groups`** (added by us) | Always attached. Hosts the groups mapper. |
+| `basic` | default-default | `sub`, `auth_time`, **`groups`** + **`mcp-gateway-audience`** (both added by us) | Always attached. Hosts the groups mapper AND the audience mapper, so every DCR'd-client token carries both `groups` (for per-user authorization) and `aud="mcp-gateway"` (for strict RFC 8707 audience binding). |
 | `profile` | optional | `given_name`, `family_name`, `preferred_username`, etc. | Standard OIDC profile claims |
 | `email` | optional | `email`, `email_verified` | Standard OIDC email claims |
 | `offline_access` | optional | (no mappers) | Allows refresh tokens |
@@ -490,6 +490,40 @@ DCR'd-client tokens.
 `full.path: false` means group names appear as flat strings (`"mcp-admin"`,
 not `"/mcp-admin"`).
 
+#### The audience protocol mapper
+
+Configured by `setup_dcr_audience_mapper()`. JSON sent to Keycloak:
+
+```json
+{
+  "name": "mcp-gateway-audience",
+  "protocol": "openid-connect",
+  "protocolMapper": "oidc-audience-mapper",
+  "consentRequired": false,
+  "config": {
+    "included.custom.audience": "mcp-gateway",
+    "id.token.claim": "false",
+    "access.token.claim": "true"
+  }
+}
+```
+
+Also attached to the `basic` client-scope, for the same reason as the groups
+mapper: `basic` is the only scope reliably attached to every DCR'd client.
+
+**What this fixes**: by default, Keycloak does NOT include an `aud` claim on
+access tokens minted for DCR'd clients. Without an `aud`, the gateway can't
+do strict RFC 8707 audience binding — it has to fall back to issuer-only
+validation, which is weaker. With this mapper, every token issued by the
+realm (whether for pre-defined clients or DCR'd clients) carries
+`aud="mcp-gateway"` (alongside Keycloak's default `aud="account"`), which
+the gateway's validator strictly requires (see "Token validation" below).
+
+The `included.custom.audience` value `"mcp-gateway"` is the audience name
+the gateway accepts. If you change it, you must also update
+[auth_server/providers/keycloak.py](../auth_server/providers/keycloak.py)'s
+`accepted_audiences` list to match.
+
 ### Gateway-side code paths
 
 #### PRM endpoint
@@ -531,12 +565,14 @@ The `resource_metadata` URL must equal the PRM `resource` field byte-for-byte
 3. Verify signature using the matching public key
 4. Verify `iss` matches one of the valid issuer URLs (external + internal +
    localhost variants)
-5. Verify `aud` is in `[account, mcp-gateway-web, mcp-gateway-m2m]`
-6. **If audience verification fails with `MissingRequiredClaimError`** (which
-   happens for DCR'd-client tokens that have no `aud` claim by default), fall
-   back to issuer-only validation if `azp` is present. Issuer match already
-   proves the token came from our realm; `azp` identifies which DCR'd client
-   minted it.
+5. Verify `aud` is in `[account, mcp-gateway-web, mcp-gateway-m2m, mcp-gateway]`.
+   The first three cover the gateway's pre-defined web/M2M clients and
+   Keycloak's default user-token audience. The fourth (`mcp-gateway`) is the
+   custom audience emitted by the audience protocol mapper attached to the
+   `basic` client-scope (see "Client-scopes" above and
+   `setup_dcr_audience_mapper` in `init-keycloak.sh`). DCR'd clients receive
+   `basic` automatically, so every DCR'd-client token carries
+   `aud="mcp-gateway"` and is validated strictly per RFC 8707 — no fallback.
 
 #### Group → scope mapping
 
@@ -569,7 +605,8 @@ Run `bash keycloak/setup/init-keycloak.sh`. The script:
 5. Creates initial admin + testuser users
 6. Sets up groups mappers on the pre-defined clients (web-UI flow)
 7. **Sets up DCR-specific config (added by PR #1115)**:
-   - Groups mapper on `basic` client-scope (covers DCR'd clients)
+   - Groups mapper on `basic` client-scope (covers DCR'd clients, emits `groups` claim)
+   - Audience mapper on `basic` client-scope (emits `aud="mcp-gateway"` for strict RFC 8707 binding)
    - Allowed Client Scopes policy widened
    - Trusted Hosts policy relaxed
 
@@ -585,10 +622,9 @@ Captured here so future hardening passes have a checklist:
 
 | Issue | Risk | Fix path |
 | --- | --- | --- |
-| Anonymous DCR with relaxed Trusted Hosts | Anyone on the internet can register a new OAuth client | Switch to authenticated DCR with initial-access tokens, OR rate-limit at nginx |
-| `aud`-claim fallback in keycloak.py | Relaxes RFC 8707 audience binding for DCR'd clients | Configure a Keycloak audience mapper that adds `aud=mcp-gateway` to DCR'd tokens, then remove fallback |
-| Realm-default `mcp-servers-unrestricted/*` scope grants made earlier in development | Blanket grant unrelated to user identity | Already redundant with groups-mapping; cleanup step pending |
-| Old DCR'd clients accumulate in the realm | DB bloat, no real security risk | Janitor process or Keycloak's "client expiration" preview feature |
+| Anonymous DCR for MCP clients | A caller already inside the network perimeter can mint unlimited DCR records (no escalation; gated by IdP login + per-user scopes), polluting the realm's clients table | nginx `limit_req_zone` on the registration endpoint as a stopgap, OR migrate to CIMD on Keycloak 26.6+ which eliminates DCR entirely |
+| Realm-default `mcp-servers-unrestricted/*` scope grants made earlier in development | None today (groups-mapping shadows them); but a future regression that re-enables `scope`-claim-based gating would silently elevate all DCR'd clients | One-time admin-API call to remove from realm-default-default and from existing DCR'd clients |
+| Old DCR'd clients accumulate in the realm | DB bloat, no security impact (public clients with no `client_secret` and no privileged scopes) | Janitor process, Keycloak `Client Registration Token Expiration` policy, or supersession by CIMD |
 
 ### Pointers when something breaks
 
@@ -596,7 +632,7 @@ Captured here so future hardening passes have a checklist:
 | --- | --- |
 | Claude Code says "Incompatible auth server: does not support DCR" | Gateway's AS metadata endpoint isn't returning `registration_endpoint`. Confirm Keycloak's underlying OIDC config has it, then check `auth_server/providers/keycloak.py::authorization_server_metadata()` |
 | Claude Code says "Got new credentials, but ai-registry-tools rejected them on reconnect" | Token exchange succeeded but gateway-side validation failed. Tail `docker logs mcp-gateway-registry-auth-server-1` and look for `Token validation failed:` or `Access denied:` |
-| Auth-server log says `Token validation failed: Token is missing the "aud" claim` | DCR'd-client token. The aud-fallback in keycloak.py should kick in; if it isn't, check the `MissingRequiredClaimError` exception handling |
+| Auth-server log says `Token validation failed: Token is missing the "aud" claim` | The Keycloak audience mapper isn't attached to the `basic` client-scope. Run `bash keycloak/setup/upgrade-realm-for-dcr.sh` to attach it, then have the user re-authenticate to get a fresh token. Existing tokens issued before the mapper was attached will keep failing until they expire (~5min default). |
 | Auth-server log says `Access denied ... for user scopes: ['profile', 'email', 'offline_access']` | Token has no `groups` claim. Run `bash keycloak/setup/upgrade-realm-for-dcr.sh` to re-attach the groups mapper. Have the user re-authenticate to get a fresh token |
 | DCR returns 403 with `Policy 'Allowed Client Scopes' rejected` | Allowed-scopes policy wasn't widened. Run the upgrade script, OR check the rejected scope name in Keycloak logs |
 | DCR returns 403 with `Policy 'Trusted Hosts' rejected` | Trusted-hosts policy still has the IP check on. Run the upgrade script |

@@ -45,7 +45,7 @@ setup_dcr_groups_mapper() {
     local token=$1
 
     echo ""
-    echo "[1/3] Attaching Groups protocol mapper to the 'basic' client-scope..."
+    echo "[1/4] Attaching Groups protocol mapper to the 'basic' client-scope..."
 
     local basic_scope_id=$(curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/client-scopes" | \
@@ -93,11 +93,61 @@ setup_dcr_groups_mapper() {
     fi
 }
 
+setup_dcr_audience_mapper() {
+    local token=$1
+
+    echo ""
+    echo "[2/4] Attaching Audience protocol mapper to the 'basic' client-scope..."
+
+    local basic_scope_id=$(curl -s -H "Authorization: Bearer ${token}" \
+        "${KEYCLOAK_URL}/admin/realms/${REALM}/client-scopes" | \
+        jq -r '.[] | select(.name=="basic") | .id')
+
+    if [ -z "$basic_scope_id" ] || [ "$basic_scope_id" = "null" ]; then
+        echo -e "${RED}Error: Could not find 'basic' client-scope${NC}"
+        return 1
+    fi
+
+    local existing=$(curl -s -H "Authorization: Bearer ${token}" \
+        "${KEYCLOAK_URL}/admin/realms/${REALM}/client-scopes/${basic_scope_id}" | \
+        jq -r '.protocolMappers[]? | select(.name=="mcp-gateway-audience") | .id')
+
+    if [ -n "$existing" ] && [ "$existing" != "null" ]; then
+        echo -e "${YELLOW}Audience mapper already attached. Skipping.${NC}"
+        return 0
+    fi
+
+    local audience_mapper_json='{
+        "name": "mcp-gateway-audience",
+        "protocol": "openid-connect",
+        "protocolMapper": "oidc-audience-mapper",
+        "consentRequired": false,
+        "config": {
+            "included.custom.audience": "mcp-gateway",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+        }
+    }'
+
+    local response=$(curl -s -o /dev/null -w "%{http_code}" \
+        -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/client-scopes/${basic_scope_id}/protocol-mappers/models" \
+        -H "Authorization: Bearer ${token}" \
+        -H "Content-Type: application/json" \
+        -d "$audience_mapper_json")
+
+    if [ "$response" = "201" ]; then
+        echo -e "${GREEN}OK: audience mapper attached. DCR'd-client tokens will carry aud=\"mcp-gateway\".${NC}"
+    else
+        echo -e "${RED}FAILED: HTTP status ${response}${NC}"
+        return 1
+    fi
+}
+
 configure_dcr_allowed_scopes() {
     local token=$1
 
     echo ""
-    echo "[2/3] Widening anonymous-DCR 'Allowed Client Scopes' policy..."
+    echo "[3/4] Widening anonymous-DCR 'Allowed Client Scopes' policy..."
 
     local components=$(curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/components?type=org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy")
@@ -153,7 +203,7 @@ configure_dcr_trusted_hosts() {
     local token=$1
 
     echo ""
-    echo "[3/3] Relaxing anonymous-DCR 'Trusted Hosts' policy..."
+    echo "[4/4] Relaxing anonymous-DCR 'Trusted Hosts' policy..."
 
     local components=$(curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/components?type=org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy")
@@ -236,6 +286,7 @@ main() {
     echo -e "${GREEN}Authentication successful.${NC}"
 
     setup_dcr_groups_mapper "$TOKEN"
+    setup_dcr_audience_mapper "$TOKEN"
     configure_dcr_allowed_scopes "$TOKEN"
     configure_dcr_trusted_hosts "$TOKEN"
 
@@ -244,6 +295,7 @@ main() {
     echo ""
     echo "What was applied:"
     echo "  - Groups protocol mapper added to 'basic' client-scope"
+    echo "  - Audience mapper added to 'basic' client-scope (aud=mcp-gateway)"
     echo "  - Allowed Client Scopes policy widened to all realm scopes"
     echo "  - Trusted Hosts policy: IP check OFF, URI check ON, 'localhost' trusted"
     echo ""

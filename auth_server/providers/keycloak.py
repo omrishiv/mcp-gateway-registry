@@ -122,18 +122,32 @@ class KeycloakProvider(AuthProvider):
                 f"http://localhost:8080/realms/{self.realm}",  # Localhost URL for development
             ]
 
+            # Accepted audiences:
+            #   - "account"          (Keycloak's default for user tokens)
+            #   - self.client_id     (the gateway's own pre-defined web client)
+            #   - self.m2m_client_id (the gateway's M2M client)
+            #   - "mcp-gateway"      (custom audience added by the realm's
+            #                         audience mapper on the `basic` scope, which
+            #                         is reliably attached to every DCR'd client.
+            #                         See keycloak/setup/init-keycloak.sh::
+            #                         setup_dcr_audience_mapper.)
+            accepted_audiences = [
+                "account",
+                self.client_id,
+                self.m2m_client_id,
+                "mcp-gateway",
+            ]
+
             claims = None
             last_error = None
             for issuer in valid_issuers:
                 try:
-                    # Decode with audience verification first (covers tokens for
-                    # the gateway's own clients).
                     claims = jwt.decode(
                         token,
                         signing_key,
                         algorithms=["RS256"],
                         issuer=issuer,
-                        audience=["account", self.client_id, self.m2m_client_id],
+                        audience=accepted_audiences,
                         options={"verify_exp": True, "verify_iat": True, "verify_aud": True},
                     )
                     logger.debug(f"Token validation successful with issuer: {issuer}")
@@ -141,37 +155,6 @@ class KeycloakProvider(AuthProvider):
                 except jwt.InvalidIssuerError as e:
                     last_error = e
                     continue
-                except (jwt.MissingRequiredClaimError, jwt.InvalidAudienceError) as aud_err:
-                    # RFC 7591-registered (DCR'd) clients on Keycloak do not get
-                    # an `aud` claim by default and don't appear in our static
-                    # audience allowlist. Fall back to issuer-only validation:
-                    # the issuer match already proves the token came from our
-                    # trusted realm, and `azp` identifies which DCR'd client
-                    # got it.
-                    try:
-                        claims = jwt.decode(
-                            token,
-                            signing_key,
-                            algorithms=["RS256"],
-                            issuer=issuer,
-                            options={
-                                "verify_exp": True,
-                                "verify_iat": True,
-                                "verify_aud": False,
-                            },
-                        )
-                        if not claims.get("azp"):
-                            last_error = aud_err
-                            claims = None
-                            continue
-                        logger.debug(
-                            f"Token accepted via issuer+azp fallback "
-                            f"(azp={claims.get('azp')}, no aud claim - DCR'd client)"
-                        )
-                        break
-                    except jwt.InvalidIssuerError as e:
-                        last_error = e
-                        continue
 
             if claims is None:
                 raise last_error or ValueError("Token validation failed with all valid issuers")

@@ -685,6 +685,63 @@ setup_dcr_groups_mapper() {
     fi
 }
 
+setup_dcr_audience_mapper() {
+    local token=$1
+
+    echo "Attaching Audience protocol mapper to the 'basic' client-scope..."
+
+    # By default, Keycloak does NOT include an `aud` claim on access tokens
+    # minted for DCR'd clients. Without an `aud` claim, RFC 8707 audience
+    # binding can't be enforced and the gateway's validator has to relax to
+    # an issuer-only check. Attaching this mapper to the `basic` scope (the
+    # only scope reliably attached to every DCR'd client) guarantees every
+    # token issued by this realm carries `aud="mcp-gateway"` so the gateway
+    # can do strict audience validation.
+
+    local basic_scope_id=$(curl -s -H "Authorization: Bearer ${token}" \
+        "${KEYCLOAK_URL}/admin/realms/${REALM}/client-scopes" | \
+        jq -r '.[] | select(.name=="basic") | .id')
+
+    if [ -z "$basic_scope_id" ] || [ "$basic_scope_id" = "null" ]; then
+        echo -e "${RED}Error: Could not find 'basic' client-scope${NC}"
+        return 1
+    fi
+
+    local existing=$(curl -s -H "Authorization: Bearer ${token}" \
+        "${KEYCLOAK_URL}/admin/realms/${REALM}/client-scopes/${basic_scope_id}" | \
+        jq -r '.protocolMappers[]? | select(.name=="mcp-gateway-audience") | .id')
+
+    if [ -n "$existing" ] && [ "$existing" != "null" ]; then
+        echo -e "${YELLOW}Audience mapper already attached to 'basic' scope. Skipping.${NC}"
+        return 0
+    fi
+
+    local audience_mapper_json='{
+        "name": "mcp-gateway-audience",
+        "protocol": "openid-connect",
+        "protocolMapper": "oidc-audience-mapper",
+        "consentRequired": false,
+        "config": {
+            "included.custom.audience": "mcp-gateway",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+        }
+    }'
+
+    local response=$(curl -s -o /dev/null -w "%{http_code}" \
+        -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/client-scopes/${basic_scope_id}/protocol-mappers/models" \
+        -H "Authorization: Bearer ${token}" \
+        -H "Content-Type: application/json" \
+        -d "$audience_mapper_json")
+
+    if [ "$response" = "201" ]; then
+        echo -e "${GREEN}Audience mapper attached to 'basic' scope. DCR'd-client tokens will carry aud=\"mcp-gateway\".${NC}"
+    else
+        echo -e "${RED}Failed to attach Audience mapper to 'basic'. HTTP status: ${response}${NC}"
+        return 1
+    fi
+}
+
 configure_dcr_allowed_scopes() {
     local token=$1
 
@@ -850,10 +907,11 @@ main() {
         setup_groups_mapper "$TOKEN"
         setup_m2m_scopes "$TOKEN"
 
-        # MCP DCR support: groups mapper on `basic` scope (covers DCR'd
-        # clients), Allowed Client Scopes widened, Trusted Hosts relaxed
-        # for cloud-egress MCP clients.
+        # MCP DCR support: groups + audience mappers on `basic` scope (which
+        # is reliably attached to every DCR'd client), Allowed Client Scopes
+        # widened, Trusted Hosts relaxed for cloud-egress MCP clients.
         setup_dcr_groups_mapper "$TOKEN"
+        setup_dcr_audience_mapper "$TOKEN"
         configure_dcr_allowed_scopes "$TOKEN"
         configure_dcr_trusted_hosts "$TOKEN"
     else
