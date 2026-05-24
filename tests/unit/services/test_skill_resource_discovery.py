@@ -365,13 +365,10 @@ class TestDiscoverSkillResources:
             "https://github.com/foo/bar/blob/main/x/SKILL.md",
         )
 
-        # Locate the AsyncClient.get call and confirm auth header was passed.
-        with patch("registry.services.skill_service.httpx.AsyncClient"):
-            pass  # client mock is already configured by the fixture
-        # The fixture's get is invoked once per call; inspect via the mock.
-        # The fixture exposes the response, but the get is on the client_instance.
-        # Re-import the fixture's parent client_instance for assertion:
-        # Easier route: ensure get_auth_headers was invoked with the tree URL.
-        mock_github_auth.get_auth_headers.assert_awaited()
-        call_arg = mock_github_auth.get_auth_headers.await_args.args[0]
-        assert "api.github.com" in call_arg
+        # Confirm get_auth_headers was awaited against the exact Trees API URL
+        # (full-equality assertion -- avoids CodeQL's
+        # py/incomplete-url-substring-sanitization rule, and is also stricter
+        # because it would catch a regression that called the wrong endpoint).
+        mock_github_auth.get_auth_headers.assert_awaited_once_with(
+            "https://api.github.com/repos/foo/bar/git/trees/main?recursive=1",
+        )
