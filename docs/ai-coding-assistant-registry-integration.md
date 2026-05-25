@@ -58,10 +58,10 @@ To add the `airegistry-tools` MCP server (which gives Claude Code access to
 the registry's discovery and search tools):
 
 ```bash
-claude mcp add --transport http airegistry-tools https://mcpgateway.ddns.net/airegistry-tools/mcp
+claude mcp add --transport http airegistry-tools https://mcpgateway.acme.corp/airegistry-tools/mcp
 ```
 
-Replace `mcpgateway.ddns.net` with your own gateway hostname.
+Replace `mcpgateway.acme.corp` with your own gateway hostname.
 
 Then inside Claude Code:
 
@@ -135,10 +135,10 @@ the assistant registers itself, opens your browser to Keycloak, you click
 To add the `airegistry-tools` MCP server:
 
 ```powershell
-kiro-cli mcp add --name airegistry-tools --scope global --url https://mcpgateway.ddns.net/airegistry-tools/mcp
+kiro-cli mcp add --name airegistry-tools --scope global --url https://mcpgateway.acme.corp/airegistry-tools/mcp
 ```
 
-Replace `mcpgateway.ddns.net` with your own gateway hostname. Then in Kiro:
+Replace `mcpgateway.acme.corp` with your own gateway hostname. Then in Kiro:
 
 ```
 /mcp
