@@ -79,7 +79,8 @@ from registry.core.telemetry import (
 from registry.health.routes import router as health_router
 from registry.health.service import health_service
 
-# Import registry mode middleware
+# Import metrics + registry mode middleware
+from registry.metrics.middleware import RegistryMetricsMiddleware
 from registry.middleware.mcp_www_authenticate import WWWAuthenticateMiddleware
 from registry.middleware.mode_filter import RegistryModeMiddleware
 from registry.repositories.factory import get_search_repository
@@ -945,6 +946,14 @@ app.add_middleware(
 if settings.registry_mode != RegistryMode.FULL:
     logger.info(f"Adding registry mode middleware - mode: {settings.registry_mode.value}")
     app.add_middleware(RegistryModeMiddleware)
+
+# Issue #1122: register the OTel-emitting metrics middleware. Emits
+# registry_operation_total / _duration_ms, tool_discovery_total / _duration_ms,
+# and (when METRICS_LEGACY_HTTP_POST=true) the legacy HTTP POST to
+# metrics-service. The middleware was previously defined but never
+# registered with the app, so these counters never reached any exporter.
+app.add_middleware(RegistryMetricsMiddleware, service_name="registry")
+logger.info("Registered RegistryMetricsMiddleware (issue #1122)")
 
 # Add audit middleware if enabled (must be added before app starts)
 if settings.audit_log_enabled:
