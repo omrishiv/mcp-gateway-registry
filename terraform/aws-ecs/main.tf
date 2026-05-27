@@ -103,6 +103,11 @@ module "mcp_gateway" {
   embeddings_aws_region       = var.embeddings_aws_region
   embeddings_api_key          = var.embeddings_api_key
 
+  # Registration deduplication
+  dedup_registration_hint_enabled = var.dedup_registration_hint_enabled
+  dedup_score_threshold           = var.dedup_score_threshold
+  dedup_max_suggestions           = var.dedup_max_suggestions
+
   # Keycloak admin credentials (for Management API)
   keycloak_admin_password = var.keycloak_admin_password
 

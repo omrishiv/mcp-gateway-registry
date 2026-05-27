@@ -1,5 +1,6 @@
 """DocumentDB-based repository for MCP server storage."""
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import Any
@@ -7,7 +8,14 @@ from typing import Any
 from motor.motor_asyncio import AsyncIOMotorCollection
 from pymongo.errors import DuplicateKeyError
 
+from ...utils.url_normalize import ENTITY_TYPE_SERVER, NORMALIZED_IDENTITY_URL_FIELD
 from ..interfaces import ServerRepositoryBase
+from ._identity_url_sidecar import (
+    backfill_normalized_identity_url,
+    ensure_normalized_identity_url_index,
+    find_by_normalized_identity_url,
+    populate_normalized_identity_url,
+)
 from .client import get_collection_name, get_documentdb_client
 
 logger = logging.getLogger(__name__)
@@ -19,13 +27,49 @@ class DocumentDBServerRepository(ServerRepositoryBase):
     def __init__(self):
         self._collection: AsyncIOMotorCollection | None = None
         self._collection_name = get_collection_name("mcp_servers")
+        # Guards the one-shot index/backfill block so two coroutines
+        # racing on the first _get_collection call don't both run the
+        # backfill cursor. The lock is constructed lazily inside the
+        # method so it binds to the running event loop, not the loop
+        # active at __init__ time (factories may run before the loop
+        # exists).
+        self._init_lock: asyncio.Lock | None = None
 
     async def _get_collection(self) -> AsyncIOMotorCollection:
-        """Get DocumentDB collection."""
-        if self._collection is None:
+        """Get DocumentDB collection.
+
+        On first acquisition we also create the sparse index on the
+        ``_identity_url_normalized`` sidecar field (used by
+        :meth:`find_by_identity_url` for registration dedup as an
+        indexed ``$eq`` lookup) and lazily backfill the sidecar onto
+        documents registered before this field existed. The init
+        block runs under an asyncio.Lock so concurrent callers don't
+        race on the backfill cursor; the second caller observes the
+        already-populated ``self._collection`` and returns
+        immediately.
+        """
+        if self._collection is not None:
+            return self._collection
+        if self._init_lock is None:
+            self._init_lock = asyncio.Lock()
+        async with self._init_lock:
+            if self._collection is not None:
+                return self._collection
             db = await get_documentdb_client()
-            self._collection = db[self._collection_name]
-        return self._collection
+            collection = db[self._collection_name]
+            await ensure_normalized_identity_url_index(
+                collection,
+                self._collection_name,
+            )
+            await backfill_normalized_identity_url(
+                collection,
+                self._collection_name,
+                ENTITY_TYPE_SERVER,
+            )
+            # Publish only after the index + backfill are in place so
+            # other coroutines never see a half-initialized state.
+            self._collection = collection
+            return self._collection
 
     async def load_all(self) -> None:
         """Load all servers from DocumentDB."""
@@ -187,6 +231,7 @@ class DocumentDBServerRepository(ServerRepositoryBase):
             doc = {**server_info}
             doc["_id"] = path
             doc.pop("path", None)
+            populate_normalized_identity_url(doc, ENTITY_TYPE_SERVER)
 
             await collection.insert_one(doc)
             logger.info(
@@ -216,8 +261,24 @@ class DocumentDBServerRepository(ServerRepositoryBase):
         try:
             doc = {**server_info}
             doc.pop("path", None)
+            populate_normalized_identity_url(doc, ENTITY_TYPE_SERVER)
+            unset_ops: dict[str, str] = {}
+            # update() may carry no proxy_pass_url at all (a partial
+            # patch that doesn't touch the URL); leave the existing
+            # sidecar alone in that case. But if proxy_pass_url is
+            # explicitly cleared, drop the sidecar so the sparse
+            # index doesn't keep a stale value.
+            if (
+                NORMALIZED_IDENTITY_URL_FIELD not in doc
+                and "proxy_pass_url" in doc
+                and not doc.get("proxy_pass_url")
+            ):
+                unset_ops[NORMALIZED_IDENTITY_URL_FIELD] = ""
 
-            result = await collection.update_one({"_id": path}, {"$set": doc})
+            update_spec: dict[str, dict[str, Any]] = {"$set": doc}
+            if unset_ops:
+                update_spec["$unset"] = unset_ops
+            result = await collection.update_one({"_id": path}, update_spec)
 
             if result.matched_count == 0:
                 logger.error(f"Server at '{path}' not found in DocumentDB")
@@ -393,13 +454,31 @@ class DocumentDBServerRepository(ServerRepositoryBase):
     async def find_with_filter(
         self,
         filter_dict: dict[str, Any],
+        *,
+        limit: int | None = None,
     ) -> dict[str, dict]:
         """Find documents matching a MongoDB-style filter."""
         collection = await self._get_collection()
         cursor = collection.find(filter_dict)
+        if limit is not None:
+            cursor = cursor.limit(limit)
         results = {}
         async for doc in cursor:
             doc_id = doc.pop("_id", None)
             if doc_id:
                 results[doc_id] = doc
         return results
+
+    async def find_by_identity_url(
+        self,
+        identity_url: str,
+    ) -> dict[str, Any] | None:
+        """Find a server whose ``proxy_pass_url`` normalizes to ``identity_url``.
+
+        Indexed ``$eq`` lookup against the ``_identity_url_normalized``
+        sidecar field, which write paths populate from
+        ``proxy_pass_url`` at insert/update time. Single-document
+        round trip; no full-collection scan.
+        """
+        collection = await self._get_collection()
+        return await find_by_normalized_identity_url(collection, identity_url)

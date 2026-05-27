@@ -6,6 +6,7 @@ interface RegistryConfig {
   registry_mode: 'full' | 'skills-only' | 'mcp-servers-only' | 'agents-only';
   nginx_updates_enabled: boolean;
   coding_assistants: string[];
+  dedup_registration_hint_enabled: boolean;
   features: {
     mcp_servers: boolean;
     agents: boolean;
@@ -21,6 +22,7 @@ const DEFAULT_CONFIG: RegistryConfig = {
   registry_mode: 'full',
   nginx_updates_enabled: true,
   coding_assistants: [],
+  dedup_registration_hint_enabled: false,
   features: {
     mcp_servers: true,
     agents: true,

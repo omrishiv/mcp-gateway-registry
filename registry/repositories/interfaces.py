@@ -168,16 +168,55 @@ class ServerRepositoryBase(ABC):
     async def find_with_filter(
         self,
         filter_dict: dict[str, Any],
+        *,
+        limit: int | None = None,
     ) -> dict[str, dict]:
         """Find documents matching a MongoDB-style filter.
 
         Args:
             filter_dict: MongoDB-style filter
+            limit: optional cap on number of documents returned. None
+                returns all matches (legacy behavior).
 
         Returns:
             Dict mapping path -> document data for matching documents
         """
         ...
+
+    async def find_by_identity_url(
+        self,
+        identity_url: str,
+    ) -> dict[str, Any] | None:
+        """Find a server whose ``proxy_pass_url`` normalizes to ``identity_url``.
+
+        Used by ``DuplicateCheckService`` to detect exact-URL
+        collisions. ``identity_url`` is the canonical form returned by
+        ``normalize_identity_url(url, "mcp_server")``.
+
+        Default implementation scans ``list_all()`` and re-normalizes each
+        candidate's ``proxy_pass_url``. Backends with index support
+        (DocumentDB) override with a server-side filter.
+
+        Args:
+            identity_url: Pre-normalized identity URL (scheme-collapsed).
+
+        Returns:
+            The full document with ``path`` populated, or None if no match.
+        """
+        from ..utils.url_normalize import ENTITY_TYPE_SERVER, normalize_identity_url
+
+        if not identity_url:
+            return None
+        all_servers = await self.list_all()
+        for path, server_info in all_servers.items():
+            candidate_url = server_info.get("proxy_pass_url")
+            if not candidate_url:
+                continue
+            if normalize_identity_url(candidate_url, ENTITY_TYPE_SERVER) == identity_url:
+                doc = dict(server_info)
+                doc["path"] = path
+                return doc
+        return None
 
 
 class AgentRepositoryBase(ABC):
@@ -301,16 +340,54 @@ class AgentRepositoryBase(ABC):
     async def find_with_filter(
         self,
         filter_dict: dict[str, Any],
+        *,
+        limit: int | None = None,
     ) -> dict[str, dict]:
         """Find documents matching a MongoDB-style filter.
 
         Args:
             filter_dict: MongoDB-style filter
+            limit: optional cap on number of documents returned. None
+                returns all matches (legacy behavior).
 
         Returns:
             Dict mapping path -> document data for matching documents
         """
         ...
+
+    async def find_by_identity_url(
+        self,
+        identity_url: str,
+    ) -> dict[str, Any] | None:
+        """Find an agent whose endpoint ``url`` normalizes to ``identity_url``.
+
+        Used by ``DuplicateCheckService`` to detect exact-URL
+        collisions. ``identity_url`` is the canonical form returned by
+        ``normalize_identity_url(url, "a2a_agent")``.
+
+        Default implementation scans ``list_all()``. Backends with index
+        support (DocumentDB) override with a server-side filter.
+
+        Args:
+            identity_url: Pre-normalized identity URL (scheme-collapsed).
+
+        Returns:
+            A dict with the agent document fields plus ``path``, or None.
+        """
+        from ..utils.url_normalize import ENTITY_TYPE_AGENT, normalize_identity_url
+
+        if not identity_url:
+            return None
+        agents = await self.list_all()
+        for agent in agents:
+            candidate_url = getattr(agent, "url", None)
+            if not candidate_url:
+                continue
+            if normalize_identity_url(candidate_url, ENTITY_TYPE_AGENT) == identity_url:
+                doc = agent.model_dump(mode="json") if hasattr(agent, "model_dump") else dict(agent)
+                doc["path"] = getattr(agent, "path", doc.get("path"))
+                return doc
+        return None
 
 
 class ScopeRepositoryBase(ABC):
@@ -1259,6 +1336,41 @@ class SkillRepositoryBase(ABC):
             Total number of skills in the repository.
         """
         pass
+
+    async def find_by_identity_url(
+        self,
+        identity_url: str,
+    ) -> dict[str, Any] | None:
+        """Find a skill whose ``skill_md_url`` normalizes to ``identity_url``.
+
+        Used by ``DuplicateCheckService`` to detect exact-URL
+        collisions. ``identity_url`` is the canonical form returned by
+        ``normalize_identity_url(url, "skill")``.
+
+        Default implementation scans ``list_all()``. DocumentDB
+        implementation overrides with a server-side filter when an
+        identity index is present.
+
+        Args:
+            identity_url: Pre-normalized identity URL (canonical github form).
+
+        Returns:
+            A dict with the skill document fields plus ``path``, or None.
+        """
+        from ..utils.url_normalize import ENTITY_TYPE_SKILL, normalize_identity_url
+
+        if not identity_url:
+            return None
+        skills = await self.list_all()
+        for skill in skills:
+            candidate_url = str(getattr(skill, "skill_md_url", "") or "")
+            if not candidate_url:
+                continue
+            if normalize_identity_url(candidate_url, ENTITY_TYPE_SKILL) == identity_url:
+                doc = skill.model_dump(mode="json") if hasattr(skill, "model_dump") else dict(skill)
+                doc["path"] = getattr(skill, "path", doc.get("path"))
+                return doc
+        return None
 
 
 class BackendSessionRepositoryBase(ABC):

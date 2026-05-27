@@ -10,6 +10,7 @@ from motor.motor_asyncio import AsyncIOMotorCollection
 from ...core.config import embedding_config, settings
 from ...schemas.agent_models import AgentCard
 from ...utils.metadata import flatten_metadata_to_text
+from ...utils.vector import cosine_similarity
 from ..interfaces import SearchRepositoryBase
 from .client import get_collection_name, get_documentdb_client
 
@@ -208,10 +209,6 @@ def _distribute_results(
     return selected
 
 
-
-
-
-
 def _build_status_filter(
     include_draft: bool = False,
     include_deprecated: bool = False,
@@ -287,7 +284,7 @@ def _build_keyword_match_filter(
     Returns:
         MongoDB $match filter dict
     """
-    match_filter = {
+    match_filter: dict[str, Any] = {
         "$or": [
             {"name": {"$regex": token_regex, "$options": "i"}},
             {"path": {"$regex": token_regex, "$options": "i"}},
@@ -513,6 +510,52 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             )
         return self._embedding_model
 
+    async def _embed_texts(
+        self,
+        texts: list[str],
+        *,
+        context: str,
+        latch_unavailable: bool = True,
+    ) -> list[list[float]] | None:
+        """Encode texts using the lazy-loaded embedding model.
+
+        Single funnel for every embedding call in this repository so the
+        embedding-invariant (query and corpus must use the same model)
+        holds structurally — there is exactly one encoder, used by both
+        index_* and search/dedup paths.
+
+        Args:
+            texts: strings to encode.
+            context: short human-readable label included in the warning
+                log line on failure (e.g. ``"server 'github'"``,
+                ``"hybrid search query"``). Helps operators trace which
+                call path tripped the _embedding_unavailable latch.
+            latch_unavailable: when True (default), an exception from
+                ``model.encode()`` flips ``_embedding_unavailable`` so
+                subsequent calls short-circuit. ``index_*`` callers pass
+                False because they want to keep trying for later docs;
+                ``search`` and ``dedup`` callers want the latch.
+
+        Returns:
+            A list of vectors (one per input) on success, or ``None`` on
+            failure (exception or latch already set).
+        """
+        if latch_unavailable and self._embedding_unavailable:
+            return None
+        try:
+            model = await self._get_embedding_model()
+            vectors = model.encode(texts)
+            return [v.tolist() for v in vectors]
+        except Exception as exc:
+            logger.warning(
+                "Embedding model unavailable for %s: %s",
+                context,
+                exc,
+            )
+            if latch_unavailable:
+                self._embedding_unavailable = True
+            return None
+
     async def initialize(self) -> None:
         """Initialize the search service and create vector index."""
         logger.info(f"Initializing DocumentDB hybrid search on collection: {self._collection_name}")
@@ -617,24 +660,20 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             ):
                 # Content unchanged and embedding exists; just update is_enabled if needed
                 if existing.get("is_enabled") != is_enabled:
-                    await collection.update_one(
-                        {"_id": path}, {"$set": {"is_enabled": is_enabled}}
-                    )
+                    await collection.update_one({"_id": path}, {"$set": {"is_enabled": is_enabled}})
                 return
 
         # Flatten metadata into a searchable text field for keyword matching
         metadata_text = flatten_metadata_to_text(metadata)
 
-        try:
-            model = await self._get_embedding_model()
-            embedding = model.encode([text_for_embedding])[0].tolist()
-        except Exception as e:
-            logger.warning(
-                "Embedding model unavailable, indexing '%s' without embeddings: %s",
-                server_info.get("server_name", path),
-                e,
-            )
-            embedding = []
+        # latch_unavailable=False: indexing failures should not poison
+        # the latch for later docs in the same batch.
+        vectors = await self._embed_texts(
+            [text_for_embedding],
+            context=f"server {server_info.get('server_name', path)!r}",
+            latch_unavailable=False,
+        )
+        embedding = vectors[0] if vectors else []
 
         doc = {
             "_id": path,
@@ -715,21 +754,15 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 and existing.get("embedding")
             ):
                 if existing.get("is_enabled") != is_enabled:
-                    await collection.update_one(
-                        {"_id": path}, {"$set": {"is_enabled": is_enabled}}
-                    )
+                    await collection.update_one({"_id": path}, {"$set": {"is_enabled": is_enabled}})
                 return
 
-        try:
-            model = await self._get_embedding_model()
-            embedding = model.encode([text_for_embedding])[0].tolist()
-        except Exception as e:
-            logger.warning(
-                "Embedding model unavailable, indexing agent '%s' without embeddings: %s",
-                agent_card.name,
-                e,
-            )
-            embedding = []
+        vectors = await self._embed_texts(
+            [text_for_embedding],
+            context=f"agent {agent_card.name!r}",
+            latch_unavailable=False,
+        )
+        embedding = vectors[0] if vectors else []
 
         # Flatten agent metadata for keyword search
         agent_metadata = getattr(agent_card, "metadata", None) or {}
@@ -816,22 +849,15 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 and existing.get("embedding")
             ):
                 if existing.get("is_enabled") != is_enabled:
-                    await collection.update_one(
-                        {"_id": path}, {"$set": {"is_enabled": is_enabled}}
-                    )
+                    await collection.update_one({"_id": path}, {"$set": {"is_enabled": is_enabled}})
                 return
 
-        # Generate embedding
-        try:
-            model = await self._get_embedding_model()
-            embedding = model.encode([text_for_embedding])[0].tolist()
-        except Exception as e:
-            logger.warning(
-                "Embedding model unavailable, indexing skill '%s' without embeddings: %s",
-                skill.name,
-                e,
-            )
-            embedding = []
+        vectors = await self._embed_texts(
+            [text_for_embedding],
+            context=f"skill {skill.name!r}",
+            latch_unavailable=False,
+        )
+        embedding = vectors[0] if vectors else []
 
         # Handle visibility enum
         visibility_value = skill.visibility
@@ -972,17 +998,12 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
 
         text_for_embedding = " ".join(filter(None, text_parts))
 
-        # Generate embedding
-        try:
-            model = await self._get_embedding_model()
-            embedding = model.encode([text_for_embedding])[0].tolist()
-        except Exception as e:
-            logger.warning(
-                "Embedding model unavailable, indexing virtual server '%s' without embeddings: %s",
-                virtual_server.server_name,
-                e,
-            )
-            embedding = []
+        vectors = await self._embed_texts(
+            [text_for_embedding],
+            context=f"virtual server {virtual_server.server_name!r}",
+            latch_unavailable=False,
+        )
+        embedding = vectors[0] if vectors else []
 
         # Flatten virtual server metadata for keyword search
         vs_metadata_parts = []
@@ -1022,25 +1043,6 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             logger.info(f"Indexed virtual server for search: {path}")
         except Exception as e:
             logger.error(f"Failed to index virtual server in search: {e}", exc_info=True)
-
-    def _calculate_cosine_similarity(self, vec1: list[float], vec2: list[float]) -> float:
-        """Calculate cosine similarity between two vectors.
-
-        Returns a value between 0 and 1, where 1 is identical.
-        """
-        import math
-
-        if not vec1 or not vec2 or len(vec1) != len(vec2):
-            return 0.0
-
-        dot_product = sum(a * b for a, b in zip(vec1, vec2, strict=True))
-        magnitude1 = math.sqrt(sum(a * a for a in vec1))
-        magnitude2 = math.sqrt(sum(b * b for b in vec2))
-
-        if magnitude1 == 0 or magnitude2 == 0:
-            return 0.0
-
-        return dot_product / (magnitude1 * magnitude2)
 
     async def search_by_tags(
         self,
@@ -1092,7 +1094,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         """Return a sorted list of all unique tags across all indexed entities."""
         collection = await self._get_collection()
         try:
-            pipeline = [
+            pipeline: list[dict[str, Any]] = [
                 {"$match": {"tags": {"$exists": True, "$ne": []}}},
                 {"$unwind": "$tags"},
                 {"$group": {"_id": {"$toLower": "$tags"}, "original": {"$first": "$tags"}}},
@@ -1191,7 +1193,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 if not embedding:
                     vector_score = 0.0
                 else:
-                    vector_score = self._calculate_cosine_similarity(query_embedding, embedding)
+                    vector_score = cosine_similarity(query_embedding, embedding)
 
                 # Add text-based boost using tokenized matching
                 text_boost = 0.0
@@ -1293,7 +1295,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             selected = _distribute_results(scored_tuples, max_results)
 
             # Format results to match the API contract
-            grouped_results = {
+            grouped_results: dict[str, list[dict[str, Any]]] = {
                 "servers": [],
                 "tools": [],
                 "agents": [],
@@ -1493,7 +1495,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
 
         text_boost_stage = _build_text_boost_stage(token_regex)
 
-        pipeline = [
+        pipeline: list[dict[str, Any]] = [
             {"$match": keyword_match_filter},
         ]
 
@@ -1557,7 +1559,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         selected = _distribute_results(scored_tuples, max_results)
 
         # Group selected results by entity type
-        grouped_results = {
+        grouped_results: dict[str, list[dict[str, Any]]] = {
             "servers": [],
             "tools": [],
             "agents": [],
@@ -1705,18 +1707,11 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         collection = await self._get_collection()
 
         try:
-            # Try to get embedding; fall back to lexical-only search if unavailable
-            query_embedding = None
-            if not self._embedding_unavailable:
-                try:
-                    model = await self._get_embedding_model()
-                    query_embedding = model.encode([query])[0].tolist()
-                except Exception as embed_error:
-                    logger.warning(
-                        "Embedding model unavailable, falling back to lexical-only search: %s",
-                        embed_error,
-                    )
-                    self._embedding_unavailable = True
+            # Try to get embedding; fall back to lexical-only search if
+            # unavailable. _embed_texts() honors and updates the
+            # _embedding_unavailable latch for us.
+            vectors = await self._embed_texts([query], context="hybrid search query")
+            query_embedding = vectors[0] if vectors else None
 
             if query_embedding is None:
                 return await self._lexical_only_search(
@@ -1732,7 +1727,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             # We get more results than needed to allow for text-based re-ranking
             ef_search = settings.vector_search_ef_search
             k_value = max(max_results * 3, 50)  # At least 50 to avoid missing docs
-            pipeline = [
+            pipeline: list[dict[str, Any]] = [
                 {
                     "$search": {
                         "vectorSearch": {
@@ -1917,7 +1912,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             for doc in results:
                 entity_type = doc.get("entity_type")
                 doc_embedding = doc.get("embedding", [])
-                vector_score = self._calculate_cosine_similarity(query_embedding, doc_embedding)
+                vector_score = cosine_similarity(query_embedding, doc_embedding)
                 text_boost = doc.get("text_boost", 0.0)
 
                 # Normalize vector_score from [-1, 1] to [0, 1]
@@ -1951,7 +1946,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             selected_results = _distribute_results(scored_results, max_results)
 
             # Group selected results by entity type for the response
-            grouped_results = {
+            grouped_results: dict[str, list[dict[str, Any]]] = {
                 "servers": [],
                 "tools": [],
                 "agents": [],

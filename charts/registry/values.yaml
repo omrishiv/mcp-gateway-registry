@@ -109,6 +109,18 @@ app:
   # their group mappings directly, without requiring an IdP Admin API token.
   m2mDirectRegistrationEnabled: true
 
+  # Registration deduplication
+  # Advisory checks that surface likely-duplicate entities (servers, agents,
+  # skills) before a user registers a new one. The /api/<entity>/check-duplicates
+  # endpoints are always available for CI / federation / CLI callers regardless
+  # of the registrationHintEnabled flag; that flag only governs whether the
+  # registration form pre-flights the check and renders the hint modal. The
+  # check is advisory and never blocks registration.
+  dedup:
+    registrationHintEnabled: true  # When true, registration UI pre-flights /check-duplicates and shows hint modal.
+    scoreThreshold: "0.7"          # Minimum similarity score (0.0..1.0) for advisory matches.
+    maxSuggestions: "3"            # Cap on advisory suggestions per request.
+
   # OpenTelemetry direct OTLP push export configuration
   otelOtlpEndpoint: ""  # OTLP endpoint URL (e.g., https://otlp.datadoghq.com)
   otelExporterOtlpHeaders: ""  # OTLP headers (e.g., dd-api-key=YOUR_KEY)

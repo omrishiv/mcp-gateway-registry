@@ -440,6 +440,25 @@ Used by `registry` and `mcpgw` services.
 
 ---
 
+## Group 20a — Registration Deduplication
+
+Advisory check that surfaces likely-duplicate servers when a user registers a new one. Reuses the embedding model from Group 20 — the query embedder and the persisted-corpus embedder must be the same model for cosine scores to be meaningful. Used by the `registry` service only. Path uniqueness remains the only hard rule; this feature is purely advisory and never blocks registration.
+
+Weights must sum to 1.0 ± 0.001 or the registry process refuses to start (validated in `Settings`).
+
+| Parameter | Docker (`.env`) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose |
+|-----------|-----------------|-----------------------|----------------------|---------|
+| Enable feature | `DEDUP_ENABLED` | `dedup_enabled` | `registry.app.dedup.enabled` | Master switch. `false` makes `POST /servers/similar` return `enabled=false` and skip all work. |
+| Score threshold | `DEDUP_SCORE_THRESHOLD` | `dedup_score_threshold` | `registry.app.dedup.scoreThreshold` | Minimum composite score (0.0..1.0) for a candidate to surface. Default `0.7`. |
+| Max suggestions | `DEDUP_MAX_SUGGESTIONS` | `dedup_max_suggestions` | `registry.app.dedup.maxSuggestions` | Cap on suggestions returned. Default `3`. |
+| Candidate pool size | `DEDUP_CANDIDATE_POOL_SIZE` | `dedup_candidate_pool_size` | `registry.app.dedup.candidatePoolSize` | `k` for vector search before scoring. Default `20`. Tripled internally for restricted callers (whose visibility filter would otherwise decimate results). |
+| Semantic weight | `DEDUP_WEIGHT_SEMANTIC` | `dedup_weight_semantic` | `registry.app.dedup.weightSemantic` | Default `0.55`. |
+| URL weight | `DEDUP_WEIGHT_URL` | `dedup_weight_url` | `registry.app.dedup.weightUrl` | Default `0.30`. |
+| Name-exact weight | `DEDUP_WEIGHT_NAME_EXACT` | `dedup_weight_name_exact` | `registry.app.dedup.weightNameExact` | Default `0.15`. |
+| Max query text chars | `DEDUP_MAX_TEXT_CHARS` | `dedup_max_text_chars` | `registry.app.dedup.maxTextChars` | Cap on `(name + description)` fed to the embedder per call. Default `2000`. Cost guard. |
+
+---
+
 ## Group 21 — ANS (Agent Naming Service)
 
 | Parameter | Docker (`.env`) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose |
