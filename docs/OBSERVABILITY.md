@@ -58,23 +58,83 @@ Three differences from the legacy architecture:
 
 ## Configuration
 
-Two new environment variables introduced in 1.25.0, plus reuse of standard
-OTel env vars. All four are wired into Docker Compose, Helm, and Terraform/ECS.
+Two new application-level settings introduced in 1.25.0, plus a handful of
+standard OTel SDK env vars. The full cross-surface mapping (Docker Compose
+env vars, Terraform tfvars, Helm values paths) lives in
+[docs/unified-parameter-reference.md, Group 25](unified-parameter-reference.md#group-25--otlp--opentelemetry-export).
+The summary below highlights each setting, its default, and where to find it
+on each deployment surface.
 
-| Env var | Default | Purpose |
+### Setting 1: `METRICS_LEGACY_HTTP_POST` — transition flag
+
+| Surface | Where to set | Default |
 |---|---|---|
-| `OTEL_EXPORTER_PROMETHEUS_HOST` | `0.0.0.0` | Bind address for the in-process Prometheus exporter listener. EKS needs `0.0.0.0` (Prometheus is in a different pod and the chart's NetworkPolicy gates access). Compose can use `127.0.0.1`. |
-| `OTEL_EXPORTER_PROMETHEUS_PORT` | `9464` | Port the Prometheus exporter listens on. The Prometheus scrape config in `config/prometheus.yml` targets this port. |
-| `OTEL_METRIC_EXPORT_INTERVAL_MS` | `15000` | OTel SDK metric flush interval. Lower for near-real-time dashboards during incident response. |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | When set, the OTel SDK ALSO pushes metrics via OTLP. On ECS this points at the per-task ADOT sidecar at `http://localhost:4317`. On EKS, point at your in-cluster collector. Optional in Compose. |
-| `METRICS_LEGACY_HTTP_POST` | `false` | When `true`, services ALSO POST JSON events to the legacy `metrics-service:8890`. One-release transition flag; removed in 1.26.0. |
+| Docker Compose | `METRICS_LEGACY_HTTP_POST` in `.env` | `false` |
+| Terraform / ECS | Hardcoded to `"false"` in the container env block in `terraform/aws-ecs/modules/mcp-gateway/ecs-services.tf` | `"false"` |
+| Helm / EKS | `app.metricsLegacyHttpPost` in `charts/registry/values.yaml`, `metrics.legacyHttpPost` in `charts/auth-server/values.yaml` and `charts/mcpgw/values.yaml` | `false` |
 
-When `OTEL_EXPORTER_OTLP_ENDPOINT` is set, the docker entrypoint additionally
+When `true`, services ALSO POST JSON events to the legacy `metrics-service:8890`
+in addition to the native OTel emission. Used during the 1.25.0 → 1.26.0
+transition window to verify dashboards before the cutover. **Removed in 1.26.0
+along with the metrics-service container itself.**
+
+### Setting 2: `OTEL_METRIC_EXPORT_INTERVAL_MS` — SDK flush interval
+
+| Surface | Where to set | Default |
+|---|---|---|
+| Docker Compose | `OTEL_METRIC_EXPORT_INTERVAL_MS` in `.env` | `15000` |
+| Terraform / ECS | Hardcoded to `"15000"` in the container env block in `ecs-services.tf` | `"15000"` |
+| Helm / EKS | `app.otelMetricExportIntervalMs` (registry), `metrics.otelExportIntervalMs` (auth-server, mcpgw) | `"15000"` |
+
+Lower (e.g., `5000`) for near-real-time dashboards during incident response;
+raise (e.g., `30000`) for high-traffic production where reduced OTLP push
+frequency matters.
+
+### Setting 3: `OTEL_EXPORTER_PROMETHEUS_HOST` / `OTEL_EXPORTER_PROMETHEUS_PORT`
+
+| Surface | Where to set | Default |
+|---|---|---|
+| Docker Compose | `OTEL_EXPORTER_PROMETHEUS_HOST` / `_PORT` in `.env` | `0.0.0.0` / `9464` |
+| Terraform / ECS | Not set explicitly; SDK default `0.0.0.0:9464` is used | `0.0.0.0:9464` |
+| Helm / EKS | `app.otelExporterPrometheusHost` / `app.otelExporterPrometheusPort` (registry), `metrics.exporterPrometheusHost` / `metrics.exporterPrometheusPort` (auth-server, mcpgw) | `0.0.0.0:9464` |
+
+Bind address and port for the in-process Prometheus exporter listener. EKS
+needs `0.0.0.0` because Prometheus runs in a different pod (the chart's
+`NetworkPolicy` template gates access). Compose can use `127.0.0.1` to keep
+the port unreachable from outside the Docker network.
+
+### Setting 4: `OTEL_EXPORTER_OTLP_ENDPOINT` and friends
+
+| Surface | Where to set | Default |
+|---|---|---|
+| Docker Compose | `OTEL_EXPORTER_OTLP_ENDPOINT` (and `_PROTOCOL`, `_HEADERS`) in `.env`. Default compose ships an `otel-collector` service; uncomment the line `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317` to enable push. | unset |
+| Terraform / ECS | The container env block in `ecs-services.tf` sets `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317` when `var.enable_observability=true` (so the per-task ADOT sidecar receives it). | `http://localhost:4317` when observability is on, else unset |
+| Helm / EKS | Operators inject this via the chart's `extraEnv` block (or via `OTEL_EXPORTER_OTLP_ENDPOINT` in the chart's configmap). Point at an in-cluster collector or the OTLP receiver of your chosen vendor. | unset |
+
+When set, the OTel SDK ALSO pushes metrics + traces via OTLP in addition to
+serving the Prometheus exporter on `:9464`. The docker entrypoint additionally
 wraps uvicorn with `opentelemetry-instrument`, which auto-activates the
 `opentelemetry-instrumentation-fastapi`, `-httpx`, `-asyncio`, `-pymongo`,
 and `-logging` packages. This produces the standard HTTP semantic-convention
 metrics (`http_server_duration_*`, `http_server_active_requests`) and per-route
 spans without any application code change.
+
+`OTEL_EXPORTER_OTLP_HEADERS` is **secret-bearing** when used with backends
+like Datadog (`dd-api-key=...`) or Grafana Cloud. On ECS, source it from
+AWS Secrets Manager. On EKS, use a `secretKeyRef`. On Compose, put it in
+`.env` (which is gitignored).
+
+### Setting 5: `OTEL_SERVICE_NAME` — trace attribution
+
+| Surface | Where to set | Default |
+|---|---|---|
+| Docker Compose | Hardcoded per service in `docker-compose.yml`: `mcp-gateway-registry`, `mcp-auth-server`, `mcp-mcpgw` | per-service |
+| Terraform / ECS | Set via the auto-instrumentation distro (defaults to the container name) | container-name-based |
+| Helm / EKS | Set via `extraEnv` per pod, or rely on auto-instrumentation defaults | unset (becomes `unknown_service`) |
+
+Without this set, OTel traces are tagged `unknown_service` in your tracing
+backend, making it impossible to tell which container produced which span.
+Set it explicitly when adding a new service.
 
 ## Metric inventory
 
