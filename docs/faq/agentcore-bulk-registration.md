@@ -300,33 +300,52 @@ After the token refresher runs, the gateways will have valid egress tokens. Howe
 
 ## Step 5: Enable the Registered Servers and Agents
 
-Newly registered assets start in a disabled state. You need to enable each one before it appears in search results and health checks begin:
+Newly registered assets start in a disabled state. You need to enable each one before it appears in search results and health checks begin.
+
+### Enable all CUSTOM_JWT gateways from the manifest
+
+Use the `token_refresh_manifest.json` to loop through all gateway paths and enable them in one shot:
 
 ```bash
-# Enable each server (toggle switches from disabled to enabled)
-uv run python api/registry_management.py \
-    --registry-url http://localhost \
-    --token-file .token \
-    toggle --path /customersupport-gw
+TOKEN=$(cat .token | python3 -c "import sys,json; print(json.load(sys.stdin)['tokens']['access_token'])")
 
-uv run python api/registry_management.py \
-    --registry-url http://localhost \
-    --token-file .token \
-    toggle --path /geo-mcp
-
-uv run python api/registry_management.py \
-    --registry-url http://localhost \
-    --token-file .token \
-    toggle --path /sre-gateway
+for path in $(python3 -c "import json; [print(e['server_path']) for e in json.load(open('token_refresh_manifest.json'))]"); do
+    echo "Enabling: $path"
+    curl -s -X POST \
+        -H "Authorization: Bearer $TOKEN" \
+        -F "path=$path" \
+        -F "new_state=true" \
+        "http://localhost/api/servers/toggle"
+    echo
+done
 ```
 
-For agents, use `agent-toggle`:
+Expected output:
+
+```
+Enabling: /customersupport-gw
+{"message":"Toggle request for /customersupport-gw processed.","service_path":"/customersupport-gw","new_enabled_state":true,"status":"healthy",...}
+Enabling: /geo-mcp
+{"message":"Toggle request for /geo-mcp processed.","service_path":"/geo-mcp","new_enabled_state":true,"status":"healthy",...}
+...
+```
+
+### Enable individual servers or agents
 
 ```bash
-uv run python api/registry_management.py \
-    --registry-url http://localhost \
-    --token-file .token \
-    agent-toggle --path /my-simple-agent
+# Enable a single server
+curl -s -X POST \
+    -H "Authorization: Bearer $TOKEN" \
+    -F "path=/geo-mcp" \
+    -F "new_state=true" \
+    "http://localhost/api/servers/toggle"
+
+# Enable a single agent
+curl -s -X POST \
+    -H "Authorization: Bearer $TOKEN" \
+    -F "path=/my-simple-agent" \
+    -F "new_state=true" \
+    "http://localhost/api/agents/toggle"
 ```
 
 You can also enable them from the registry UI by clicking the toggle switch on each asset's card.
