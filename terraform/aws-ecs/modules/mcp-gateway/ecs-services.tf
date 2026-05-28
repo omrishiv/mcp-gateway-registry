@@ -53,10 +53,15 @@ module "ecs_service_auth" {
     EcsExecTaskExecution = aws_iam_policy.ecs_exec_task_execution.arn
   }
   create_tasks_iam_role = true
-  tasks_iam_role_policies = {
-    SecretsManagerAccess = aws_iam_policy.ecs_secrets_access.arn
-    EcsExecTask          = aws_iam_policy.ecs_exec_task.arn
-  }
+  tasks_iam_role_policies = merge(
+    {
+      SecretsManagerAccess = aws_iam_policy.ecs_secrets_access.arn
+      EcsExecTask          = aws_iam_policy.ecs_exec_task.arn
+    },
+    var.enable_observability ? {
+      AMPRemoteWrite = aws_iam_policy.adot_amp_write[0].arn
+    } : {}
+  )
 
   # Enable Service Connect
   service_connect_configuration = {
@@ -72,10 +77,10 @@ module "ecs_service_auth" {
   }
 
   # Container definitions
-  container_definitions = {
+  container_definitions = merge({
     auth-server = {
-      cpu                    = tonumber(var.cpu)
-      memory                 = tonumber(var.memory)
+      cpu                    = var.enable_observability ? tonumber(var.cpu) - local.adot_sidecar_cpu : tonumber(var.cpu)
+      memory                 = var.enable_observability ? tonumber(var.memory) - local.adot_sidecar_memory : tonumber(var.memory)
       essential              = true
       image                  = var.auth_server_image_uri
       versionConsistency     = "disabled"
@@ -84,7 +89,7 @@ module "ecs_service_auth" {
       portMappings = [
         {
           name          = "auth-server"
-          containerPort = 8888
+          containerPort = 18888
           protocol      = "tcp"
         }
       ]
@@ -97,6 +102,10 @@ module "ecs_service_auth" {
         {
           name  = "BIND_HOST"
           value = var.bind_host
+        },
+        {
+          name  = "AUTH_LISTEN_PORT"
+          value = "18888"
         },
         {
           name  = "AUTH_SERVER_URL"
@@ -362,19 +371,29 @@ module "ecs_service_auth" {
           name  = "TOOL_FILTER_AUDIT_LOG_LEVEL"
           value = var.tool_filter_audit_log_level
         },
-        # Metrics pipeline (only wired when observability is enabled).
-        # Issue #1122: auth-server intentionally has no OTel sidecar on ECS
-        # because uvicorn 0.0.0.0:8888 races with Service Connect Envoy's
-        # 127.0.0.1:8888 outbound interceptor. The legacy metrics-service
-        # POST path is the only metrics surface for auth-server on ECS for
-        # this PR; registry+mcpgw still get the full OTel-native pipeline.
-        {
-          name  = "METRICS_SERVICE_URL"
-          value = var.enable_observability ? "http://metrics-service:8890" : ""
-        },
         {
           name  = "METRICS_LEGACY_HTTP_POST"
-          value = var.enable_observability ? "true" : "false"
+          value = "false"
+        },
+        {
+          name  = "OTEL_METRIC_EXPORT_INTERVAL_MS"
+          value = "15000"
+        },
+        {
+          name  = "OTEL_EXPORTER_PROMETHEUS_HOST"
+          value = "0.0.0.0"
+        },
+        {
+          name  = "OTEL_EXPORTER_PROMETHEUS_PORT"
+          value = "9464"
+        },
+        {
+          name  = "OTEL_EXPORTER_OTLP_ENDPOINT"
+          value = var.enable_observability ? "http://localhost:4317" : ""
+        },
+        {
+          name  = "OTEL_EXPORTER_OTLP_PROTOCOL"
+          value = "grpc"
         }
         ],
         # PR #947: MongoDB connection string override (plain-text variant).
@@ -478,14 +497,47 @@ module "ecs_service_auth" {
       cloudwatch_log_group_retention_in_days = 30
 
       healthCheck = {
-        command     = ["CMD-SHELL", "curl -f http://localhost:8888/health || exit 1"]
+        command     = ["CMD-SHELL", "curl -f http://localhost:18888/health || exit 1"]
         interval    = 30
         timeout     = 5
         retries     = 3
         startPeriod = 60
       }
     }
-  }
+    },
+    var.enable_observability ? {
+      adot-collector = {
+        cpu                    = local.adot_sidecar_cpu
+        memory                 = local.adot_sidecar_memory
+        essential              = false
+        image                  = "public.ecr.aws/aws-observability/aws-otel-collector:latest"
+        versionConsistency     = "disabled"
+        readonlyRootFilesystem = false
+
+        command = ["--config=env:AOT_CONFIG_CONTENT"]
+
+        environment = [
+          {
+            name  = "AOT_CONFIG_CONTENT"
+            value = local.adot_otlp_to_amp_config
+          },
+          {
+            name  = "AWS_REGION"
+            value = data.aws_region.current.id
+          }
+        ]
+
+        enable_cloudwatch_logging              = true
+        cloudwatch_log_group_name              = "/ecs/${local.name_prefix}-auth-adot"
+        cloudwatch_log_group_retention_in_days = 30
+
+        dependencies = [{
+          containerName = "auth-server"
+          condition     = "START"
+        }]
+      }
+    } : {}
+  )
 
   volume = {
     mcp-logs = {
@@ -508,16 +560,16 @@ module "ecs_service_auth" {
     service = {
       target_group_arn = module.alb.target_groups["auth"].arn
       container_name   = "auth-server"
-      container_port   = 8888
+      container_port   = 18888
     }
   }
 
   subnet_ids = var.private_subnet_ids
   security_group_ingress_rules = {
-    alb_8888 = {
+    alb_18888 = {
       description                  = "Auth server port from ALB"
-      from_port                    = 8888
-      to_port                      = 8888
+      from_port                    = 18888
+      to_port                      = 18888
       ip_protocol                  = "tcp"
       referenced_security_group_id = module.alb.security_group_id
     }
@@ -1385,12 +1437,14 @@ resource "aws_vpc_security_group_ingress_rule" "mcpgw_to_registry" {
 }
 
 
-# Allow registry to communicate with auth server on port 8888
+# Allow registry to communicate with auth server on port 18888
+# Service Connect proxy-to-proxy traffic uses containerPort (18888),
+# not client_alias.port (8888).
 resource "aws_vpc_security_group_ingress_rule" "registry_to_auth" {
   security_group_id            = module.ecs_service_auth.security_group_id
   referenced_security_group_id = module.ecs_service_registry.security_group_id
-  from_port                    = 8888
-  to_port                      = 8888
+  from_port                    = 18888
+  to_port                      = 18888
   ip_protocol                  = "tcp"
   description                  = "Allow registry to access auth server"
 

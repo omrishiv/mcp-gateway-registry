@@ -1300,7 +1300,7 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         # impact is the extra hop. Nginx never inspects the body or flag; auth_server decides.
         # We use the header strategy (X-Upstream-Url) so auth_server does not need a separate
         # MongoDB lookup per request, and version-aware upstream selection stays in nginx.
-        mcp_proxy_target = "http://auth-server:8888/mcp-proxy/" + path.strip("/") + "/"
+        mcp_proxy_target = f"{settings.auth_server_url}/mcp-proxy/" + path.strip("/") + "/"
         if has_versions:
             # Multi-version server: use map variable with fallback, then proxy the selected
             # upstream URL to auth_server via X-Upstream-Url so it knows where to forward.
