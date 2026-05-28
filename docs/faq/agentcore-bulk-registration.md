@@ -18,11 +18,12 @@ Attach this policy to the IAM user or role that will run the CLI:
       "Sid": "AgentCoreDiscovery",
       "Effect": "Allow",
       "Action": [
-        "bedrock-agent:ListAgentGateways",
-        "bedrock-agent:GetAgentGateway",
-        "bedrock-agent:ListAgentRuntimes",
-        "bedrock-agent:GetAgentRuntime",
-        "bedrock-agent:ListTargets",
+        "bedrock-agentcore:ListGateways",
+        "bedrock-agentcore:GetGateway",
+        "bedrock-agentcore:ListGatewayTargets",
+        "bedrock-agentcore:GetGatewayTarget",
+        "bedrock-agentcore:ListAgentRuntimes",
+        "bedrock-agentcore:GetAgentRuntime",
         "sts:GetCallerIdentity"
       ],
       "Resource": "*"
@@ -35,11 +36,12 @@ What each permission does:
 
 | Permission | Purpose |
 |---|---|
-| `bedrock-agent:ListAgentGateways` | Discover all gateways in the account |
-| `bedrock-agent:GetAgentGateway` | Read gateway details (URL, authorizer config) |
-| `bedrock-agent:ListAgentRuntimes` | Discover all agent runtimes in the account |
-| `bedrock-agent:GetAgentRuntime` | Read runtime details (protocol, invocation URL) |
-| `bedrock-agent:ListTargets` | Enumerate targets behind each gateway |
+| `bedrock-agentcore:ListGateways` | Discover all gateways in the account |
+| `bedrock-agentcore:GetGateway` | Read gateway details (URL, authorizer config) |
+| `bedrock-agentcore:ListGatewayTargets` | List targets behind each gateway |
+| `bedrock-agentcore:GetGatewayTarget` | Read target details (URL, type) |
+| `bedrock-agentcore:ListAgentRuntimes` | Discover all agent runtimes in the account |
+| `bedrock-agentcore:GetAgentRuntime` | Read runtime details (protocol, invocation URL) |
 | `sts:GetCallerIdentity` | Verify credentials are valid |
 
 ### Configure Credentials
