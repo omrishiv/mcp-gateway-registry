@@ -136,15 +136,27 @@ uv run python -m cli.agentcore sync \
 
 ## Step 3: Configure Client Secrets (for CUSTOM_JWT Gateways)
 
-If the dry-run showed any gateways with `CUSTOM_JWT` auth, you need to configure OAuth2 client secrets so the token refresher can obtain JWTs on behalf of the registry.
+If the dry-run showed any gateways with `CUSTOM_JWT` auth, the token refresher needs a client secret to obtain JWTs on behalf of the registry. Whether you need to configure anything depends on which IdP your gateways use.
+
+### Do I Need to Configure a Secret?
+
+| IdP Vendor | Configuration Required? | How |
+|---|---|---|
+| **Cognito** | No | Auto-retrieved via AWS API (`describe_user_pool_client`). Just ensure your IAM credentials have `cognito-idp:DescribeUserPoolClient` permission. |
+| **Entra** | Yes | Set `ENTRA_CLIENT_SECRET` in your `.env` file |
+| **Auth0** | Yes | Set `AUTH0_CLIENT_SECRET` in your `.env` file |
+| **Okta** | Yes | Set `OKTA_CLIENT_SECRET` in your `.env` file |
+| **Keycloak** | Yes | Set `KEYCLOAK_CLIENT_SECRET` in your `.env` file |
+
+If all your gateways are Cognito (which is the most common case for AgentCore), you can skip the rest of this step and go directly to Step 4.
 
 ### What is the Client ID?
 
-Each AgentCore gateway with CUSTOM_JWT auth has an `allowedClients` list configured in its authorizer. These are OAuth2 application client IDs registered in the identity provider (Cognito, Auth0, Entra, etc.). The client ID identifies which application is authorized to call the gateway.
+Each AgentCore gateway with CUSTOM_JWT auth has an `allowedClients` list configured in its authorizer. These are OAuth2 application client IDs registered in the identity provider. The client ID identifies which application is authorized to call the gateway.
 
 The token refresher performs the OAuth2 `client_credentials` grant (machine-to-machine flow) using:
 - The **client_id** from `allowedClients` (discovered automatically by the scanner)
-- The **client_secret** you provide via environment variables
+- The **client_secret** you provide via environment variables (or auto-retrieved for Cognito)
 - The **token endpoint** (auto-discovered from the gateway's OIDC discovery URL)
 
 ### How to Find the Client ID
@@ -202,31 +214,44 @@ Example output (multiple gateways, all using Cognito):
 ]
 ```
 
-Each `allowed_clients` entry is an alphanumeric Cognito App Client ID (typically 26 characters). This is the identifier you reference when configuring secrets.
+Each `allowed_clients` entry is an alphanumeric client ID (typically 26 characters for Cognito, a UUID for Entra). This is the identifier the token refresher uses to authenticate with the IdP.
 
-### Configure Secrets
+### Configure Secrets (Non-Cognito IdPs)
 
-Add client secrets to your `.env` file or export them as environment variables:
+For Entra, Auth0, Okta, or Keycloak gateways, add the appropriate secret to your `.env` file:
 
 ```bash
-# Per-client secret (highest priority)
-# Format: OAUTH_CLIENT_SECRET_<client_id>=<secret>
-export OAUTH_CLIENT_SECRET_yourAlphaNumericClientId1abc=your-secret-here
+# Entra (Microsoft Azure AD)
+# Get this from: Azure Portal -> App registrations -> your app -> Certificates & secrets
+ENTRA_CLIENT_SECRET=your-entra-client-secret-value
 
-# Or vendor-level secrets (shared across all gateways for that IdP)
-export AUTH0_CLIENT_SECRET=your-auth0-secret
-export OKTA_CLIENT_SECRET=your-okta-secret
-export ENTRA_CLIENT_SECRET=your-entra-secret
-export KEYCLOAK_CLIENT_SECRET=your-keycloak-secret
+# Auth0
+AUTH0_CLIENT_SECRET=your-auth0-client-secret-value
+
+# Okta
+OKTA_CLIENT_SECRET=your-okta-client-secret-value
+
+# Keycloak
+KEYCLOAK_CLIENT_SECRET=your-keycloak-client-secret-value
 ```
 
-**Cognito gateways need no manual secret configuration.** The token refresher auto-retrieves client secrets via the AWS API (`describe_user_pool_client`), as long as your IAM credentials have `cognito-idp:DescribeUserPoolClient` permission.
+These are **vendor-level** secrets, meaning one secret is shared across all gateways that use that IdP.
+
+If you have multiple apps with different secrets for the same IdP, use the **per-client** form instead:
+
+```bash
+# Per-client secret (overrides vendor-level secret for this specific client)
+# Format: OAUTH_CLIENT_SECRET_<client_id>=<secret>
+OAUTH_CLIENT_SECRET_yourAlphaNumericClientId1abc=your-secret-for-this-specific-client
+```
 
 ### Secret Resolution Priority
 
+The token refresher resolves secrets in this order (first match wins):
+
 1. Per-client env var: `OAUTH_CLIENT_SECRET_<client_id>`
-2. Cognito auto-retrieval via AWS API (Cognito only)
-3. Vendor-specific env var: `AUTH0_CLIENT_SECRET`, etc.
+2. Cognito auto-retrieval via AWS API (Cognito only, no config needed)
+3. Vendor-specific env var: `ENTRA_CLIENT_SECRET`, `AUTH0_CLIENT_SECRET`, etc.
 
 ## Step 4: Run the Token Refresher
 
