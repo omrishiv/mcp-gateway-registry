@@ -7,8 +7,10 @@ This main.py file serves as the application coordinator, importing and registeri
 domain routers while handling core app configuration.
 """
 
+import asyncio
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 
 # Import datetime for uptime tracking
@@ -584,6 +586,13 @@ async def lifespan(app: FastAPI):
 
                 if sync_on_startup:
                     logger.info("🔄 Syncing servers from federated registries on startup...")
+                    # Issue #1129: bound the entire startup-sync block so a slow or
+                    # unreachable upstream registry can't block FastAPI lifespan. The
+                    # full background-task refactor is tracked in #1129; this is the
+                    # minimal cap to prevent crash-loops when sync would otherwise
+                    # blow past the entrypoint's nginx-config wait.
+                    sync_deadline_seconds = int(os.environ.get("FEDERATION_STARTUP_SYNC_TIMEOUT_SECONDS", "60"))
+                    sync_started_at = time.monotonic()
                     try:
                         from registry.services.federation.anthropic_client import (
                             AnthropicFederationClient,
@@ -595,11 +604,22 @@ async def lifespan(app: FastAPI):
                             and federation_config.anthropic.sync_on_startup
                         ):
                             logger.info("Syncing from Anthropic MCP Registry...")
+                            # Per-request timeout of 5s (down from default 30s) so
+                            # a single slow server can't consume the whole 60s budget.
                             anthropic_client = AnthropicFederationClient(
-                                endpoint=federation_config.anthropic.endpoint
+                                endpoint=federation_config.anthropic.endpoint,
+                                timeout_seconds=5,
                             )
-                            servers = anthropic_client.fetch_all_servers(
-                                federation_config.anthropic.servers
+                            # fetch_all_servers is synchronous (httpx.Client); run it
+                            # in a thread with a remaining-budget timeout so the event
+                            # loop stays free and we can actually cancel.
+                            remaining = max(1.0, sync_deadline_seconds - (time.monotonic() - sync_started_at))
+                            servers = await asyncio.wait_for(
+                                asyncio.to_thread(
+                                    anthropic_client.fetch_all_servers,
+                                    federation_config.anthropic.servers,
+                                ),
+                                timeout=remaining,
                             )
 
                             # Register servers
@@ -687,6 +707,13 @@ async def lifespan(app: FastAPI):
                                     exc_info=True,
                                 )
 
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            "⚠️ Federation startup sync exceeded %ds budget — abandoning to "
+                            "let the registry come up. Set FEDERATION_STARTUP_SYNC_TIMEOUT_SECONDS "
+                            "to extend, or trigger sync manually after startup. See issue #1129.",
+                            sync_deadline_seconds,
+                        )
                     except Exception as e:
                         logger.error(
                             f"⚠️ Federation sync failed (continuing with startup): {e}",
@@ -909,12 +936,17 @@ app = FastAPI(
 # http.server.active_requests gauge) and spans for every route, with
 # attributes including http.route (template form, NOT the raw URL),
 # http.method, http.status_code. Works whether or not opentelemetry-
-# instrument is wrapping uvicorn at startup.
+# instrument is wrapping uvicorn at startup. Skipped when the wrapper has
+# already instrumented the app, to avoid the "already instrumented" warning
+# and any double-instrumentation side effects observed on ECS.
 try:
     from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
-    FastAPIInstrumentor.instrument_app(app)
-    logger.info("Programmatic FastAPI auto-instrumentation enabled (issue #1122)")
+    if getattr(app, "_is_instrumented_by_opentelemetry", False):
+        logger.info("FastAPI already instrumented by opentelemetry-instrument; skipping programmatic instrument_app")
+    else:
+        FastAPIInstrumentor.instrument_app(app)
+        logger.info("Programmatic FastAPI auto-instrumentation enabled (issue #1122)")
 except ImportError:
     logger.debug("opentelemetry-instrumentation-fastapi not installed; HTTP auto-metrics disabled")
 except Exception as exc:
