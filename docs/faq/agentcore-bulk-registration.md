@@ -162,9 +162,9 @@ Example output (multiple gateways, all using Cognito):
     {
         "server_path": "/customersupport-gw",
         "gateway_arn": "arn:aws:bedrock-agentcore:us-east-1:123456789012:gateway/customersupport-gw-abc123def",
-        "discovery_url": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_AbCdEfGhI/.well-known/openid-configuration",
+        "discovery_url": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_YourPoolId1/.well-known/openid-configuration",
         "allowed_clients": [
-            "7abc2def47ghijklmnop12qrs3"
+            "yourAlphaNumericClientId1abc"
         ],
         "allowed_audience": [],
         "idp_vendor": "cognito"
@@ -172,9 +172,9 @@ Example output (multiple gateways, all using Cognito):
     {
         "server_path": "/geo-mcp",
         "gateway_arn": "arn:aws:bedrock-agentcore:us-east-1:123456789012:gateway/geo-mcp-xyz789uvw",
-        "discovery_url": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_JkLmNoPqR/.well-known/openid-configuration",
+        "discovery_url": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_YourPoolId2/.well-known/openid-configuration",
         "allowed_clients": [
-            "5tuv3wxy9zabcde1fghij2klmn"
+            "yourAlphaNumericClientId2def"
         ],
         "allowed_audience": [],
         "idp_vendor": "cognito"
@@ -182,9 +182,9 @@ Example output (multiple gateways, all using Cognito):
     {
         "server_path": "/sre-gateway",
         "gateway_arn": "arn:aws:bedrock-agentcore:us-east-1:123456789012:gateway/sre-gateway-qrs456tuv",
-        "discovery_url": "https://cognito-idp.us-west-2.amazonaws.com/us-west-2_StUvWxYzA/.well-known/openid-configuration",
+        "discovery_url": "https://cognito-idp.us-west-2.amazonaws.com/us-west-2_YourPoolId3/.well-known/openid-configuration",
         "allowed_clients": [
-            "2opqr4stu6vwxyz8abcde0fghi"
+            "yourAlphaNumericClientId3ghi"
         ],
         "allowed_audience": [],
         "idp_vendor": "cognito"
@@ -192,9 +192,9 @@ Example output (multiple gateways, all using Cognito):
     {
         "server_path": "/weather-time-observability-gateway",
         "gateway_arn": "arn:aws:bedrock-agentcore:us-east-1:123456789012:gateway/weather-time-observability-gateway-lmn012opq",
-        "discovery_url": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_BcDeFgHiJ/.well-known/openid-configuration",
+        "discovery_url": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_YourPoolId4/.well-known/openid-configuration",
         "allowed_clients": [
-            "49abc0def9ghijklmnop6qrstu"
+            "yourAlphaNumericClientId4jkl"
         ],
         "allowed_audience": [],
         "idp_vendor": "cognito"
@@ -211,7 +211,7 @@ Add client secrets to your `.env` file or export them as environment variables:
 ```bash
 # Per-client secret (highest priority)
 # Format: OAUTH_CLIENT_SECRET_<client_id>=<secret>
-export OAUTH_CLIENT_SECRET_49ujl0b9ser72gnp6q1ph9v6vs=your-secret-here
+export OAUTH_CLIENT_SECRET_yourAlphaNumericClientId1abc=your-secret-here
 
 # Or vendor-level secrets (shared across all gateways for that IdP)
 export AUTH0_CLIENT_SECRET=your-auth0-secret
