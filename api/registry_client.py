@@ -109,6 +109,14 @@ class InternalServiceRegistration(BaseModel):
         None,
         description="List of {name, value} custom header objects. Encrypted before storage.",
     )
+    visibility: str | None = Field(
+        None,
+        description="Visibility: public, private, or group-restricted",
+    )
+    allowed_groups: list[str] | None = Field(
+        None,
+        description="Groups with access when visibility is group-restricted",
+    )
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -1622,6 +1630,10 @@ class RegistryClient:
         # Convert custom_headers list to JSON string for form encoding
         if "custom_headers" in data and isinstance(data["custom_headers"], list):
             data["custom_headers"] = json.dumps(data["custom_headers"])
+
+        # Convert allowed_groups list to comma-separated string for form encoding
+        if "allowed_groups" in data and isinstance(data["allowed_groups"], list):
+            data["allowed_groups"] = ",".join(data["allowed_groups"])
 
         response = self._make_request(method="POST", endpoint="/api/servers/register", data=data)
 

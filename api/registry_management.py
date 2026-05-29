@@ -608,6 +608,8 @@ def cmd_register(args: argparse.Namespace) -> int:
             source_updated_at=config.get("source_updated_at"),
             external_tags=config.get("external_tags"),
             custom_headers=config.get("custom_headers"),
+            visibility=config.get("visibility"),
+            allowed_groups=config.get("allowed_groups"),
         )
 
         client = _create_client(args)

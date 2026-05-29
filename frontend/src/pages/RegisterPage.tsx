@@ -192,6 +192,7 @@ const RegisterPage: React.FC = () => {
   const [errors, setErrors] = useState<FormErrors>({});
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [mcpRegistryNotice, setMcpRegistryNotice] = useState<string | null>(null);
 
 
   const generatePath = useCallback((name: string): string => {
@@ -318,6 +319,50 @@ const RegisterPage: React.FC = () => {
         const content = e.target?.result as string;
         const parsed = JSON.parse(content);
         setJsonContent(JSON.stringify(parsed, null, 2));
+
+        // Detect upstream MCP Registry server.json schema
+        const isMcpRegistrySchema = typeof parsed.$schema === 'string'
+          && parsed.$schema.includes('modelcontextprotocol/registry');
+
+        if (isMcpRegistrySchema) {
+          setMcpRegistryNotice(
+            'This file uses the upstream MCP Registry server.json format. ' +
+            'Additional fields (repository, packages, remotes, _meta) will be stored ' +
+            'in the metadata field and preserved in the database.'
+          );
+          // Transform upstream fields to populate the form correctly
+          if (!parsed.server_name && !parsed.name && parsed.title) {
+            parsed.name = parsed.title;
+          }
+          if (!parsed.proxy_pass_url && parsed.remotes?.[0]?.url) {
+            parsed.proxy_pass_url = parsed.remotes[0].url;
+          }
+          if (!parsed.deployment) {
+            parsed.deployment = parsed.remotes?.length ? 'remote' : 'local';
+          }
+          if (!parsed.auth_scheme && parsed.remotes?.[0]?.headers) {
+            const authHeader = parsed.remotes[0].headers.find(
+              (h: any) => h.name?.toLowerCase() === 'authorization'
+            );
+            if (authHeader?.value?.toLowerCase().includes('bearer')) {
+              parsed.auth_scheme = 'bearer';
+            }
+          }
+          // Preserve upstream-only fields in metadata
+          const upstreamSpec: any = {};
+          if (parsed.repository) upstreamSpec.repository = parsed.repository;
+          if (parsed.packages) upstreamSpec.packages = parsed.packages;
+          if (parsed.remotes) upstreamSpec.remotes = parsed.remotes;
+          if (parsed._meta) upstreamSpec._meta = parsed._meta;
+          if (parsed.version) upstreamSpec.version = parsed.version;
+          if (parsed.$schema) upstreamSpec.$schema = parsed.$schema;
+          upstreamSpec.original_name = parsed.name || parsed.title;
+
+          const existingMetadata = parsed.metadata || {};
+          parsed.metadata = { ...existingMetadata, mcp_registry_spec: upstreamSpec };
+        } else {
+          setMcpRegistryNotice(null);
+        }
 
         // Auto-populate form fields from JSON
         if (registrationType === 'server') {
@@ -1377,6 +1422,23 @@ const RegisterPage: React.FC = () => {
             <pre className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg p-4 overflow-auto max-h-64 text-sm text-gray-800 dark:text-gray-200">
               {jsonContent}
             </pre>
+          </div>
+        </div>
+      )}
+
+      {/* MCP Registry Schema Notice */}
+      {mcpRegistryNotice && (
+        <div className="bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded-lg p-4">
+          <div className="flex">
+            <InformationCircleIcon className="h-5 w-5 text-amber-500 flex-shrink-0" />
+            <div className="ml-3">
+              <h4 className="text-sm font-medium text-amber-800 dark:text-amber-200">
+                MCP Registry Format Detected
+              </h4>
+              <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">
+                {mcpRegistryNotice}
+              </p>
+            </div>
           </div>
         </div>
       )}
