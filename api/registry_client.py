@@ -66,6 +66,7 @@ class InternalServiceRegistration(BaseModel):
     auth_scheme: str | None = Field(
         None, description="Authentication scheme (e.g., 'bearer', 'api_key', 'none')"
     )
+    transport: str | None = Field(None, description="Preferred transport: sse, streamable-http, or auto")
     supported_transports: list[str] | None = Field(None, description="Supported transports")
     headers: dict[str, str] | None = Field(None, description="Custom headers")
     tool_list_json: str | None = Field(None, description="Tool list as JSON string")
@@ -1634,6 +1635,10 @@ class RegistryClient:
         # Convert allowed_groups list to comma-separated string for form encoding
         if "allowed_groups" in data and isinstance(data["allowed_groups"], list):
             data["allowed_groups"] = ",".join(data["allowed_groups"])
+
+        # Convert supported_transports list to comma-separated string for form encoding
+        if "supported_transports" in data and isinstance(data["supported_transports"], list):
+            data["supported_transports"] = ",".join(data["supported_transports"])
 
         response = self._make_request(method="POST", endpoint="/api/servers/register", data=data)
 

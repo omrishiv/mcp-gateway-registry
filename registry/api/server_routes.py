@@ -3156,6 +3156,7 @@ async def register_service_api(
     auth_credential: Annotated[str | None, Form()] = None,
     auth_header_name: Annotated[str | None, Form()] = None,
     custom_headers: Annotated[str | None, Form()] = None,
+    transport: Annotated[str | None, Form()] = None,
     supported_transports: Annotated[str | None, Form()] = None,
     headers: Annotated[str | None, Form()] = None,
     tool_list_json: Annotated[str | None, Form()] = None,
@@ -3171,6 +3172,8 @@ async def register_service_api(
     external_tags: Annotated[str | None, Form()] = None,
     deployment: Annotated[str, Form()] = "remote",
     local_runtime: Annotated[str | None, Form()] = None,
+    visibility: Annotated[str, Form()] = "public",
+    allowed_groups: Annotated[str | None, Form()] = None,
 ):
     """Register a service via JWT Bearer Token authentication (External API).
 
@@ -3333,7 +3336,7 @@ async def register_service_api(
         "description": description,
         "path": path,
         "tags": tag_list,
-        "num_tools": num_tools,
+        "num_tools": len(tool_list) if tool_list else num_tools,
         "license": license_str,
         "tool_list": tool_list,
         "deployment": deployment,
@@ -3347,6 +3350,8 @@ async def register_service_api(
     else:
         server_entry["proxy_pass_url"] = proxy_pass_url
         server_entry["supported_transports"] = transports_list
+        if transport:
+            server_entry["transport"] = transport
         server_entry["auth_scheme"] = auth_scheme
         if auth_provider:
             server_entry["auth_provider"] = auth_provider
@@ -3358,6 +3363,14 @@ async def register_service_api(
             server_entry["mcp_endpoint"] = mcp_endpoint
         if sse_endpoint:
             server_entry["sse_endpoint"] = sse_endpoint
+
+    # Visibility and access control
+    if visibility and visibility != "public":
+        server_entry["visibility"] = visibility
+    if allowed_groups:
+        groups_list = [g.strip() for g in allowed_groups.split(",") if g.strip()]
+        if groups_list:
+            server_entry["allowed_groups"] = groups_list
 
     if version:
         server_entry["version"] = version

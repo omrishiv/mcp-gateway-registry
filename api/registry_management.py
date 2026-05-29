@@ -457,6 +457,150 @@ def _load_json_config(config_path: str) -> dict[str, Any]:
     return config
 
 
+def _is_mcp_registry_schema(data: dict[str, Any]) -> bool:
+    """Check if a JSON config uses the upstream MCP Registry server.json schema."""
+    schema_value = data.get("$schema", "")
+    if not isinstance(schema_value, str):
+        return False
+    return "modelcontextprotocol/registry" in schema_value
+
+
+def _transform_mcp_registry_to_internal(data: dict[str, Any]) -> dict[str, Any]:
+    """Transform an upstream MCP Registry server.json into internal registration format.
+
+    Derives path, server_name, proxy_pass_url, deployment, and other fields from
+    the upstream schema. Preserves all upstream-only fields in metadata["mcp_registry_spec"].
+    """
+    import re as _re
+
+    def slugify(name: str) -> str:
+        slug = name.lower()
+        slug = _re.sub(r"[^a-z0-9\-]", "-", slug)
+        slug = _re.sub(r"-+", "-", slug)
+        return slug.strip("-")
+
+    name = data.get("name", "")
+    title = data.get("title")
+    remotes = data.get("remotes", [])
+    packages = data.get("packages", [])
+
+    path = data.get("path") or f"/{slugify(name)}"
+    if not path.startswith("/"):
+        path = f"/{path}"
+
+    server_name = title if title else name
+
+    proxy_pass_url = data.get("proxy_pass_url")
+    if not proxy_pass_url and remotes:
+        proxy_pass_url = remotes[0].get("url")
+
+    deployment = data.get("deployment")
+    if not deployment:
+        if remotes:
+            deployment = "remote"
+        elif packages:
+            pkg_transport = (packages[0].get("transport") or {}).get("type", "")
+            deployment = "local" if pkg_transport == "stdio" else "remote"
+        else:
+            deployment = "remote"
+
+    supported_transports = data.get("supported_transports")
+    if not supported_transports and remotes:
+        supported_transports = [r.get("type") for r in remotes]
+
+    transport = data.get("transport")
+    if not transport and remotes:
+        transport = remotes[0].get("type")
+
+    auth_scheme = data.get("auth_scheme")
+    if not auth_scheme and remotes:
+        for header in remotes[0].get("headers", []):
+            if header.get("name", "").lower() == "authorization":
+                if "bearer" in header.get("value", "").lower():
+                    auth_scheme = "bearer"
+                    break
+    if not auth_scheme:
+        auth_scheme = "none"
+
+    tags = list(data.get("tags") or [])
+    if "mcp-registry-spec" not in tags:
+        tags.append("mcp-registry-spec")
+
+    tool_list = data.get("tool_list") or []
+
+    spec_data: dict[str, Any] = {}
+    if data.get("repository"):
+        spec_data["repository"] = data["repository"]
+    if packages:
+        spec_data["packages"] = packages
+    if remotes:
+        spec_data["remotes"] = remotes
+    if data.get("_meta"):
+        spec_data["_meta"] = data["_meta"]
+    if data.get("version"):
+        spec_data["version"] = data["version"]
+    if data.get("$schema"):
+        spec_data["$schema"] = data["$schema"]
+    spec_data["original_name"] = name
+
+    metadata = dict(data.get("metadata") or {})
+    metadata["mcp_registry_spec"] = spec_data
+
+    result: dict[str, Any] = {
+        "path": path,
+        "server_name": server_name,
+        "name": server_name,
+        "description": data.get("description", ""),
+        "proxy_pass_url": proxy_pass_url,
+        "deployment": deployment,
+        "transport": transport,
+        "supported_transports": supported_transports,
+        "auth_scheme": auth_scheme,
+        "tags": tags,
+        "num_tools": data.get("num_tools") or len(tool_list),
+        "tool_list": tool_list,
+        "tool_list_json": json.dumps(tool_list) if tool_list else None,
+        "metadata": metadata,
+        "status": data.get("status") or "active",
+        "version": data.get("version"),
+    }
+
+    if data.get("visibility"):
+        result["visibility"] = data["visibility"]
+    if data.get("allowed_groups"):
+        result["allowed_groups"] = data["allowed_groups"]
+
+    if deployment == "local" and packages:
+        pkg = packages[0]
+        runtime_type = (pkg.get("runtimeHint") or "command").lower()
+        if runtime_type not in {"npx", "uvx", "docker", "command"}:
+            runtime_type = "command"
+        env: dict[str, str] = {}
+        required_env: list[str] = []
+        for env_var in pkg.get("environmentVariables", []):
+            if env_var.get("isRequired"):
+                required_env.append(env_var["name"])
+            if env_var.get("default"):
+                env[env_var["name"]] = env_var["default"]
+        local_runtime: dict[str, Any] = {
+            "type": runtime_type,
+            "package": pkg.get("identifier", ""),
+            "version": pkg.get("version"),
+        }
+        if env:
+            local_runtime["env"] = env
+        if required_env:
+            local_runtime["required_env"] = required_env
+        result["local_runtime"] = local_runtime
+        result["proxy_pass_url"] = None
+
+    logger.info(
+        f"Transformed MCP Registry server.json: "
+        f"name={name} -> path={path}, deployment={deployment}"
+    )
+    return result
+
+
 def _create_client(args: argparse.Namespace) -> RegistryClient:
     """
     Create and return a configured RegistryClient instance.
@@ -572,14 +716,9 @@ def cmd_register(args: argparse.Namespace) -> int:
         config = _load_json_config(args.config)
 
         # Detect upstream MCP Registry server.json schema and transform
-        from registry.schemas.mcp_registry_transform import (
-            is_mcp_registry_schema,
-            transform_mcp_registry_to_internal,
-        )
-
-        if is_mcp_registry_schema(config):
+        if _is_mcp_registry_schema(config):
             logger.info("Detected upstream MCP Registry server.json format, transforming...")
-            config = transform_mcp_registry_to_internal(config)
+            config = _transform_mcp_registry_to_internal(config)
 
         # Convert config to InternalServiceRegistration
         # Handle both old and new config formats
@@ -594,6 +733,7 @@ def cmd_register(args: argparse.Namespace) -> int:
             status=config.get("status"),
             auth_provider=config.get("auth_provider"),
             auth_scheme=config.get("auth_scheme", config.get("auth_type")),
+            transport=config.get("transport"),
             supported_transports=config.get("supported_transports"),
             headers=config.get("headers"),
             tool_list_json=config.get("tool_list_json"),

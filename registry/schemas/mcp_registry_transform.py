@@ -6,6 +6,7 @@ format expected by InternalServiceRegistration in api/registry_client.py.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import Any
@@ -193,6 +194,8 @@ def transform_mcp_registry_to_internal(data: dict[str, Any]) -> dict[str, Any]:
     if "mcp-registry-spec" not in tags:
         tags.append("mcp-registry-spec")
 
+    tool_list = parsed.tool_list or []
+
     result: dict[str, Any] = {
         "path": path,
         "server_name": server_name,
@@ -204,8 +207,9 @@ def transform_mcp_registry_to_internal(data: dict[str, Any]) -> dict[str, Any]:
         "supported_transports": _derive_supported_transports(parsed),
         "auth_scheme": _derive_auth_scheme(parsed),
         "tags": tags,
-        "num_tools": parsed.num_tools or 0,
-        "tool_list": parsed.tool_list,
+        "num_tools": parsed.num_tools or len(tool_list),
+        "tool_list": tool_list,
+        "tool_list_json": json.dumps(tool_list) if tool_list else None,
         "metadata": _build_metadata(parsed, data),
         "status": parsed.status or "active",
         "version": parsed.version,
