@@ -67,7 +67,7 @@ app:
 
   # Tool-level access control (issue #1026)
   mcpToolsListFilterEnabled: true   # Filter MCP tools/list JSON-RPC responses against per-user tool allowlist
-  mcpProxyMaxBodyBytes: 2097152     # Max upstream tools/list body the proxy hop buffers; oversize returns HTTP 413
+  mcpProxyMaxBodyBytes: "2097152"   # Max upstream tools/list body the proxy hop buffers; oversize returns HTTP 413
   toolFilterAuditLogLevel: "INFO"   # Audit log level for tool-prune events (DEBUG, INFO, WARNING)
 
 # Authentication Provider Configuration
