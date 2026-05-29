@@ -36,10 +36,15 @@ from ..schemas.agent_models import (
     AgentProvider,
     AgentRegistrationRequest,
 )
+from ..schemas.duplicate_check_models import (
+    AgentDuplicateCheckRequest,
+    DuplicateCheckResult,
+)
 from ..services.agent_service import agent_service
+from ..services.duplicate_check_service import get_duplicate_check_service
 from ..services.registration_gate_service import check_registration_gate
-from ..utils.metadata import flatten_metadata_to_text
 from ..services.webhook_service import send_registration_webhook
+from ..utils.metadata import flatten_metadata_to_text
 from ..utils.request_utils import get_client_ip
 
 
@@ -127,9 +132,7 @@ async def _perform_agent_security_scan_on_registration(
                         updated_card["tags"] = current_tags
                         from ..schemas.agent_models import AgentCard as AgentCardModel
 
-                        await agent_service.update_agent(
-                            path, AgentCardModel(**updated_card)
-                        )
+                        await agent_service.update_agent(path, AgentCardModel(**updated_card))
                     logger.info(f"Added 'security-pending' tag to agent {path}")
 
             # Disable agent if configured
@@ -344,6 +347,47 @@ def _filter_agents_by_access(
     return accessible
 
 
+@router.post(
+    "/agents/check-duplicates",
+    response_model=DuplicateCheckResult,
+    summary="Check whether an agent registration would duplicate an existing one",
+)
+async def check_agent_duplicates(
+    payload: AgentDuplicateCheckRequest,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+) -> DuplicateCheckResult:
+    """Advisory duplicate check for agent registrations.
+
+    Always returns 200; the response shape signals matches via
+    ``collision_with`` (exact-URL hit on the agent endpoint) and
+    ``advisory_matches`` (similarity hits). The endpoint does not
+    block registration — callers are free to proceed even when matches
+    are returned.
+    """
+    ui_permissions = user_context.get("ui_permissions", {})
+    publish_permissions = ui_permissions.get("publish_agent", [])
+    if not publish_permissions:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to register agents",
+        )
+
+    if not payload.name.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="name must not be blank",
+        )
+
+    service = get_duplicate_check_service()
+    return await service.check(
+        name=payload.name,
+        description=payload.description,
+        identity_url=payload.url,
+        self_path=payload.self_path,
+        user_context=user_context,
+    )
+
+
 @router.post("/agents/register")
 async def register_agent(
     http_request: Request,
@@ -515,8 +559,7 @@ async def register_agent(
     )
     if not gate_result.allowed:
         logger.warning(
-            f"Registration gate denied agent '{request.name}': "
-            f"{gate_result.error_message}"
+            f"Registration gate denied agent '{request.name}': {gate_result.error_message}"
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -1386,8 +1429,7 @@ async def update_agent(
     )
     if not gate_result.allowed:
         logger.warning(
-            f"Registration gate denied agent update '{request.name}': "
-            f"{gate_result.error_message}"
+            f"Registration gate denied agent update '{request.name}': {gate_result.error_message}"
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -1690,7 +1732,7 @@ async def discover_agents_semantic(
         logger.info(f"Semantic search returned {len(accessible_results)} agents for query: {query}")
 
         # Increment semantic search counter (fail-silent)
-        from registry.repositories.stats_repository import increment_search_counter
+        from ..repositories.stats_repository import increment_search_counter
 
         await increment_search_counter()
 

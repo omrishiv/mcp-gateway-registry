@@ -235,6 +235,44 @@ variable "embeddings_api_key" {
 }
 
 
+#
+# Registration Deduplication Configuration
+#
+# Advisory checks that surface likely-duplicate entities (servers, agents,
+# skills) during registration. Reuses the embeddings model above. The
+# /api/<entity>/check-duplicates endpoints are always available; the hint
+# flag only governs whether the registration UI pre-flights the check.
+# This feature is purely advisory and never blocks registration.
+
+variable "dedup_registration_hint_enabled" {
+  description = "When true, registration UI pre-flights /check-duplicates and shows a hint modal. Endpoints remain available regardless."
+  type        = bool
+  default     = true
+}
+
+variable "dedup_score_threshold" {
+  description = "Minimum similarity score (0.0..1.0) for an advisory match. Raise toward 1.0 for higher precision."
+  type        = number
+  default     = 0.7
+
+  validation {
+    condition     = var.dedup_score_threshold >= 0 && var.dedup_score_threshold <= 1
+    error_message = "dedup_score_threshold must be between 0.0 and 1.0."
+  }
+}
+
+variable "dedup_max_suggestions" {
+  description = "Cap on the number of advisory suggestions returned per request."
+  type        = number
+  default     = 3
+
+  validation {
+    condition     = var.dedup_max_suggestions >= 1 && var.dedup_max_suggestions <= 10
+    error_message = "dedup_max_suggestions must be between 1 and 10."
+  }
+}
+
+
 # =============================================================================
 # SESSION COOKIE SECURITY CONFIGURATION
 # =============================================================================

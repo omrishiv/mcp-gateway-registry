@@ -228,6 +228,21 @@ session_cookie_domain = ""
 # embeddings_api_key          = ""  # Empty for Bedrock (uses IAM)
 
 # ============================================================================
+# REGISTRATION DEDUPLICATION
+# ============================================================================
+#
+# Advisory checks that surface likely-duplicate entities (servers, agents,
+# skills) when a user registers a new one. The /api/<entity>/check-duplicates
+# endpoints are always available for CI / federation / CLI callers regardless
+# of the hint flag; the flag only controls whether the registration UI
+# pre-flights the check. This feature never blocks registration. All defaults
+# shown below — uncomment only to override.
+#
+# dedup_registration_hint_enabled = true
+# dedup_score_threshold           = 0.7
+# dedup_max_suggestions           = 3
+
+# ============================================================================
 # DOCUMENTDB ELASTIC CLUSTER CONFIGURATION
 # ============================================================================
 
