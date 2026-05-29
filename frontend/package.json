@@ -16,7 +16,7 @@
     "@tailwindcss/typography": "^0.5.10",
     "ajv": "8.18.0",
     "autoprefixer": "^10.4.16",
-    "axios": "^1.15.2",
+    "axios": "^1.16.0",
     "clsx": "^2.0.0",
     "date-fns": "^4.1.0",
     "jszip": "^3.10.1",
