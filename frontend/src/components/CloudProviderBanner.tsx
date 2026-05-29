@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 
-type Hint = 'on_premises' | 'other' | 'declined';
+type Hint = 'aws' | 'azure' | 'gcp' | 'on_premises' | 'other' | 'declined';
 
 interface BannerState {
   should_show: boolean;
@@ -45,37 +45,54 @@ export const CloudProviderBanner: React.FC = () => {
   return (
     <div
       role="region"
-      aria-label="Cloud provider confirmation"
-      className="bg-yellow-50 border-l-4 border-yellow-400 p-4 my-4 mx-6"
+      aria-label="Deployment environment"
+      className="bg-indigo-900/40 border border-indigo-700/50 rounded-lg p-3 my-3 mx-6"
     >
-      <p className="text-sm font-medium text-gray-900">
-        We tried 5 ways to detect your hosting environment and couldn't find one.
-        Are you running this on-premises, or somewhere else?
+      <p className="text-sm text-indigo-200 mb-2">
+        Help us improve: where is this registry deployed?
       </p>
-      <p className="text-xs text-gray-600 mt-1">
-        If you're actually on AWS, Azure, or GCP, please upgrade to 1.24.2+ (we likely have a detection bug for your setup).
-      </p>
-      <div className="flex gap-3 mt-3 items-center">
+      <div className="flex flex-wrap gap-2 items-center">
+        <button
+          type="button"
+          onClick={() => submit('aws')}
+          className="px-3 py-1 bg-gray-700 text-gray-200 text-xs font-medium rounded hover:bg-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-500"
+        >
+          AWS
+        </button>
+        <button
+          type="button"
+          onClick={() => submit('azure')}
+          className="px-3 py-1 bg-gray-700 text-gray-200 text-xs font-medium rounded hover:bg-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-500"
+        >
+          Azure
+        </button>
+        <button
+          type="button"
+          onClick={() => submit('gcp')}
+          className="px-3 py-1 bg-gray-700 text-gray-200 text-xs font-medium rounded hover:bg-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-500"
+        >
+          GCP
+        </button>
         <button
           type="button"
           onClick={() => submit('on_premises')}
-          className="px-3 py-1 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="px-3 py-1 bg-gray-700 text-gray-200 text-xs font-medium rounded hover:bg-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-500"
         >
           On-premises
         </button>
         <button
           type="button"
           onClick={() => submit('other')}
-          className="px-3 py-1 bg-gray-200 text-gray-900 text-sm font-medium rounded hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-400"
+          className="px-3 py-1 bg-gray-700 text-gray-200 text-xs font-medium rounded hover:bg-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-500"
         >
-          Other / not sure
+          Other
         </button>
         <button
           type="button"
           onClick={() => submit('declined')}
-          className="text-sm text-gray-600 hover:text-gray-900 underline focus:outline-none"
+          className="text-xs text-gray-500 hover:text-gray-300 focus:outline-none ml-2"
         >
-          Don't show this again
+          Dismiss
         </button>
       </div>
     </div>

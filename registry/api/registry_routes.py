@@ -709,9 +709,9 @@ class BannerStateResponse(BaseModel):
 class CloudProviderHintRequest(BaseModel):
     """Request body for POST /api/registry/cloud-provider-hint."""
 
-    hint: Literal["on_premises", "other", "declined"] = Field(
+    hint: Literal["aws", "azure", "gcp", "on_premises", "other", "declined"] = Field(
         ...,
-        description="Operator's banner answer.",
+        description="Operator's banner answer. Includes cloud providers for cases where auto-detection failed.",
     )
 
 
@@ -745,7 +745,6 @@ async def get_banner_state(
     )
 
 
-@router.post("/cloud-provider-hint", status_code=204)
 async def _audit_cloud_hint_set(
     request: Request,
     user_context: dict,
@@ -793,6 +792,7 @@ async def _audit_cloud_hint_set(
         logger.warning(f"[banner] audit log for hint set failed: {type(e).__name__}")
 
 
+@router.post("/cloud-provider-hint", status_code=204)
 async def set_cloud_provider_hint(
     payload: CloudProviderHintRequest,
     request: Request,
