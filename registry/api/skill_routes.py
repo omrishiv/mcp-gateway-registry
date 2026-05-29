@@ -841,6 +841,14 @@ async def check_skill_duplicates(
     block registration — callers are free to proceed even when matches
     are returned.
     """
+    ui_permissions = user_context.get("ui_permissions", {})
+    publish_permissions = ui_permissions.get("publish_skill", [])
+    if not publish_permissions:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to register skills",
+        )
+
     if not payload.name.strip():
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

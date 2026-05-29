@@ -216,8 +216,6 @@ class DuplicateCheckService:
             match_path = match.get("path")
             if self_path is not None and match_path == self_path:
                 continue
-            if self._caller_owns_match(candidate_entity_type, match, user_context):
-                continue
             collisions.append(
                 await self._build_collision_entity(
                     entity_type=candidate_entity_type,

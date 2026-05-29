@@ -254,12 +254,22 @@ variable "dedup_score_threshold" {
   description = "Minimum similarity score (0.0..1.0) for an advisory match. Raise toward 1.0 for higher precision."
   type        = number
   default     = 0.7
+
+  validation {
+    condition     = var.dedup_score_threshold >= 0 && var.dedup_score_threshold <= 1
+    error_message = "dedup_score_threshold must be between 0.0 and 1.0."
+  }
 }
 
 variable "dedup_max_suggestions" {
   description = "Cap on the number of advisory suggestions returned per request."
   type        = number
   default     = 3
+
+  validation {
+    condition     = var.dedup_max_suggestions >= 1 && var.dedup_max_suggestions <= 10
+    error_message = "dedup_max_suggestions must be between 1 and 10."
+  }
 }
 
 
