@@ -57,6 +57,25 @@ class ServerRepositoryBase(ABC):
         pass
 
     @abstractmethod
+    async def list_by_ids(
+        self,
+        paths: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        """List servers whose path (_id) is in the given set.
+
+        Used to fetch only the servers a restricted user can access without
+        scanning the full collection. Version documents (``{path}:{version}``)
+        are never matched because only exact active paths are queried.
+
+        Args:
+            paths: Exact server paths to fetch.
+
+        Returns:
+            Dictionary mapping server path to server info for found paths.
+        """
+        pass
+
+    @abstractmethod
     async def list_by_source(
         self,
         source: str,

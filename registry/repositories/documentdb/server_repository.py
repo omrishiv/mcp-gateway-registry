@@ -178,6 +178,46 @@ class DocumentDBServerRepository(ServerRepositoryBase):
             logger.error(f"Error listing paginated servers from DocumentDB: {e}", exc_info=True)
             return {}
 
+    async def list_by_ids(
+        self,
+        paths: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        """List servers whose _id is in the given set of paths.
+
+        Only exact paths are matched, so version documents
+        (``{path}:{version}``) are never returned.
+
+        Args:
+            paths: Exact server paths to fetch.
+
+        Returns:
+            Dictionary mapping server path to server info for found paths.
+        """
+        if not paths:
+            return {}
+
+        logger.debug(
+            f"DocumentDB READ: Listing {len(paths)} servers by id "
+            f"from collection '{self._collection_name}'"
+        )
+        collection = await self._get_collection()
+
+        try:
+            cursor = collection.find({"_id": {"$in": paths}})
+            servers = {}
+            async for doc in cursor:
+                path = doc.pop("_id")
+                doc["path"] = path
+                servers[path] = doc
+            logger.info(
+                f"DocumentDB READ: Retrieved {len(servers)} of {len(paths)} requested servers "
+                f"from collection '{self._collection_name}'"
+            )
+            return servers
+        except Exception as e:
+            logger.error(f"Error listing servers by ids from DocumentDB: {e}", exc_info=True)
+            return {}
+
     async def list_by_source(
         self,
         source: str,

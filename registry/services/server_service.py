@@ -348,44 +348,43 @@ class ServerService:
             logger.debug("Wildcard access detected in accessible_servers, returning all servers")
             return await self.get_all_servers()
         else:
-            # Filtered access - return only accessible servers
+            # Filtered access - fetch only the accessible servers via a targeted
+            # query instead of scanning the full collection.
             logger.debug(
                 f"Filtered access - returning servers accessible to user: {accessible_servers}"
             )
-            all_servers = await self.get_all_servers()
 
-            # Filter based on accessible_servers
-            filtered_servers = {}
-            logger.info(f"[FILTER DEBUG] Starting to filter {len(all_servers)} servers")
-            logger.info(f"[FILTER DEBUG] accessible_servers = {accessible_servers}")
-
-            for path, server_info in all_servers.items():
-                server_name = server_info.get("server_name", "")
-                technical_name = path.strip("/")
-
-                logger.info(
-                    f"[FILTER DEBUG] Checking server: path='{path}', technical_name='{technical_name}', server_name='{server_name}'"
+            # Build candidate _id paths covering the slash variants the caller
+            # may supply ("currenttime", "/currenttime", "/currenttime/"). The
+            # $in query only matches existing docs, so extra candidates are
+            # harmless and version docs ({path}:{version}) never match.
+            candidate_paths: list[str] = []
+            for accessible_server in accessible_servers:
+                normalized = accessible_server.strip("/")
+                if not normalized:
+                    continue
+                candidate_paths.extend(
+                    [f"/{normalized}", f"/{normalized}/", normalized, f"{normalized}/"]
                 )
 
-                # Check if user has access to this server using multiple formats
-                # Support: "currenttime", "/currenttime", "/currenttime/"
-                has_access = False
-                for accessible_server in accessible_servers:
-                    # Normalize both sides by stripping slashes for comparison
-                    normalized_accessible = accessible_server.strip("/")
-                    logger.info(
-                        f"[FILTER DEBUG]   Comparing: '{technical_name}' == '{normalized_accessible}' ? {technical_name == normalized_accessible}"
-                    )
-                    if technical_name == normalized_accessible:
-                        has_access = True
-                        break
+            filtered_servers = await self._repo.list_by_ids(candidate_paths)
 
-                logger.info(f"[FILTER DEBUG]   has_access = {has_access}")
-                if has_access:
-                    filtered_servers[path] = server_info
+            # Apply read-time migration and credential stripping
+            for server_info in filtered_servers.values():
+                self._prepare_server_dict(server_info, include_credentials=False)
 
-            logger.info(f"[FILTER DEBUG] Final filtered_servers: {len(filtered_servers)} servers")
-            logger.info(f"[FILTER DEBUG] Filtered server paths: {list(filtered_servers.keys())}")
+            # Filter out inactive servers (non-default versions) for parity with
+            # get_all_servers; defaults to True for backward compatibility.
+            filtered_servers = {
+                path: server_info
+                for path, server_info in filtered_servers.items()
+                if server_info.get("is_active", True)
+            }
+
+            logger.info(
+                f"Filtered access: fetched {len(filtered_servers)} servers "
+                f"for {len(accessible_servers)} accessible entries"
+            )
             return filtered_servers
 
     async def user_can_access_server_path(self, path: str, accessible_servers: list[str]) -> bool:

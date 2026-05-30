@@ -332,3 +332,49 @@ class TestFileServerRepositoryIntegration:
             assert result is True
             # Verify file was written
             m.assert_called()
+
+
+@pytest.mark.unit
+@pytest.mark.repositories
+class TestFileServerRepositoryListByIds:
+    """Tests for list_by_ids targeted fetch."""
+
+    @pytest.mark.asyncio
+    async def test_returns_only_requested_paths(self, server_repository):
+        """Only servers whose path is requested come back."""
+        server_repository._servers = {
+            "/a": {"path": "/a", "server_name": "A"},
+            "/b": {"path": "/b", "server_name": "B"},
+            "/c": {"path": "/c", "server_name": "C"},
+        }
+
+        result = await server_repository.list_by_ids(["/a", "/c"])
+
+        assert set(result.keys()) == {"/a", "/c"}
+
+    @pytest.mark.asyncio
+    async def test_empty_paths_returns_empty(self, server_repository):
+        """An empty request set returns nothing without scanning."""
+        server_repository._servers = {"/a": {"path": "/a", "server_name": "A"}}
+
+        result = await server_repository.list_by_ids([])
+
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_matches_trailing_slash_variant(self, server_repository):
+        """A stored trailing-slash path is found when queried without it."""
+        server_repository._servers = {"/a/": {"path": "/a/", "server_name": "A"}}
+
+        result = await server_repository.list_by_ids(["/a"])
+
+        assert set(result.keys()) == {"/a/"}
+
+    @pytest.mark.asyncio
+    async def test_missing_paths_are_skipped(self, server_repository):
+        """Requesting unknown paths yields no spurious entries."""
+        server_repository._servers = {"/a": {"path": "/a", "server_name": "A"}}
+
+        result = await server_repository.list_by_ids(["/a", "/missing"])
+
+        assert set(result.keys()) == {"/a"}

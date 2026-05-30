@@ -41,6 +41,9 @@ class _FakeServerRepo(ServerRepositoryBase):
     async def list_paginated(self, skip=0, limit=100):  # pragma: no cover
         return {}
 
+    async def list_by_ids(self, paths):  # pragma: no cover
+        return {p: self._servers[p] for p in paths if p in self._servers}
+
     async def list_by_source(self, source):  # pragma: no cover
         return {}
 

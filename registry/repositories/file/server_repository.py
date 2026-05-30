@@ -176,6 +176,31 @@ class FileServerRepository(ServerRepositoryBase):
         page_items = items[skip : skip + limit]
         return dict(page_items)
 
+    async def list_by_ids(
+        self,
+        paths: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        """List servers whose path is in the given set (file backend).
+
+        Mirrors ``get``'s trailing-slash tolerance so callers can pass paths
+        in either form.
+
+        Args:
+            paths: Exact server paths to fetch.
+
+        Returns:
+            Dictionary mapping stored server path to server info for found paths.
+        """
+        result: dict[str, dict[str, Any]] = {}
+        for path in paths:
+            info = self._servers.get(path)
+            if info is None:
+                alternate_path = path.rstrip("/") if path.endswith("/") else path + "/"
+                info = self._servers.get(alternate_path)
+            if info is not None:
+                result[info["path"]] = info
+        return result
+
     async def list_by_source(
         self,
         source: str,
