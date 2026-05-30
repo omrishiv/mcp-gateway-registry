@@ -120,15 +120,26 @@ class DocumentDBServerRepository(ServerRepositoryBase):
             logger.error(f"Error getting server '{path}' from DocumentDB: {e}", exc_info=True)
             return None
 
-    async def list_all(self) -> dict[str, dict[str, Any]]:
-        """List all servers."""
+    async def list_all(
+        self,
+        exclude_tool_list: bool = False,
+    ) -> dict[str, dict[str, Any]]:
+        """List all servers.
+
+        Args:
+            exclude_tool_list: If True, project out the ``tool_list`` field so
+                heavy tool schemas are not transferred from the database.
+        """
         logger.debug(
-            f"DocumentDB READ: Listing all servers from collection '{self._collection_name}'"
+            f"DocumentDB READ: Listing all servers from collection '{self._collection_name}' "
+            f"(exclude_tool_list={exclude_tool_list})"
         )
         collection = await self._get_collection()
 
+        projection = {"tool_list": 0} if exclude_tool_list else None
+
         try:
-            cursor = collection.find({})
+            cursor = collection.find({}, projection)
             servers = {}
             async for doc in cursor:
                 path = doc.pop("_id")
@@ -146,24 +157,29 @@ class DocumentDBServerRepository(ServerRepositoryBase):
         self,
         skip: int = 0,
         limit: int = 100,
+        exclude_tool_list: bool = False,
     ) -> dict[str, dict[str, Any]]:
         """List servers with DB-level skip/limit pagination.
 
         Args:
             skip: Number of documents to skip.
             limit: Maximum number of documents to return.
+            exclude_tool_list: If True, project out the ``tool_list`` field so
+                heavy tool schemas are not transferred from the database.
 
         Returns:
             Dictionary mapping server path to server info for the requested page.
         """
         logger.debug(
             f"DocumentDB READ: Listing paginated servers (skip={skip}, limit={limit}) "
-            f"from collection '{self._collection_name}'"
+            f"from collection '{self._collection_name}' (exclude_tool_list={exclude_tool_list})"
         )
         collection = await self._get_collection()
 
+        projection = {"tool_list": 0} if exclude_tool_list else None
+
         try:
-            cursor = collection.find({}).sort("_id", 1).skip(skip).limit(limit)
+            cursor = collection.find({}, projection).sort("_id", 1).skip(skip).limit(limit)
             servers = {}
             async for doc in cursor:
                 path = doc.pop("_id")

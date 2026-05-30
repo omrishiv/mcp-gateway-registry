@@ -35,8 +35,20 @@ class ServerRepositoryBase(ABC):
         pass
 
     @abstractmethod
-    async def list_all(self) -> dict[str, dict[str, Any]]:
-        """List all servers."""
+    async def list_all(
+        self,
+        exclude_tool_list: bool = False,
+    ) -> dict[str, dict[str, Any]]:
+        """List all servers.
+
+        Args:
+            exclude_tool_list: If True, omit the heavy ``tool_list`` field from
+                each document (DB-side projection) to cut transfer for callers
+                that only need metadata. ``num_tools`` is unaffected.
+
+        Returns:
+            Dictionary mapping server path to server info.
+        """
         pass
 
     @abstractmethod
@@ -44,12 +56,15 @@ class ServerRepositoryBase(ABC):
         self,
         skip: int = 0,
         limit: int = 100,
+        exclude_tool_list: bool = False,
     ) -> dict[str, dict[str, Any]]:
         """List servers with DB-level pagination.
 
         Args:
             skip: Number of documents to skip.
             limit: Maximum number of documents to return.
+            exclude_tool_list: If True, omit the heavy ``tool_list`` field from
+                each document (DB-side projection). ``num_tools`` is unaffected.
 
         Returns:
             Dictionary mapping server path to server info for the requested page.

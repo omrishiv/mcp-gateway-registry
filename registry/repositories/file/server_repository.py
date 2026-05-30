@@ -154,26 +154,49 @@ class FileServerRepository(ServerRepositoryBase):
 
         return self._servers.get(alternate_path)
 
-    async def list_all(self) -> dict[str, dict[str, Any]]:
-        """List all servers."""
-        return self._servers.copy()
+    async def list_all(
+        self,
+        exclude_tool_list: bool = False,
+    ) -> dict[str, dict[str, Any]]:
+        """List all servers.
+
+        Args:
+            exclude_tool_list: If True, return shallow copies without the
+                ``tool_list`` field to mirror the DocumentDB projection. The
+                stored documents are not mutated.
+        """
+        if not exclude_tool_list:
+            return self._servers.copy()
+
+        return {
+            path: {k: v for k, v in info.items() if k != "tool_list"}
+            for path, info in self._servers.items()
+        }
 
     async def list_paginated(
         self,
         skip: int = 0,
         limit: int = 100,
+        exclude_tool_list: bool = False,
     ) -> dict[str, dict[str, Any]]:
         """List servers with in-memory pagination (file backend).
 
         Args:
             skip: Number of servers to skip.
             limit: Maximum number of servers to return.
+            exclude_tool_list: If True, return shallow copies without the
+                ``tool_list`` field. The stored documents are not mutated.
 
         Returns:
             Dictionary mapping server path to server info for the requested page.
         """
         items = list(self._servers.items())
         page_items = items[skip : skip + limit]
+        if exclude_tool_list:
+            return {
+                path: {k: v for k, v in info.items() if k != "tool_list"}
+                for path, info in page_items
+            }
         return dict(page_items)
 
     async def list_by_ids(

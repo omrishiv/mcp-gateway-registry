@@ -555,6 +555,27 @@ class TestGetAllServers:
         assert sample_server_dict_2["path"] in result
 
 
+@pytest.mark.unit
+@pytest.mark.servers
+class TestCountServers:
+    """Test the count_servers helper used for the dashboard total."""
+
+    @pytest.mark.asyncio
+    async def test_count_servers_delegates_to_repository(
+        self,
+        server_service: ServerService,
+        mock_server_repository,
+    ):
+        """count_servers delegates to repository.count() without a full fetch."""
+        mock_server_repository.count.return_value = 7
+
+        result = await server_service.count_servers()
+
+        mock_server_repository.count.assert_awaited_once()
+        mock_server_repository.list_all.assert_not_called()
+        assert result == 7
+
+
 # =============================================================================
 # TEST: Filtering Servers
 # =============================================================================

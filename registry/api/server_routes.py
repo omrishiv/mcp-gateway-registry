@@ -405,9 +405,9 @@ async def read_root(
         all_servers = await server_service.get_all_servers_with_permissions(
             user_context["accessible_servers"]
         )
-        all_servers_count = await server_service.get_all_servers()
+        total_server_count = await server_service.count_servers()
         logger.info(
-            f"User {user_context['username']} accessing {len(all_servers)} of {len(all_servers_count)} total servers"
+            f"User {user_context['username']} accessing {len(all_servers)} of {total_server_count} total servers"
         )
 
     sorted_server_paths = sorted(all_servers.keys(), key=lambda p: all_servers[p]["server_name"])
@@ -558,14 +558,17 @@ async def get_servers_json(
     if is_unrestricted and not has_field_filters:
         # FAST PATH: DB-level pagination -- correct because no servers are filtered out
         # and no field filters need a full scan for accurate total_count
-        all_servers, db_total = await server_service.get_servers_paginated(skip=offset, limit=limit)
+        all_servers, db_total = await server_service.get_servers_paginated(
+            skip=offset, limit=limit, exclude_tool_list=not include_tools
+        )
     else:
         # FALLBACK PATH: full fetch needed
         if is_admin:
-            all_servers = await server_service.get_all_servers()
+            all_servers = await server_service.get_all_servers(exclude_tool_list=not include_tools)
         else:
             all_servers = await server_service.get_all_servers_with_permissions(
-                accessible_servers_list
+                accessible_servers_list,
+                exclude_tool_list=not include_tools,
             )
 
     sorted_server_paths = sorted(all_servers.keys(), key=lambda p: all_servers[p]["server_name"])
