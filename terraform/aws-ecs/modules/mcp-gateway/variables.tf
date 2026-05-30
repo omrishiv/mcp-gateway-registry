@@ -341,6 +341,37 @@ variable "embeddings_api_key" {
 }
 
 
+# Registration Deduplication. Advisory only; reuses the embeddings
+# model above. The /api/<entity>/check-duplicates endpoints are always
+# available; the hint flag only governs whether the registration UI
+# pre-flights the check. The check never blocks registration.
+variable "dedup_registration_hint_enabled" {
+  description = "When true, registration UI pre-flights /check-duplicates and shows a hint modal. Endpoints remain available regardless."
+  type        = bool
+  default     = true
+}
+
+variable "dedup_score_threshold" {
+  description = "Minimum similarity score (0.0..1.0) for an advisory match. Default 0.7."
+  type        = number
+  default     = 0.7
+  validation {
+    condition     = var.dedup_score_threshold >= 0.0 && var.dedup_score_threshold <= 1.0
+    error_message = "dedup_score_threshold must be between 0.0 and 1.0."
+  }
+}
+
+variable "dedup_max_suggestions" {
+  description = "Cap on duplicate suggestions returned per request. Default 3."
+  type        = number
+  default     = 3
+  validation {
+    condition     = var.dedup_max_suggestions >= 1 && var.dedup_max_suggestions <= 10
+    error_message = "dedup_max_suggestions must be between 1 and 10."
+  }
+}
+
+
 # Keycloak Admin Credentials (for Management API)
 variable "keycloak_admin_password" {
   description = "Keycloak admin password for Management API user/group operations"
@@ -1151,6 +1182,12 @@ variable "telemetry_debug" {
 
 variable "mcp_telemetry_imds_probe_disabled" {
   description = "Disable IMDS probing in cloud detection (issue #986). Set to '1' to opt out. Env-var, DMI, ECS-metadata, and k8s heuristics still run."
+  type        = string
+  default     = ""
+}
+
+variable "mcp_cloud_provider" {
+  description = "Override the cloud auto-detection cascade (issue #1120). Allowed: aws, azure, gcp, on_premises, other. Leave empty to let the cascade run."
   type        = string
   default     = ""
 }

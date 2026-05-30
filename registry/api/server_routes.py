@@ -11,7 +11,11 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from ..audit import set_audit_action
-from ..auth.csrf import generate_csrf_token, verify_csrf_token_flexible, verify_csrf_token_header_only
+from ..auth.csrf import (
+    generate_csrf_token,
+    verify_csrf_token_flexible,
+    verify_csrf_token_header_only,
+)
 from ..auth.dependencies import enhanced_auth, nginx_proxied_auth
 from ..auth.internal import validate_internal_auth
 from ..auth.tool_filter import filter_tools_for_user
@@ -337,7 +341,6 @@ async def _perform_security_scan_on_registration(
 
             # Disable server if configured
             if scan_config.block_unsafe_servers:
-                from ..core.nginx_service import nginx_service
                 from ..repositories.factory import get_search_repository
 
                 await server_service.toggle_service(path, False)
@@ -694,7 +697,6 @@ async def toggle_service_route(
 ):
     """Toggle a service on/off (requires toggle_service UI permission)."""
     from ..auth.dependencies import user_has_ui_permission_for_service
-    from ..core.nginx_service import nginx_service
     from ..health.service import health_service
     from ..search.service import faiss_service
 
@@ -800,6 +802,83 @@ async def toggle_service_route(
     )
 
 
+# --- Registration deduplication ---
+
+
+from ..schemas.duplicate_check_models import (
+    DuplicateCheckResult,
+    ServerDuplicateCheckRequest,
+)
+from ..services.duplicate_check_service import get_duplicate_check_service
+
+
+def _check_register_permission(
+    user_context: dict | None,
+    *,
+    is_local: bool,
+) -> None:
+    """Apply the same permission gate as register_service.
+
+    Mirrors register_service exactly:
+      - local registrations require is_admin
+      - remote registrations require ui_permissions.register_service
+        to be non-empty (admins normally have register_service: ["all"]
+        anyway).
+    """
+    if not user_context:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to register new services",
+        )
+    if is_local:
+        if not user_context.get("is_admin"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Local server registration requires admin privileges",
+            )
+        return
+    register_perms = (user_context.get("ui_permissions") or {}).get("register_service") or []
+    if not register_perms:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to register new services",
+        )
+
+
+@router.post(
+    "/servers/check-duplicates",
+    response_model=DuplicateCheckResult,
+    summary="Check whether a server registration would duplicate an existing one",
+)
+async def check_server_duplicates(
+    payload: ServerDuplicateCheckRequest,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+) -> DuplicateCheckResult:
+    """Advisory duplicate check for server registrations.
+
+    Always returns 200; the response shape signals matches via
+    ``collision_with`` (exact-URL hit) and ``advisory_matches``
+    (similarity hits). The endpoint does not block registration —
+    callers are free to proceed even when matches are returned.
+    """
+    _check_register_permission(user_context, is_local=False)
+
+    if not payload.name.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="name must not be blank",
+        )
+
+    service = get_duplicate_check_service()
+    return await service.check(
+        name=payload.name,
+        description=payload.description,
+        identity_url=payload.proxy_pass_url,
+        self_path=payload.self_path,
+        user_context=user_context,
+    )
+
+
 @router.post("/register")
 async def register_service(
     request: Request,
@@ -839,7 +918,6 @@ async def register_service(
         {"type": "npx", "package": "@acme/mcp", "version": "1.0.0",
          "args": [...], "env": {...}, "required_env": [...]}
     """
-    from ..core.nginx_service import nginx_service
     from ..health.service import health_service
     from ..search.service import faiss_service
     from ..utils.local_runtime_validation import (
@@ -1009,7 +1087,7 @@ async def register_service(
 
     # Add provider information (stored as nested AgentProvider object)
     if provider_organization or provider_url:
-        from registry.schemas.agent_models import AgentProvider
+        from ..schemas.agent_models import AgentProvider
 
         server_entry["provider"] = AgentProvider(
             organization=provider_organization,
@@ -1138,7 +1216,6 @@ async def internal_register_service(
         "INTERNAL REGISTER: Function called - starting execution"
     )  # TODO: replace with debug
 
-    from ..core.nginx_service import nginx_service
     from ..health.service import health_service
     from ..search.service import faiss_service
 
@@ -1197,7 +1274,7 @@ async def internal_register_service(
         allowed_groups_list = [g.strip() for g in allowed_groups.split(",") if g.strip()]
 
     # Validate and normalize visibility value
-    from registry.utils.visibility import (
+    from ..utils.visibility import (
         VALID_VISIBILITY_VALUES,
         _normalize_visibility,
     )
@@ -1392,9 +1469,12 @@ async def internal_register_service(
     from ..services.scope_service import update_server_scopes
 
     # Get the tool list from the server entry
-    tool_names = []
-    if "tool_list" in server_entry and server_entry["tool_list"]:
-        tool_names = [tool["name"] for tool in server_entry["tool_list"] if "name" in tool]
+    tool_names: list[str] = []
+    raw_tool_list = server_entry.get("tool_list") if isinstance(server_entry, dict) else None
+    if isinstance(raw_tool_list, list):
+        tool_names = [
+            tool["name"] for tool in raw_tool_list if isinstance(tool, dict) and "name" in tool
+        ]
 
     # Update scopes and reload auth server
     try:
@@ -1492,7 +1572,6 @@ async def internal_remove_service(
     service_path: Annotated[str, Form()],
 ):
     """Internal service removal endpoint for mcpgw-server (requires admin authentication)."""
-    from ..core.nginx_service import nginx_service
     from ..health.service import health_service
     from ..search.service import faiss_service
 
@@ -1600,7 +1679,6 @@ async def internal_toggle_service(
     service_path: Annotated[str, Form()],
 ):
     """Internal service toggle endpoint for mcpgw-server (requires admin authentication)."""
-    from ..core.nginx_service import nginx_service
     from ..health.service import health_service
     from ..search.service import faiss_service
 
@@ -1826,7 +1904,6 @@ async def edit_server_submit(
     is omitted, the existing server's deployment is preserved.
     """
     from ..auth.dependencies import user_has_ui_permission_for_service
-    from ..core.nginx_service import nginx_service
     from ..search.service import faiss_service
     from ..utils.local_runtime_validation import (
         add_unpinned_warning_tag,
@@ -2049,9 +2126,7 @@ async def edit_server_submit(
             updated_server_entry.pop("auth_header_name", None)
 
     # Custom headers: partial-update merge with stored values
-    validated_custom = _parse_and_validate_custom_headers(
-        custom_headers, allow_empty_values=True
-    )
+    validated_custom = _parse_and_validate_custom_headers(custom_headers, allow_empty_values=True)
     if validated_custom is not None:
         from datetime import UTC, datetime
 
@@ -2071,9 +2146,7 @@ async def edit_server_submit(
             )
             existing_by_name: dict[str, dict] = {
                 entry["name"]: entry
-                for entry in (
-                    (server_info_with_creds or {}).get("custom_headers_encrypted") or []
-                )
+                for entry in ((server_info_with_creds or {}).get("custom_headers_encrypted") or [])
             }
             merged_plaintext: list[dict] = []
             for entry in validated_custom:
@@ -2405,7 +2478,6 @@ async def get_service_tools(
 async def refresh_service(service_path: str, user_context: Annotated[dict, Depends(enhanced_auth)]):
     """Refresh service health and tool information (requires health_check_service permission)."""
     from ..auth.dependencies import user_has_ui_permission_for_service
-    from ..core.nginx_service import nginx_service
     from ..health.service import health_service
     from ..search.service import faiss_service
 
@@ -2739,7 +2811,7 @@ async def _list_groups_impl(
     from ..utils.iam_manager import get_iam_manager
 
     try:
-        result = {
+        result: dict[str, Any] = {
             "keycloak_groups": [],
             "scopes_groups": {},
             "synchronized": [],
@@ -3230,6 +3302,11 @@ async def register_service_api(
         request, "create", "server", resource_id=path, description=f"Register server {name}"
     )
 
+    # The Form parameter `status` shadows the imported fastapi.status
+    # module inside this function; alias it locally so we can still raise
+    # with named status codes.
+    from fastapi import status as fastapi_status
+
     from ..health.service import health_service
     from ..search.service import faiss_service
     from ..utils.local_runtime_validation import (
@@ -3240,7 +3317,7 @@ async def register_service_api(
 
     if deployment not in ("remote", "local"):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=fastapi_status.HTTP_400_BAD_REQUEST,
             detail="deployment must be 'remote' or 'local'",
         )
 
@@ -3250,7 +3327,7 @@ async def register_service_api(
     if is_local:
         if not user_context.get("is_admin"):
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
+                status_code=fastapi_status.HTTP_403_FORBIDDEN,
                 detail="Local server registration requires admin privileges",
             )
 
@@ -3265,9 +3342,7 @@ async def register_service_api(
         proxy_pass_url=proxy_pass_url,
         local_runtime=local_runtime,
     )
-    local_runtime_obj = (
-        parse_and_validate_local_runtime(local_runtime) if is_local else None
-    )
+    local_runtime_obj = parse_and_validate_local_runtime(local_runtime) if is_local else None
 
     # Validate path format
     if not path.startswith("/"):
@@ -3379,7 +3454,7 @@ async def register_service_api(
 
     # Add provider information
     if provider_organization or provider_url:
-        from registry.schemas.agent_models import AgentProvider
+        from ..schemas.agent_models import AgentProvider
 
         server_entry["provider"] = AgentProvider(
             organization=provider_organization,
@@ -3715,7 +3790,6 @@ async def toggle_service_api(
       -F "new_state=true"
     ```
     """
-    from ..core.nginx_service import nginx_service
     from ..health.service import health_service
     from ..search.service import faiss_service
 
@@ -3827,7 +3901,6 @@ async def remove_service_api(
       -F "path=/myservice"
     ```
     """
-    from ..core.nginx_service import nginx_service
     from ..health.service import health_service
     from ..search.service import faiss_service
     from ..services.scope_service import remove_server_scopes
@@ -5000,9 +5073,7 @@ async def get_server_connect_config(
     if service_path.endswith("/connect-config"):
         service_path = service_path[: -len("/connect-config")]
 
-    server_info = await server_service.get_server_info(
-        service_path, include_credentials=True
-    )
+    server_info = await server_service.get_server_info(service_path, include_credentials=True)
     if not server_info:
         raise HTTPException(status_code=404, detail="Service path not found")
 

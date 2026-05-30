@@ -391,11 +391,21 @@ class FileServerRepository(ServerRepositoryBase):
     async def find_with_filter(
         self,
         filter_dict: dict[str, Any],
+        *,
+        limit: int | None = None,
     ) -> dict[str, dict]:
-        """Find documents matching a filter (file-based, basic support)."""
+        """Find documents matching a filter (file-based, basic support).
+
+        Note: only `$exists` is supported here today. Conditions other
+        than `$exists` (e.g. `$regex`, `$in`) are silently treated as
+        a match, which means filters that the DocumentDB backend would
+        reject will return ALL documents from the file backend.
+        """
         all_data = await self.list_all()
-        results = {}
+        results: dict[str, dict] = {}
         for path, data in all_data.items():
+            if limit is not None and len(results) >= limit:
+                break
             match = True
             for field_name, condition in filter_dict.items():
                 if isinstance(condition, dict) and "$exists" in condition:

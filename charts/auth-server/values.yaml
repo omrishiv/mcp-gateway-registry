@@ -3,7 +3,7 @@ global:
   image:
     # Container registry (host + optional namespace). Shared default across subcharts.
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.24.2
+    tag: 1.24.3
     pullPolicy: IfNotPresent
 
 # Per-service image configuration
@@ -67,7 +67,7 @@ app:
 
   # Tool-level access control (issue #1026)
   mcpToolsListFilterEnabled: true   # Filter MCP tools/list JSON-RPC responses against per-user tool allowlist
-  mcpProxyMaxBodyBytes: 2097152     # Max upstream tools/list body the proxy hop buffers; oversize returns HTTP 413
+  mcpProxyMaxBodyBytes: "2097152"   # Max upstream tools/list body the proxy hop buffers; oversize returns HTTP 413
   toolFilterAuditLogLevel: "INFO"   # Audit log level for tool-prune events (DEBUG, INFO, WARNING)
 
 # Authentication Provider Configuration

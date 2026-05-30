@@ -3,7 +3,7 @@ global:
   image:
     # Container registry (host + optional namespace). Shared default across subcharts.
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.24.2
+    tag: 1.24.3
     pullPolicy: IfNotPresent
 
   cloud:
@@ -12,12 +12,25 @@ global:
     # Previously only injected for Cognito; now available unconditionally.
     awsRegion: ""
 
+  # Defaults below cover both standalone (`helm template charts/registry`)
+  # and umbrella deploys; the umbrella overrides what it needs from
+  # charts/mcp-gateway-registry-stack/values.yaml. Most operators should
+  # deploy via the umbrella.
   ingress:
-    # Default ALB scheme for the registry's ingress when this subchart is
-    # deployed standalone. Overridden by mcp-gateway-registry-stack's
-    # global.ingress.scheme when deployed via the umbrella. Per-ingress
-    # override available at .ingress.scheme below.
     scheme: internet-facing
+    tls: false
+    routingMode: subdomain
+    paths:
+      registry: /registry
+
+  # Auth provider used by the registry. Defaults match the umbrella's
+  # bundled-Keycloak setup. Set to your real provider when deploying
+  # standalone without the umbrella.
+  authProvider:
+    type: keycloak
+    keycloak:
+      adminUsername: user
+      realm: mcp-gateway
 
 # Per-service image configuration
 # Any field left empty falls back to the corresponding global.image.* value.
@@ -96,6 +109,18 @@ app:
   # their group mappings directly, without requiring an IdP Admin API token.
   m2mDirectRegistrationEnabled: true
 
+  # Registration deduplication
+  # Advisory checks that surface likely-duplicate entities (servers, agents,
+  # skills) before a user registers a new one. The /api/<entity>/check-duplicates
+  # endpoints are always available for CI / federation / CLI callers regardless
+  # of the registrationHintEnabled flag; that flag only governs whether the
+  # registration form pre-flights the check and renders the hint modal. The
+  # check is advisory and never blocks registration.
+  dedup:
+    registrationHintEnabled: true  # When true, registration UI pre-flights /check-duplicates and shows hint modal.
+    scoreThreshold: "0.7"          # Minimum similarity score (0.0..1.0) for advisory matches.
+    maxSuggestions: "3"            # Cap on advisory suggestions per request.
+
   # OpenTelemetry direct OTLP push export configuration
   otelOtlpEndpoint: ""  # OTLP endpoint URL (e.g., https://otlp.datadoghq.com)
   otelExporterOtlpHeaders: ""  # OTLP headers (e.g., dd-api-key=YOUR_KEY)
@@ -117,20 +142,6 @@ app:
   otelExporterPrometheusHost: "0.0.0.0"
   otelExporterPrometheusPort: "9464"
 
-# Metrics scrape configuration (Issue #1122)
-# Controls the NetworkPolicy that gates the OTel exporter-prometheus port.
-metricsScrape:
-  port: 9464
-  # NetworkPolicy resource that gates ingress to the scrape port.
-  # Default: only Prometheus pods in the `monitoring` namespace can scrape.
-  # Override the selectors below to match your in-cluster Prometheus.
-  networkPolicy:
-    enabled: true
-    fromNamespaceSelector:
-      kubernetes.io/metadata.name: monitoring
-    fromPodSelector:
-      app.kubernetes.io/name: prometheus
-
   # Telemetry configuration
   # Anonymous usage telemetry (startup ping + daily heartbeat, both on by default)
   mcpTelemetryDisabled: false  # Set to true to disable all telemetry
@@ -138,6 +149,7 @@ metricsScrape:
   telemetryHeartbeatIntervalMinutes: "1440"  # Heartbeat interval in minutes (default: 1440 = 24 hours)
   telemetryDebug: false  # Set to true to log payloads instead of sending
   mcpTelemetryImdsProbeDisabled: false  # Set to true to disable IMDS probing in cloud detection (issue #986)
+  mcpCloudProvider: ""  # Override cloud auto-detection: aws|azure|gcp|on_premises|other (issue #1120)
 
   # Demo server configuration
   disableAiRegistryToolsServer: false  # Set to true to disable auto-registration of the built-in airegistry-tools server
@@ -185,6 +197,40 @@ metricsScrape:
   # Tool-level access control (issue #1026)
   mcpToolsListFilterEnabled: true   # Registry-side awareness of the MCP tools/list filter (also read by auth-server)
   toolFilterAuditLogLevel: "INFO"   # Audit log level for tool-prune events (DEBUG, INFO, WARNING)
+
+  # Override the `scopes_supported` array in the Protected Resource Metadata
+  # document (`/.well-known/oauth-protected-resource`). Space-separated scope
+  # names.
+  #
+  # Default ("profile email offline_access") matches the docs' recommended
+  # Keycloak-DCR setup: MCP clients (Claude Code, Claude.ai, Cursor) perform
+  # RFC 7591 DCR against the bundled Keycloak realm, and Keycloak rejects
+  # any scope name that isn't already in the realm. These three are present
+  # by default in every Keycloak realm, so DCR succeeds and the user's
+  # groups (delivered via the `basic` scope's groups mapper) drive
+  # authorization at the gateway.
+  #
+  # Set to empty ("") to let the registry derive the list from its own
+  # scopes config (DocumentDB-backed in production, YAML-backed in dev) —
+  # appropriate when DCR is not used and clients have pre-issued tokens
+  # whose scopes match the registry's internal scope names.
+  #
+  # See docs/ai-coding-assistant-registry-integration.md for the rationale.
+  mcpAdvertisedScopes: "profile email offline_access"
+
+# Metrics scrape configuration (Issue #1122)
+# Controls the NetworkPolicy that gates the OTel exporter-prometheus port.
+metricsScrape:
+  port: 9464
+  # NetworkPolicy resource that gates ingress to the scrape port.
+  # Default: only Prometheus pods in the `monitoring` namespace can scrape.
+  # Override the selectors below to match your in-cluster Prometheus.
+  networkPolicy:
+    enabled: true
+    fromNamespaceSelector:
+      kubernetes.io/metadata.name: monitoring
+    fromPodSelector:
+      app.kubernetes.io/name: prometheus
 
 # AWS Agent Registry Federation
 awsRegistry:

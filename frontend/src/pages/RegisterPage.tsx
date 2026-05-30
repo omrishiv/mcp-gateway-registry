@@ -20,6 +20,9 @@ import {
   buildLocalRuntimeForm,
 } from '../utils/localRuntime';
 import LocalRuntimeFormPanel from '../components/LocalRuntimeFormPanel';
+import DuplicateCheckModal from '../components/DuplicateCheckModal';
+import { useDuplicateCheck } from '../hooks/useDuplicateCheck';
+import type { ExistingEntity } from '../types/duplicateCheck';
 
 
 // Toast notification component
@@ -193,6 +196,25 @@ const RegisterPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [mcpRegistryNotice, setMcpRegistryNotice] = useState<string | null>(null);
+
+  // Registration deduplication. The hook owns the modal state, the
+  // sticky-disabled flag, the AbortController, and all of the network
+  // The hook owns AbortController, the hint-flag short-circuit, and
+  // the modal state. The page only owns the action callbacks
+  // (proceed / pick / cancel) that interact with the local form
+  // lifecycle. The modal currently surfaces from either the server
+  // tab or the agent tab; whichever submitted last sets
+  // ``activeRegisteringEntityType`` so the modal title and pluralization
+  // match.
+  const {
+    collisionWith,
+    advisoryMatches,
+    showModal: showDuplicateModal,
+    runCheck: runDuplicateCheck,
+    closeModal: closeDuplicateModal,
+  } = useDuplicateCheck();
+  const [activeRegisteringEntityType, setActiveRegisteringEntityType] =
+    useState<'mcp_server' | 'a2a_agent'>('mcp_server');
 
 
   const generatePath = useCallback((name: string): string => {
@@ -479,20 +501,14 @@ const RegisterPage: React.FC = () => {
   }, [registrationType]);
 
 
-  const handleServerSubmit = useCallback(async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (loading) return;
-
-    if (!validateServerForm()) return;
-
-    setLoading(true);
-
+  const performServerRegistration = useCallback(async () => {
     // Local deployments accept local_runtime as a JSON-encoded form field
     // (same convention as metadata). See utils/localRuntime.ts.
     const localRuntimeJson = serverForm.deployment === 'local'
       ? buildLocalRuntimeJson(serverForm.local_runtime)
       : null;
 
+    setLoading(true);
     try {
       const formData = new FormData();
       formData.append('name', serverForm.name);
@@ -564,15 +580,10 @@ const RegisterPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [loading, serverForm, validateServerForm, navigate]);
+  }, [serverForm, navigate]);
 
 
-  const handleAgentSubmit = useCallback(async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (loading) return;
-
-    if (!validateAgentForm()) return;
-
+  const performAgentRegistration = useCallback(async (): Promise<void> => {
     let parsedSkills = agentForm.skills;
     if (agentForm.skills_json.trim()) {
       try {
@@ -642,7 +653,116 @@ const RegisterPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [loading, agentForm, validateAgentForm, navigate]);
+  }, [agentForm, navigate]);
+
+
+  const handleServerSubmit = useCallback(async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (loading) return;
+    if (!validateServerForm()) return;
+
+    setLoading(true);
+    setActiveRegisteringEntityType('mcp_server');
+    const outcome = await runDuplicateCheck({
+      entityType: 'mcp_server',
+      payload: {
+        name: serverForm.name.trim(),
+        description: serverForm.description.trim() || null,
+        proxy_pass_url:
+          serverForm.deployment === 'remote' && serverForm.proxy_pass_url
+            ? serverForm.proxy_pass_url.trim()
+            : null,
+        self_path: serverForm.path.trim() || null,
+      },
+    });
+    // performServerRegistration manages `loading` itself, so reset
+    // here before branching.
+    setLoading(false);
+
+    if (outcome.kind === 'show-modal') {
+      // Hook already set collisionWith / advisoryMatches / showModal.
+      return;
+    }
+    if (outcome.kind === 'cancelled') {
+      // The hook's in-flight check was aborted by a fresher submit or
+      // by the component unmounting. Either way the page must not
+      // proceed: a stale registration POST after navigation is the
+      // exact bug this branch prevents.
+      return;
+    }
+    if (outcome.notice) {
+      setToast({ message: outcome.notice, type: 'error' });
+    }
+    await performServerRegistration();
+  }, [loading, serverForm, validateServerForm, performServerRegistration, runDuplicateCheck]);
+
+
+  const handleDuplicateProceed = useCallback(async () => {
+    closeDuplicateModal();
+    if (activeRegisteringEntityType === 'mcp_server') {
+      await performServerRegistration();
+    } else {
+      await performAgentRegistration();
+    }
+  }, [
+    performServerRegistration,
+    performAgentRegistration,
+    closeDuplicateModal,
+    activeRegisteringEntityType,
+  ]);
+
+
+  const handleDuplicatePickExisting = useCallback((entity: ExistingEntity) => {
+    closeDuplicateModal();
+    // The advisory list is cross-entity: a server registration can
+    // surface a similar skill, etc. Pass `tab=` so the dashboard
+    // switches view filters to the entity's own list.
+    const tabByEntityType: Record<string, string> = {
+      mcp_server: 'servers',
+      a2a_agent: 'agents',
+      skill: 'skills',
+    };
+    const params = new URLSearchParams();
+    params.set('highlight', entity.path);
+    const tab = tabByEntityType[entity.entity_type];
+    if (tab) {
+      params.set('tab', tab);
+    }
+    navigate(`/?${params.toString()}`);
+  }, [navigate, closeDuplicateModal]);
+
+
+  const handleAgentSubmit = useCallback(async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (loading) return;
+    if (!validateAgentForm()) return;
+
+    setLoading(true);
+    setActiveRegisteringEntityType('a2a_agent');
+    const outcome = await runDuplicateCheck({
+      entityType: 'a2a_agent',
+      payload: {
+        name: agentForm.name.trim(),
+        description: agentForm.description.trim() || null,
+        url: agentForm.url.trim() || null,
+        self_path: agentForm.path.trim() || null,
+      },
+    });
+    // performAgentRegistration manages `loading` itself, so reset
+    // here before branching.
+    setLoading(false);
+
+    if (outcome.kind === 'show-modal') {
+      return;
+    }
+    if (outcome.kind === 'cancelled') {
+      return;
+    }
+    if (outcome.notice) {
+      setToast({ message: outcome.notice, type: 'error' });
+    }
+    await performAgentRegistration();
+  }, [loading, agentForm, validateAgentForm, performAgentRegistration, runDuplicateCheck]);
 
 
   const inputClass = "block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500";
@@ -1527,6 +1647,17 @@ const RegisterPage: React.FC = () => {
           onClose={() => setToast(null)}
         />
       )}
+
+      <DuplicateCheckModal
+        isOpen={showDuplicateModal}
+        onClose={closeDuplicateModal}
+        onProceed={handleDuplicateProceed}
+        onPickExisting={handleDuplicatePickExisting}
+        collisionWith={collisionWith}
+        advisoryMatches={advisoryMatches}
+        isLoading={loading}
+      />
+
 
       {/* Header */}
       <div className="mb-8">

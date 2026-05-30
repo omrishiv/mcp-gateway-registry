@@ -837,6 +837,20 @@ module "ecs_service_registry" {
           name  = "EMBEDDINGS_AWS_REGION"
           value = var.embeddings_aws_region
         },
+        # Registration deduplication. Advisory check; never blocks
+        # registration. Reuses the embeddings model above.
+        {
+          name  = "DEDUP_REGISTRATION_HINT_ENABLED"
+          value = tostring(var.dedup_registration_hint_enabled)
+        },
+        {
+          name  = "DEDUP_SCORE_THRESHOLD"
+          value = tostring(var.dedup_score_threshold)
+        },
+        {
+          name  = "DEDUP_MAX_SUGGESTIONS"
+          value = tostring(var.dedup_max_suggestions)
+        },
         {
           name  = "SESSION_COOKIE_SECURE"
           value = tostring(var.session_cookie_secure)
@@ -1160,6 +1174,10 @@ module "ecs_service_registry" {
         {
           name  = "MCP_TELEMETRY_IMDS_PROBE_DISABLED"
           value = var.mcp_telemetry_imds_probe_disabled
+        },
+        {
+          name  = "MCP_CLOUD_PROVIDER"
+          value = var.mcp_cloud_provider
         },
         # Demo server configuration
         {

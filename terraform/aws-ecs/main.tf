@@ -106,6 +106,11 @@ module "mcp_gateway" {
   embeddings_aws_region       = var.embeddings_aws_region
   embeddings_api_key          = var.embeddings_api_key
 
+  # Registration deduplication
+  dedup_registration_hint_enabled = var.dedup_registration_hint_enabled
+  dedup_score_threshold           = var.dedup_score_threshold
+  dedup_max_suggestions           = var.dedup_max_suggestions
+
   # Keycloak admin credentials (for Management API)
   keycloak_admin_password = var.keycloak_admin_password
 
@@ -270,6 +275,7 @@ module "mcp_gateway" {
   mcp_telemetry_heartbeat_interval_minutes = var.mcp_telemetry_heartbeat_interval_minutes
   telemetry_debug                          = var.telemetry_debug
   mcp_telemetry_imds_probe_disabled        = var.mcp_telemetry_imds_probe_disabled
+  mcp_cloud_provider                       = var.mcp_cloud_provider
 
   # Demo server configuration
   disable_ai_registry_tools_server = var.disable_ai_registry_tools_server

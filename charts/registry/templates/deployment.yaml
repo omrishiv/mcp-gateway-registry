@@ -104,6 +104,9 @@ spec:
               value: {{ .Values.app.mcpToolsListFilterEnabled | toString | quote }}
             - name: TOOL_FILTER_AUDIT_LOG_LEVEL
               value: {{ .Values.app.toolFilterAuditLogLevel | default "INFO" | quote }}
+            # DCR scope-allowlist alignment
+            - name: MCP_ADVERTISED_SCOPES
+              value: {{ .Values.app.mcpAdvertisedScopes | default "" | quote }}
             {{- if .Values.awsRegistry.federationEnabled }}
             - name: AWS_REGISTRY_FEDERATION_ENABLED
               value: "true"

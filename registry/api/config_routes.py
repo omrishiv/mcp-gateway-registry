@@ -259,6 +259,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("telemetry_debug", "Debug Mode", False),
             ("telemetry_endpoint", "Collector Endpoint", False),
             ("telemetry_imds_probe_disabled", "Telemetry: Disable IMDS Probe", False),
+            ("mcp_cloud_provider", "Cloud Provider Override", False),
         ],
     },
     "demo_server": {
@@ -321,6 +322,15 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("github_api_base_url", "API Base URL", False),
         ],
     },
+    "registration_dedup": {
+        "title": "Registration Deduplication",
+        "order": 21,
+        "fields": [
+            ("dedup_registration_hint_enabled", "UI Hint Enabled", False),
+            ("dedup_score_threshold", "Score Threshold", False),
+            ("dedup_max_suggestions", "Max Suggestions", False),
+        ],
+    },
 }
 
 
@@ -380,10 +390,10 @@ def _format_value(
 
     if field_name.endswith("_seconds"):
         unit = "seconds"
-        if isinstance(value, (int, float)) and value >= 3600:
+        if isinstance(value, int | float) and value >= 3600:
             hours = value / 3600
             display = f"{value} ({hours:.1f} hours)"
-        elif isinstance(value, (int, float)) and value >= 60:
+        elif isinstance(value, int | float) and value >= 60:
             minutes = value / 60
             display = f"{value} ({minutes:.0f} minutes)"
     elif field_name.endswith("_ms"):
@@ -631,6 +641,7 @@ async def get_config() -> dict[str, Any]:
         "registry_mode": settings.registry_mode.value,
         "nginx_updates_enabled": settings.nginx_updates_enabled,
         "registration_gate_enabled": settings.registration_gate_enabled,
+        "dedup_registration_hint_enabled": settings.dedup_registration_hint_enabled,
         "asset_lifecycle_statuses": [s.value for s in LifecycleStatus],
         "coding_assistants": settings.coding_assistants_list,
         "ui_title": settings.effective_ui_title,
@@ -795,7 +806,7 @@ def _export_as_tfvars(include_sensitive: bool = False) -> str:
                 lines.append(f"# {tf_key} = null")
             elif isinstance(value, bool):
                 lines.append(f"{tf_key} = {str(value).lower()}")
-            elif isinstance(value, (int, float)):
+            elif isinstance(value, int | float):
                 lines.append(f"{tf_key} = {value}")
             elif isinstance(value, str):
                 lines.append(f'{tf_key} = "{value}"')

@@ -3,8 +3,8 @@ from datetime import UTC
 from enum import Enum
 from pathlib import Path
 
-from pydantic import ConfigDict, Field, field_validator
-from pydantic_settings import BaseSettings
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Accepted values for STORAGE_BACKEND. Keep in sync with the Terraform allowlist
 # at terraform/aws-ecs/variables.tf (issue #955) so both layers reject the same
@@ -53,7 +53,7 @@ class RegistryMode(str, Enum):
 class Settings(BaseSettings):
     """Application settings with environment variable support."""
 
-    model_config = ConfigDict(
+    model_config = SettingsConfigDict(
         env_file=".env",
         case_sensitive=False,
         extra="ignore",  # Ignore extra environment variables
@@ -619,6 +619,29 @@ class Settings(BaseSettings):
             "provider. MCP_TELEMETRY_IMDS_PROBE_DISABLED=1"
         ),
     )
+    mcp_cloud_provider: str | None = Field(
+        default=None,
+        description=(
+            "Operator-supplied cloud provider override. Takes precedence over "
+            "the auto-detection cascade and the admin-UI hint. "
+            "Allowed: aws, azure, gcp, on_premises, other."
+        ),
+    )
+
+    @field_validator("mcp_cloud_provider")
+    @classmethod
+    def _validate_cloud_provider(cls, v: str | None) -> str | None:
+        if v is None or v == "":
+            return None
+        v_lower = v.strip().lower()
+        if v_lower not in {"aws", "azure", "gcp", "on_premises", "other"}:
+            display = v[:16] + ("..." if len(v) > 16 else "")
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                f"MCP_CLOUD_PROVIDER={display!r} is not a valid value; ignoring"
+            )
+            return None
+        return v_lower
 
     # Demo server configuration
     disable_ai_registry_tools_server: bool = Field(
@@ -680,6 +703,34 @@ class Settings(BaseSettings):
         if self.deployment_mode == DeploymentMode.REGISTRY_ONLY:
             return "AI Registry"
         return "AI Gateway & Registry"
+
+    # Registration deduplication. Advisory checks that surface
+    # likely-duplicate entities (servers, agents, skills) before a user
+    # registers a new one. The /check-duplicates endpoints are always
+    # available; this setting only controls whether the registration
+    # form pre-flights the check and renders the modal hint.
+    dedup_registration_hint_enabled: bool = Field(
+        default=True,
+        description=(
+            "When true, the registration form pre-flights "
+            "/api/<entity>/check-duplicates and renders a hint modal "
+            "if matches are found. When false, the form submits "
+            "straight to /register without checking. The endpoint and "
+            "service themselves remain available regardless."
+        ),
+    )
+    dedup_score_threshold: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description="Minimum semantic-search score (0..1) for an advisory match to be returned.",
+    )
+    dedup_max_suggestions: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Cap on the number of duplicate suggestions returned.",
+    )
 
     # Storage Backend Configuration
     storage_backend: str = Field(
