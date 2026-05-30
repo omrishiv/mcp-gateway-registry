@@ -451,7 +451,7 @@ async def read_root(
         )
         if not search_query or search_query in searchable_text:
             # Fetch enabled status before health check to avoid race condition (Issue #612)
-            is_enabled = await server_service.is_service_enabled(path)
+            is_enabled = server_info.get("is_enabled", False)
 
             # Get real health status from health service
             from ..health.service import health_service
@@ -583,7 +583,7 @@ async def get_servers_json(
         )
         if not search_query or search_query in searchable_text:
             # Fetch enabled status before health check to avoid race condition (Issue #612)
-            is_enabled = await server_service.is_service_enabled(path)
+            is_enabled = server_info.get("is_enabled", False)
 
             # Get real health status from health service
             from ..health.service import health_service

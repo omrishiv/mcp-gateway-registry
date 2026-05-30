@@ -97,7 +97,7 @@ async def list_servers(
             continue
 
         # Fetch enabled status before health check to avoid race condition (Issue #612)
-        is_enabled = await server_service.is_service_enabled(path)
+        is_enabled = server_info.get("is_enabled", False)
 
         # Add health status with current enabled state
         health_data = health_service._get_service_health_data(

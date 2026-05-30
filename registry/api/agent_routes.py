@@ -736,7 +736,9 @@ async def list_agents(
     search_query = query.lower() if query else ""
 
     for agent in accessible_agents:
-        if enabled_only and not await agent_service.is_agent_enabled(agent.path):
+        agent_is_enabled = getattr(agent, "is_enabled", False)
+
+        if enabled_only and not agent_is_enabled:
             continue
 
         if visibility and agent.visibility != visibility:
@@ -771,7 +773,7 @@ async def list_agents(
                 skills=[s.name for s in agent.skills],
                 num_skills=len(agent.skills),
                 num_stars=agent.num_stars,
-                is_enabled=await agent_service.is_agent_enabled(agent.path),
+                is_enabled=agent_is_enabled,
                 provider=provider_name,
                 streaming=streaming,
                 trust_level=agent.trust_level,
@@ -1592,7 +1594,7 @@ async def discover_agents_by_skills(
     required_tags = set(t.lower() for t in tags) if tags else set()
 
     for agent in accessible_agents:
-        if not await agent_service.is_agent_enabled(agent.path):
+        if not getattr(agent, "is_enabled", False):
             continue
 
         agent_skills = set(skill.id.lower() for skill in agent.skills) | set(
