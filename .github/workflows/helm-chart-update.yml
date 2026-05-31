@@ -56,8 +56,9 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           # Replace :latest (or any existing tag) with the release version
-          # in all image_uri lines. Preserves the YOUR_ACCOUNT_ID placeholder.
-          sed -i "s|\(image_uri.*:\)[^\"]*\"|\1${VERSION}\"|" \
+          # only on UNCOMMENTED image_uri lines. Commented-out lines (starting
+          # with #) are example placeholders and must not be modified.
+          sed -i "/^[^#]*image_uri/s|\(image_uri.*:\)[^\"]*\"|\1${VERSION}\"|" \
             terraform/aws-ecs/terraform.tfvars.example
           echo "Updated terraform/aws-ecs/terraform.tfvars.example"
 
