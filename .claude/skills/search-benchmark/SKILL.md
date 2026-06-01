@@ -35,28 +35,86 @@ The `.token` file supports both raw JWT format and the full JSON response from t
 Check if a ground truth dataset already exists:
 
 ```bash
-ls tests/fixtures/search_dataset/generated_ground_truth.json 2>/dev/null
+ls tests/fixtures/search_dataset/ground_truth.json 2>/dev/null
 ```
 
-If the file exists, ask the user: "A ground truth dataset already exists (N queries). Do you want to use it or generate a new one from the registry?"
+If the file exists, report how many queries it contains and ask the user: "A ground truth dataset already exists (N queries). Do you want to use it or generate a new one from this registry?"
 
 - If **use existing**: skip to Step 2
-- If **generate new**: proceed to generate
+- If **generate new**: proceed to Step 1b
 
-### Step 1b: Generate Ground Truth (if needed)
+### Step 1b: Generate Expert Ground Truth
 
-Generate a ground truth dataset from the registry's assets. This pulls all servers, agents, and skills and creates test queries from their names, tags, and descriptions.
+This is NOT a simple programmatic generation. You must deeply analyze the registry's assets and craft queries like a search expert. Follow this process:
+
+**1b.1: Fetch all assets as JSON**
 
 ```bash
-uv run python scripts/benchmark_search.py \
-    --url {REGISTRY_URL} \
-    --token-file {TOKEN_FILE} \
-    --generate-ground-truth
+TOKEN=$(python3 -c "
+import json
+with open('{TOKEN_FILE}') as f:
+    raw = f.read().strip()
+if raw.startswith('{'):
+    data = json.loads(raw)
+    print(data.get('tokens',{}).get('access_token') or data.get('access_token',''))
+else:
+    print(raw.replace('Bearer ',''))
+")
+
+curl -s -H "Authorization: Bearer $TOKEN" "{REGISTRY_URL}/api/servers?limit=2000" > /tmp/servers.json
+curl -s -H "Authorization: Bearer $TOKEN" "{REGISTRY_URL}/api/agents?limit=2000" > /tmp/agents.json
+curl -s -H "Authorization: Bearer $TOKEN" "{REGISTRY_URL}/api/skills?limit=2000" > /tmp/skills.json
 ```
 
-Output: `tests/fixtures/search_dataset/generated_ground_truth.json`
+**1b.2: Analyze the assets deeply**
 
-Tell the user how many queries were generated and across which categories. Note that these are programmatically generated queries (a starting point, not a substitute for hand-curated queries).
+Read the JSON dumps. Filter out stress-test and security-pending assets. For each real asset, understand:
+- What it does (from description)
+- What tools it has (tool names and descriptions)
+- What tags it uses
+- How users would naturally search for it
+
+**1b.3: Craft 100 queries across these categories**
+
+| Category | Count | Strategy |
+|----------|-------|----------|
+| exact-name | 10 | Product/server/agent names as queries |
+| semantic | 15 | Natural language paraphrases with NO keyword overlap |
+| tool-precision | 10 | Exact tool names as queries |
+| tag-based | 10 | Tag vocabulary combinations |
+| multi-entity | 10 | Queries where correct answers span servers + agents + skills |
+| conflict | 10 | Ambiguous terms where vector and keyword disagree |
+| no-answer | 10 | Queries completely outside the dataset (no match exists) |
+| agent-focused | 10 | Queries specifically targeting agents |
+| skill-focused | 10 | Queries specifically targeting skills |
+| tricky | 15 | Edge cases, short queries, non-English, adversarial |
+
+**1b.4: For each query, define expected results**
+
+```json
+{
+  "query": "the search query",
+  "category": "one of the categories above",
+  "description": "what this query tests and why",
+  "expected": [
+    {"path": "/exact-path-from-registry", "grade": 3, "reason": "why this should match"},
+    {"path": "/another-path", "grade": 2, "reason": "why this is relevant but not perfect"}
+  ]
+}
+```
+
+Grade scale: 3 = perfect match, 2 = highly relevant, 1 = somewhat relevant.
+For no-answer queries, expected should be an empty list.
+
+**1b.5: Validate all paths exist**
+
+Every path in expected results must exist in the fetched assets. Verify before saving.
+
+**1b.6: Save**
+
+Write the ground truth to `tests/fixtures/search_dataset/ground_truth.json`.
+
+Tell the user how many queries were created per category and that they should review it.
 
 ### Step 2: Run Benchmark
 
