@@ -206,12 +206,10 @@ class FileServerRepository(ServerRepositoryBase):
         """
         items = list(self._servers.items())
         page_items = items[skip : skip + limit]
-        if exclude_tool_list:
-            return {
-                path: {k: v for k, v in info.items() if k != "tool_list"}
-                for path, info in page_items
-            }
-        return dict(page_items)
+        return {
+            path: self._with_state(info, exclude_tool_list)
+            for path, info in page_items
+        }
 
     async def list_by_ids(
         self,
@@ -235,7 +233,7 @@ class FileServerRepository(ServerRepositoryBase):
                 alternate_path = path.rstrip("/") if path.endswith("/") else path + "/"
                 info = self._servers.get(alternate_path)
             if info is not None:
-                result[info["path"]] = info
+                result[info["path"]] = self._with_state(info)
         return result
 
     async def list_by_source(
