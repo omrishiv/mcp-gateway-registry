@@ -5,8 +5,10 @@
 If you use Claude Code, the entire pipeline (dataset creation, benchmarking, and reporting) is available as an interactive skill:
 
 ```
-/search-benchmark https://your-registry-url .token
+/search-benchmark https://your-registry-url /path/to/your/token-file
 ```
+
+You can get a token from the "Get JWT Token" button in the top-left corner of the registry UI.
 
 The [search-benchmark skill](../../.claude/skills/search-benchmark/SKILL.md) will guide you step by step through generating ground truth, running the benchmark, and interpreting results. Alternatively, follow the manual steps below.
 
