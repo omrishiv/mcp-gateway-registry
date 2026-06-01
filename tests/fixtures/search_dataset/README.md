@@ -35,12 +35,15 @@ Two ways to test search quality:
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| [unified_dataset.json](unified_dataset.json) | 378 documents with embeddings (for offline mode) |
-| [ground_truth.json](ground_truth.json) | 100 queries with expected results and relevance grades |
-| [../../scripts/benchmark_search.py](../../scripts/benchmark_search.py) | Live deployment testing |
-| [../../scripts/evaluate_search.py](../../scripts/evaluate_search.py) | Offline evaluation with both scoring methods |
+| File | Description |
+|------|-------------|
+| `unified_dataset.json` | Generated: document embeddings dump from your local MongoDB (for offline mode) |
+| `ground_truth.json` | Generated: search queries with expected results (from your registry's assets) |
+| `generated_ground_truth.json` | Generated: programmatic ground truth (alternative to hand-curated) |
+| `benchmark_results.json` | Generated: raw benchmark results from a live run |
+| `benchmark_results.md` | Generated: markdown report with NDCG/MRR/Recall metrics |
+| `scripts/benchmark_search.py` | Script: live deployment testing and report generation |
+| `scripts/evaluate_search.py` | Script: offline evaluation comparing RRF vs legacy scoring |
 
 ## Method 1: Test Against Your Deployed Registry (Recommended)
 
