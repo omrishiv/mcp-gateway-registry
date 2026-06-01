@@ -231,14 +231,25 @@ async def _get_registry_headers(ctx: Context | None) -> dict[str, str]:
     """Return headers for internal registry API calls.
 
     Priority: static API token > M2M service token > caller bearer token.
+    Includes X-Forwarded-Host so the registry can construct correct external URLs.
     """
     if REGISTRY_API_TOKEN:
-        return {"Authorization": f"Bearer {REGISTRY_API_TOKEN}"}
-    if _m2m_manager:
+        headers = {"Authorization": f"Bearer {REGISTRY_API_TOKEN}"}
+    elif _m2m_manager:
         token = await _m2m_manager.get_token()
-        return {"X-Authorization": f"Bearer {token}"}
-    token = _extract_bearer_token(ctx)
-    return {"X-Authorization": f"Bearer {token}"}
+        headers = {"X-Authorization": f"Bearer {token}"}
+    else:
+        token = _extract_bearer_token(ctx)
+        headers = {"X-Authorization": f"Bearer {token}"}
+
+    from urllib.parse import urlparse
+
+    parsed = urlparse(REGISTRY_URL)
+    if parsed.hostname and parsed.hostname not in ("localhost", "registry", "127.0.0.1"):
+        headers["X-Forwarded-Host"] = parsed.netloc
+        headers["X-Forwarded-Proto"] = parsed.scheme or "https"
+
+    return headers
 
 
 @mcp.tool()
