@@ -19,7 +19,7 @@ The evaluation datasets are not checked into this repository (they contain deplo
 - **ground_truth.json** - Search queries with expected results (generated from your registry's assets, or hand-curated)
 - **unified_dataset.json** - Document embeddings dump (for offline evaluation only)
 
-The assets in a typical registry come from these sources:
+The assets in a typical registry can come from these sources:
 
 1. **[Anthropic MCP Server Registry](https://github.com/modelcontextprotocol/servers)**: Federated MCP servers from the public Anthropic registry (context7, exa, hydrata, strava, linkedin, petstore, etc.)
 2. **[Anthropic Skills Registry](https://github.com/anthropics/skills)**: Skills from the public Anthropic skills repo (pr-review, mcp-builder, claude-api, etc.)
