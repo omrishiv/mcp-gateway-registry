@@ -295,7 +295,7 @@ def _normalize_scores(
     normalized = []
     for doc, score in scored_results:
         norm = (score - min_score) / (max_score - min_score)
-        display_score = round(norm, 4)
+        display_score = max(0.0, round(norm, 4))
         normalized.append((doc, display_score))
 
     above_floor = [item for item in normalized if item[1] >= SCORE_DISPLAY_FLOOR]
