@@ -87,7 +87,7 @@ def _run_search(
     payload = {
         "query": query,
         "entity_types": ["mcp_server", "tool", "a2a_agent", "skill", "virtual_server"],
-        "max_results": 10,
+        "max_results": 20,
     }
     headers = {"Content-Type": "application/json"}
     if token:
@@ -119,8 +119,9 @@ def _extract_summary(
         })
 
     for agent in response.get("agents", []):
+        agent_card = agent.get("agent_card", {})
         summary["agents"].append({
-            "name": agent.get("agent_name"),
+            "name": agent_card.get("name") or agent.get("agent_name"),
             "path": agent.get("path"),
             "score": agent.get("relevance_score"),
         })
@@ -722,7 +723,7 @@ def _generate_report(
             f.write("\n")
 
         f.write("## Results by Query\n\n")
-        for q in successful[:30]:
+        for q in successful:
             results = q.get("results", {})
             total = q.get("total_results", 0)
             f.write(f"### \"{q['query']}\"\n\n")
