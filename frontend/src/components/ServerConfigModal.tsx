@@ -392,9 +392,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
 
     let cmd = `codex mcp add "${serverName}" --url "${url}"`;
 
-    if (isDCR) {
-      cmd += ' --oauth-client-id "codex-cli"';
-    } else if (!isRegistryOnly) {
+    if (!isDCR && !isRegistryOnly) {
       cmd += ' --bearer-token-env-var "MCP_AUTH_TOKEN"';
     }
 
