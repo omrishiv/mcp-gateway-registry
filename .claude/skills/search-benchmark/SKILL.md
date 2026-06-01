@@ -30,7 +30,20 @@ The `.token` file supports both raw JWT format and the full JSON response from t
 
 ## Workflow
 
-### Step 1: Generate Ground Truth
+### Step 1: Check for Existing Ground Truth
+
+Check if a ground truth dataset already exists:
+
+```bash
+ls tests/fixtures/search_dataset/generated_ground_truth.json 2>/dev/null
+```
+
+If the file exists, ask the user: "A ground truth dataset already exists (N queries). Do you want to use it or generate a new one from the registry?"
+
+- If **use existing**: skip to Step 2
+- If **generate new**: proceed to generate
+
+### Step 1b: Generate Ground Truth (if needed)
 
 Generate a ground truth dataset from the registry's assets. This pulls all servers, agents, and skills and creates test queries from their names, tags, and descriptions.
 
@@ -43,12 +56,7 @@ uv run python scripts/benchmark_search.py \
 
 Output: `tests/fixtures/search_dataset/generated_ground_truth.json`
 
-Review the generated file. It contains programmatically generated queries across three categories:
-- **exact-name**: Asset names as queries (should find the asset directly)
-- **tag-based**: Tag values as queries (should find assets with that tag)
-- **description-derived**: Key phrases from descriptions (tests semantic matching)
-
-These are a starting point. For higher quality evaluation, manually review and add queries that reflect how real users search.
+Tell the user how many queries were generated and across which categories. Note that these are programmatically generated queries (a starting point, not a substitute for hand-curated queries).
 
 ### Step 2: Run Benchmark
 
@@ -67,16 +75,18 @@ Output:
 
 ### Step 3: Review Report
 
-Open the report and check:
+Show the user the key metrics from the report:
 
 1. **Quality Metrics** - NDCG@10 > 0.7 is good, > 0.8 is excellent
 2. **Score Health** - Saturated scores at 1.0 should be < 15% (if higher, scoring formula may have issues)
 3. **Quality by Category** - Identify weak areas (e.g., agent-focused queries underperforming)
 4. **Per-query results** - Check specific queries that scored 0.0 (complete miss) or low NDCG
 
+Open the report in the editor for the user to review.
+
 ### Step 4: Compare Before/After (Optional)
 
-To compare two runs (e.g., before and after a scoring algorithm change):
+If asked to compare two runs (e.g., before and after a scoring algorithm change):
 
 ```bash
 uv run python scripts/benchmark_search.py \
