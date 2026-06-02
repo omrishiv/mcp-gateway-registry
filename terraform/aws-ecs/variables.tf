@@ -1075,6 +1075,38 @@ variable "tool_filter_audit_log_level" {
 }
 
 # =============================================================================
+# CUSTOM ENTITY TYPES (admin-defined, schema-driven catalog types)
+# =============================================================================
+
+variable "custom_entity_types_enabled" {
+  description = "Main switch for the custom-entity-types feature (dynamic tabs + endpoints). Off by default = no behavior change for existing deployments. When enabled, a registry-admin can define new catalog entity types at runtime."
+  type        = bool
+  default     = false
+}
+
+variable "custom_type_cache_ttl_seconds" {
+  description = "TTL (seconds) for the in-process custom-type descriptor cache used by the config tab list and default search scope. Lower for faster cross-replica convergence under bursty admin writes."
+  type        = number
+  default     = 60
+
+  validation {
+    condition     = var.custom_type_cache_ttl_seconds > 0
+    error_message = "custom_type_cache_ttl_seconds must be greater than 0"
+  }
+}
+
+variable "max_custom_records_per_type" {
+  description = "Soft cap on records per custom type (0 = unlimited). When non-zero, record creation is rejected with HTTP 409 once a type reaches the cap. Guards against runaway imports hitting the embedding-collection scaling ceiling."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.max_custom_records_per_type >= 0
+    error_message = "max_custom_records_per_type must be 0 (unlimited) or a positive integer"
+  }
+}
+
+# =============================================================================
 # REGISTRY CARD CONFIGURATION (Federation Metadata)
 # =============================================================================
 

@@ -363,6 +363,11 @@ registry:
     mcpToolsListFilterEnabled: true    # Registry-side awareness of the MCP tools/list filter (also read by auth-server)
     toolFilterAuditLogLevel: "INFO"    # Audit log level for tool-prune events (DEBUG, INFO, WARNING)
 
+    # Custom entity types (admin-defined, schema-driven catalog types)
+    customEntityTypesEnabled: false    # Main switch for dynamic tabs + endpoints; off = no behavior change
+    customTypeCacheTtlSeconds: 60      # TTL (s) for the in-process custom-type descriptor cache
+    maxCustomRecordsPerType: 0         # Soft cap on records per type (0 = unlimited); rejects create at cap
+
     # PRM `scopes_supported` override. Default matches Keycloak-DCR setup
     # (Claude Code, Claude.ai, Cursor) — the three scopes are present in every
     # Keycloak realm by default, so DCR succeeds. Set to "" to derive from the

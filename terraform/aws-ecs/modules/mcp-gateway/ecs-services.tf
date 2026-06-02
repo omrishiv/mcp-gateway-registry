@@ -1033,6 +1033,19 @@ module "ecs_service_registry" {
           name  = "TOOL_FILTER_AUDIT_LOG_LEVEL"
           value = var.tool_filter_audit_log_level
         },
+        # Custom entity types (admin-defined, schema-driven catalog types)
+        {
+          name  = "CUSTOM_ENTITY_TYPES_ENABLED"
+          value = tostring(var.custom_entity_types_enabled)
+        },
+        {
+          name  = "CUSTOM_TYPE_CACHE_TTL_SECONDS"
+          value = tostring(var.custom_type_cache_ttl_seconds)
+        },
+        {
+          name  = "MAX_CUSTOM_RECORDS_PER_TYPE"
+          value = tostring(var.max_custom_records_per_type)
+        },
         # Override the scopes_supported array advertised in the gateway's
         # /.well-known/oauth-protected-resource document. Required when the
         # IdP's RFC 7591 DCR rejects scopes that don't exist as client-scope

@@ -109,6 +109,13 @@ spec:
             # DCR scope-allowlist alignment
             - name: MCP_ADVERTISED_SCOPES
               value: {{ .Values.app.mcpAdvertisedScopes | default "" | quote }}
+            # Custom entity types (admin-defined, schema-driven catalog types)
+            - name: CUSTOM_ENTITY_TYPES_ENABLED
+              value: {{ .Values.app.customEntityTypesEnabled | default false | toString | quote }}
+            - name: CUSTOM_TYPE_CACHE_TTL_SECONDS
+              value: {{ .Values.app.customTypeCacheTtlSeconds | default 60 | toString | quote }}
+            - name: MAX_CUSTOM_RECORDS_PER_TYPE
+              value: {{ .Values.app.maxCustomRecordsPerType | default 0 | toString | quote }}
             {{- if .Values.awsRegistry.federationEnabled }}
             - name: AWS_REGISTRY_FEDERATION_ENABLED
               value: "true"

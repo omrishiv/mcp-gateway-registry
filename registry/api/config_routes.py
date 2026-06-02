@@ -345,6 +345,15 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("batch_max_request_bytes", "Max Request Bytes", False),
         ],
     },
+    "custom_entity_types": {
+        "title": "Custom Entity Types",
+        "order": 23,
+        "fields": [
+            ("custom_entity_types_enabled", "Enabled", False),
+            ("custom_type_cache_ttl_seconds", "Descriptor Cache TTL (s)", False),
+            ("max_custom_records_per_type", "Max Records Per Type (0 = unlimited)", False),
+        ],
+    },
 }
 
 
