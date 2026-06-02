@@ -20,7 +20,6 @@ import {
 import VirtualServerForm from '../components/VirtualServerForm';
 import DiscoverTab from '../components/DiscoverTab';
 import CustomEntityTab from '../components/CustomEntityTab';
-import { useCustomEntityCounts } from '../hooks/useCustomEntityCounts';
 import axios from 'axios';
 import { getBaseURL } from '../utils/basePath';
 import {
@@ -162,7 +161,7 @@ interface DashboardProps {
 
 const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFilter, selectedTags = [] }) => {
   const navigate = useNavigate();
-  const { servers, agents: agentsFromStats, loading, error, refreshData, setServers, setAgents } = useServerStats();
+  const { servers, agents: agentsFromStats, customRecordsByType: customEntityRecordsByType, loading, error, refreshData, setServers, setAgents } = useServerStats();
   const { skills, setSkills, loading: skillsLoading, error: skillsError, refreshData: refreshSkills } = useSkills();
   const {
     virtualServers,
@@ -180,9 +179,6 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
   const { virtualServer: editingVirtualServer, loading: editingVirtualServerLoading } = useVirtualServer(editingVirtualServerPath);
   const { user } = useAuth();
   const { config: registryConfig } = useRegistryConfig();
-  const { byType: customEntityRecordsByType } = useCustomEntityCounts(
-    registryConfig?.features.custom_types ? (registryConfig.custom_types ?? []) : [],
-  );
   const [searchTerm, setSearchTerm] = useState('');
   const [committedQuery, setCommittedQuery] = useState('');
 

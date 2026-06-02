@@ -68,10 +68,18 @@ interface ServerStats {
   withIssues: number;
 }
 
+/** Records for one custom type, shared by the tabs, Discover counts, and sidebar. */
+export interface CustomTypeRecords {
+  name: string;
+  displayName: string;
+  records: any[];
+}
+
 interface ServerStatsContextType {
   stats: ServerStats;
   servers: Server[];
   agents: Server[];
+  customRecordsByType: CustomTypeRecords[];
   setServers: React.Dispatch<React.SetStateAction<Server[]>>;
   setAgents: React.Dispatch<React.SetStateAction<Server[]>>;
   activeFilter: string;
@@ -105,6 +113,7 @@ export const ServerStatsProvider: React.FC<ServerStatsProviderProps> = ({ childr
   });
   const [servers, setServers] = useState<Server[]>([]);
   const [agents, setAgents] = useState<Server[]>([]);
+  const [customRecordsByType, setCustomRecordsByType] = useState<CustomTypeRecords[]>([]);
   const [activeFilter, setActiveFilter] = useState<string>('all');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -113,6 +122,12 @@ export const ServerStatsProvider: React.FC<ServerStatsProviderProps> = ({ childr
   const { config: registryConfig } = useRegistryConfig();
 
   const fetchData = useCallback(async () => {
+    // Wait for registry config before fetching. Without it we don't yet know
+    // which custom types exist, so computing stats now would show a core-only
+    // total that visibly jumps when the custom counts arrive a moment later.
+    if (!registryConfig) {
+      return;
+    }
     try {
       setLoading(true);
       setError(null);
@@ -147,23 +162,36 @@ export const ServerStatsProvider: React.FC<ServerStatsProviderProps> = ({ childr
         fetchPromises.push(Promise.resolve({ data: { skills: [] } }));
       }
 
-      const [serversResponse, agentsResponse, skillsResponse] = await Promise.all(fetchPromises);
-
-      // Fetch custom entity records (one call per type) so the sidebar stats
-      // reflect them too. Each type 404s only if deleted mid-session.
+      // Fetch custom entity records (one call per type) alongside the core
+      // entities so every count lands in the SAME stats update — no visible
+      // jump from a core-only total to the full total. Each type 404s only if
+      // deleted mid-session.
       const customTypes = registryConfig?.features.custom_types
         ? (registryConfig.custom_types ?? [])
         : [];
-      const customResponses = await Promise.all(
-        customTypes.map((t) =>
-          axios
-            .get(`/api/custom/${t.name}?limit=2000`)
-            .catch(() => ({ data: { records: [] } })),
-        ),
+      const customPromises = customTypes.map((t) =>
+        axios.get(`/api/custom/${t.name}?limit=1000`).catch((err) => {
+          // Treat as zero records so one stale type doesn't blank the sidebar.
+          // Log so a real failure (auth, 422, 5xx) is visible rather than
+          // silently zeroed out.
+          console.error(`Failed to fetch custom records for "${t.name}":`, err);
+          return { data: { records: [] } };
+        }),
       );
-      const customRecords = customResponses.flatMap(
-        (res) => res.data?.records ?? [],
-      );
+
+      const [coreResponses, customResponses] = await Promise.all([
+        Promise.all(fetchPromises),
+        Promise.all(customPromises),
+      ]);
+      const [serversResponse, agentsResponse, skillsResponse] = coreResponses;
+
+      const customByType: CustomTypeRecords[] = customTypes.map((t, i) => ({
+        name: t.name,
+        displayName: t.display_name,
+        records: customResponses[i].data?.records ?? [],
+      }));
+      setCustomRecordsByType(customByType);
+      const customRecords = customByType.flatMap((ct) => ct.records);
 
       // The API returns {"servers": [...]}
       const responseData = serversResponse.data || {};
@@ -316,6 +344,7 @@ export const ServerStatsProvider: React.FC<ServerStatsProviderProps> = ({ childr
       setError(err.response?.data?.detail || 'Failed to fetch data');
       setServers([]);
       setAgents([]);
+      setCustomRecordsByType([]);
       setStats({ total: 0, enabled: 0, disabled: 0, withIssues: 0 });
     } finally {
       setLoading(false);
@@ -330,6 +359,7 @@ export const ServerStatsProvider: React.FC<ServerStatsProviderProps> = ({ childr
     stats,
     servers,
     agents,
+    customRecordsByType,
     setServers,
     setAgents,
     activeFilter,
