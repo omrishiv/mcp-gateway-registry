@@ -59,6 +59,33 @@ class TestParseGitlabUrl:
         assert nested.encoded_project == "g%2Fsub%2Fr"
         assert root.file_dir == ""
 
+    def test_parses_self_hosted_without_gitlab_in_hostname(self):
+        """Should parse a /-/raw/ URL from a self-hosted instance without 'gitlab' in name."""
+        url = "https://code.internal.corp/team/project/-/raw/develop/skills/jira/SKILL.md"
+
+        parts = parse_gitlab_url(url)
+
+        assert parts is not None
+        assert parts.base == "https://code.internal.corp"
+        assert parts.project == "team/project"
+        assert parts.ref == "develop"
+        assert parts.filepath == "skills/jira/SKILL.md"
+
+    def test_parses_api_v4_url_from_self_hosted_without_gitlab_in_hostname(self):
+        """Should parse an API v4 URL from a self-hosted instance without 'gitlab' in name."""
+        url = (
+            "https://scm.mycompany.io/api/v4/projects/ops%2Finfra"
+            "/repository/files/skills%2Fdemo%2FSKILL.md/raw?ref=main"
+        )
+
+        parts = parse_gitlab_url(url)
+
+        assert parts is not None
+        assert parts.base == "https://scm.mycompany.io"
+        assert parts.project == "ops/infra"
+        assert parts.ref == "main"
+        assert parts.filepath == "skills/demo/SKILL.md"
+
     @pytest.mark.parametrize(
         "url",
         [

@@ -77,6 +77,34 @@ class TestBuildFetchHeadersGitlab:
         assert fetch_url == url
         assert headers == {}
 
+    def test_self_hosted_gitlab_without_gitlab_in_hostname(self):
+        """Self-hosted GitLab with no 'gitlab' in hostname still translates."""
+        url = "https://code.internal.corp/team/project/-/raw/main/skills/demo/SKILL.md"
+
+        fetch_url, headers = _build_fetch_headers(
+            url, auth_scheme="api_key", auth_credential="glpat-xxx"
+        )
+
+        assert headers == {"PRIVATE-TOKEN": "glpat-xxx"}
+        assert fetch_url == (
+            "https://code.internal.corp/api/v4/projects/team%2Fproject"
+            "/repository/files/skills%2Fdemo%2FSKILL.md/raw?ref=main"
+        )
+
+    def test_self_hosted_gitlab_bearer_without_gitlab_in_hostname(self):
+        """Self-hosted GitLab with bearer auth and no 'gitlab' in hostname."""
+        url = "https://scm.mycompany.io/ops/infra/-/raw/develop/SKILL.md"
+
+        fetch_url, headers = _build_fetch_headers(
+            url, auth_scheme="bearer", auth_credential="token123"
+        )
+
+        assert headers == {"Authorization": "Bearer token123"}
+        assert fetch_url == (
+            "https://scm.mycompany.io/api/v4/projects/ops%2Finfra"
+            "/repository/files/SKILL.md/raw?ref=develop"
+        )
+
     def test_gitlab_url_with_unrecognised_shape_falls_through(self):
         # Contains "gitlab" but is not a /-/raw/ or API v4 file URL,
         # so translate_gitlab_to_api_url returns None and fetch_url
@@ -130,6 +158,24 @@ class TestResolveTreeApiGitlab:
             "?path=skills%2Fdemo&ref=main&recursive=true&per_page=100"
         )
 
+    def test_self_hosted_gitlab_without_gitlab_in_hostname(self):
+        """Self-hosted GitLab without 'gitlab' in hostname resolves tree URL."""
+        skill_md_url = (
+            "https://code.internal.corp/team/project/-/raw/main/skills/demo/SKILL.md"
+        )
+
+        result = _resolve_tree_api(skill_md_url)
+
+        assert result is not None
+        tree_url, project_encoded, ref, skill_dir = result
+        assert project_encoded == "team%2Fproject"
+        assert ref == "main"
+        assert skill_dir == "skills/demo"
+        assert tree_url == (
+            "https://code.internal.corp/api/v4/projects/team%2Fproject/repository/tree"
+            "?path=skills%2Fdemo&ref=main&recursive=true&per_page=100"
+        )
+
     def test_gitlab_skill_md_at_repo_root_falls_through_to_github_branch(self):
         # translate_gitlab_tree_api_url returns None for root-level files,
         # so the function continues to the GitHub matcher which then also
@@ -159,6 +205,48 @@ class TestResolveTreeApiGitlab:
 
 # =============================================================================
 # Parametrised non-GitLab auth schemes (kept short — for regression only)
+# =============================================================================
+
+
+# =============================================================================
+# _append_page_param helper
+# =============================================================================
+
+
+class TestAppendPageParam:
+    """Tests for the _append_page_param URL helper."""
+
+    def test_appends_page_to_url_with_existing_params(self):
+        from registry.services.skill_service import _append_page_param
+
+        url = "https://host/api/v4/projects/x/repository/tree?path=a&ref=main&recursive=true&per_page=100"
+
+        result = _append_page_param(url, "2")
+
+        assert result == url + "&page=2"
+
+    def test_replaces_existing_page_param(self):
+        from registry.services.skill_service import _append_page_param
+
+        url = "https://host/api/tree?path=a&ref=main&page=2&per_page=100"
+
+        result = _append_page_param(url, "3")
+
+        assert "page=3" in result
+        assert "page=2" not in result
+
+    def test_appends_page_to_url_without_query_string(self):
+        from registry.services.skill_service import _append_page_param
+
+        url = "https://host/api/tree"
+
+        result = _append_page_param(url, "1")
+
+        assert result == "https://host/api/tree?page=1"
+
+
+# =============================================================================
+# Parametrised non-GitLab auth schemes (kept short - for regression only)
 # =============================================================================
 
 
