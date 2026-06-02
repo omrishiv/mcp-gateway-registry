@@ -19,6 +19,7 @@ import {
 } from '../types/virtualServer';
 import VirtualServerForm from '../components/VirtualServerForm';
 import DiscoverTab from '../components/DiscoverTab';
+import CustomEntityTab from '../components/CustomEntityTab';
 import axios from 'axios';
 import { getBaseURL } from '../utils/basePath';
 import {
@@ -262,8 +263,16 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
   const [agentApiToken, setAgentApiToken] = useState<string | null>(null);
 
-  // View filter state
-  const [viewFilter, setViewFilter] = useState<'discover' | 'servers' | 'agents' | 'skills' | 'virtual' | 'external'>('discover');
+  // View filter state. Custom entity types use a dynamic `custom:{name}` value.
+  type ViewFilter =
+    | 'discover'
+    | 'servers'
+    | 'agents'
+    | 'skills'
+    | 'virtual'
+    | 'external'
+    | `custom:${string}`;
+  const [viewFilter, setViewFilter] = useState<ViewFilter>('discover');
 
   // Pagination state (per entity type)
   const PAGE_SIZE = 50;
@@ -291,6 +300,14 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     }
     if (viewFilter === 'servers' && registryConfig?.features.mcp_servers === false) {
       setViewFilter('discover');
+    }
+    // A custom-type tab whose type is no longer in config (admin deleted it).
+    if (viewFilter.startsWith('custom:')) {
+      const typeName = viewFilter.slice('custom:'.length);
+      const exists = (registryConfig?.custom_types ?? []).some((t) => t.name === typeName);
+      if (registryConfig && !exists) {
+        setViewFilter('discover');
+      }
     }
   }, [viewFilter, registryConfig]);
 
@@ -1052,6 +1069,13 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     },
     [semanticSectionVisible]
   );
+
+  // Derived: the active custom type (name + display label), or null for built-in tabs.
+  const currentCustomType = useMemo(() => {
+    if (!viewFilter.startsWith('custom:')) return null;
+    const typeName = viewFilter.slice('custom:'.length);
+    return (registryConfig?.custom_types ?? []).find((t) => t.name === typeName) ?? null;
+  }, [viewFilter, registryConfig]);
 
   // Notify Layout to refresh the sidebar tag list after data changes
   const notifyDataChanged = useCallback(() => {
@@ -2874,9 +2898,26 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                 External Registries
               </button>
             )}
+            {registryConfig?.features.custom_types &&
+              (registryConfig?.custom_types ?? []).map((ct) => {
+                const filter = `custom:${ct.name}` as const;
+                return (
+                  <button
+                    key={ct.name}
+                    onClick={() => handleChangeViewFilter(filter)}
+                    className={`px-4 py-2 text-sm font-medium whitespace-nowrap transition-colors border-b-2 ${
+                      viewFilter === filter
+                        ? 'border-purple-500 text-purple-600 dark:text-purple-400'
+                        : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+                    }`}
+                  >
+                    {ct.display_name}
+                  </button>
+                );
+              })}
           </div>
 
-          {viewFilter !== 'discover' && (
+          {viewFilter !== 'discover' && !currentCustomType && (
           <>
           {/* Search Bar and Refresh Button */}
           <div className="flex gap-4 items-center">
@@ -2964,7 +3005,16 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
 
         {/* Scrollable Content Area */}
         <div className="flex-1 overflow-y-auto min-h-0 space-y-10">
-          {viewFilter === 'discover' ? (
+          {currentCustomType ? (
+            <CustomEntityTab
+              key={currentCustomType.name}
+              typeName={currentCustomType.name}
+              displayName={currentCustomType.display_name}
+              user={user}
+              selectedTags={selectedTags}
+              onShowToast={showToast}
+            />
+          ) : viewFilter === 'discover' ? (
             <DiscoverTab
               servers={filteredServers}
               agents={filteredAgents}
