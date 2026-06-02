@@ -3018,10 +3018,10 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
             <DiscoverTab
               servers={filteredServers}
               agents={filteredAgents}
-              skills={skills}
-              virtualServers={virtualServers}
-              externalServers={externalServers}
-              externalAgents={externalAgents}
+              skills={filteredSkills}
+              virtualServers={filteredVirtualServers}
+              externalServers={filteredExternalServers}
+              externalAgents={filteredExternalAgents}
               loading={loading || skillsLoading || virtualServersLoading}
               onServerToggle={handleToggleServer}
               onServerEdit={handleEditServer}
