@@ -869,13 +869,13 @@ Our development roadmap is organized into release milestones with clear delivera
 |-----------|----------|--------|------------|
 | **1.24.0** | 100% | Complete (May 2026) | Federation 2.0, skills phase 1. See [release-notes/1.24.0.md](release-notes/1.24.0.md). |
 | **1.24.1** | 100% (21/21) | Complete (May 2026) | [#1042 - Server-side OAuth session store](https://github.com/agentic-community/mcp-gateway-registry/issues/971), [#1061 - CVE-2026-4438 (glibc) remediation](https://github.com/agentic-community/mcp-gateway-registry/issues/1061), [#1044 - Nginx config race fix](https://github.com/agentic-community/mcp-gateway-registry/issues/1044), [#1056 - Operations runbooks](https://github.com/agentic-community/mcp-gateway-registry/issues/1056), [#1066 - HealthStatus enum sync](https://github.com/agentic-community/mcp-gateway-registry/issues/1066) and 16 more. See [release-notes/1.24.1.md](release-notes/1.24.1.md). |
-| **1.24.2** | In progress | Planned | [#997 - Stress test (100/500/1000 entities)](https://github.com/agentic-community/mcp-gateway-registry/issues/997), [#1072 - Nginx reload lock test flake](https://github.com/agentic-community/mcp-gateway-registry/issues/1072) |
-| **1.25.0 - Registry Hardening & Observability** | 0% (0/9) | Planned | [#867 - Prometheus /metrics endpoint](https://github.com/agentic-community/mcp-gateway-registry/issues/867), [#913 - MCP registration deduplication](https://github.com/agentic-community/mcp-gateway-registry/issues/913), [#956 - Agent-card PATCH + async batch](https://github.com/agentic-community/mcp-gateway-registry/issues/956), [#1020 - mcpgw to airegistry-tools rename](https://github.com/agentic-community/mcp-gateway-registry/issues/1020), [#1063 - CDK deployment](https://github.com/agentic-community/mcp-gateway-registry/issues/1063), [#844 - Card dependency management](https://github.com/agentic-community/mcp-gateway-registry/issues/844) and 3 more |
-| **1.26.0 - Coding-Assistant OAuth Integration** | 0% (0/8) | Planned | [#988 - Umbrella issue](https://github.com/agentic-community/mcp-gateway-registry/issues/988): PRM + AS metadata + WWW-Authenticate ([#989](https://github.com/agentic-community/mcp-gateway-registry/issues/989)), Entra v1 scope pass-through ([#990](https://github.com/agentic-community/mcp-gateway-registry/issues/990)), RFC 8707 resource enforcement ([#991](https://github.com/agentic-community/mcp-gateway-registry/issues/991)), CIMD publisher/consumer ([#992](https://github.com/agentic-community/mcp-gateway-registry/issues/992), [#993](https://github.com/agentic-community/mcp-gateway-registry/issues/993)), ID-JAG receiver ([#994](https://github.com/agentic-community/mcp-gateway-registry/issues/994)), no-DCR decision doc ([#995](https://github.com/agentic-community/mcp-gateway-registry/issues/995)) |
-| **1.27.0 - A2A Gateway & Registry Copilot** | 0% (0/2) | Planned | [#847 - A2A reverse proxy gateway](https://github.com/agentic-community/mcp-gateway-registry/issues/847), [#744 - Registry Copilot embedded chat](https://github.com/agentic-community/mcp-gateway-registry/issues/744) |
-| **Parking Lot** | Backlog | Backlog | 24 open issues awaiting prioritization |
+| **1.24.4** | 78% (14/18) | In progress (Jun 2026) | [#1122 - Native OpenTelemetry metrics](https://github.com/agentic-community/mcp-gateway-registry/issues/1122), [#1157 - RRF hybrid search scoring](https://github.com/agentic-community/mcp-gateway-registry/issues/1157), [#1155 - search_registry tool](https://github.com/agentic-community/mcp-gateway-registry/issues/1155), [#1160 - per-entity vector search](https://github.com/agentic-community/mcp-gateway-registry/issues/1160), [#1135 - Pre-built ECR images for Terraform](https://github.com/agentic-community/mcp-gateway-registry/issues/1135), [#1128 - GitLab private repo support](https://github.com/agentic-community/mcp-gateway-registry/issues/1128), [#1127 - PingFederate IdP](https://github.com/agentic-community/mcp-gateway-registry/issues/1127) and 4 more |
+| **1.24.5 - Registry Hardening & Observability** | 0% (0/7) | Planned (Jun 6) | [#1134 - Secrets Manager for ECS env vars](https://github.com/agentic-community/mcp-gateway-registry/issues/1134), [#1101 - MCP proxy session affinity](https://github.com/agentic-community/mcp-gateway-registry/issues/1101), [#1063 - CDK deployment](https://github.com/agentic-community/mcp-gateway-registry/issues/1063), [#862 - CDK deployment support](https://github.com/agentic-community/mcp-gateway-registry/issues/862), [#844 - Card dependency management](https://github.com/agentic-community/mcp-gateway-registry/issues/844) and 2 more |
+| **1.25.0 - Coding-Assistant OAuth Integration** | 13% (1/8) | In progress (Jun 9) | [#988 - Umbrella issue](https://github.com/agentic-community/mcp-gateway-registry/issues/988): PRM + AS metadata + WWW-Authenticate ([#989](https://github.com/agentic-community/mcp-gateway-registry/issues/989) done), Entra v1 scope pass-through ([#990](https://github.com/agentic-community/mcp-gateway-registry/issues/990)), RFC 8707 resource enforcement ([#991](https://github.com/agentic-community/mcp-gateway-registry/issues/991)), CIMD publisher/consumer ([#992](https://github.com/agentic-community/mcp-gateway-registry/issues/992), [#993](https://github.com/agentic-community/mcp-gateway-registry/issues/993)), ID-JAG receiver ([#994](https://github.com/agentic-community/mcp-gateway-registry/issues/994)), no-DCR decision doc ([#995](https://github.com/agentic-community/mcp-gateway-registry/issues/995)) |
+| **1.27.0 - A2A Gateway & Registry Copilot** | 0% (0/2) | Planned (Jun 12) | [#847 - A2A reverse proxy gateway](https://github.com/agentic-community/mcp-gateway-registry/issues/847), [#744 - Registry Copilot embedded chat](https://github.com/agentic-community/mcp-gateway-registry/issues/744) |
+| **Parking Lot** | Backlog | Backlog | 25 open issues awaiting prioritization |
 
-**Status Legend:** Complete, Planned, Backlog
+**Status Legend:** Complete, In progress, Planned, Backlog
 
 ---
 
@@ -883,16 +883,13 @@ Our development roadmap is organized into release milestones with clear delivera
 
 The following major features span multiple milestones and represent significant architectural improvements:
 
-- **[#988 - Coding-Assistant OAuth Integration](https://github.com/agentic-community/mcp-gateway-registry/issues/988)** **PLANNED** (1.26.0)
-  Umbrella for the seven-phase OAuth 2.1 / RFC 8707 / CIMD / ID-JAG implementation that brings native coding-assistant token flows to the gateway.
+- **[#988 - Coding-Assistant OAuth Integration](https://github.com/agentic-community/mcp-gateway-registry/issues/988)** **IN PROGRESS** (1.25.0)
+  Umbrella for the seven-phase OAuth 2.1 / RFC 8707 / CIMD / ID-JAG implementation that brings native coding-assistant token flows to the gateway. Phase 1 (PRM + AS metadata) complete.
 
-- **[#867 - Prometheus Metrics Endpoint](https://github.com/agentic-community/mcp-gateway-registry/issues/867)** **PLANNED** (1.25.0)
-  Expose a `/metrics` endpoint on the registry for in-process Prometheus counters.
-
-- **[#1063 - CDK-based Deployment](https://github.com/agentic-community/mcp-gateway-registry/issues/1063)** **PLANNED** (1.25.0)
+- **[#1063 - CDK-based Deployment](https://github.com/agentic-community/mcp-gateway-registry/issues/1063)** **PLANNED** (1.24.5)
   CDK deployment option alongside the existing Terraform module for AWS-native installs.
 
-- **[#1020 - Rename `mcpgw` to `airegistry-tools`](https://github.com/agentic-community/mcp-gateway-registry/issues/1020)** **PLANNED** (1.25.0)
+- **[#1020 - Rename `mcpgw` to `airegistry-tools`](https://github.com/agentic-community/mcp-gateway-registry/issues/1020)** **BACKLOG**
   Naming alignment to make the proxy server's role clearer.
 
 - **[#847 - A2A Reverse Proxy Gateway](https://github.com/agentic-community/mcp-gateway-registry/issues/847)** **PLANNED** (1.27.0)
