@@ -38,6 +38,11 @@ from .custom_entity_errors import (
     UnknownCustomTypeError,
 )
 from .custom_entity_validator import validate_attributes
+from .rating_service import (
+    calculate_average_rating,
+    update_rating_details,
+    validate_rating,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -246,6 +251,51 @@ class CustomEntityService:
         if record is None or not _user_can_view(record, user_context):
             raise CustomEntityNotFoundError(path)
         return record
+
+    async def update_rating(
+        self,
+        path: str,
+        username: str,
+        rating: int,
+        user_context: dict,
+    ) -> float:
+        """Add/update a user's rating on a record; returns the new average.
+
+        Any user who can VIEW the record may rate it (mirrors servers/agents).
+        Raises CustomEntityNotFoundError (404) if the record is missing or not
+        viewable, ValueError if the rating is out of range.
+        """
+        validate_rating(rating)
+        existing = await self._get_entities().get(path)
+        if existing is None or not _user_can_view(existing, user_context):
+            raise CustomEntityNotFoundError(path)  # 404 — don't disclose existence
+
+        updated_details, _ = update_rating_details(
+            list(existing.rating_details), username, rating
+        )
+        average = calculate_average_rating(updated_details)
+        updated = await self._get_entities().update(
+            path,
+            {"rating_details": updated_details, "num_stars": average},
+        )
+        if updated is None:
+            raise CustomEntityNotFoundError(path)  # concurrent delete
+        logger.info(f"Rated custom record {path}: {rating} by {username} (avg {average:.2f})")
+        return average
+
+    async def get_rating(
+        self,
+        path: str,
+        user_context: dict,
+    ) -> dict:
+        """Return {num_stars, rating_details} for a viewable record (404 otherwise)."""
+        record = await self._get_entities().get(path)
+        if record is None or not _user_can_view(record, user_context):
+            raise CustomEntityNotFoundError(path)
+        return {
+            "num_stars": record.num_stars,
+            "rating_details": record.rating_details,
+        }
 
     async def list_records(
         self,

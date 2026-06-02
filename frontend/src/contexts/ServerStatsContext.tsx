@@ -149,6 +149,22 @@ export const ServerStatsProvider: React.FC<ServerStatsProviderProps> = ({ childr
 
       const [serversResponse, agentsResponse, skillsResponse] = await Promise.all(fetchPromises);
 
+      // Fetch custom entity records (one call per type) so the sidebar stats
+      // reflect them too. Each type 404s only if deleted mid-session.
+      const customTypes = registryConfig?.features.custom_types
+        ? (registryConfig.custom_types ?? [])
+        : [];
+      const customResponses = await Promise.all(
+        customTypes.map((t) =>
+          axios
+            .get(`/api/custom/${t.name}?limit=2000`)
+            .catch(() => ({ data: { records: [] } })),
+        ),
+      );
+      const customRecords = customResponses.flatMap(
+        (res) => res.data?.records ?? [],
+      );
+
       // The API returns {"servers": [...]}
       const responseData = serversResponse.data || {};
       const serversList = responseData.servers || [];
@@ -276,6 +292,17 @@ export const ServerStatsProvider: React.FC<ServerStatsProviderProps> = ({ childr
           // Skills don't have health status, so no withIssues increment
         });
       }
+
+      // Include custom entity records. They have no health status and no
+      // disable toggle in the UI, so each record counts as enabled.
+      customRecords.forEach((record: any) => {
+        total++;
+        if (record.is_enabled !== false) {
+          enabled++;
+        } else {
+          disabled++;
+        }
+      });
 
       const newStats = {
         total,

@@ -219,6 +219,11 @@ class CustomEntityRecord(BaseModel):
     owner: str | None = None
     tags: list[str] = Field(default_factory=list)
     is_enabled: bool = True
+    num_stars: float = Field(default=0.0, ge=0.0, le=5.0, description="Average user rating")
+    rating_details: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Per-user ratings ([{user, rating}], rotating buffer)",
+    )
     created_at: datetime = Field(default_factory=_utc_now)
     updated_at: datetime = Field(default_factory=_utc_now)
 

@@ -16,6 +16,13 @@ const AI_REGISTRY_TOOLS_PATH = '/airegistry-tools/';
 const MAX_FEATURED = 4;
 
 
+/** Per-custom-type count shown in the Discover summary line. */
+export interface CustomEntityCount {
+  name: string;
+  displayName: string;
+  count: number;
+}
+
 interface DiscoverTabProps {
   servers: Server[];
   agents: Agent[];
@@ -23,6 +30,7 @@ interface DiscoverTabProps {
   virtualServers: VirtualServerInfo[];
   externalServers: Server[];
   externalAgents: Agent[];
+  customCounts?: CustomEntityCount[];
   loading: boolean;
   onServerToggle: (path: string, enabled: boolean) => void;
   onServerEdit?: (server: Server) => void;
@@ -132,7 +140,8 @@ function _countFragment(
 function _buildSummaryText(
   totals: { servers: number; virtual: number; agents: number; skills: number; external: number },
   matched: { servers: number; virtual: number; agents: number; skills: number; external: number },
-  isSearching: boolean
+  isSearching: boolean,
+  customCounts: CustomEntityCount[] = []
 ): string {
   const parts: string[] = [];
 
@@ -151,6 +160,17 @@ function _buildSummaryText(
       parts.push(_countFragment(cat.match, cat.label));
     } else if (!isSearching && cat.total > 0) {
       parts.push(_countFragment(cat.total, cat.label));
+    }
+  }
+
+  // Custom types only contribute to the default (non-searching) summary; the
+  // search/semantic path filters built-in entities only. Use the type's
+  // display name verbatim (already human-readable) rather than pluralizing.
+  if (!isSearching) {
+    for (const ct of customCounts) {
+      if (ct.count > 0) {
+        parts.push(`${ct.count} ${ct.displayName}`);
+      }
     }
   }
 
@@ -276,6 +296,7 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
   virtualServers,
   externalServers,
   externalAgents,
+  customCounts = [],
   loading,
   onServerToggle,
   onServerEdit,
@@ -393,7 +414,8 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
             {_buildSummaryText(
               { servers: totalServers, virtual: totalVirtual, agents: totalAgents, skills: totalSkills, external: totalExternal },
               { servers: matchedServers, virtual: matchedVirtual, agents: matchedAgents, skills: matchedSkills, external: matchedExternal },
-              searchTerm.length > 0
+              searchTerm.length > 0,
+              customCounts
             )}
             {searchTerm && (
               <span className="text-gray-600 dark:text-gray-600">

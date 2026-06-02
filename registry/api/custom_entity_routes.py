@@ -19,6 +19,7 @@ from fastapi import (
     Request,
     status,
 )
+from pydantic import BaseModel
 
 from ..audit.context import set_audit_action
 from ..auth.dependencies import nginx_proxied_auth
@@ -52,6 +53,12 @@ UUID_PARAM = Path(
     ...,
     pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
 )
+
+
+class RatingRequest(BaseModel):
+    """Body for POST /api/custom/{type}/{uuid}/rate."""
+
+    rating: int
 
 
 def _get_service() -> CustomEntityService:
@@ -197,3 +204,48 @@ async def delete_custom_entity(
         resource_id=path,
         description=f"Delete {type} record {path}",
     )
+
+
+@router.post("/{type}/{uuid}/rate", summary="Rate a custom record")
+async def rate_custom_entity(
+    http_request: Request,
+    rating_request: RatingRequest,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    type: str = TYPE_PARAM,
+    uuid: str = UUID_PARAM,
+) -> dict:
+    """Add or update the caller's 1-5 rating on a record they can view."""
+    service = _get_service()
+    path = f"/{type}/{uuid}"
+    set_audit_action(
+        http_request,
+        "rate",
+        "custom_entity",
+        resource_id=path,
+        description=f"Rate {type} record with {rating_request.rating}",
+    )
+    try:
+        average = await service.update_rating(
+            path, user_context["username"], rating_request.rating, user_context
+        )
+    except CustomEntityNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    return {"message": "Rating added successfully", "average_rating": average}
+
+
+@router.get("/{type}/{uuid}/rating", summary="Get a custom record's rating")
+async def get_custom_entity_rating(
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    type: str = TYPE_PARAM,
+    uuid: str = UUID_PARAM,
+) -> dict:
+    """Return {num_stars, rating_details} for a record the caller can view."""
+    service = _get_service()
+    path = f"/{type}/{uuid}"
+    try:
+        return await service.get_rating(path, user_context)
+    except CustomEntityNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))

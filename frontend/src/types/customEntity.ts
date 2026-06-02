@@ -50,6 +50,8 @@ export interface CustomEntityRecord {
   owner?: string | null;
   tags: string[];
   is_enabled: boolean;
+  num_stars: number;
+  rating_details: Array<{ user: string; rating: number }>;
   created_at: string;
   updated_at: string;
   attributes: Record<string, unknown>;

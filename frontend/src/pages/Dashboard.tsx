@@ -20,6 +20,7 @@ import {
 import VirtualServerForm from '../components/VirtualServerForm';
 import DiscoverTab from '../components/DiscoverTab';
 import CustomEntityTab from '../components/CustomEntityTab';
+import { useCustomEntityCounts } from '../hooks/useCustomEntityCounts';
 import axios from 'axios';
 import { getBaseURL } from '../utils/basePath';
 import {
@@ -179,6 +180,9 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
   const { virtualServer: editingVirtualServer, loading: editingVirtualServerLoading } = useVirtualServer(editingVirtualServerPath);
   const { user } = useAuth();
   const { config: registryConfig } = useRegistryConfig();
+  const { byType: customEntityRecordsByType } = useCustomEntityCounts(
+    registryConfig?.features.custom_types ? (registryConfig.custom_types ?? []) : [],
+  );
   const [searchTerm, setSearchTerm] = useState('');
   const [committedQuery, setCommittedQuery] = useState('');
 
@@ -684,6 +688,18 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     const lowerTags = entityTags.map(t => t.toLowerCase());
     return selectedTags.every(st => lowerTags.includes(st.toLowerCase()));
   }, [selectedTags]);
+
+  // Per-type custom entity counts for the Discover summary, respecting the
+  // sidebar tag filter the same way the built-in categories do.
+  const customCounts = useMemo(
+    () =>
+      customEntityRecordsByType.map((ct) => ({
+        name: ct.name,
+        displayName: ct.displayName,
+        count: ct.records.filter((r) => matchesSelectedTags(r.tags)).length,
+      })),
+    [customEntityRecordsByType, matchesSelectedTags],
+  );
 
   // Parse #tag tokens from the search term for local filtering
   const parsedSearch = useMemo(() => {
@@ -2991,6 +3007,11 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                     {registryConfig?.features.skills !== false && (
                       <>{filteredSkills.length} skills</>
                     )}
+                    {customCounts.map((ct) => (
+                      <React.Fragment key={ct.name}>
+                        , {ct.count} {ct.displayName}
+                      </React.Fragment>
+                    ))}
                   </>
                 )}
               </p>
@@ -3012,6 +3033,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
               displayName={currentCustomType.display_name}
               user={user}
               selectedTags={selectedTags}
+              authToken={agentApiToken}
               onShowToast={showToast}
             />
           ) : viewFilter === 'discover' ? (
@@ -3022,6 +3044,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
               virtualServers={filteredVirtualServers}
               externalServers={filteredExternalServers}
               externalAgents={filteredExternalAgents}
+              customCounts={customCounts}
               loading={loading || skillsLoading || virtualServersLoading}
               onServerToggle={handleToggleServer}
               onServerEdit={handleEditServer}

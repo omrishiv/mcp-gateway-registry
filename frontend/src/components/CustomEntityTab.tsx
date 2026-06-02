@@ -1,5 +1,10 @@
 import React, { useState } from 'react';
-import { PlusIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
+import {
+  PlusIcon,
+  ArrowPathIcon,
+  MagnifyingGlassIcon,
+  XMarkIcon,
+} from '@heroicons/react/24/outline';
 import { CustomEntityRecord } from '../types/customEntity';
 import { useCustomEntities, uuidFromPath } from '../hooks/useCustomEntities';
 import { labelFor } from '../utils/humanize';
@@ -18,6 +23,7 @@ interface CustomEntityTabProps {
   displayName: string;
   user: CurrentUser | null;
   selectedTags?: string[];
+  authToken?: string | null;
   onShowToast?: (message: string, type: 'success' | 'error') => void;
 }
 
@@ -31,6 +37,7 @@ const CustomEntityTab: React.FC<CustomEntityTabProps> = ({
   displayName,
   user,
   selectedTags = [],
+  authToken,
   onShowToast,
 }) => {
   const {
@@ -49,13 +56,14 @@ const CustomEntityTab: React.FC<CustomEntityTabProps> = ({
   const [viewing, setViewing] = useState<CustomEntityRecord | null>(null);
   const [deleting, setDeleting] = useState<CustomEntityRecord | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
 
   const canModify = (record: CustomEntityRecord): boolean =>
     !!user?.is_admin || record.owner === user?.username;
 
   // Client-side tag filter, matching the case-insensitive "all selected tags"
   // semantics used by the server/agent/skill tabs in Dashboard.
-  const visibleRecords =
+  const tagFiltered =
     selectedTags.length === 0
       ? records
       : records.filter((record) => {
@@ -63,6 +71,19 @@ const CustomEntityTab: React.FC<CustomEntityTabProps> = ({
           const lowerTags = record.tags.map((t) => t.toLowerCase());
           return selectedTags.every((st) => lowerTags.includes(st.toLowerCase()));
         });
+
+  // Text search over name, description, tags, and stringified attribute values.
+  const query = searchTerm.trim().toLowerCase();
+  const visibleRecords = query
+    ? tagFiltered.filter((record) => {
+        if (record.name.toLowerCase().includes(query)) return true;
+        if ((record.description || '').toLowerCase().includes(query)) return true;
+        if (record.tags.some((t) => t.toLowerCase().includes(query))) return true;
+        return Object.values(record.attributes).some((v) =>
+          String(v ?? '').toLowerCase().includes(query),
+        );
+      })
+    : tagFiltered;
 
   const openCreate = () => {
     setEditing(null);
@@ -122,26 +143,52 @@ const CustomEntityTab: React.FC<CustomEntityTabProps> = ({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
-            {displayName}
-          </h2>
-          {descriptor.description && (
-            <p className="text-sm text-gray-500 dark:text-gray-400">
-              {descriptor.description}
-            </p>
+      {/* Search Bar and Create Button (mirrors the built-in tabs' layout) */}
+      <div className="flex gap-4 items-center">
+        <div className="relative flex-1">
+          <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+            <MagnifyingGlassIcon className="h-5 w-5 text-gray-400" />
+          </div>
+          <input
+            type="text"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder={`Search ${displayName}…`}
+            className="input pl-10 pr-9 w-full"
+          />
+          {searchTerm && (
+            <button
+              type="button"
+              onClick={() => setSearchTerm('')}
+              className="absolute inset-y-0 right-0 flex items-center pr-3
+                text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+              aria-label="Clear search"
+            >
+              <XMarkIcon className="h-4 w-4" />
+            </button>
           )}
         </div>
+
         <button
           type="button"
           onClick={openCreate}
-          className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white
-                     bg-teal-600 rounded-lg hover:bg-teal-700 transition-colors"
+          className="btn-primary flex items-center space-x-2 flex-shrink-0"
         >
           <PlusIcon className="h-4 w-4" />
-          Create
+          <span>Create</span>
         </button>
+      </div>
+
+      {/* Results count */}
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-gray-500 dark:text-gray-300">
+          Showing {visibleRecords.length} {displayName}
+        </p>
+        {descriptor.description && (
+          <p className="text-xs text-gray-400 dark:text-gray-500">
+            {descriptor.description}
+          </p>
+        )}
       </div>
 
       {error && (
@@ -151,10 +198,14 @@ const CustomEntityTab: React.FC<CustomEntityTabProps> = ({
       )}
 
       {visibleRecords.length === 0 ? (
-        selectedTags.length > 0 ? (
+        selectedTags.length > 0 || query ? (
           <div className="text-center py-16 border border-dashed border-gray-300 dark:border-gray-700 rounded-xl">
             <p className="text-gray-500 dark:text-gray-400">
-              No {displayName} match the selected tags.
+              No {displayName} match your {query && selectedTags.length > 0
+                ? 'search and selected tags'
+                : query
+                ? 'search'
+                : 'selected tags'}.
             </p>
           </div>
         ) : (
@@ -184,6 +235,8 @@ const CustomEntityTab: React.FC<CustomEntityTabProps> = ({
               onView={setViewing}
               onEdit={openEdit}
               onDelete={setDeleting}
+              authToken={authToken}
+              onShowToast={onShowToast}
             />
           ))}
         </div>

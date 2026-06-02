@@ -13,6 +13,7 @@ import {
   CustomTypeDescriptor,
 } from '../types/customEntity';
 import { labelFor } from '../utils/humanize';
+import StarRatingWidget from './StarRatingWidget';
 
 interface CustomEntityCardProps {
   descriptor: CustomTypeDescriptor;
@@ -21,6 +22,8 @@ interface CustomEntityCardProps {
   onView: (record: CustomEntityRecord) => void;
   onEdit: (record: CustomEntityRecord) => void;
   onDelete: (record: CustomEntityRecord) => void;
+  authToken?: string | null;
+  onShowToast?: (message: string, type: 'success' | 'error') => void;
 }
 
 /** Render an attribute value as a TEXT NODE only (no HTML injection). */
@@ -68,6 +71,8 @@ const CustomEntityCard: React.FC<CustomEntityCardProps> = ({
   onView,
   onEdit,
   onDelete,
+  authToken,
+  onShowToast,
 }) => {
   const listFields = descriptor.fields.filter((f) => f.show_in_list);
 
@@ -126,7 +131,16 @@ const CustomEntityCard: React.FC<CustomEntityCardProps> = ({
         </div>
       )}
 
-      <div className="flex items-center justify-end gap-1 mt-auto pt-2 border-t border-gray-100 dark:border-gray-700">
+      <div className="flex items-center justify-between gap-1 mt-auto pt-2 border-t border-gray-100 dark:border-gray-700">
+        <StarRatingWidget
+          resourceType="custom"
+          path={record.path}
+          initialRating={record.num_stars}
+          initialCount={record.rating_details?.length ?? 0}
+          authToken={authToken}
+          onShowToast={onShowToast}
+        />
+        <div className="flex items-center gap-1">
         <button
           type="button"
           onClick={() => onView(record)}
@@ -155,6 +169,7 @@ const CustomEntityCard: React.FC<CustomEntityCardProps> = ({
             </button>
           </>
         )}
+        </div>
       </div>
     </div>
   );
