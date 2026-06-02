@@ -643,6 +643,33 @@ async def get_full_config(
 # ---------------------------------------------------------------------------
 
 
+def _humanize(name: str) -> str:
+    """Turn a custom-type slug (e.g. "n8n_workflow") into a display label."""
+    return name.replace("-", " ").replace("_", " ").title()
+
+
+async def _custom_type_tabs() -> list[dict[str, str]]:
+    """Lightweight tab list ({name, display_name}) for enabled custom types.
+
+    Sourced from the shared in-process descriptor cache (zero Mongo reads).
+    Returns an empty list if the feature is disabled or the lookup fails so
+    the hot config path stays resilient.
+    """
+    if not settings.custom_entity_types_enabled:
+        return []
+    try:
+        from ..repositories.factory import get_custom_entity_service
+
+        descriptors = await get_custom_entity_service().list_types()
+        return [
+            {"name": d.name, "display_name": d.display_name or _humanize(d.name)}
+            for d in descriptors
+        ]
+    except Exception:
+        logger.exception("Failed to load custom-type tabs for /api/config")
+        return []
+
+
 @router.get(
     "",
     summary="Get registry configuration",
@@ -678,7 +705,9 @@ async def get_config() -> dict[str, Any]:
             ),
             "federation": settings.registry_mode == RegistryMode.FULL,
             "gateway_proxy": settings.deployment_mode == DeploymentMode.WITH_GATEWAY,
+            "custom_types": settings.custom_entity_types_enabled,
         },
+        "custom_types": await _custom_type_tabs(),
     }
 
 
