@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, Rea
 import axios from 'axios';
 import { useRegistryConfig } from '../hooks/useRegistryConfig';
 import type { LocalRuntime } from '../types/server';
+import type { CustomEntityRecord, CustomTypeDescriptor } from '../types/customEntity';
 
 interface ServerVersion {
   version: string;
@@ -72,7 +73,9 @@ interface ServerStats {
 export interface CustomTypeRecords {
   name: string;
   displayName: string;
-  records: any[];
+  /** Schema descriptor, needed to render record cards outside the dedicated tab. */
+  descriptor: CustomTypeDescriptor | null;
+  records: CustomEntityRecord[];
 }
 
 interface ServerStatsContextType {
@@ -178,17 +181,35 @@ export const ServerStatsProvider: React.FC<ServerStatsProviderProps> = ({ childr
           return { data: { records: [] } };
         }),
       );
+      // One bulk fetch of every descriptor so Discover can render record cards
+      // (which need the schema) without a per-type round-trip. Falls back to an
+      // empty list — sections then render via the per-tab descriptor fetch.
+      const descriptorsPromise = customTypes.length
+        ? axios
+            .get('/api/custom-types')
+            .catch((err) => {
+              console.error('Failed to fetch custom type descriptors:', err);
+              return { data: { custom_types: [] } };
+            })
+        : Promise.resolve({ data: { custom_types: [] } });
 
-      const [coreResponses, customResponses] = await Promise.all([
+      const [coreResponses, customResponses, descriptorsResponse] = await Promise.all([
         Promise.all(fetchPromises),
         Promise.all(customPromises),
+        descriptorsPromise,
       ]);
       const [serversResponse, agentsResponse, skillsResponse] = coreResponses;
 
+      const descriptorsByName = new Map<string, CustomTypeDescriptor>(
+        ((descriptorsResponse.data?.custom_types ?? []) as CustomTypeDescriptor[]).map(
+          (d) => [d.name, d],
+        ),
+      );
       const customByType: CustomTypeRecords[] = customTypes.map((t, i) => ({
         name: t.name,
         displayName: t.display_name,
-        records: customResponses[i].data?.records ?? [],
+        descriptor: descriptorsByName.get(t.name) ?? null,
+        records: (customResponses[i].data?.records ?? []) as CustomEntityRecord[],
       }));
       setCustomRecordsByType(customByType);
       const customRecords = customByType.flatMap((ct) => ct.records);

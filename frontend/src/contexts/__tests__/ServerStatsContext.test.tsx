@@ -110,6 +110,7 @@ describe('ServerStatsContext custom entities', () => {
       {
         name: 'prompt_template',
         displayName: 'Prompt Templates',
+        descriptor: null,
         records: [
           { path: '/prompt_template/a', name: 'A', is_enabled: true },
           { path: '/prompt_template/b', name: 'B', is_enabled: true },
@@ -118,9 +119,37 @@ describe('ServerStatsContext custom entities', () => {
       {
         name: 'dataset',
         displayName: 'Datasets',
+        descriptor: null,
         records: [{ path: '/dataset/c', name: 'C', is_enabled: false }],
       },
     ]);
+  });
+
+  test('attaches matching descriptors from /api/custom-types', async () => {
+    setConfig([{ name: 'prompt_template', display_name: 'Prompt Templates' }]);
+    const descriptor = {
+      name: 'prompt_template',
+      display_name: 'Prompt Templates',
+      description: null,
+      fields: [],
+      schema_version: 1,
+      created_at: '2026-01-01T00:00:00Z',
+    };
+    mockGetByUrl({
+      '/api/servers': { servers: [] },
+      '/api/agents': { agents: [] },
+      '/api/skills': { skills: [] },
+      '/api/custom-types': { custom_types: [descriptor] },
+      '/api/custom/prompt_template': {
+        records: [{ path: '/prompt_template/a', name: 'A', is_enabled: true }],
+      },
+    });
+
+    const { result } = renderHook(() => useServerStats(), { wrapper });
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.customRecordsByType[0].descriptor).toEqual(descriptor);
   });
 
   test('a failing custom-type fetch is logged and treated as zero records', async () => {
@@ -149,9 +178,10 @@ describe('ServerStatsContext custom entities', () => {
       {
         name: 'good',
         displayName: 'Good',
+        descriptor: null,
         records: [{ path: '/good/a', name: 'A', is_enabled: true }],
       },
-      { name: 'broken', displayName: 'Broken', records: [] },
+      { name: 'broken', displayName: 'Broken', descriptor: null, records: [] },
     ]);
     expect(errorSpy).toHaveBeenCalledWith(
       'Failed to fetch custom records for "broken":',

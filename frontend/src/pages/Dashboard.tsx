@@ -19,7 +19,18 @@ import {
 } from '../types/virtualServer';
 import VirtualServerForm from '../components/VirtualServerForm';
 import DiscoverTab from '../components/DiscoverTab';
+import type { CustomEntitySection } from '../components/DiscoverTab';
 import CustomEntityTab from '../components/CustomEntityTab';
+import CustomEntityForm from '../components/CustomEntityForm';
+import CustomEntityDetail from '../components/CustomEntityDetail';
+import ConfirmModal from '../components/ConfirmModal';
+import { uuidFromPath } from '../hooks/useCustomEntities';
+import type {
+  CustomEntityRecord,
+  CustomEntityCreate,
+  CustomEntityUpdate,
+  CustomTypeDescriptor,
+} from '../types/customEntity';
 import axios from 'axios';
 import { getBaseURL } from '../utils/basePath';
 import {
@@ -685,7 +696,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     return selectedTags.every(st => lowerTags.includes(st.toLowerCase()));
   }, [selectedTags]);
 
-  // Per-type custom entity counts for the Discover summary, respecting the
+  // Per-type custom entity counts for the sidebar summary, respecting the
   // sidebar tag filter the same way the built-in categories do.
   const customCounts = useMemo(
     () =>
@@ -695,6 +706,50 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         count: ct.records.filter((r) => matchesSelectedTags(r.tags)).length,
       })),
     [customEntityRecordsByType, matchesSelectedTags],
+  );
+
+  // Custom-entity modal state for the Discover view. Spans multiple types, so
+  // each carries its own descriptor (the per-tab hook only knows one type).
+  const [customViewing, setCustomViewing] = useState<{
+    descriptor: CustomTypeDescriptor;
+    record: CustomEntityRecord;
+  } | null>(null);
+  const [customEditing, setCustomEditing] = useState<{
+    typeName: string;
+    descriptor: CustomTypeDescriptor;
+    record: CustomEntityRecord | null;
+  } | null>(null);
+  const [customDeleting, setCustomDeleting] = useState<{
+    typeName: string;
+    record: CustomEntityRecord;
+  } | null>(null);
+  const [customDeleteLoading, setCustomDeleteLoading] = useState(false);
+
+  // Build the Discover custom sections: tag-filtered records + descriptor +
+  // per-record view/edit/delete handlers. Only types with a loaded descriptor
+  // can render cards, so descriptor-less types are dropped here.
+  const customSections = useMemo<CustomEntitySection[]>(
+    () =>
+      customEntityRecordsByType
+        .filter((ct) => ct.descriptor)
+        .map((ct) => {
+          const descriptor = ct.descriptor as CustomTypeDescriptor;
+          return {
+            name: ct.name,
+            displayName: ct.displayName,
+            descriptor,
+            records: ct.records.filter((r) => matchesSelectedTags(r.tags)),
+            canModify: (record: CustomEntityRecord) =>
+              !!user?.is_admin || record.owner === user?.username,
+            onView: (record: CustomEntityRecord) =>
+              setCustomViewing({ descriptor, record }),
+            onEdit: (record: CustomEntityRecord) =>
+              setCustomEditing({ typeName: ct.name, descriptor, record }),
+            onDelete: (record: CustomEntityRecord) =>
+              setCustomDeleting({ typeName: ct.name, record }),
+          };
+        }),
+    [customEntityRecordsByType, matchesSelectedTags, user],
   );
 
   // Parse #tag tokens from the search term for local filtering
@@ -1258,6 +1313,40 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
   const hideToast = useCallback(() => {
     setToast(null);
   }, []);
+
+  const handleCustomSave = useCallback(
+    async (body: CustomEntityCreate | CustomEntityUpdate) => {
+      if (!customEditing) return;
+      const { typeName, record } = customEditing;
+      if (record) {
+        await axios.put(`/api/custom/${typeName}/${uuidFromPath(record.path)}`, body);
+        showToast(`Updated ${body.name ?? record.name}`, 'success');
+      } else {
+        await axios.post(`/api/custom/${typeName}`, body);
+        showToast(`Created ${body.name}`, 'success');
+      }
+      setCustomEditing(null);
+      await refreshData();
+    },
+    [customEditing, refreshData, showToast],
+  );
+
+  const handleCustomDelete = useCallback(async () => {
+    if (!customDeleting) return;
+    setCustomDeleteLoading(true);
+    try {
+      await axios.delete(
+        `/api/custom/${customDeleting.typeName}/${uuidFromPath(customDeleting.record.path)}`,
+      );
+      showToast(`Deleted ${customDeleting.record.name}`, 'success');
+      setCustomDeleting(null);
+      await refreshData();
+    } catch (err: any) {
+      showToast(err.response?.data?.detail || 'Failed to delete', 'error');
+    } finally {
+      setCustomDeleteLoading(false);
+    }
+  }, [customDeleting, refreshData, showToast]);
 
   const handleSaveEdit = async () => {
     if (editLoading || !editingServer) return;
@@ -3040,7 +3129,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
               virtualServers={filteredVirtualServers}
               externalServers={filteredExternalServers}
               externalAgents={filteredExternalAgents}
-              customCounts={customCounts}
+              customSections={customSections}
               loading={loading || skillsLoading || virtualServersLoading}
               onServerToggle={handleToggleServer}
               onServerEdit={handleEditServer}
@@ -4237,6 +4326,36 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
           </div>
         </div>
       )}
+
+      {/* Custom entity modals for the Discover view (view / edit / delete) */}
+      {customViewing && (
+        <CustomEntityDetail
+          descriptor={customViewing.descriptor}
+          record={customViewing.record}
+          onClose={() => setCustomViewing(null)}
+        />
+      )}
+
+      {customEditing && (
+        <CustomEntityForm
+          descriptor={customEditing.descriptor}
+          record={customEditing.record}
+          onSave={handleCustomSave}
+          onCancel={() => setCustomEditing(null)}
+        />
+      )}
+
+      <ConfirmModal
+        isOpen={!!customDeleting}
+        onClose={() => setCustomDeleting(null)}
+        onConfirm={handleCustomDelete}
+        title="Delete record"
+        message={`Are you sure you want to delete "${customDeleting?.record.name}"? This cannot be undone.`}
+        confirmLabel="Delete"
+        loadingLabel="Deleting..."
+        isDestructive
+        isLoading={customDeleteLoading}
+      />
 
     </>
   );
