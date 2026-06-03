@@ -84,7 +84,7 @@ jobs:
             HAS_CHANGES="true"
 
             # Parse version changes from uv.lock (TOML-like [[package]] blocks)
-            python3 << 'PYEOF' "$before" "$lock" >> /tmp/changelog_uv.md
+            python3 - "$before" "$lock" << 'PYEOF' >> /tmp/changelog_uv.md
           import sys
           import re
           import json
@@ -149,7 +149,7 @@ jobs:
             fi
             HAS_CHANGES="true"
 
-            python3 << 'PYEOF' "$before" "$lock" >> /tmp/changelog_npm.md
+            python3 - "$before" "$lock" << 'PYEOF' >> /tmp/changelog_npm.md
           import sys
           import json
           import urllib.request
