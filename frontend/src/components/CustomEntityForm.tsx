@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import axios from 'axios';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import {
   CustomEntityCreate,
@@ -261,8 +262,8 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
     setSaving(true);
     try {
       await onSave(payload);
-    } catch (err: any) {
-      const detail = err.response?.data?.detail;
+    } catch (err: unknown) {
+      const detail = axios.isAxiosError(err) ? err.response?.data?.detail : undefined;
       if (Array.isArray(detail)) {
         // Multi-error 400 body: [{ field, message }, ...] — highlight every field.
         const map: Record<string, string> = {};
@@ -272,9 +273,8 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
         setFieldErrors(map);
         setFormError('Please fix the highlighted fields.');
       } else {
-        setFormError(
-          typeof detail === 'string' ? detail : err.message || 'Failed to save record',
-        );
+        const message = err instanceof Error ? err.message : 'Failed to save record';
+        setFormError(typeof detail === 'string' ? detail : message);
       }
     } finally {
       setSaving(false);

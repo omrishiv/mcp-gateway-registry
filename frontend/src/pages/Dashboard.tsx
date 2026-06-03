@@ -676,6 +676,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
   const semanticAgents = semanticResults?.agents ?? [];
   const semanticSkills = semanticResults?.skills ?? [];
   const semanticVirtualServers = semanticResults?.virtual_servers ?? [];
+  const semanticCustom = semanticResults?.custom ?? [];
   const semanticDisplayQuery = semanticResults?.query || committedQuery || searchTerm;
   const semanticSectionVisible = semanticEnabled;
   const shouldShowFallbackGrid =
@@ -686,7 +687,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         semanticTools.length === 0 &&
         semanticAgents.length === 0 &&
         semanticSkills.length === 0 &&
-        semanticVirtualServers.length === 0));
+        semanticVirtualServers.length === 0 &&
+        semanticCustom.length === 0));
 
   // Helper: check if entity has all selected tags (case-insensitive)
   const matchesSelectedTags = useCallback((entityTags: string[] | undefined) => {
@@ -3159,6 +3161,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                     agents={semanticAgents}
                     skills={semanticSkills}
                     virtualServers={semanticVirtualServers}
+                    custom={semanticCustom}
                   />
 
                   {shouldShowFallbackGrid && (

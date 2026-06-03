@@ -154,6 +154,7 @@ def _format_custom_result(
         "tags": doc.get("tags", []),
         "visibility": doc.get("visibility", "private"),
         "owner": doc.get("owner"),
+        "allowed_groups": doc.get("allowed_groups", []),
         "is_enabled": doc.get("is_enabled", False),
         "relevance_score": relevance_score,
         "match_context": doc.get("description"),

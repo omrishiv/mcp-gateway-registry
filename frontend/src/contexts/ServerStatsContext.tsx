@@ -344,7 +344,7 @@ export const ServerStatsProvider: React.FC<ServerStatsProviderProps> = ({ childr
 
       // Include custom entity records. They have no health status and no
       // disable toggle in the UI, so each record counts as enabled.
-      customRecords.forEach((record: any) => {
+      customRecords.forEach((record: CustomEntityRecord) => {
         total++;
         if (record.is_enabled !== false) {
           enabled++;

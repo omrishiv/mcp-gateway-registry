@@ -82,13 +82,15 @@ export const useCustomEntities = (typeName: string): UseCustomEntitiesReturn => 
         _descriptorCache.set(typeName, res.data);
         if (!cancelled) setDescriptor(res.data);
       })
-      .catch((err: any) => {
+      .catch((err: unknown) => {
         if (cancelled) return;
-        if (err.response?.status === 404) {
+        const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+        if (status === 404) {
           setNotFound(true);
         } else {
           console.error(`Failed to load custom type ${typeName}:`, err);
-          setError(err.response?.data?.detail || 'Failed to load type');
+          const detail = axios.isAxiosError(err) ? err.response?.data?.detail : undefined;
+          setError(detail || 'Failed to load type');
         }
       })
       .finally(() => {

@@ -27,6 +27,7 @@ function setConfig(customTypes: { name: string; display_name: string }[]) {
     config: {
       deployment_mode: 'with-gateway',
       registry_mode: 'full',
+      auth_provider: 'cognito',
       nginx_updates_enabled: true,
       coding_assistants: [],
       dedup_registration_hint_enabled: false,
@@ -215,6 +216,7 @@ describe('ServerStatsContext custom entities', () => {
       config: {
         deployment_mode: 'with-gateway',
         registry_mode: 'full',
+        auth_provider: 'cognito',
         nginx_updates_enabled: true,
         coding_assistants: [],
         dedup_registration_hint_enabled: false,

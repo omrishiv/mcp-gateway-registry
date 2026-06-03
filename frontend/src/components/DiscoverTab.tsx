@@ -510,6 +510,7 @@ const DiscoverTab: React.FC<DiscoverTabProps> = ({
             agents={searchResults?.agents || []}
             skills={searchResults?.skills || []}
             virtualServers={searchResults?.virtual_servers || []}
+            custom={searchResults?.custom || []}
           />
         </div>
       ) : (

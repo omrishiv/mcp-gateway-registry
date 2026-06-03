@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import axios from 'axios';
 import {
   PlusIcon,
   ArrowPathIcon,
@@ -7,10 +8,12 @@ import {
 } from '@heroicons/react/24/outline';
 import { CustomEntityRecord } from '../types/customEntity';
 import { useCustomEntities, uuidFromPath } from '../hooks/useCustomEntities';
+import { useSemanticSearch } from '../hooks/useSemanticSearch';
 import { labelFor } from '../utils/humanize';
 import CustomEntityCard from './CustomEntityCard';
 import CustomEntityDetail from './CustomEntityDetail';
 import CustomEntityForm from './CustomEntityForm';
+import SemanticSearchResults from './SemanticSearchResults';
 import ConfirmModal from './ConfirmModal';
 
 interface CurrentUser {
@@ -57,6 +60,28 @@ const CustomEntityTab: React.FC<CustomEntityTabProps> = ({
   const [deleting, setDeleting] = useState<CustomEntityRecord | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  // Set on Enter to run a semantic search (mirrors the built-in Dashboard tabs);
+  // typing alone only filters locally.
+  const [committedQuery, setCommittedQuery] = useState('');
+
+  // Cross-type semantic search, matching the built-in tabs: pressing Enter
+  // searches across ALL entity types (servers, agents, skills, custom, ...),
+  // not just this tab's type, and renders the shared SemanticSearchResults view.
+  const semanticEnabled = committedQuery.trim().length >= 2;
+  const {
+    results: semanticResults,
+    loading: semanticLoading,
+    error: semanticError,
+  } = useSemanticSearch(committedQuery, {
+    enabled: semanticEnabled,
+  });
+
+  // Clearing the input exits semantic mode.
+  useEffect(() => {
+    if (searchTerm.trim().length === 0 && committedQuery.length > 0) {
+      setCommittedQuery('');
+    }
+  }, [searchTerm, committedQuery]);
 
   const canModify = (record: CustomEntityRecord): boolean =>
     !!user?.is_admin || record.owner === user?.username;
@@ -114,8 +139,9 @@ const CustomEntityTab: React.FC<CustomEntityTabProps> = ({
       await deleteRecord(uuidFromPath(deleting.path));
       onShowToast?.(`Deleted ${deleting.name}`, 'success');
       setDeleting(null);
-    } catch (err: any) {
-      onShowToast?.(err.response?.data?.detail || 'Failed to delete', 'error');
+    } catch (err: unknown) {
+      const detail = axios.isAxiosError(err) ? err.response?.data?.detail : undefined;
+      onShowToast?.(detail || 'Failed to delete', 'error');
     } finally {
       setDeleteLoading(false);
     }
@@ -153,13 +179,22 @@ const CustomEntityTab: React.FC<CustomEntityTabProps> = ({
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder={`Search ${displayName}…`}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                setCommittedQuery(searchTerm.trim());
+              }
+            }}
+            placeholder={`Search ${displayName}… (Press Enter for semantic search; typing filters locally.)`}
             className="input pl-10 pr-9 w-full"
           />
           {searchTerm && (
             <button
               type="button"
-              onClick={() => setSearchTerm('')}
+              onClick={() => {
+                setSearchTerm('');
+                setCommittedQuery('');
+              }}
               className="absolute inset-y-0 right-0 flex items-center pr-3
                 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
               aria-label="Clear search"
@@ -179,17 +214,19 @@ const CustomEntityTab: React.FC<CustomEntityTabProps> = ({
         </button>
       </div>
 
-      {/* Results count */}
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-gray-500 dark:text-gray-300">
-          Showing {visibleRecords.length} {displayName}
-        </p>
-        {descriptor.description && (
-          <p className="text-xs text-gray-400 dark:text-gray-500">
-            {descriptor.description}
+      {/* Results count (local listing only; semantic mode shows its own view) */}
+      {!semanticEnabled && (
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-gray-500 dark:text-gray-300">
+            Showing {visibleRecords.length} {displayName}
           </p>
-        )}
-      </div>
+          {descriptor.description && (
+            <p className="text-xs text-gray-400 dark:text-gray-500">
+              {descriptor.description}
+            </p>
+          )}
+        </div>
+      )}
 
       {error && (
         <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
@@ -197,7 +234,19 @@ const CustomEntityTab: React.FC<CustomEntityTabProps> = ({
         </div>
       )}
 
-      {visibleRecords.length === 0 ? (
+      {semanticEnabled ? (
+        <SemanticSearchResults
+          query={semanticResults?.query || committedQuery}
+          loading={semanticLoading}
+          error={semanticError}
+          servers={semanticResults?.servers ?? []}
+          tools={semanticResults?.tools ?? []}
+          agents={semanticResults?.agents ?? []}
+          skills={semanticResults?.skills ?? []}
+          virtualServers={semanticResults?.virtual_servers ?? []}
+          custom={semanticResults?.custom ?? []}
+        />
+      ) : visibleRecords.length === 0 ? (
         selectedTags.length > 0 || query ? (
           <div className="text-center py-16 border border-dashed border-gray-300 dark:border-gray-700 rounded-xl">
             <p className="text-gray-500 dark:text-gray-400">
