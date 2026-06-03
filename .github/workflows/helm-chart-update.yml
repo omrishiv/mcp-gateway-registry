@@ -1,6 +1,13 @@
 name: Update Image Tags on Release
 
 on:
+  # zizmor: ignore[dangerous-triggers]
+  # Safe: this workflow only reads head_branch (via env, never interpolated),
+  # runs on the trusted base ref, never checks out or executes PR/fork code,
+  # and is gated by a repo-owner check. workflow_run is required so the tag
+  # bump runs only after "Release Docker Images" succeeds (conclusion check
+  # below) — a tag-push trigger would race the release and could advertise
+  # image tags whose images were never built.
   workflow_run:
     workflows: ["Release Docker Images"]
     types: [completed]
