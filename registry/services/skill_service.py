@@ -188,6 +188,17 @@ def _is_safe_url(
         return False
 
 
+def _append_page_param(
+    url: str,
+    page: str,
+) -> str:
+    """Append or replace the page query parameter on a URL."""
+    if re.search(r"(?<![a-z_])page=\d+", url):
+        return re.sub(r"(?<![a-z_])page=\d+", f"page={page}", url)
+    separator = "&" if "?" in url else "?"
+    return f"{url}{separator}page={page}"
+
+
 def _build_fetch_headers(
     url: str,
     auth_scheme: str = "none",
@@ -196,9 +207,10 @@ def _build_fetch_headers(
 ) -> tuple[str, dict[str, str]]:
     """Build fetch URL and auth headers for a SKILL.md request.
 
-    Returns (fetch_url, headers) tuple.  The URL is returned unchanged;
-    platform-specific modules may override to translate web URLs to
-    authenticated API endpoints.
+    For GitLab URLs with credentials, translates /-/raw/ web URLs to
+    API v4 endpoints that accept PRIVATE-TOKEN headers.
+
+    Returns (fetch_url, headers) tuple.
     """
     headers: dict[str, str] = {}
     fetch_url = url
@@ -212,6 +224,20 @@ def _build_fetch_headers(
     elif auth_scheme == "api_key":
         header_name = auth_header_name or "PRIVATE-TOKEN"
         headers[header_name] = auth_credential
+
+    if headers:
+        try:
+            from ..utils.gitlab_url_utils import (
+                parse_gitlab_url,
+                translate_gitlab_to_api_url,
+            )
+
+            if parse_gitlab_url(url):
+                api_url = translate_gitlab_to_api_url(url)
+                if api_url:
+                    fetch_url = api_url
+        except ImportError:
+            pass
 
     return fetch_url, headers
 
@@ -290,6 +316,18 @@ def _resolve_tree_api(
         - ``skill_dir``: directory portion of the path leading up to
           ``SKILL.md`` (``""`` when SKILL.md is at the repo root).
     """
+    # Try GitLab translation first (Meraki: defensive import so removing
+    # gitlab_url_utils leaves upstream features fully functional for GitHub).
+    try:
+        from ..utils.gitlab_url_utils import translate_gitlab_tree_api_url
+
+        gitlab_result = translate_gitlab_tree_api_url(skill_md_url)
+        if gitlab_result is not None:
+            return gitlab_result
+    except ImportError:
+        pass
+
+    # Fall through to upstream GitHub / GHES handling.
     parsed = urlparse(skill_md_url)
     hostname = parsed.hostname or ""
     if not hostname:
@@ -417,6 +455,21 @@ async def _discover_skill_resources(
                 logger.warning("Resource discovery failed: HTTP %s for %s", resp.status_code, tree_url)
                 return None
             payload = resp.json()
+
+            # GitLab tree API returns a bare JSON array and paginates via
+            # the x-next-page response header. Fetch remaining pages.
+            if isinstance(payload, list):
+                next_page = resp.headers.get("x-next-page", "")
+                while next_page:
+                    page_url = _append_page_param(tree_url, next_page)
+                    resp = await client.get(page_url, headers=merged_headers)
+                    if resp.status_code >= 400:
+                        break
+                    page_payload = resp.json()
+                    if not isinstance(page_payload, list):
+                        break
+                    payload.extend(page_payload)
+                    next_page = resp.headers.get("x-next-page", "")
     except Exception as e:
         logger.warning("Resource discovery error for %s: %s", tree_url, e)
         return None
