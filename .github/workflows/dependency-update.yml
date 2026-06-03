@@ -242,10 +242,14 @@ jobs:
           git checkout -b "$BRANCH"
           git add -A '*.lock' '**/package-lock.json'
           git commit -m "chore(deps): weekly lockfile update ($(date +%Y-%m-%d))"
-          git push -u origin "$BRANCH"
+          git push -u --force origin "$BRANCH"
 
-          gh pr create \
-            --title "chore(deps): weekly lockfile update ($(date +%Y-%m-%d))" \
-            --body-file /tmp/pr_body.md \
-            --base main \
-            --label "dependencies"
+          if gh pr view "$BRANCH" --json number >/dev/null 2>&1; then
+            echo "PR already exists for $BRANCH; branch updated."
+          else
+            gh pr create \
+              --title "chore(deps): weekly lockfile update ($(date +%Y-%m-%d))" \
+              --body-file /tmp/pr_body.md \
+              --base main \
+              --label "dependencies"
+          fi
