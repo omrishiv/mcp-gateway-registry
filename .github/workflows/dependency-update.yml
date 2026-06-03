@@ -64,7 +64,7 @@ jobs:
       - name: Update npm lockfiles (7-day quarantine)
         env:
           CUTOFF_EPOCH: ${{ steps.cutoff.outputs.timestamp }}
-        run: npm-update-locks
+        run: make npm-update-locks
 
       - name: Generate changelog
         id: changelog
