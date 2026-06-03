@@ -3803,338 +3803,6 @@ async def register_service_api(
         raise HTTPException(status_code=500, detail="Service registration failed")
 
 
-@router.put("/servers/{path:path}")
-async def update_server_endpoint(
-    http_request: Request,
-    path: str,
-    body: ServerUpdateRequest,
-    response: Response,
-    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
-    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
-):
-    """Replace a registered server's mutable metadata.
-
-    Registrant-only fields (timestamps, identity anchors, deployment,
-    credential blobs) are preserved from storage even if a client sends
-    them. Auth/credential mutation goes through
-    PATCH /api/servers/{path}/auth-credential.
-
-    Concurrency: when ``If-Match`` is supplied the request is rejected
-    with 412 if the stored ``updated_at`` no longer matches.
-    """
-    path = _normalize_server_path(path)
-
-    existing = await server_service.get_server_info(path, include_credentials=True)
-    if not existing:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Server not found at path '{path}'",
-        )
-
-    set_audit_action(
-        http_request,
-        "update",
-        "server",
-        resource_id=path,
-        description=f"Update server {existing.get('server_name', path)}",
-        metadata={"had_if_match": if_match is not None},
-    )
-
-    sync_metadata = existing.get("sync_metadata") or {}
-    if sync_metadata.get("is_federated") or sync_metadata.get("is_read_only"):
-        source_peer = sync_metadata.get("source_peer_id", "unknown peer registry")
-        logger.warning(
-            f"User {user_context['username']} attempted to update federated server {path} "
-            f"from {source_peer}"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                f"Server '{path}' is synced from {source_peer} and cannot be "
-                f"updated locally. Update at the source registry, or remove "
-                f"the peer federation."
-            ),
-        )
-
-    _check_server_permission(
-        "modify_service",
-        existing.get("server_name", path),
-        user_context,
-    )
-
-    if (
-        not user_context.get("is_admin")
-        and existing.get("registered_by") != user_context["username"]
-    ):
-        logger.warning(
-            f"User {user_context['username']} attempted to update server {path} "
-            f"owned by {existing.get('registered_by')}"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You can only update servers you registered",
-        )
-
-    client_ts = parse_if_match(if_match)
-    if client_ts is not None:
-        server_ts = updated_ms(
-            _to_dt(existing.get("updated_at")),
-            _to_dt(existing.get("registered_at")),
-        )
-        if client_ts != server_ts:
-            logger.warning(
-                "update_server_endpoint if_match_mismatch path=%s user=%s "
-                "client_ts=%d server_ts=%d",
-                path,
-                user_context["username"],
-                client_ts,
-                server_ts,
-            )
-            raise HTTPException(
-                status_code=status.HTTP_412_PRECONDITION_FAILED,
-                detail="If-Match does not match current server version",
-            )
-
-    incoming = body.model_dump(exclude_unset=False, mode="json")
-    if body.provider is not None:
-        incoming["provider"] = body.provider.model_dump()
-
-    merged = _merge_server_update(existing, incoming)
-
-    gate_result = await check_registration_gate(
-        asset_type="server",
-        operation="update",
-        source_api=f"/api/servers/{path}",
-        registration_payload=merged,
-        raw_headers=http_request.scope.get("headers", []),
-    )
-    if not gate_result.allowed:
-        logger.warning(
-            f"Registration gate denied server update '{path}': {gate_result.error_message}"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Registration denied by policy gate: {gate_result.error_message}",
-        )
-
-    success = await server_service.update_server(path, merged)
-    if not success:
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"detail": "Failed to save server"},
-        )
-
-    if existing.get("deployment") != "local" and existing.get("proxy_pass_url") != merged.get(
-        "proxy_pass_url"
-    ):
-        asyncio.create_task(
-            _perform_security_scan_on_registration(
-                path,
-                merged.get("proxy_pass_url"),
-                merged,
-                merged.get("headers") or [],
-            )
-        )
-
-    asyncio.create_task(
-        send_registration_webhook(
-            event_type="update",
-            registration_type="server",
-            card_data=strip_credentials_from_dict(dict(merged)),
-            performed_by=user_context.get("username"),
-        )
-    )
-
-    fresh = await server_service.get_server_info(path)
-    if fresh is None:
-        # Concurrent delete is unlikely but defensible.
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Server not found at path '{path}' after update",
-        )
-
-    response.headers["ETag"] = weak_etag_for_timestamp(
-        _to_dt(fresh.get("updated_at")),
-        _to_dt(fresh.get("registered_at")),
-    )
-
-    logger.info(
-        "update_server_endpoint success path=%s user=%s if_match_supplied=%s",
-        path,
-        user_context["username"],
-        if_match is not None,
-    )
-
-    return fresh
-
-
-@router.patch("/servers/{path:path}")
-async def patch_server_endpoint(
-    http_request: Request,
-    path: str,
-    patch_body: ServerCardPatch,
-    response: Response,
-    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
-    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
-):
-    """Apply an RFC 7396 JSON Merge Patch to a server's metadata.
-
-    Only fields explicitly supplied are changed. Registrant-only fields
-    are rejected by the ServerCardPatch validator before this handler
-    runs; this handler additionally re-pins them defensively.
-
-    Auth/credential mutation goes through
-    PATCH /api/servers/{path}/auth-credential.
-    """
-    path = _normalize_server_path(path)
-
-    existing = await server_service.get_server_info(path, include_credentials=True)
-    if not existing:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Server not found at path '{path}'",
-        )
-
-    set_audit_action(
-        http_request,
-        "update",
-        "server",
-        resource_id=path,
-        description=f"Patch server {existing.get('server_name', path)}",
-        metadata={"had_if_match": if_match is not None},
-    )
-
-    sync_metadata = existing.get("sync_metadata") or {}
-    if sync_metadata.get("is_federated") or sync_metadata.get("is_read_only"):
-        source_peer = sync_metadata.get("source_peer_id", "unknown peer registry")
-        logger.warning(
-            f"User {user_context['username']} attempted to patch federated server {path} "
-            f"from {source_peer}"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                f"Server '{path}' is synced from {source_peer} and cannot be "
-                f"patched locally. Patch at the source registry, or remove "
-                f"the peer federation."
-            ),
-        )
-
-    _check_server_permission(
-        "modify_service",
-        existing.get("server_name", path),
-        user_context,
-    )
-
-    if (
-        not user_context.get("is_admin")
-        and existing.get("registered_by") != user_context["username"]
-    ):
-        logger.warning(
-            f"User {user_context['username']} attempted to patch server {path} "
-            f"owned by {existing.get('registered_by')}"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You can only patch servers you registered",
-        )
-
-    client_ts = parse_if_match(if_match)
-    if client_ts is not None:
-        server_ts = updated_ms(
-            _to_dt(existing.get("updated_at")),
-            _to_dt(existing.get("registered_at")),
-        )
-        if client_ts != server_ts:
-            logger.warning(
-                "patch_server_endpoint if_match_mismatch path=%s user=%s client_ts=%d server_ts=%d",
-                path,
-                user_context["username"],
-                client_ts,
-                server_ts,
-            )
-            raise HTTPException(
-                status_code=status.HTTP_412_PRECONDITION_FAILED,
-                detail="If-Match does not match current server version",
-            )
-
-    patch_dict = patch_body.model_dump(exclude_unset=True, by_alias=False, mode="json")
-    if not patch_dict:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Empty patch body",
-        )
-
-    merged = _merge_server_update(existing, patch_dict)
-
-    gate_result = await check_registration_gate(
-        asset_type="server",
-        operation="update",
-        source_api=f"/api/servers/{path}",
-        registration_payload=merged,
-        raw_headers=http_request.scope.get("headers", []),
-    )
-    if not gate_result.allowed:
-        logger.warning(
-            f"Registration gate denied server patch '{path}': {gate_result.error_message}"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Registration denied by policy gate: {gate_result.error_message}",
-        )
-
-    success = await server_service.update_server(path, merged)
-    if not success:
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"detail": "Failed to save server"},
-        )
-
-    if (
-        "proxy_pass_url" in patch_dict
-        and existing.get("deployment") != "local"
-        and existing.get("proxy_pass_url") != merged.get("proxy_pass_url")
-    ):
-        asyncio.create_task(
-            _perform_security_scan_on_registration(
-                path,
-                merged.get("proxy_pass_url"),
-                merged,
-                merged.get("headers") or [],
-            )
-        )
-
-    asyncio.create_task(
-        send_registration_webhook(
-            event_type="update",
-            registration_type="server",
-            card_data=strip_credentials_from_dict(dict(merged)),
-            performed_by=user_context.get("username"),
-        )
-    )
-
-    fresh = await server_service.get_server_info(path)
-    if fresh is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Server not found at path '{path}' after patch",
-        )
-
-    response.headers["ETag"] = weak_etag_for_timestamp(
-        _to_dt(fresh.get("updated_at")),
-        _to_dt(fresh.get("registered_at")),
-    )
-
-    logger.info(
-        "patch_server_endpoint success path=%s user=%s if_match_supplied=%s",
-        path,
-        user_context["username"],
-        if_match is not None,
-    )
-
-    return fresh
-
-
 @router.patch("/servers/{server_path:path}/auth-credential")
 async def update_server_auth_credential(
     request: Request,
@@ -5602,6 +5270,340 @@ async def get_server_connect_config(
 
 
 # IMPORTANT: This catch-all route must remain AFTER all /servers/{path}/... suffixed routes
+
+
+@router.put("/servers/{path:path}")
+async def update_server_endpoint(
+    http_request: Request,
+    path: str,
+    body: ServerUpdateRequest,
+    response: Response,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+):
+    """Replace a registered server's mutable metadata.
+
+    Registrant-only fields (timestamps, identity anchors, deployment,
+    credential blobs) are preserved from storage even if a client sends
+    them. Auth/credential mutation goes through
+    PATCH /api/servers/{path}/auth-credential.
+
+    Concurrency: when ``If-Match`` is supplied the request is rejected
+    with 412 if the stored ``updated_at`` no longer matches.
+    """
+    path = _normalize_server_path(path)
+
+    existing = await server_service.get_server_info(path, include_credentials=True)
+    if not existing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Server not found at path '{path}'",
+        )
+
+    set_audit_action(
+        http_request,
+        "update",
+        "server",
+        resource_id=path,
+        description=f"Update server {existing.get('server_name', path)}",
+        metadata={"had_if_match": if_match is not None},
+    )
+
+    sync_metadata = existing.get("sync_metadata") or {}
+    if sync_metadata.get("is_federated") or sync_metadata.get("is_read_only"):
+        source_peer = sync_metadata.get("source_peer_id", "unknown peer registry")
+        logger.warning(
+            f"User {user_context['username']} attempted to update federated server {path} "
+            f"from {source_peer}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Server '{path}' is synced from {source_peer} and cannot be "
+                f"updated locally. Update at the source registry, or remove "
+                f"the peer federation."
+            ),
+        )
+
+    _check_server_permission(
+        "modify_service",
+        existing.get("server_name", path),
+        user_context,
+    )
+
+    if (
+        not user_context.get("is_admin")
+        and existing.get("registered_by") != user_context["username"]
+    ):
+        logger.warning(
+            f"User {user_context['username']} attempted to update server {path} "
+            f"owned by {existing.get('registered_by')}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only update servers you registered",
+        )
+
+    client_ts = parse_if_match(if_match)
+    if client_ts is not None:
+        server_ts = updated_ms(
+            _to_dt(existing.get("updated_at")),
+            _to_dt(existing.get("registered_at")),
+        )
+        if client_ts != server_ts:
+            logger.warning(
+                "update_server_endpoint if_match_mismatch path=%s user=%s "
+                "client_ts=%d server_ts=%d",
+                path,
+                user_context["username"],
+                client_ts,
+                server_ts,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_412_PRECONDITION_FAILED,
+                detail="If-Match does not match current server version",
+            )
+
+    incoming = body.model_dump(exclude_unset=False, mode="json")
+    if body.provider is not None:
+        incoming["provider"] = body.provider.model_dump()
+
+    merged = _merge_server_update(existing, incoming)
+
+    gate_result = await check_registration_gate(
+        asset_type="server",
+        operation="update",
+        source_api=f"/api/servers/{path}",
+        registration_payload=merged,
+        raw_headers=http_request.scope.get("headers", []),
+    )
+    if not gate_result.allowed:
+        logger.warning(
+            f"Registration gate denied server update '{path}': {gate_result.error_message}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Registration denied by policy gate: {gate_result.error_message}",
+        )
+
+    success = await server_service.update_server(path, merged)
+    if not success:
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": "Failed to save server"},
+        )
+
+    if existing.get("deployment") != "local" and existing.get("proxy_pass_url") != merged.get(
+        "proxy_pass_url"
+    ):
+        asyncio.create_task(
+            _perform_security_scan_on_registration(
+                path,
+                merged.get("proxy_pass_url"),
+                merged,
+                merged.get("headers") or [],
+            )
+        )
+
+    asyncio.create_task(
+        send_registration_webhook(
+            event_type="update",
+            registration_type="server",
+            card_data=strip_credentials_from_dict(dict(merged)),
+            performed_by=user_context.get("username"),
+        )
+    )
+
+    fresh = await server_service.get_server_info(path)
+    if fresh is None:
+        # Concurrent delete is unlikely but defensible.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Server not found at path '{path}' after update",
+        )
+
+    response.headers["ETag"] = weak_etag_for_timestamp(
+        _to_dt(fresh.get("updated_at")),
+        _to_dt(fresh.get("registered_at")),
+    )
+
+    logger.info(
+        "update_server_endpoint success path=%s user=%s if_match_supplied=%s",
+        path,
+        user_context["username"],
+        if_match is not None,
+    )
+
+    return fresh
+
+
+@router.patch("/servers/{path:path}")
+async def patch_server_endpoint(
+    http_request: Request,
+    path: str,
+    patch_body: ServerCardPatch,
+    response: Response,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+):
+    """Apply an RFC 7396 JSON Merge Patch to a server's metadata.
+
+    Only fields explicitly supplied are changed. Registrant-only fields
+    are rejected by the ServerCardPatch validator before this handler
+    runs; this handler additionally re-pins them defensively.
+
+    Auth/credential mutation goes through
+    PATCH /api/servers/{path}/auth-credential.
+    """
+    path = _normalize_server_path(path)
+
+    existing = await server_service.get_server_info(path, include_credentials=True)
+    if not existing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Server not found at path '{path}'",
+        )
+
+    set_audit_action(
+        http_request,
+        "update",
+        "server",
+        resource_id=path,
+        description=f"Patch server {existing.get('server_name', path)}",
+        metadata={"had_if_match": if_match is not None},
+    )
+
+    sync_metadata = existing.get("sync_metadata") or {}
+    if sync_metadata.get("is_federated") or sync_metadata.get("is_read_only"):
+        source_peer = sync_metadata.get("source_peer_id", "unknown peer registry")
+        logger.warning(
+            f"User {user_context['username']} attempted to patch federated server {path} "
+            f"from {source_peer}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Server '{path}' is synced from {source_peer} and cannot be "
+                f"patched locally. Patch at the source registry, or remove "
+                f"the peer federation."
+            ),
+        )
+
+    _check_server_permission(
+        "modify_service",
+        existing.get("server_name", path),
+        user_context,
+    )
+
+    if (
+        not user_context.get("is_admin")
+        and existing.get("registered_by") != user_context["username"]
+    ):
+        logger.warning(
+            f"User {user_context['username']} attempted to patch server {path} "
+            f"owned by {existing.get('registered_by')}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only patch servers you registered",
+        )
+
+    client_ts = parse_if_match(if_match)
+    if client_ts is not None:
+        server_ts = updated_ms(
+            _to_dt(existing.get("updated_at")),
+            _to_dt(existing.get("registered_at")),
+        )
+        if client_ts != server_ts:
+            logger.warning(
+                "patch_server_endpoint if_match_mismatch path=%s user=%s client_ts=%d server_ts=%d",
+                path,
+                user_context["username"],
+                client_ts,
+                server_ts,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_412_PRECONDITION_FAILED,
+                detail="If-Match does not match current server version",
+            )
+
+    patch_dict = patch_body.model_dump(exclude_unset=True, by_alias=False, mode="json")
+    if not patch_dict:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Empty patch body",
+        )
+
+    merged = _merge_server_update(existing, patch_dict)
+
+    gate_result = await check_registration_gate(
+        asset_type="server",
+        operation="update",
+        source_api=f"/api/servers/{path}",
+        registration_payload=merged,
+        raw_headers=http_request.scope.get("headers", []),
+    )
+    if not gate_result.allowed:
+        logger.warning(
+            f"Registration gate denied server patch '{path}': {gate_result.error_message}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Registration denied by policy gate: {gate_result.error_message}",
+        )
+
+    success = await server_service.update_server(path, merged)
+    if not success:
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": "Failed to save server"},
+        )
+
+    if (
+        "proxy_pass_url" in patch_dict
+        and existing.get("deployment") != "local"
+        and existing.get("proxy_pass_url") != merged.get("proxy_pass_url")
+    ):
+        asyncio.create_task(
+            _perform_security_scan_on_registration(
+                path,
+                merged.get("proxy_pass_url"),
+                merged,
+                merged.get("headers") or [],
+            )
+        )
+
+    asyncio.create_task(
+        send_registration_webhook(
+            event_type="update",
+            registration_type="server",
+            card_data=strip_credentials_from_dict(dict(merged)),
+            performed_by=user_context.get("username"),
+        )
+    )
+
+    fresh = await server_service.get_server_info(path)
+    if fresh is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Server not found at path '{path}' after patch",
+        )
+
+    response.headers["ETag"] = weak_etag_for_timestamp(
+        _to_dt(fresh.get("updated_at")),
+        _to_dt(fresh.get("registered_at")),
+    )
+
+    logger.info(
+        "patch_server_endpoint success path=%s user=%s if_match_supplied=%s",
+        path,
+        user_context["username"],
+        if_match is not None,
+    )
+
+    return fresh
+
+
 @router.get("/servers/{path:path}")
 async def get_server(
     request: Request,
