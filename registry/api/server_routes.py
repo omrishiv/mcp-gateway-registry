@@ -689,6 +689,11 @@ async def get_servers_json(
                     "auth_scheme": server_info.get("auth_scheme", "none"),
                     "auth_header_name": server_info.get("auth_header_name"),
                     "tool_list": _filtered_tools,
+                    # Access control. Default absent to "public" for servers
+                    # stored before the write-side fix always persisted the
+                    # field (#1181). Matches the convention used by agents,
+                    # search, and federation responses.
+                    "visibility": server_info.get("visibility") or "public",
                     # Federation and lifecycle metadata
                     "status": server_info.get("status", "active"),
                     "provider_organization": (
@@ -3606,13 +3611,15 @@ async def register_service_api(
         if sse_endpoint:
             server_entry["sse_endpoint"] = sse_endpoint
 
-    # Visibility and access control
-    if visibility and visibility != "public":
-        server_entry["visibility"] = visibility
-    if allowed_groups:
-        groups_list = [g.strip() for g in allowed_groups.split(",") if g.strip()]
-        if groups_list:
-            server_entry["allowed_groups"] = groups_list
+    # Visibility and access control. Mirror the legacy POST /register
+    # handler: normalize and validate the value (rejecting unknown values
+    # and enforcing 'group-restricted' carries at least one group), then
+    # always persist it so GET responses don't surface a misleading null
+    # when the caller chose the default "public".
+    visibility, allowed_groups_list = _validate_visibility_and_groups(visibility, allowed_groups)
+    server_entry["visibility"] = visibility
+    if allowed_groups_list:
+        server_entry["allowed_groups"] = allowed_groups_list
 
     if version:
         server_entry["version"] = version
@@ -5667,6 +5674,11 @@ async def get_server(
     if not user_context.get("is_admin"):
         if settings.deployment_mode != DeploymentMode.REGISTRY_ONLY:
             server_info.pop("proxy_pass_url", None)
+
+    # Normalize visibility for servers stored before the write-side fix
+    # always persisted the field (#1181). Matches the default-on-read
+    # pattern already used by agents, search, and federation responses.
+    server_info.setdefault("visibility", "public")
 
     return JSONResponse(
         status_code=200,

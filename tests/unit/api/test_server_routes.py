@@ -154,6 +154,11 @@ def mock_faiss_service():
     mock_service = MagicMock()
     mock_service.add_or_update_service = AsyncMock()
     mock_service.remove_service = AsyncMock()
+    # POST /api/servers/register schedules `asyncio.create_task(save_data())`
+    # after a successful registration; if save_data is a plain MagicMock the
+    # call returns a non-coroutine and create_task() raises, turning a 201
+    # into a 500.
+    mock_service.save_data = AsyncMock()
     return mock_service
 
 
@@ -2001,3 +2006,129 @@ class TestClearSecurityPendingLocal:
         assert response.status_code == 200
         # update_server NOT called — we short-circuit.
         mock_server_service.update_server.assert_not_called()
+
+
+# =============================================================================
+# TESTS — POST /api/servers/register visibility round-trip (Issue #1181)
+# =============================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.api
+@pytest.mark.servers
+class TestServerRegisterVisibility:
+    """Regression coverage for #1181.
+
+    The newer POST /api/servers/register handler previously dropped
+    visibility="public" entirely (never persisted), skipped validation,
+    and the matching GET responses surfaced absent visibility as null.
+    These tests pin the corrected behaviour.
+    """
+
+    _BASE_FORM = {
+        "name": "Vis Server",
+        "description": "Visibility round-trip test",
+        "path": "/vis-server",
+        "proxy_pass_url": "http://localhost:9000",
+    }
+
+    def test_register_persists_visibility_public(
+        self, test_client_admin, mock_server_service
+    ):
+        response = test_client_admin.post(
+            "/api/servers/register",
+            data={**self._BASE_FORM, "visibility": "public"},
+        )
+        assert response.status_code == 201
+        # The handler builds a server_entry dict and passes it to register_server.
+        # That dict must carry visibility="public" — never omitted.
+        call_args = mock_server_service.register_server.call_args
+        server_entry = call_args.args[0] if call_args.args else call_args.kwargs.get("server_entry")
+        assert server_entry["visibility"] == "public"
+
+    def test_register_rejects_invalid_visibility(
+        self, test_client_admin, mock_server_service
+    ):
+        response = test_client_admin.post(
+            "/api/servers/register",
+            data={**self._BASE_FORM, "visibility": "garbage"},
+        )
+        assert response.status_code == 400
+        assert "visibility" in response.json()["detail"].lower()
+        mock_server_service.register_server.assert_not_called()
+
+    def test_register_rejects_group_restricted_without_groups(
+        self, test_client_admin, mock_server_service
+    ):
+        response = test_client_admin.post(
+            "/api/servers/register",
+            data={**self._BASE_FORM, "visibility": "group-restricted"},
+        )
+        assert response.status_code == 400
+        assert "allowed_group" in response.json()["detail"].lower()
+        mock_server_service.register_server.assert_not_called()
+
+    def test_register_persists_group_restricted_with_groups(
+        self, test_client_admin, mock_server_service
+    ):
+        response = test_client_admin.post(
+            "/api/servers/register",
+            data={
+                **self._BASE_FORM,
+                "visibility": "group-restricted",
+                "allowed_groups": "engineering,platform-team",
+            },
+        )
+        assert response.status_code == 201
+        call_args = mock_server_service.register_server.call_args
+        server_entry = call_args.args[0] if call_args.args else call_args.kwargs.get("server_entry")
+        assert server_entry["visibility"] == "group-restricted"
+        assert server_entry["allowed_groups"] == ["engineering", "platform-team"]
+
+
+# =============================================================================
+# TESTS — GET endpoints normalize absent visibility to "public" (Issue #1181)
+# =============================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.api
+@pytest.mark.servers
+class TestServerGetVisibilityNormalization:
+    """Servers stored before #1181's write-side fix have no visibility key.
+
+    GET responses must default the field to "public" so clients never see
+    a misleading null. The list endpoint historically did not include the
+    field at all; #1181 adds it.
+    """
+
+    _LEGACY_DOC = {
+        "server_name": "Legacy Server",
+        "description": "Pre-#1181 row with no visibility key",
+        "path": "/legacy",
+        "proxy_pass_url": "http://localhost:9000",
+        "is_enabled": True,
+        # Note: no 'visibility' key — this is the legacy shape under test.
+    }
+
+    def test_get_server_defaults_absent_visibility_to_public(
+        self, test_client_admin, mock_server_service
+    ):
+        mock_server_service.get_server_info.return_value = {**self._LEGACY_DOC}
+
+        response = test_client_admin.get("/api/servers/legacy")
+        assert response.status_code == 200
+        assert response.json()["visibility"] == "public"
+
+    def test_list_servers_defaults_absent_visibility_to_public(
+        self, test_client_admin, mock_server_service
+    ):
+        mock_server_service.get_servers_paginated = AsyncMock(
+            return_value=({"/legacy": {**self._LEGACY_DOC}}, 1)
+        )
+
+        response = test_client_admin.get("/api/servers")
+        assert response.status_code == 200
+        servers = response.json()["servers"]
+        assert len(servers) == 1
+        assert servers[0]["visibility"] == "public"
