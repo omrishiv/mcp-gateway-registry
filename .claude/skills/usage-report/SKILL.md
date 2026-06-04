@@ -425,7 +425,7 @@ Also read the generated `liveness-YYYY-MM-DD.md` (from Step 6c) and include its 
 
 #### Report Structure
 
-The main body focuses on insights and charts. Detailed event-count distribution tables are moved to an appendix. **IMPORTANT:** Every section below is MANDATORY. Do not skip any section. Each `![...]` image reference is a REQUIRED chart that must be embedded.
+The main body focuses on insights and charts. Detailed event-count distribution tables are moved to an appendix. **IMPORTANT:** Every section below is MANDATORY. Do not skip any section. Each `![...]` image reference is a REQUIRED chart that must be embedded. In particular, the "Most Active Instances", "Largest Catalogs", and "Most Engaged Operators" tables MUST appear in the main report body (not just in the tables appendix file). These are high-value sections for stakeholders.
 
 ```markdown
 # AI Registry -- Usage Report
@@ -513,13 +513,13 @@ From `tables-YYYY-MM-DD.md`: instances with search, total queries, average, max.
 Table from `tables-YYYY-MM-DD.md`. Grouped by cloud/compute profile with change vs previous.
 
 ## Most Active Instances (by Feature Usage)
-Top 10 table from `tables-YYYY-MM-DD.md`. Narrative on usage patterns.
+**DO NOT SKIP THIS SECTION.** Copy the full "Most Active Instances" table from `tables-YYYY-MM-DD.md` into the report. This is the top 10 non-internal instances ranked by total feature usage (servers + agents + skills + search queries). Add 2-3 sentences of narrative on usage patterns (e.g., search-heavy vs catalog-heavy deployments).
 
 ## Largest Catalogs (by Registered Servers + Agents + Skills)
-Top 10 table from `tables-YYYY-MM-DD.md`.
+**DO NOT SKIP THIS SECTION.** Copy the full "Largest Catalogs" table from `tables-YYYY-MM-DD.md` into the report. This is the top 10 non-internal instances ranked by registered objects (servers + agents + skills). Add a sentence noting any instances that appear here but not in Most Active (large catalog, low search usage).
 
 ## Most Engaged Operators (by Upgrade-Chain Length)
-Top 10 table from `tables-YYYY-MM-DD.md`.
+**DO NOT SKIP THIS SECTION.** Copy the full "Most Engaged Operators" table from `tables-YYYY-MM-DD.md` into the report. This is the top 10 non-internal instances ranked by number of distinct versions reported. Add a sentence on upgrade frequency trends.
 
 ## Install Forecast
 ![Install Forecast](install-forecast-YYYY-MM-DD.png)
