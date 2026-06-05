@@ -5,9 +5,7 @@ on:
     - cron: "0 9 * * 1" # Every Monday at 09:00 UTC
   workflow_dispatch:
 
-permissions:
-  contents: write
-  pull-requests: write
+permissions: {}
 
 concurrency:
   group: dependency-update
@@ -18,11 +16,15 @@ jobs:
     name: Update lockfiles
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: write # push lockfile update branch
+      pull-requests: write # create PR via gh cli
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
@@ -216,7 +218,7 @@ jobs:
           {
             echo "## Dependency Updates"
             echo ""
-            echo "Lockfiles refreshed with a **7-day supply-chain quarantine** (packages published after ${{ steps.cutoff.outputs.date }} excluded)."
+            echo "Lockfiles refreshed with a **7-day supply-chain quarantine** (packages published after ${STEPS_CUTOFF_OUTPUTS_DATE} excluded)."
             echo ""
             if [ -f /tmp/changelog_uv.md ]; then
               echo "## Python (uv)"
@@ -230,6 +232,8 @@ jobs:
           } > /tmp/pr_body.md
 
           echo "has_changes=$HAS_CHANGES" >> "$GITHUB_OUTPUT"
+        env:
+          STEPS_CUTOFF_OUTPUTS_DATE: ${{ steps.cutoff.outputs.date }}
 
       - name: Create pull request
         if: steps.changelog.outputs.has_changes == 'true'
