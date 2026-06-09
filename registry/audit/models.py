@@ -57,7 +57,8 @@ class Identity(BaseModel):
     username: str = Field(description="Username or identifier of the requester")
     auth_method: str = Field(description="Authentication method: oauth2, jwt_bearer, anonymous")
     provider: str | None = Field(
-        default=None, description="Identity provider: cognito, entra_id, keycloak"
+        default=None,
+        description="Identity provider: cognito, entra_id, keycloak, okta, auth0, pingfederate",
     )
     groups: list[str] = Field(default_factory=list, description="Groups the user belongs to")
     scopes: list[str] = Field(default_factory=list, description="OAuth scopes granted to the user")
@@ -148,6 +149,13 @@ class Action(BaseModel):
             "When an IdP admin call was intentionally skipped, the reason. "
             "One of: 'local_only' (is_idp_managed=False), "
             "'forbidden' (IdP 403), 'not_found' (IdP 404)."
+        ),
+    )
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Optional structured dimensions recorded alongside the action "
+            "(e.g., {'had_if_match': True}). Used for later analysis."
         ),
     )
 

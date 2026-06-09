@@ -183,6 +183,21 @@ class ServerDetailResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
+class ServerUpdateResponse(BaseModel):
+    """Response from PUT/PATCH /api/servers/{path}.
+
+    Returns the updated server document. Extra fields are allowed so
+    callers tolerate added server-side fields without breaking.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    path: str | None = None
+    server_name: str | None = None
+    description: str | None = None
+    updated_at: str | None = None
+
+
 class ServerListResponse(BaseModel):
     """Server list response model."""
 
@@ -1367,6 +1382,45 @@ class M2MClientListResponse(BaseModel):
     items: list[IdPM2MClient] = Field(default_factory=list, description="Records on this page")
 
 
+class IdPUserGroup(BaseModel):
+    """User-group record as stored in idp_user_groups.
+
+    Models the response shape from /api/iam/user-groups direct CRUD
+    endpoints (issue #1127, IdP user-group fallback).
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    username: str
+    groups: list[str]
+    email: str | None = None
+    provider: str = "manual"
+    enabled: bool = True
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    created_by: str | None = None
+
+
+class UserGroupListResponse(BaseModel):
+    """Paginated response for GET /api/iam/user-groups."""
+
+    model_config = ConfigDict(extra="allow")
+
+    items: list[IdPUserGroup]
+    total: int
+    skip: int = 0
+    limit: int = 50
+
+
+class PingFederateUserCreateResponse(BaseModel):
+    """Response from POST /api/iam/user-groups/{username}/pingfederate-user."""
+
+    model_config = ConfigDict(extra="allow")
+
+    username: str
+    created_or_updated: str  # "created" or "updated"
+
+
 class GroupSyncStatusResponse(BaseModel):
     """Response model for list groups endpoint with sync status."""
 
@@ -1600,6 +1654,7 @@ class RegistryClient:
 
         # Determine content type based on endpoint
         # Agent, Management, Search, Federation, Skills, Virtual Servers, Registry Card, version, and group import endpoints use JSON
+        # PUT/PATCH on /api/servers/{path} (issue #1164) also use JSON
         # Server registration uses form data
         if (
             endpoint.startswith("/api/agents")
@@ -1616,6 +1671,7 @@ class RegistryClient:
             or endpoint == "/api/servers/groups/import"
             or "/auth-credential" in endpoint
             or "/versions" in endpoint
+            or (method in ("PUT", "PATCH") and endpoint.startswith("/api/servers/"))
         ):
             # Send as JSON for agent, management, search, federation, and import endpoints
             response = requests.request(
@@ -1810,6 +1866,97 @@ class RegistryClient:
 
         return response.json()
 
+    def update_server(
+        self,
+        path: str,
+        body: dict[str, Any],
+        if_match: str | None = None,
+    ) -> ServerUpdateResponse:
+        """Full-replacement update via PUT /api/servers/{path}.
+
+        Replaces the server's mutable metadata. Identity anchors and
+        server-managed fields (timestamps, deployment, credentials) are
+        preserved by the server even if absent or supplied. Auth/credential
+        mutation must go through PATCH /api/servers/{path}/auth-credential.
+
+        Args:
+            path: Server path with or without leading slash (e.g.
+                "/my-server" or "my-server").
+            body: Full ServerUpdateRequest body as a dict. Required keys
+                include server_name and description.
+            if_match: Optional weak ETag (e.g. ``W/"<epoch_ms>"``) from a
+                prior GET/PUT/PATCH for optimistic concurrency. When
+                supplied and stale, the server returns 412.
+
+        Returns:
+            ServerUpdateResponse with the updated server document.
+
+        Raises:
+            requests.HTTPError: 400 empty/malformed body, 403 unauthorized
+                or federated, 404 not found, 412 precondition failed,
+                422 validation error.
+        """
+        normalized = path if path.startswith("/") else f"/{path}"
+        logger.info(f"Updating server: {normalized}")
+        logger.debug(f"Update body: {json.dumps(body, indent=2, default=str)}")
+
+        extra_headers = {"If-Match": if_match} if if_match else None
+        response = self._make_request(
+            method="PUT",
+            endpoint=f"/api/servers{normalized}",
+            data=body,
+            extra_headers=extra_headers,
+        )
+
+        result = ServerUpdateResponse(**response.json())
+        logger.info(f"Server updated successfully: {normalized}")
+        return result
+
+    def patch_server(
+        self,
+        path: str,
+        patch: dict[str, Any],
+        if_match: str | None = None,
+    ) -> ServerUpdateResponse:
+        """Partial update via PATCH /api/servers/{path} (RFC 7396 JSON Merge Patch).
+
+        Only the keys present in ``patch`` are changed; everything else is
+        left untouched. Registrant-only fields (timestamps, identity
+        anchors, deployment, credentials) are rejected by the server with
+        a 422.
+
+        Args:
+            path: Server path with or without leading slash.
+            patch: Mapping of fields to change. A JSON null clears an
+                optional field.
+            if_match: Optional weak ETag from a prior GET/PUT/PATCH for
+                optimistic concurrency. When supplied and stale, the
+                server returns 412.
+
+        Returns:
+            ServerUpdateResponse with the updated server document.
+
+        Raises:
+            requests.HTTPError: 400 empty/malformed patch, 403 unauthorized
+                or federated, 404 not found, 412 precondition failed,
+                422 validation error.
+        """
+        normalized = path if path.startswith("/") else f"/{path}"
+        logger.info(f"Patching server: {normalized}")
+        logger.debug(f"Patch body: {json.dumps(patch, indent=2, default=str)}")
+
+        extra_headers = {"If-Match": if_match} if if_match else None
+        response = self._make_request(
+            method="PATCH",
+            endpoint=f"/api/servers{normalized}",
+            data=patch,
+            extra_headers=extra_headers,
+        )
+
+        result = ServerUpdateResponse(**response.json())
+        logger.info(f"Server patched successfully: {normalized}")
+        return result
+
     def list_services(
         self,
         limit: int = 20,
@@ -1877,7 +2024,13 @@ class RegistryClient:
 
         Returns:
             Configuration response with deployment_mode, registry_mode,
-            nginx_updates_enabled, and features dict
+            nginx_updates_enabled, and features dict. Also includes:
+            - auth_provider: name of the active auth provider (keycloak/pingfederate/etc.)
+            - idp_user_group_fallback_enabled_providers: list of providers that use
+              idp_user_groups fallback
+            - user_group_management_enabled: bool, whether the User Groups IAM tab is shown
+            - pingfederate_user_management_enabled: bool, whether PF Simple PCV user
+              creation is available
 
         Raises:
             requests.HTTPError: If request fails
@@ -4643,6 +4796,208 @@ class RegistryClient:
             method="DELETE",
             endpoint=f"/api/iam/m2m-clients/{quote(client_id, safe='')}",
         )
+
+    # ------------------------------------------------------------------
+    # Direct user-group registration (issue #1127, /api/iam/user-groups)
+    #
+    # These endpoints write directly to idp_user_groups for IdPs that
+    # don't carry group memberships in JWTs (e.g. PingFederate Simple
+    # PCV). Admin only for mutations.
+    # ------------------------------------------------------------------
+
+    def register_user_group(
+        self,
+        username: str,
+        groups: list[str],
+        email: str | None = None,
+        provider: str | None = None,
+        enabled: bool = True,
+    ) -> IdPUserGroup:
+        """Register a new username -> groups mapping in idp_user_groups.
+
+        Args:
+            username: IdP username (sub, email, or login id).
+            groups: Group memberships to assign.
+            email: Optional user email address.
+            provider: Optional provider hint. Server forces ``provider=manual``
+                today; included for forward-compatibility with the spec.
+            enabled: Whether the record should be active. Server defaults to
+                True for newly created manual records.
+
+        Returns:
+            The persisted user-group record.
+
+        Raises:
+            requests.HTTPError: 401/403 on auth, 409 if username already
+                exists, 422 for invalid payload.
+        """
+        logger.info(f"Registering user-group: {username}")
+
+        payload: dict[str, Any] = {
+            "username": username,
+            "groups": list(groups) if groups else [],
+        }
+        if email is not None:
+            payload["email"] = email
+        if provider is not None:
+            payload["provider"] = provider
+        if enabled is not True:
+            payload["enabled"] = enabled
+
+        response = self._make_request(
+            method="POST",
+            endpoint="/api/iam/user-groups",
+            data=payload,
+        )
+        return IdPUserGroup(**response.json())
+
+    def list_user_groups(
+        self,
+        skip: int = 0,
+        limit: int = 50,
+        provider: str | None = None,
+        q: str | None = None,
+    ) -> UserGroupListResponse:
+        """List user-group records (paginated).
+
+        Args:
+            skip: Offset for pagination (default 0).
+            limit: Max records to return (default 50).
+            provider: Optional provider filter (e.g. "manual", "pingfederate").
+            q: Optional substring filter on username/email.
+
+        Returns:
+            Paginated envelope with items and total.
+
+        Raises:
+            requests.HTTPError: 401 if unauthenticated.
+        """
+        logger.info(
+            f"Listing user-groups (skip={skip}, limit={limit}, provider={provider}, q={q})"
+        )
+
+        params: dict[str, Any] = {"skip": skip, "limit": limit}
+        if provider is not None:
+            params["provider"] = provider
+        if q is not None:
+            params["q"] = q
+
+        response = self._make_request(
+            method="GET",
+            endpoint="/api/iam/user-groups",
+            params=params,
+        )
+        return UserGroupListResponse(**response.json())
+
+    def get_user_group(self, username: str) -> IdPUserGroup:
+        """Fetch a single user-group record by username.
+
+        Args:
+            username: IdP username to look up.
+
+        Returns:
+            The user-group record.
+
+        Raises:
+            requests.HTTPError: 401 if unauthenticated, 404 if not found.
+        """
+        logger.info(f"Getting user-group: {username}")
+
+        response = self._make_request(
+            method="GET",
+            endpoint=f"/api/iam/user-groups/{quote(username, safe='')}",
+        )
+        return IdPUserGroup(**response.json())
+
+    def patch_user_group(
+        self,
+        username: str,
+        groups: list[str] | None = None,
+        email: str | None = None,
+        enabled: bool | None = None,
+    ) -> IdPUserGroup:
+        """Update fields on an existing user-group record (admin only).
+
+        Fields left as None are NOT sent to the server (unchanged). To clear
+        groups, pass an empty list explicitly.
+
+        Args:
+            username: IdP username to update.
+            groups: New groups list (empty list clears), or None to leave unchanged.
+            email: New email, or None to leave unchanged.
+            enabled: New enabled flag, or None to leave unchanged.
+
+        Returns:
+            The updated user-group record.
+
+        Raises:
+            requests.HTTPError: 401/403 on auth, 404 if not found.
+        """
+        logger.info(f"Updating user-group: {username}")
+
+        payload: dict[str, Any] = {}
+        if groups is not None:
+            payload["groups"] = list(groups)
+        if email is not None:
+            payload["email"] = email
+        if enabled is not None:
+            payload["enabled"] = enabled
+
+        response = self._make_request(
+            method="PATCH",
+            endpoint=f"/api/iam/user-groups/{quote(username, safe='')}",
+            data=payload,
+        )
+        return IdPUserGroup(**response.json())
+
+    def delete_user_group(self, username: str) -> None:
+        """Delete a user-group record by username (admin only).
+
+        Args:
+            username: IdP username to delete.
+
+        Raises:
+            requests.HTTPError: 401/403 on auth, 404 if not found.
+        """
+        logger.info(f"Deleting user-group: {username}")
+
+        self._make_request(
+            method="DELETE",
+            endpoint=f"/api/iam/user-groups/{quote(username, safe='')}",
+        )
+
+    def create_pingfederate_user(
+        self,
+        username: str,
+        password: str,
+    ) -> PingFederateUserCreateResponse:
+        """Create or update a user inside PingFederate's Simple PCV.
+
+        Only valid when AUTH_PROVIDER=pingfederate. The registry never
+        stores the password; it is forwarded once to the PF admin API.
+
+        Args:
+            username: Target username inside PingFederate.
+            password: Password to set (8-256 chars, validated server-side).
+
+        Returns:
+            Response describing whether the user was created or updated.
+
+        Raises:
+            requests.HTTPError: 400 if PF is not the active provider, 401/403
+                on auth, 404 if no user-group record exists for username, 502
+                on PingFederate admin API errors.
+        """
+        logger.info(f"Creating PingFederate Simple PCV user: {username}")
+
+        payload: dict[str, Any] = {"password": password}
+
+        response = self._make_request(
+            method="POST",
+            endpoint=f"/api/iam/user-groups/{quote(username, safe='')}/pingfederate-user",
+            data=payload,
+        )
+        return PingFederateUserCreateResponse(**response.json())
 
     # -------------------------------------------------------------------------
     # Application Logs (admin-only, issue #886)

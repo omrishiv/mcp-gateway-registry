@@ -133,6 +133,19 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
                     ("entra_group_admin_id", "Admin Group ID", False),
                 ],
             },
+            {
+                "id": "pingfederate",
+                "title": "PingFederate",
+                "fields": [
+                    ("pingfederate_enabled", "Enabled", False),
+                    ("pingfederate_base_url", "Base URL", False),
+                    ("pingfederate_client_id", "Client ID", False),
+                    ("pingfederate_client_secret", "Client Secret", True),
+                    ("pingfederate_m2m_client_id", "M2M Client ID", False),
+                    ("pingfederate_m2m_client_secret", "M2M Client Secret", True),
+                    ("pingfederate_groups_claim", "Groups Claim Name", False),
+                ],
+            },
         ],
     },
     "embeddings": {
@@ -686,10 +699,27 @@ async def _custom_type_tabs() -> list[dict[str, str]]:
 )
 async def get_config() -> dict[str, Any]:
     """Get current registry configuration."""
+    # User-group fallback feature flags (issue #1127). These let the frontend
+    # decide whether to show the "User Groups" IAM tab and the "Also create in
+    # PingFederate" checkbox without baking provider names into the UI.
+    auth_provider_lower = (settings.auth_provider or "").lower()
+    fallback_providers_lower = [
+        p.lower() for p in settings.idp_user_group_fallback_enabled_providers
+    ]
+    user_group_management_enabled = auth_provider_lower in fallback_providers_lower
+    pingfederate_user_management_enabled = (
+        user_group_management_enabled and auth_provider_lower == "pingfederate"
+    )
+
     return {
         "deployment_mode": settings.deployment_mode.value,
         "registry_mode": settings.registry_mode.value,
         "auth_provider": settings.auth_provider,
+        "idp_user_group_fallback_enabled_providers": list(
+            settings.idp_user_group_fallback_enabled_providers
+        ),
+        "user_group_management_enabled": user_group_management_enabled,
+        "pingfederate_user_management_enabled": pingfederate_user_management_enabled,
         "nginx_updates_enabled": settings.nginx_updates_enabled,
         "registration_gate_enabled": settings.registration_gate_enabled,
         "dedup_registration_hint_enabled": settings.dedup_registration_hint_enabled,

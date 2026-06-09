@@ -113,6 +113,24 @@ Group Management (IAM):
     # Delete an IAM group
     uv run python registry_management.py group-delete --name developers --force
 
+User Groups (IdP Fallback - issue #1127):
+    # Register a user-to-groups mapping (admin only)
+    uv run python registry_management.py user-group-create \\
+        --username alice --groups registry-admins,public-mcp-users
+
+    # List user-group mappings
+    uv run python registry_management.py user-group-list
+
+    # Update a user's groups
+    uv run python registry_management.py user-group-update \\
+        --username alice --groups registry-admins
+
+    # Delete a user-group mapping
+    uv run python registry_management.py user-group-delete --username alice
+
+    # Create a user inside PingFederate Simple PCV (PingFederate-only)
+    uv run python registry_management.py pingfederate-user-create --username alice
+
 Federation Management:
     # Get federation configuration
     uv run python registry_management.py federation-get
@@ -233,6 +251,7 @@ Local Development (running against local Docker Compose setup):
 """
 
 import argparse
+import getpass
 import json
 import logging
 import os
@@ -253,6 +272,7 @@ from registry_client import (
     RatingInfoResponse,
     RatingResponse,
     RegistryClient,
+    ServerUpdateResponse,
     Skill,
     SkillRegistrationRequest,
     ToolMapping,
@@ -595,8 +615,7 @@ def _transform_mcp_registry_to_internal(data: dict[str, Any]) -> dict[str, Any]:
         result["proxy_pass_url"] = None
 
     logger.info(
-        f"Transformed MCP Registry server.json: "
-        f"name={name} -> path={path}, deployment={deployment}"
+        f"Transformed MCP Registry server.json: name={name} -> path={path}, deployment={deployment}"
     )
     return result
 
@@ -1298,6 +1317,129 @@ def cmd_server_get(args: argparse.Namespace) -> int:
 
     except Exception as e:
         logger.error(f"Get server failed: {e}")
+        return 1
+
+
+def _build_update_server_body(args: argparse.Namespace) -> dict[str, Any]:
+    """Build the PUT body from --body or from individual field flags.
+
+    If ``--body`` is supplied, it is parsed as JSON and used verbatim.
+    Otherwise, only the supplied field flags are added to the body so
+    the user does not have to repeat unchanged fields.
+
+    Args:
+        args: Parsed CLI arguments for the update-server command.
+
+    Returns:
+        Dict to send as the JSON body of PUT /api/servers/{path}.
+
+    Raises:
+        ValueError: If ``--body`` is not valid JSON or not a JSON object.
+    """
+    if args.body:
+        parsed = json.loads(args.body)
+        if not isinstance(parsed, dict):
+            raise ValueError("--body must be a JSON object")
+        return parsed
+
+    body: dict[str, Any] = {}
+    if args.server_name is not None:
+        body["server_name"] = args.server_name
+    if args.description is not None:
+        body["description"] = args.description
+    if args.proxy_pass_url is not None:
+        body["proxy_pass_url"] = args.proxy_pass_url
+    if args.tags is not None:
+        body["tags"] = [t.strip() for t in args.tags.split(",") if t.strip()]
+    if args.license is not None:
+        body["license"] = args.license
+    if args.num_tools is not None:
+        body["num_tools"] = args.num_tools
+    if args.metadata is not None:
+        body["metadata"] = json.loads(args.metadata)
+    if args.visibility is not None:
+        body["visibility"] = args.visibility
+    if args.allowed_groups is not None:
+        body["allowed_groups"] = [g.strip() for g in args.allowed_groups.split(",") if g.strip()]
+    return body
+
+
+def cmd_update_server(args: argparse.Namespace) -> int:
+    """
+    Replace a server's mutable metadata via PUT /api/servers/{path}.
+
+    Either provide a full JSON body via --body, or supply individual
+    field flags (--server-name, --description, ...). When --body is
+    supplied, all field flags are ignored.
+
+    Args:
+        args: Command arguments with path, body or field flags, and
+            optional if-match.
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        body = _build_update_server_body(args)
+        if not body:
+            logger.error("No update fields provided. Pass --body or at least one field flag.")
+            return 1
+
+        client = _create_client(args)
+        result: ServerUpdateResponse = client.update_server(
+            path=args.path,
+            body=body,
+            if_match=args.if_match,
+        )
+
+        print(json.dumps(result.model_dump(), indent=2, default=str))
+        return 0
+
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON: {e}")
+        return 1
+    except Exception as e:
+        logger.error(f"Update server failed: {e}")
+        logger.debug("Full error details:", exc_info=True)
+        return 1
+
+
+def cmd_patch_server(args: argparse.Namespace) -> int:
+    """
+    Partially update a server via PATCH /api/servers/{path}.
+
+    The patch body must be a JSON object (RFC 7396 JSON Merge Patch).
+    Only fields present in the patch are changed.
+
+    Args:
+        args: Command arguments with path, patch JSON string, and
+            optional if-match.
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        patch = json.loads(args.patch)
+        if not isinstance(patch, dict):
+            logger.error("--patch must be a JSON object")
+            return 1
+
+        client = _create_client(args)
+        result: ServerUpdateResponse = client.patch_server(
+            path=args.path,
+            patch=patch,
+            if_match=args.if_match,
+        )
+
+        print(json.dumps(result.model_dump(), indent=2, default=str))
+        return 0
+
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON in --patch: {e}")
+        return 1
+    except Exception as e:
+        logger.error(f"Patch server failed: {e}")
+        logger.debug("Full error details:", exc_info=True)
         return 1
 
 
@@ -2233,8 +2375,7 @@ def cmd_agent_batch_submit(args: argparse.Namespace) -> int:
             print(json.dumps(response.model_dump(), indent=2, default=str))
         else:
             logger.info(
-                f"Batch submitted: job_id={response.job_id} "
-                f"(replay={response.idempotent_replay})"
+                f"Batch submitted: job_id={response.job_id} (replay={response.idempotent_replay})"
             )
             logger.info(f"Poll status with: agent-batch-status --job-id {response.job_id}")
         return 0
@@ -3517,6 +3658,204 @@ def cmd_m2m_client_delete(args: argparse.Namespace) -> int:
         return 0
     except Exception as e:
         logger.error(f"Delete M2M client failed: {e}")
+        return 1
+
+
+def _print_user_group(record: Any) -> None:
+    """Print one user-group record."""
+    print(f"Username: {record.username}")
+    print(f"Groups: {', '.join(record.groups) if record.groups else 'None'}")
+    print(f"Email: {record.email or '-'}")
+    print(f"Provider: {record.provider}")
+    print(f"Enabled: {record.enabled}")
+    if record.created_at:
+        print(f"Created: {record.created_at}")
+    if record.updated_at:
+        print(f"Updated: {record.updated_at}")
+
+
+def cmd_user_group_create(args: argparse.Namespace) -> int:
+    """Register a new user-to-groups mapping in idp_user_groups (admin only).
+
+    Args:
+        args: Command arguments.
+
+    Returns:
+        Exit code (0 for success, 1 for failure).
+    """
+    try:
+        groups = [g.strip() for g in args.groups.split(",") if g.strip()] if args.groups else []
+        client = _create_client(args)
+        result = client.register_user_group(
+            username=args.username,
+            groups=groups,
+            email=args.email,
+            provider=args.provider,
+            enabled=not args.disabled,
+        )
+        logger.info("User-group registered successfully\n")
+        if args.json:
+            print(result.model_dump_json(indent=2))
+            return 0
+        _print_user_group(result)
+        return 0
+    except Exception as e:
+        logger.error(f"Register user-group failed: {e}")
+        return 1
+
+
+def cmd_user_group_list(args: argparse.Namespace) -> int:
+    """List user-group records (paginated).
+
+    Args:
+        args: Command arguments.
+
+    Returns:
+        Exit code (0 for success, 1 for failure).
+    """
+    try:
+        client = _create_client(args)
+        result = client.list_user_groups(
+            skip=args.skip,
+            limit=args.limit,
+            provider=args.provider,
+            q=args.q,
+        )
+
+        if args.json:
+            print(result.model_dump_json(indent=2))
+            return 0
+
+        print(f"Total: {result.total}\n")
+        for item in result.items:
+            _print_user_group(item)
+            print("---")
+        return 0
+    except Exception as e:
+        logger.error(f"List user-groups failed: {e}")
+        return 1
+
+
+def cmd_user_group_get(args: argparse.Namespace) -> int:
+    """Get a single user-group record by username.
+
+    Args:
+        args: Command arguments.
+
+    Returns:
+        Exit code (0 for success, 1 for failure).
+    """
+    try:
+        client = _create_client(args)
+        result = client.get_user_group(args.username)
+
+        if args.json:
+            print(result.model_dump_json(indent=2))
+            return 0
+
+        _print_user_group(result)
+        return 0
+    except Exception as e:
+        logger.error(f"Get user-group failed: {e}")
+        return 1
+
+
+def cmd_user_group_update(args: argparse.Namespace) -> int:
+    """Update fields on an existing user-group record (admin only).
+
+    Args:
+        args: Command arguments.
+
+    Returns:
+        Exit code (0 for success, 1 for failure).
+    """
+    try:
+        # Only forward fields the user actually set on the command line.
+        groups: list[str] | None = None
+        if args.groups is not None:
+            groups = [g.strip() for g in args.groups.split(",") if g.strip()]
+
+        enabled: bool | None = None
+        if args.enabled:
+            enabled = True
+        elif args.disabled:
+            enabled = False
+
+        client = _create_client(args)
+        result = client.patch_user_group(
+            username=args.username,
+            groups=groups,
+            email=args.email,
+            enabled=enabled,
+        )
+        logger.info("User-group updated successfully\n")
+        if args.json:
+            print(result.model_dump_json(indent=2))
+            return 0
+        _print_user_group(result)
+        return 0
+    except Exception as e:
+        logger.error(f"Update user-group failed: {e}")
+        return 1
+
+
+def cmd_user_group_delete(args: argparse.Namespace) -> int:
+    """Delete a user-group record by username (admin only).
+
+    Args:
+        args: Command arguments.
+
+    Returns:
+        Exit code (0 for success, 1 for failure).
+    """
+    try:
+        if not args.force:
+            confirmation = input(f"Delete user-group '{args.username}'? (yes/no): ")
+            if confirmation.lower() != "yes":
+                logger.info("Operation cancelled")
+                return 0
+
+        client = _create_client(args)
+        client.delete_user_group(args.username)
+        print(f"Deleted: {args.username}")
+        return 0
+    except Exception as e:
+        logger.error(f"Delete user-group failed: {e}")
+        return 1
+
+
+def cmd_pingfederate_user_create(args: argparse.Namespace) -> int:
+    """Create or update a user inside PingFederate's Simple PCV (admin only).
+
+    Requires AUTH_PROVIDER=pingfederate server-side. The password is collected
+    via interactive prompt (so it never appears in shell history) unless
+    --password-stdin is passed in which case one line is read from stdin.
+    The registry never stores the password.
+
+    Args:
+        args: Command arguments.
+
+    Returns:
+        Exit code (0 for success, 1 for failure).
+    """
+    try:
+        if args.password_stdin:
+            password = sys.stdin.readline().rstrip("\n")
+        else:
+            password = getpass.getpass(f"Password for PingFederate user '{args.username}': ")
+
+        if not password:
+            logger.error("Empty password is not allowed")
+            return 1
+
+        client = _create_client(args)
+        result = client.create_pingfederate_user(args.username, password)
+
+        outcome = result.created_or_updated.capitalize()
+        print(f"{outcome} user in PingFederate: {result.username}")
+        return 0
+    except Exception as e:
+        logger.error(f"Create PingFederate user failed: {e}")
         return 1
 
 
@@ -4954,7 +5293,7 @@ def cmd_embeddings_missing(args: argparse.Namespace) -> int:
             print(json.dumps(data, indent=2))
             return 0
 
-        print(f"\nEmbeddings Index Status:")
+        print("\nEmbeddings Index Status:")
         print(f"  Source documents:  {total_source}")
         print(f"  Indexed:           {total_indexed}")
         print(f"  Missing:           {total_missing}")
@@ -4965,11 +5304,9 @@ def cmd_embeddings_missing(args: argparse.Namespace) -> int:
 
         print(f"\nMissing documents ({total_missing}):\n")
         print(f"  {'Path':<50} {'Type':<15} {'Name'}")
-        print(f"  {'-'*50} {'-'*15} {'-'*30}")
+        print(f"  {'-' * 50} {'-' * 15} {'-' * 30}")
         for entry in data.get("missing", []):
-            print(
-                f"  {entry['path']:<50} {entry['entity_type']:<15} {entry['name']}"
-            )
+            print(f"  {entry['path']:<50} {entry['entity_type']:<15} {entry['name']}")
 
         return 0
 
@@ -5035,9 +5372,7 @@ def cmd_embeddings_reindex(args: argparse.Namespace) -> int:
 
                 for detail in result.get("details", []):
                     if detail.get("status") == "failed":
-                        print(
-                            f"    FAILED: {detail['path']} - {detail.get('error', 'unknown')}"
-                        )
+                        print(f"    FAILED: {detail['path']} - {detail.get('error', 'unknown')}")
 
         print(f"\nReindex complete: {total_success} success, {total_failed} failed")
         return 0 if total_failed == 0 else 1
@@ -5211,6 +5546,73 @@ Examples:
     # Server get command
     server_get_parser = subparsers.add_parser("server-get", help="Get details of a specific server")
     server_get_parser.add_argument("--path", required=True, help="Server path (e.g., /my-server)")
+
+    # Server full-replacement update (PUT /api/servers/{path})
+    update_server_parser = subparsers.add_parser(
+        "update-server",
+        help="Replace a server's mutable metadata (PUT /api/servers/{path})",
+    )
+    update_server_parser.add_argument(
+        "--path", required=True, help="Server path (e.g., /my-server)"
+    )
+    update_server_parser.add_argument(
+        "--body",
+        default=None,
+        help=(
+            "Full JSON body for ServerUpdateRequest. When supplied, "
+            "individual field flags are ignored."
+        ),
+    )
+    update_server_parser.add_argument("--server-name", default=None, help="New server display name")
+    update_server_parser.add_argument("--description", default=None, help="New server description")
+    update_server_parser.add_argument(
+        "--proxy-pass-url", default=None, help="Backend URL for remote-deployment servers"
+    )
+    update_server_parser.add_argument("--tags", default=None, help="Comma-separated list of tags")
+    update_server_parser.add_argument("--license", default=None, help="License identifier")
+    update_server_parser.add_argument(
+        "--num-tools", type=int, default=None, help="Number of tools exposed by the server"
+    )
+    update_server_parser.add_argument(
+        "--metadata",
+        default=None,
+        help="JSON object string for the metadata field",
+    )
+    update_server_parser.add_argument(
+        "--visibility",
+        default=None,
+        choices=["public", "private", "group-restricted"],
+        help="Visibility level",
+    )
+    update_server_parser.add_argument(
+        "--allowed-groups",
+        default=None,
+        help="Comma-separated groups for group-restricted visibility",
+    )
+    update_server_parser.add_argument(
+        "--if-match",
+        dest="if_match",
+        default=None,
+        help="Weak ETag for optimistic concurrency (e.g. 'W/\"<epoch_ms>\"')",
+    )
+
+    # Server partial update (PATCH /api/servers/{path}) - RFC 7396 JSON Merge Patch
+    patch_server_parser = subparsers.add_parser(
+        "patch-server",
+        help="Partially update a server (PATCH /api/servers/{path}, RFC 7396 JSON Merge Patch)",
+    )
+    patch_server_parser.add_argument("--path", required=True, help="Server path (e.g., /my-server)")
+    patch_server_parser.add_argument(
+        "--patch",
+        required=True,
+        help="JSON object string with fields to change (RFC 7396 JSON Merge Patch)",
+    )
+    patch_server_parser.add_argument(
+        "--if-match",
+        dest="if_match",
+        default=None,
+        help="Weak ETag for optimistic concurrency (e.g. 'W/\"<epoch_ms>\"')",
+    )
 
     # Server rate command
     server_rate_parser = subparsers.add_parser("server-rate", help="Rate a server (1-5 stars)")
@@ -5779,6 +6181,125 @@ Examples:
     m2m_delete_parser.add_argument("--client-id", required=True, help="IdP client ID")
     m2m_delete_parser.add_argument("--force", action="store_true", help="Skip confirmation prompt")
 
+    # -------------------------------------------------------------------------
+    # User-group fallback commands (issue #1127)
+    # Write to idp_user_groups for IdPs (e.g. PingFederate) that don't carry
+    # group memberships in JWTs. Admin only for mutations.
+    # -------------------------------------------------------------------------
+
+    user_group_create_parser = subparsers.add_parser(
+        "user-group-create",
+        help="Register a username -> groups mapping in idp_user_groups (admin only)",
+    )
+    user_group_create_parser.add_argument(
+        "--username", required=True, help="IdP username (sub, email, or login id)"
+    )
+    user_group_create_parser.add_argument(
+        "--groups",
+        required=True,
+        help="Comma-separated group names (use empty string for no groups)",
+    )
+    user_group_create_parser.add_argument("--email", help="Optional user email")
+    user_group_create_parser.add_argument(
+        "--provider", help="Optional provider hint (server forces 'manual' today)"
+    )
+    user_group_create_parser.add_argument(
+        "--disabled",
+        action="store_true",
+        help="Create the record in disabled state (default: enabled)",
+    )
+    user_group_create_parser.add_argument(
+        "--json", action="store_true", help="Output raw JSON instead of formatted text"
+    )
+
+    user_group_list_parser = subparsers.add_parser(
+        "user-group-list",
+        help="List user-group fallback records (paginated)",
+    )
+    user_group_list_parser.add_argument(
+        "--skip", type=int, default=0, help="Offset for pagination (default 0)"
+    )
+    user_group_list_parser.add_argument(
+        "--limit", type=int, default=50, help="Max records per page (default 50)"
+    )
+    user_group_list_parser.add_argument(
+        "--provider", help="Filter by provider (e.g. manual, pingfederate)"
+    )
+    user_group_list_parser.add_argument(
+        "--q", help="Substring filter on username/email"
+    )
+    user_group_list_parser.add_argument(
+        "--json", action="store_true", help="Output raw JSON instead of formatted text"
+    )
+
+    user_group_get_parser = subparsers.add_parser(
+        "user-group-get",
+        help="Get a single user-group record by username",
+    )
+    user_group_get_parser.add_argument(
+        "--username", required=True, help="IdP username to look up"
+    )
+    user_group_get_parser.add_argument(
+        "--json", action="store_true", help="Output raw JSON instead of formatted text"
+    )
+
+    user_group_update_parser = subparsers.add_parser(
+        "user-group-update",
+        help="Update fields on an existing user-group record (admin only)",
+    )
+    user_group_update_parser.add_argument(
+        "--username", required=True, help="IdP username to update"
+    )
+    user_group_update_parser.add_argument(
+        "--groups",
+        help="Comma-separated new groups list; empty string clears groups; omit to leave unchanged",
+    )
+    user_group_update_parser.add_argument(
+        "--email", help="New email (omit to leave unchanged)"
+    )
+    user_group_update_enabled = user_group_update_parser.add_mutually_exclusive_group()
+    user_group_update_enabled.add_argument(
+        "--enabled", action="store_true", help="Set enabled=True"
+    )
+    user_group_update_enabled.add_argument(
+        "--disabled", action="store_true", help="Set enabled=False"
+    )
+    user_group_update_parser.add_argument(
+        "--json", action="store_true", help="Output raw JSON instead of formatted text"
+    )
+
+    user_group_delete_parser = subparsers.add_parser(
+        "user-group-delete",
+        help="Delete a user-group record by username (admin only)",
+    )
+    user_group_delete_parser.add_argument(
+        "--username", required=True, help="IdP username to delete"
+    )
+    user_group_delete_parser.add_argument(
+        "--force", action="store_true", help="Skip confirmation prompt"
+    )
+
+    pingfederate_user_create_parser = subparsers.add_parser(
+        "pingfederate-user-create",
+        help="Create or update a user inside PingFederate's Simple PCV (admin only)",
+        description=(
+            "Create or update a user inside PingFederate's Simple Password "
+            "Credential Validator (PCV). Requires AUTH_PROVIDER=pingfederate "
+            "server-side. The password is collected via an interactive prompt "
+            "(so it never appears in shell history) unless --password-stdin is "
+            "passed in which case one line is read from stdin. The registry "
+            "never stores the password."
+        ),
+    )
+    pingfederate_user_create_parser.add_argument(
+        "--username", required=True, help="Target username inside PingFederate"
+    )
+    pingfederate_user_create_parser.add_argument(
+        "--password-stdin",
+        action="store_true",
+        help="Read password from stdin instead of prompting interactively",
+    )
+
     # Create IAM group command
     group_create_parser = subparsers.add_parser("group-create", help="Create a new IAM group")
     group_create_parser.add_argument("--name", required=True, help="Group name")
@@ -6135,9 +6656,7 @@ Examples:
         "embeddings-missing",
         help="Find documents missing from the search embeddings index (admin only)",
     )
-    embeddings_missing_parser.add_argument(
-        "--json", action="store_true", help="Output raw JSON"
-    )
+    embeddings_missing_parser.add_argument("--json", action="store_true", help="Output raw JSON")
 
     embeddings_reindex_parser = subparsers.add_parser(
         "embeddings-reindex",
@@ -6203,6 +6722,8 @@ Examples:
         "list-groups": cmd_list_groups,
         "describe-group": cmd_describe_group,
         "server-get": cmd_server_get,
+        "update-server": cmd_update_server,
+        "patch-server": cmd_patch_server,
         "server-rate": cmd_server_rate,
         "server-rating": cmd_server_rating,
         "security-scan": cmd_security_scan,
@@ -6257,6 +6778,13 @@ Examples:
         "m2m-client-get": cmd_m2m_client_get,
         "m2m-client-update": cmd_m2m_client_update,
         "m2m-client-delete": cmd_m2m_client_delete,
+        # Direct user-group fallback registration (issue #1127)
+        "user-group-create": cmd_user_group_create,
+        "user-group-list": cmd_user_group_list,
+        "user-group-get": cmd_user_group_get,
+        "user-group-update": cmd_user_group_update,
+        "user-group-delete": cmd_user_group_delete,
+        "pingfederate-user-create": cmd_pingfederate_user_create,
         "group-create": cmd_group_create,
         "group-delete": cmd_group_delete,
         "group-list": cmd_group_list,

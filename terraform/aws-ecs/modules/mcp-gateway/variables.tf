@@ -41,19 +41,19 @@ variable "task_execution_role_arn" {
 variable "registry_image_uri" {
   description = "Container image URI for registry service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/registry:1.24.2"
+  default     = "public.ecr.aws/p3v1o3c6/registry:1.24.4"
 }
 
 variable "auth_server_image_uri" {
   description = "Container image URI for auth server service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/auth-server:1.24.2"
+  default     = "public.ecr.aws/p3v1o3c6/auth-server:1.24.4"
 }
 
 variable "mcpgw_image_uri" {
   description = "Container image URI for mcpgw service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/mcpgw:1.24.2"
+  default     = "public.ecr.aws/p3v1o3c6/mcpgw:1.24.4"
 }
 
 variable "enable_demo_servers" {
@@ -591,6 +591,12 @@ variable "idp_group_filter_prefix" {
   default     = ""
 }
 
+variable "idp_user_group_fallback_enabled_providers" {
+  description = "Comma-separated list of IdP providers (e.g. pingfederate) for which the registry's local idp_user_groups collection is consulted to populate empty JWT groups claims. Empty list disables the fallback for all providers. Default: pingfederate."
+  type        = string
+  default     = "pingfederate"
+}
+
 # =============================================================================
 # OKTA CONFIGURATION
 # =============================================================================
@@ -704,6 +710,89 @@ variable "auth0_management_api_token" {
   description = "Auth0 Management API token (alternative to M2M credentials, expires after 24h)"
   type        = string
   default     = ""
+  sensitive   = true
+}
+
+# =============================================================================
+# PINGFEDERATE CONFIGURATION
+# =============================================================================
+
+variable "pingfederate_enabled" {
+  description = "Enable PingFederate as authentication provider"
+  type        = bool
+  default     = false
+}
+
+variable "pingfederate_base_url" {
+  description = "PingFederate runtime base URL (internal, server-to-server), e.g. https://pf.example.com:9031"
+  type        = string
+  default     = ""
+}
+
+variable "pingfederate_external_url" {
+  description = "PingFederate external URL (browser-facing, for auth redirects)"
+  type        = string
+  default     = ""
+}
+
+variable "pingfederate_client_id" {
+  description = "PingFederate OAuth client ID for the gateway web app"
+  type        = string
+  default     = ""
+}
+
+variable "pingfederate_client_secret" {
+  description = "PingFederate OAuth client secret"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "pingfederate_m2m_client_id" {
+  description = "PingFederate M2M client ID (defaults to web client if empty)"
+  type        = string
+  default     = ""
+}
+
+variable "pingfederate_m2m_client_secret" {
+  description = "PingFederate M2M client secret (defaults to web client secret if empty)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "pingfederate_application_id_uri" {
+  description = "Optional resource-server identifier accepted as the JWT aud claim"
+  type        = string
+  default     = ""
+}
+
+variable "pingfederate_groups_claim" {
+  description = "JWT claim name carrying group memberships (default: groups)"
+  type        = string
+  default     = "groups"
+}
+
+# -----------------------------------------------------------------------------
+# PINGFEDERATE ADMIN API (registry only)
+# -----------------------------------------------------------------------------
+
+variable "pf_admin_url" {
+  description = "PingFederate admin API URL (used by registry to create OAuth clients and PCV users)"
+  type        = string
+  default     = "https://pingfederate:9999"
+}
+
+variable "pf_admin_user" {
+  description = "PingFederate admin API username"
+  type        = string
+  default     = "administrator"
+}
+
+variable "pf_admin_pass" {
+  description = "PingFederate admin API password (sensitive). Wired through AWS Secrets Manager in production."
+  type        = string
+  default     = "2FederateM0re"
   sensitive   = true
 }
 
