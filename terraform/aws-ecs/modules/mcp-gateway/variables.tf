@@ -1213,6 +1213,30 @@ variable "tool_filter_audit_log_level" {
   default     = "INFO"
 }
 
+variable "custom_entity_types_enabled" {
+  description = "Main switch for the custom-entity-types feature (dynamic tabs + endpoints). Off by default = no behavior change for existing deployments."
+  type        = bool
+  default     = false
+}
+
+variable "custom_type_cache_ttl_seconds" {
+  description = "TTL (seconds) for the in-process custom-type descriptor cache used by the config tab list and default search scope."
+  type        = number
+  default     = 60
+}
+
+variable "max_custom_records_per_type" {
+  description = "Soft cap on records per custom type (0 = unlimited). When non-zero, record creation is rejected with HTTP 409 once a type reaches the cap. Best-effort (concurrent creates may overshoot slightly)."
+  type        = number
+  default     = 1000
+}
+
+variable "max_custom_types" {
+  description = "Cap on the number of custom entity types an admin can define (0 = unlimited). When non-zero, type creation is rejected with HTTP 409 once the limit is reached."
+  type        = number
+  default     = 50
+}
+
 variable "mcp_advertised_scopes" {
   description = <<-EOT
     Space-separated override for the `scopes_supported` array in the gateway's

@@ -115,6 +115,7 @@ nav:
   - Architecture & Development:
     - Registry API: registry_api.md
     - Dynamic Tool Discovery: dynamic-tool-discovery.md
+    - Custom Entity Types: custom-entities.md
     - Architecture Overview: registry-auth-architecture.md
     - Detailed Architecture: registry-auth-detailed.md
   - Integration:

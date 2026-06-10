@@ -721,6 +721,117 @@ def _create_client(args: argparse.Namespace) -> RegistryClient:
     return RegistryClient(registry_url=registry_url, token=token)
 
 
+def cmd_custom_type_create(args: argparse.Namespace) -> int:
+    """
+    Define a new custom entity type from a JSON descriptor file (admin only).
+
+    Args:
+        args: Command arguments (expects args.config)
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        descriptor = _load_json_config(args.config)
+        client = _create_client(args)
+        response = client.create_custom_type(descriptor)
+        logger.info(f"Custom type created: {response.get('name')}")
+        if args.json:
+            print(json.dumps(response, indent=2, default=str))
+        return 0
+    except FileNotFoundError as e:
+        logger.error(f"Configuration file error: {e}")
+        return 1
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON configuration: {e}")
+        return 1
+    except Exception as e:
+        logger.error(f"Custom type creation failed: {e}")
+        return 1
+
+
+def cmd_custom_type_list(args: argparse.Namespace) -> int:
+    """
+    List all defined custom entity type descriptors.
+
+    Args:
+        args: Command arguments
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        client = _create_client(args)
+        response = client.list_custom_types()
+        if args.json:
+            print(json.dumps(response, indent=2, default=str))
+        else:
+            types = response.get("custom_types", [])
+            logger.info(f"Custom types ({response.get('total_count', len(types))}):")
+            for t in types:
+                field_count = len(t.get("fields", []))
+                logger.info(f"  {t.get('name')} ({field_count} fields): {t.get('display_name')}")
+        return 0
+    except Exception as e:
+        logger.error(f"Listing custom types failed: {e}")
+        return 1
+
+
+def cmd_custom_record_create(args: argparse.Namespace) -> int:
+    """
+    Create a record of a custom type from a JSON file.
+
+    Args:
+        args: Command arguments (expects args.type and args.config)
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        record = _load_json_config(args.config)
+        client = _create_client(args)
+        response = client.create_custom_record(args.type, record)
+        logger.info(f"Custom record created: {response.get('path')}")
+        if args.json:
+            print(json.dumps(response, indent=2, default=str))
+        return 0
+    except FileNotFoundError as e:
+        logger.error(f"Configuration file error: {e}")
+        return 1
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON configuration: {e}")
+        return 1
+    except Exception as e:
+        logger.error(f"Custom record creation failed: {e}")
+        return 1
+
+
+def cmd_custom_record_list(args: argparse.Namespace) -> int:
+    """
+    List records of a custom type the caller can view.
+
+    Args:
+        args: Command arguments (expects args.type)
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        client = _create_client(args)
+        response = client.list_custom_records(args.type)
+        if args.json:
+            print(json.dumps(response, indent=2, default=str))
+        else:
+            records = response.get("records", [])
+            logger.info(f"{args.type} records ({response.get('total_count', len(records))}):")
+            for r in records:
+                logger.info(f"  {r.get('name')} ({r.get('path')}) owner={r.get('owner')}")
+        return 0
+    except Exception as e:
+        logger.error(f"Listing custom records failed: {e}")
+        return 1
+
+
 def cmd_register(args: argparse.Namespace) -> int:
     """
     Register a new server from JSON configuration.
@@ -5455,6 +5566,47 @@ Examples:
         "--overwrite", action="store_true", help="Overwrite if server already exists"
     )
 
+    # Custom entity type commands (admin-defined, schema-driven catalog types)
+    custom_type_create_parser = subparsers.add_parser(
+        "custom-type-create", help="Define a new custom entity type from a JSON descriptor (admin)"
+    )
+    custom_type_create_parser.add_argument(
+        "--config", required=True, help="Path to custom type descriptor JSON file"
+    )
+    custom_type_create_parser.add_argument(
+        "--json", action="store_true", help="Print raw JSON response"
+    )
+
+    custom_type_list_parser = subparsers.add_parser(
+        "custom-type-list", help="List all custom entity type descriptors"
+    )
+    custom_type_list_parser.add_argument(
+        "--json", action="store_true", help="Print raw JSON response"
+    )
+
+    custom_record_create_parser = subparsers.add_parser(
+        "custom-record-create", help="Create a record of a custom type from a JSON file"
+    )
+    custom_record_create_parser.add_argument(
+        "--type", required=True, help="Custom type name (entity_type discriminator)"
+    )
+    custom_record_create_parser.add_argument(
+        "--config", required=True, help="Path to custom record JSON file"
+    )
+    custom_record_create_parser.add_argument(
+        "--json", action="store_true", help="Print raw JSON response"
+    )
+
+    custom_record_list_parser = subparsers.add_parser(
+        "custom-record-list", help="List records of a custom type"
+    )
+    custom_record_list_parser.add_argument(
+        "--type", required=True, help="Custom type name"
+    )
+    custom_record_list_parser.add_argument(
+        "--json", action="store_true", help="Print raw JSON response"
+    )
+
     # List command
     list_parser = subparsers.add_parser("list", help="List all servers")
     list_parser.add_argument("--query", help="Search query string")
@@ -6709,6 +6861,10 @@ Examples:
 
     command_handlers = {
         "register": cmd_register,
+        "custom-type-create": cmd_custom_type_create,
+        "custom-type-list": cmd_custom_type_list,
+        "custom-record-create": cmd_custom_record_create,
+        "custom-record-list": cmd_custom_record_list,
         "list": cmd_list,
         "toggle": cmd_toggle,
         "remove": cmd_remove,

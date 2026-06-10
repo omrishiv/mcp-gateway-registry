@@ -1,6 +1,12 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
 
+/** Lightweight tab descriptor from /api/config (name + display label only). */
+export interface CustomTypeTab {
+  name: string;
+  display_name: string;
+}
+
 interface RegistryConfig {
   deployment_mode: 'with-gateway' | 'registry-only';
   registry_mode: 'full' | 'skills-only' | 'mcp-servers-only' | 'agents-only';
@@ -24,7 +30,9 @@ interface RegistryConfig {
     virtual_servers: boolean;
     federation: boolean;
     gateway_proxy: boolean;
+    custom_types: boolean;
   };
+  custom_types: CustomTypeTab[];
 }
 
 const DEFAULT_CONFIG: RegistryConfig = {
@@ -43,7 +51,9 @@ const DEFAULT_CONFIG: RegistryConfig = {
     virtual_servers: true,
     federation: true,
     gateway_proxy: true,
+    custom_types: false,
   },
+  custom_types: [],
 };
 
 let cachedConfig: RegistryConfig | null = null;

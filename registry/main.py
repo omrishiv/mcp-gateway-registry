@@ -29,13 +29,15 @@ from registry.api.agent_routes import router as agent_router
 from registry.api.ans_routes import router as ans_router
 from registry.api.auth0_m2m_routes import router as auth0_m2m_router
 from registry.api.config_routes import router as config_router
+from registry.api.custom_entity_routes import router as custom_entity_router
+from registry.api.custom_type_routes import router as custom_type_router
+from registry.api.embeddings_admin_routes import router as embeddings_admin_router
 from registry.api.export_routes import router as export_router
 from registry.api.federation_export_routes import router as federation_export_router
 from registry.api.federation_routes import router as federation_router
 from registry.api.internal_routes import router as internal_router
 from registry.api.log_routes import router as log_router
 from registry.api.m2m_management_routes import router as m2m_management_router
-from registry.api.embeddings_admin_routes import router as embeddings_admin_router
 from registry.api.iam_user_groups_routes import router as iam_user_groups_router
 from registry.api.management_routes import router as management_router
 from registry.api.okta_m2m_routes import router as okta_m2m_router
@@ -1077,6 +1079,10 @@ app.include_router(federation_router, prefix="/api", tags=["federation"])
 app.include_router(skill_router, prefix="/api", tags=["skills"])
 app.include_router(config_router, prefix="/api/config", tags=["config"])
 app.include_router(virtual_server_router, prefix="/api", tags=["virtual-servers"])
+if settings.custom_entity_types_enabled:
+    app.include_router(custom_type_router, prefix="/api", tags=["custom-types"])
+    app.include_router(custom_entity_router, prefix="/api", tags=["custom-entities"])
+    logger.info("Custom entity types feature enabled; registered custom-type/custom routes")
 app.include_router(internal_router, prefix="/api")
 app.include_router(health_router, prefix="/api/health", tags=["Health Monitoring"])
 app.include_router(federation_export_router)

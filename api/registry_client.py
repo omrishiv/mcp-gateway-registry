@@ -1665,6 +1665,8 @@ class RegistryClient:
             or endpoint.startswith("/api/peers")
             or endpoint.startswith("/api/skills")
             or endpoint.startswith("/api/virtual-servers")
+            or endpoint.startswith("/api/custom-types")
+            or endpoint.startswith("/api/custom")
             or endpoint.startswith("/api/admin")
             or endpoint.startswith("/api/v1/registry")
             or endpoint.startswith("/api/v1/health")
@@ -5070,6 +5072,83 @@ class RegistryClient:
         """
         metadata = self.get_log_metadata()
         return metadata.services
+
+    # --- Custom entity types (admin-defined, schema-driven catalog types) ---
+
+    def create_custom_type(
+        self,
+        descriptor: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Define a new custom entity type (admin only).
+
+        Args:
+            descriptor: Type descriptor dict (name, display_name, description, fields).
+
+        Returns:
+            The created descriptor as returned by the registry.
+
+        Raises:
+            requests.HTTPError: 409 if the type already exists or the type
+                limit is reached; 422 on schema validation errors.
+        """
+        logger.info(f"Creating custom type: {descriptor.get('name')}")
+        response = self._make_request(
+            method="POST", endpoint="/api/custom-types", data=descriptor
+        )
+        logger.info(f"Custom type created: {descriptor.get('name')}")
+        return response.json()
+
+    def list_custom_types(self) -> dict[str, Any]:
+        """List all defined custom entity type descriptors.
+
+        Returns:
+            Dict with custom_types list and total_count.
+        """
+        response = self._make_request(method="GET", endpoint="/api/custom-types")
+        return response.json()
+
+    def create_custom_record(
+        self,
+        type_name: str,
+        record: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Create a record of the given custom type.
+
+        Args:
+            type_name: The custom type name (entity_type discriminator).
+            record: Record payload (name, description, visibility,
+                allowed_groups, tags, attributes).
+
+        Returns:
+            The created record as returned by the registry.
+
+        Raises:
+            requests.HTTPError: 404 if the type is unknown; 409 at the record
+                cap; 400 on attribute validation errors.
+        """
+        logger.info(f"Creating {type_name} record: {record.get('name')}")
+        response = self._make_request(
+            method="POST", endpoint=f"/api/custom/{type_name}", data=record
+        )
+        logger.info(f"Custom record created under {type_name}: {record.get('name')}")
+        return response.json()
+
+    def list_custom_records(
+        self,
+        type_name: str,
+    ) -> dict[str, Any]:
+        """List records of a custom type the caller can view.
+
+        Args:
+            type_name: The custom type name.
+
+        Returns:
+            Dict with records list and total_count.
+        """
+        response = self._make_request(
+            method="GET", endpoint=f"/api/custom/{type_name}"
+        )
+        return response.json()
 
 
 def _format_tool_result(

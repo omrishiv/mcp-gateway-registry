@@ -364,6 +364,21 @@ Controls the per-user tool allowlist filter applied at the registry REST endpoin
 
 ---
 
+## Group 13b — Custom Entity Types
+
+Admin-defined, schema-driven catalog types (catalog-only; never proxied or executed). These are **registry-only** — the
+auth-server does not read them. All three values are non-sensitive. When the Main switch is off (default) the dynamic
+tabs and `/api/custom*` endpoints are not registered, so there is no behavior change.
+
+| Parameter                  | Docker (`.env`)                 | Terraform (`.tfvars`)           | Helm (`values.yaml`)                     | Purpose                                                                                                 |
+|----------------------------|---------------------------------|---------------------------------|------------------------------------------|---------------------------------------------------------------------------------------------------------|
+| Enable custom entity types | `CUSTOM_ENTITY_TYPES_ENABLED`   | `custom_entity_types_enabled`   | `registry.app.customEntityTypesEnabled`  | Main switch for dynamic tabs + `/api/custom*` endpoints. Default `false`; off = routers not registered. |
+| Descriptor cache TTL (s)   | `CUSTOM_TYPE_CACHE_TTL_SECONDS` | `custom_type_cache_ttl_seconds` | `registry.app.customTypeCacheTtlSeconds` | TTL for the in-process custom-type descriptor cache. Default `60`.                                      |
+| Max records per type       | `MAX_CUSTOM_RECORDS_PER_TYPE`   | `max_custom_records_per_type`   | `registry.app.maxCustomRecordsPerType`   | Soft (best-effort) cap on records per type; create rejected at cap. Default `1000` (0 = unlimited).     |
+| Max custom types           | `MAX_CUSTOM_TYPES`              | `max_custom_types`              | `registry.app.maxCustomTypes`            | Cap on number of custom types; type create rejected at limit. Default `50` (0 = unlimited).             |
+
+---
+
 ## Group 14 — GitHub Private Repo Access (for SKILL.md fetching)
 
 Only the Helm `mcpgw` subchart and Docker expose these today.

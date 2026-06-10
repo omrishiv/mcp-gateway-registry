@@ -279,6 +279,12 @@ module "mcp_gateway" {
   mcp_proxy_max_body_bytes      = var.mcp_proxy_max_body_bytes
   tool_filter_audit_log_level   = var.tool_filter_audit_log_level
 
+  # Custom entity types (admin-defined, schema-driven catalog types)
+  custom_entity_types_enabled   = var.custom_entity_types_enabled
+  custom_type_cache_ttl_seconds = var.custom_type_cache_ttl_seconds
+  max_custom_records_per_type   = var.max_custom_records_per_type
+  max_custom_types              = var.max_custom_types
+
   # Deployment mode configuration
   deployment_mode = var.deployment_mode
   registry_mode   = var.registry_mode

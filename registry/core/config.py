@@ -163,6 +163,40 @@ class Settings(BaseSettings):
     # handles missing embeddings gracefully.
     search_fusion_method: str = "rrf"
 
+    # Custom entity types (admin-defined schema-driven catalog types)
+    custom_entity_types_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable admin-defined custom catalog entity types. This is a "
+            "feature-invisible kill-switch, not a pause-new-usage flag: when "
+            "false the CRUD routers are unregistered (404), the tabs/config "
+            "list is empty, and custom types are excluded from both the search "
+            "scope and result processing. Existing records remain in the DB but "
+            "are unreachable until the flag is re-enabled."
+        ),
+    )
+    custom_type_cache_ttl_seconds: float = Field(
+        default=60.0,
+        description="TTL for the in-process custom-type descriptor cache (seconds)",
+    )
+    max_custom_records_per_type: int = Field(
+        default=1000,
+        description=(
+            "Soft cap on records per custom type (0 = unlimited). Best-effort: "
+            "the count-then-create check may overshoot slightly under concurrent "
+            "creates; it is not a hard transactional guarantee. Guards against "
+            "runaway imports hitting the embedding-collection scaling ceiling."
+        ),
+    )
+    max_custom_types: int = Field(
+        default=50,
+        description=(
+            "Cap on the number of custom entity TYPES an admin can define "
+            "(0 = unlimited). Guards against unbounded type creation, each of "
+            "which carries its own embedding collection. Enforced at type create."
+        ),
+    )
+
     # LiteLLM-specific settings (only used when embeddings_provider='litellm')
     # For Bedrock: Set to None and configure AWS credentials via standard methods
     # (IAM roles, AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY env vars, or ~/.aws/credentials)
