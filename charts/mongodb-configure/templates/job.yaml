@@ -18,7 +18,7 @@ spec:
             - |
               echo "Installing pymongo..."
               pip install --no-cache-dir pymongo
-              
+
               echo "Waiting for MongoDB replica set to be ready..."
               python3 /app/wait.py
           volumeMounts:
@@ -32,6 +32,14 @@ spec:
           args: [
             "pip install --no-cache-dir pyyaml motor && python /app/script.py"
           ]
+{{- if not $.Values.mongodb.password}}
+          env:
+            - name: DOCUMENTDB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  key: password
+                  name: my-user-password
+          {{- end }}
           envFrom:
             - secretRef:
                 name: {{ $existingSecret | default "mongo-credentials" }}
