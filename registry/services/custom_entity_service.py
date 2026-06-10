@@ -29,11 +29,13 @@ from ..schemas.custom_entity_models import (
     CustomEntityRecord,
     CustomEntityUpdate,
     CustomTypeDescriptor,
+    CustomTypeUpdate,
 )
 from .custom_entity_errors import (
     CustomEntityNotFoundError,
     CustomEntityValidationError,
     CustomTypeHasRecordsError,
+    CustomTypeLimitError,
     CustomTypeRecordCapError,
     UnknownCustomTypeError,
 )
@@ -89,11 +91,42 @@ class CustomEntityService:
         self,
         descriptor: CustomTypeDescriptor,
     ) -> CustomTypeDescriptor:
-        """Persist a new type descriptor and invalidate the cache."""
+        """Persist a new type descriptor and invalidate the cache.
+
+        Enforces the MAX_CUSTOM_TYPES limit (0 = unlimited) before creating.
+        Like the record cap, this count-then-create check is best-effort: two
+        concurrent type creates could both pass at the boundary. Acceptable
+        because type creation is admin-only and low-frequency.
+        """
+        type_limit = settings.max_custom_types
+        if type_limit > 0:
+            current_types = await self._get_types().count_types()
+            if current_types >= type_limit:
+                raise CustomTypeLimitError(type_limit)
+
         created = await self._get_types().create(descriptor)
         self.cache.invalidate()
         logger.info(f"Defined custom type {created.name} ({len(created.fields)} fields)")
         return created
+
+    async def update_type(
+        self,
+        type_name: str,
+        request: CustomTypeUpdate,
+    ) -> CustomTypeDescriptor | None:
+        """Update a type's mutable metadata (display_name/description).
+
+        The type name and field schema are immutable; only display_name and
+        description can change. A field left None in the request is not touched.
+        Returns the updated descriptor, or None if the type does not exist.
+        Invalidates the descriptor cache so the new label propagates.
+        """
+        updates = request.model_dump(exclude_none=True)
+        updated = await self._get_types().update_metadata(type_name, updates)
+        if updated is not None:
+            self.cache.invalidate()
+            logger.info(f"Updated custom type {type_name} metadata: {list(updates.keys())}")
+        return updated
 
     async def delete_type(
         self,
@@ -126,8 +159,15 @@ class CustomEntityService:
         self,
         type_name: str,
     ) -> CustomTypeDescriptor | None:
-        """Return a single type descriptor (authoritative read)."""
-        return await self.cache.get_for_write(type_name)
+        """Return a single type descriptor (cache-backed read, hot path).
+
+        Uses the TTL cache: this is a read-only descriptor lookup (GET
+        /custom-types/{name}, list-page rendering), where a brief
+        cross-replica staleness window is acceptable. Write paths
+        (create/update/delete record) use get_for_write for an authoritative
+        read instead.
+        """
+        return await self.cache.get_for_read(type_name)
 
     # --- Record operations ----------------------------------------------
 
@@ -142,6 +182,11 @@ class CustomEntityService:
         if descriptor is None:
             raise UnknownCustomTypeError(type_name)
 
+        # Soft cap (0 = unlimited). This count-then-create check is best-effort:
+        # concurrent creates can both read a count below the cap and both insert,
+        # so the type may overshoot the cap slightly. It is NOT a hard
+        # transactional guarantee -- it exists to stop runaway imports, not to
+        # enforce an exact ceiling. Making it hard would need an atomic counter.
         cap = settings.max_custom_records_per_type
         if cap > 0:
             current_count = await self._get_entities().count(type_name)
@@ -310,7 +355,9 @@ class CustomEntityService:
         records THIS user can see — both use the SAME filter so the count
         matches the slice.
         """
-        descriptor = await self.cache.get_for_write(type_name)
+        # Read path: a list page tolerates brief cross-replica staleness, so
+        # use the TTL cache rather than an authoritative Mongo read per page.
+        descriptor = await self.cache.get_for_read(type_name)
         if descriptor is None:
             raise UnknownCustomTypeError(type_name)
         visibility_filter = _build_visibility_filter(user_context)

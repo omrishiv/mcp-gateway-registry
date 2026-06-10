@@ -20,11 +20,13 @@ from registry.schemas.custom_entity_models import (
     CustomFieldDescriptor,
     CustomFieldType,
     CustomTypeDescriptor,
+    CustomTypeUpdate,
 )
 from registry.services.custom_entity_errors import (
     CustomEntityNotFoundError,
     CustomEntityValidationError,
     CustomTypeHasRecordsError,
+    CustomTypeLimitError,
     CustomTypeRecordCapError,
     UnknownCustomTypeError,
 )
@@ -70,6 +72,9 @@ def service():
     search.delete_custom_entity_index_by_type = AsyncMock()
     types = MagicMock()
     types.delete = AsyncMock()
+    types.create = AsyncMock(side_effect=lambda d: d)
+    types.count_types = AsyncMock(return_value=0)
+    types.update_metadata = AsyncMock(return_value=_descriptor())
     cache = MagicMock()
     cache.get_for_write = AsyncMock(return_value=_descriptor())
     cache.invalidate = MagicMock()
@@ -196,3 +201,56 @@ class TestDeleteType:
             call.descriptor(TYPE),
         ]
         types.cache.invalidate.assert_called_once()
+
+
+@pytest.mark.unit
+class TestCreateType:
+    async def test_created_when_under_limit(self, service):
+        svc, _, _, types = service
+        types.count_types = AsyncMock(return_value=10)
+        with patch("registry.services.custom_entity_service.settings") as s:
+            s.max_custom_types = 50
+            out = await svc.create_type(_descriptor())
+        assert out.name == TYPE
+        types.create.assert_awaited_once()
+        types.cache.invalidate.assert_called_once()
+
+    async def test_type_limit_enforced(self, service):
+        svc, _, _, types = service
+        types.count_types = AsyncMock(return_value=50)
+        with patch("registry.services.custom_entity_service.settings") as s:
+            s.max_custom_types = 50
+            with pytest.raises(CustomTypeLimitError):
+                await svc.create_type(_descriptor())
+        types.create.assert_not_awaited()
+
+    async def test_zero_limit_means_unlimited(self, service):
+        svc, _, _, types = service
+        types.count_types = AsyncMock(return_value=10_000)
+        with patch("registry.services.custom_entity_service.settings") as s:
+            s.max_custom_types = 0
+            out = await svc.create_type(_descriptor())
+        assert out.name == TYPE
+        types.create.assert_awaited_once()
+
+
+@pytest.mark.unit
+class TestUpdateType:
+    async def test_updates_mutable_metadata(self, service):
+        svc, _, _, types = service
+        await svc.update_type(TYPE, CustomTypeUpdate(display_name="New Label"))
+        # Only the supplied (non-None) keys are forwarded to the repo.
+        types.update_metadata.assert_awaited_once_with(TYPE, {"display_name": "New Label"})
+        types.cache.invalidate.assert_called_once()
+
+    async def test_none_fields_excluded_from_update(self, service):
+        svc, _, _, types = service
+        await svc.update_type(TYPE, CustomTypeUpdate(description="just a description"))
+        types.update_metadata.assert_awaited_once_with(TYPE, {"description": "just a description"})
+
+    async def test_unknown_type_returns_none_no_cache_invalidate(self, service):
+        svc, _, _, types = service
+        types.update_metadata = AsyncMock(return_value=None)
+        result = await svc.update_type("does_not_exist", CustomTypeUpdate(display_name="x"))
+        assert result is None
+        types.cache.invalidate.assert_not_called()

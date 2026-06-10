@@ -374,7 +374,8 @@ tabs and `/api/custom*` endpoints are not registered, so there is no behavior ch
 |----------------------------|---------------------------------|---------------------------------|------------------------------------------|---------------------------------------------------------------------------------------------------------|
 | Enable custom entity types | `CUSTOM_ENTITY_TYPES_ENABLED`   | `custom_entity_types_enabled`   | `registry.app.customEntityTypesEnabled`  | Main switch for dynamic tabs + `/api/custom*` endpoints. Default `false`; off = routers not registered. |
 | Descriptor cache TTL (s)   | `CUSTOM_TYPE_CACHE_TTL_SECONDS` | `custom_type_cache_ttl_seconds` | `registry.app.customTypeCacheTtlSeconds` | TTL for the in-process custom-type descriptor cache. Default `60`.                                      |
-| Max records per type       | `MAX_CUSTOM_RECORDS_PER_TYPE`   | `max_custom_records_per_type`   | `registry.app.maxCustomRecordsPerType`   | Soft cap on records per type; create is rejected at the cap. Default `0` (unlimited).                   |
+| Max records per type       | `MAX_CUSTOM_RECORDS_PER_TYPE`   | `max_custom_records_per_type`   | `registry.app.maxCustomRecordsPerType`   | Soft (best-effort) cap on records per type; create rejected at cap. Default `1000` (0 = unlimited).     |
+| Max custom types           | `MAX_CUSTOM_TYPES`              | `max_custom_types`              | `registry.app.maxCustomTypes`            | Cap on number of custom types; type create rejected at limit. Default `50` (0 = unlimited).             |
 
 ---
 

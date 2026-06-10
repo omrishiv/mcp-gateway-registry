@@ -166,9 +166,19 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
           <input
             type="number"
             value={raw === undefined || raw === null ? '' : (raw as number)}
-            onChange={(e) =>
-              setAttr(field.name, e.target.value === '' ? null : Number(e.target.value))
-            }
+            onChange={(e) => {
+              // Guard against NaN: inputs like "1e" or "1.2.3" parse to NaN,
+              // which would serialize to null and silently drop the value.
+              // Treat any non-finite parse as empty (null) so the field stays
+              // predictable rather than confusingly failing server-side.
+              const text = e.target.value;
+              if (text === '') {
+                setAttr(field.name, null);
+                return;
+              }
+              const parsed = Number(text);
+              setAttr(field.name, Number.isFinite(parsed) ? parsed : null);
+            }}
             className={INPUT_CLASS}
           />
         );
@@ -250,13 +260,28 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
       return;
     }
 
+    // Materialize bool field defaults. The checkbox widget renders an untouched
+    // bool as unchecked but never writes into `attributes` until toggled, so a
+    // bool left at its default false would be OMITTED from the payload — and a
+    // required bool would then fail server-side for input that looked valid.
+    // Default any absent bool field to false before submitting.
+    const attributesWithDefaults = { ...attributes };
+    descriptor.fields.forEach((field) => {
+      if (
+        field.datatype === 'bool' &&
+        attributesWithDefaults[field.name] === undefined
+      ) {
+        attributesWithDefaults[field.name] = false;
+      }
+    });
+
     const payload = {
       name: name.trim(),
       description: description.trim() || null,
       visibility,
       allowed_groups: allowedGroups,
       tags,
-      attributes,
+      attributes: attributesWithDefaults,
     };
 
     setSaving(true);

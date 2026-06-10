@@ -23,11 +23,12 @@ from fastapi import (
 
 from ..audit.context import set_audit_action
 from ..auth.dependencies import nginx_proxied_auth
-from ..schemas.custom_entity_models import CustomTypeDescriptor
+from ..schemas.custom_entity_models import CustomTypeDescriptor, CustomTypeUpdate
 from ..services.custom_entity_errors import (
     CustomEntityValidationError,
     CustomTypeAlreadyExistsError,
     CustomTypeHasRecordsError,
+    CustomTypeLimitError,
 )
 from ..services.custom_entity_service import CustomEntityService
 
@@ -130,11 +131,53 @@ async def create_custom_type(
         created = await service.create_type(descriptor)
     except CustomTypeAlreadyExistsError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except CustomTypeLimitError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except CustomEntityValidationError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=e.errors)
 
     logger.info(f"Custom type defined: {created.name} by {user_context.get('username')}")
     return created
+
+
+@router.patch(
+    "/{name}",
+    response_model=CustomTypeDescriptor,
+    summary="Update a custom type's mutable metadata (admin)",
+)
+async def update_custom_type(
+    http_request: Request,
+    updates: CustomTypeUpdate,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    name: str = TYPE_PARAM,
+) -> CustomTypeDescriptor:
+    """Update a custom type's display_name/description. Admin only.
+
+    The type name and field schema are IMMUTABLE; only the human-facing
+    display_name and description can change. Renaming a type or altering its
+    fields is not supported (it would orphan existing records and embeddings);
+    delete and recreate the type for that.
+    """
+    _require_admin(user_context)
+
+    set_audit_action(
+        http_request,
+        "update",
+        "custom_type",
+        resource_id=name,
+        description=f"Update custom type {name} metadata",
+    )
+
+    service = _get_service()
+    updated = await service.update_type(name, updates)
+    if updated is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Unknown custom type: {name}",
+        )
+
+    logger.info(f"Custom type updated: {name} by {user_context.get('username')}")
+    return updated
 
 
 @router.delete(

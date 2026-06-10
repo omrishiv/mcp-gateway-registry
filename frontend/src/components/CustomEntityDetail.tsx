@@ -1,5 +1,9 @@
-import React, { useEffect } from 'react';
-import { XMarkIcon } from '@heroicons/react/24/outline';
+import React, { useEffect, useState } from 'react';
+import {
+  ClipboardDocumentCheckIcon,
+  ClipboardDocumentIcon,
+  XMarkIcon,
+} from '@heroicons/react/24/outline';
 import {
   CustomEntityRecord,
   CustomTypeDescriptor,
@@ -18,6 +22,22 @@ const CustomEntityDetail: React.FC<CustomEntityDetailProps> = ({
   record,
   onClose,
 }) => {
+  const [copied, setCopied] = useState(false);
+
+  // Copy the full record exactly as stored in the datastore (envelope +
+  // attributes + path/timestamps/ratings), pretty-printed. `record` is the
+  // raw object returned by the API, so this is a faithful copy of the stored
+  // document.
+  const handleCopyJson = async () => {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(record, null, 2));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy record JSON:', err);
+    }
+  };
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -38,12 +58,34 @@ const CustomEntityDetail: React.FC<CustomEntityDetailProps> = ({
           <h2 className="text-lg font-semibold text-gray-900 dark:text-white truncate">
             {record.name}
           </h2>
-          <button
-            onClick={onClose}
-            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-lg transition-colors"
-          >
-            <XMarkIcon className="h-5 w-5" />
-          </button>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <button
+              onClick={handleCopyJson}
+              title="Copy the full record JSON as stored"
+              aria-label="Copy record JSON"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg
+                         text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-700
+                         hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+            >
+              {copied ? (
+                <>
+                  <ClipboardDocumentCheckIcon className="h-4 w-4 text-green-600 dark:text-green-400" />
+                  Copied
+                </>
+              ) : (
+                <>
+                  <ClipboardDocumentIcon className="h-4 w-4" />
+                  Copy JSON
+                </>
+              )}
+            </button>
+            <button
+              onClick={onClose}
+              className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-lg transition-colors"
+            >
+              <XMarkIcon className="h-5 w-5" />
+            </button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-6 space-y-6">

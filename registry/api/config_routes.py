@@ -365,6 +365,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("custom_entity_types_enabled", "Enabled", False),
             ("custom_type_cache_ttl_seconds", "Descriptor Cache TTL (s)", False),
             ("max_custom_records_per_type", "Max Records Per Type (0 = unlimited)", False),
+            ("max_custom_types", "Max Custom Types (0 = unlimited)", False),
         ],
     },
 }

@@ -1175,6 +1175,10 @@ module "ecs_service_registry" {
           name  = "MAX_CUSTOM_RECORDS_PER_TYPE"
           value = tostring(var.max_custom_records_per_type)
         },
+        {
+          name  = "MAX_CUSTOM_TYPES"
+          value = tostring(var.max_custom_types)
+        },
         # Override the scopes_supported array advertised in the gateway's
         # /.well-known/oauth-protected-resource document. Required when the
         # IdP's RFC 7591 DCR rejects scopes that don't exist as client-scope

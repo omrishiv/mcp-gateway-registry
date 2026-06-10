@@ -115,7 +115,9 @@ spec:
             - name: CUSTOM_TYPE_CACHE_TTL_SECONDS
               value: {{ .Values.app.customTypeCacheTtlSeconds | default 60 | toString | quote }}
             - name: MAX_CUSTOM_RECORDS_PER_TYPE
-              value: {{ .Values.app.maxCustomRecordsPerType | default 0 | toString | quote }}
+              value: {{ .Values.app.maxCustomRecordsPerType | default 1000 | toString | quote }}
+            - name: MAX_CUSTOM_TYPES
+              value: {{ .Values.app.maxCustomTypes | default 50 | toString | quote }}
             {{- if .Values.awsRegistry.federationEnabled }}
             - name: AWS_REGISTRY_FEDERATION_ENABLED
               value: "true"

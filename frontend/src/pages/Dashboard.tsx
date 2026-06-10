@@ -2989,18 +2989,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                 Agent Skills
               </button>
             )}
-            {registryConfig?.features.federation !== false && (
-              <button
-                onClick={() => handleChangeViewFilter('external')}
-                className={`px-4 py-2 text-sm font-medium whitespace-nowrap transition-colors border-b-2 ${
-                  viewFilter === 'external'
-                    ? 'border-green-500 text-green-600 dark:text-green-400'
-                    : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
-                }`}
-              >
-                External Registries
-              </button>
-            )}
+            {/* Custom entity type tabs render before External Registries, which
+                is always the last tab. */}
             {registryConfig?.features.custom_types &&
               (registryConfig?.custom_types ?? []).map((ct) => {
                 const filter = `custom:${ct.name}` as const;
@@ -3018,6 +3008,18 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                   </button>
                 );
               })}
+            {registryConfig?.features.federation !== false && (
+              <button
+                onClick={() => handleChangeViewFilter('external')}
+                className={`px-4 py-2 text-sm font-medium whitespace-nowrap transition-colors border-b-2 ${
+                  viewFilter === 'external'
+                    ? 'border-green-500 text-green-600 dark:text-green-400'
+                    : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+                }`}
+              >
+                External Registries
+              </button>
+            )}
           </div>
 
           {viewFilter !== 'discover' && !currentCustomType && (

@@ -346,6 +346,13 @@ const DiscoverListRow: React.FC<DiscoverListRowProps> = ({
               onShowToast={onShowToast}
             />
           )}
+          {type === 'custom' && !customDescriptor && (
+            // Descriptor failed to load (deleted type, network error): show an
+            // inline notice instead of rendering an empty expanded box.
+            <div className="px-3 py-2 rounded-lg bg-gray-100 dark:bg-gray-900/50 text-sm text-gray-500 dark:text-gray-400">
+              Schema unavailable for this entry (type descriptor could not be loaded).
+            </div>
+          )}
         </div>
       )}
     </div>

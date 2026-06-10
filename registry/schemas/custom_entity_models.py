@@ -13,7 +13,7 @@ These types are catalog-only — never proxied, executed, or health-checked.
 
 import logging
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 from uuid import uuid4
 
@@ -39,6 +39,11 @@ MAX_ENUM_VALUES: int = 100  # cap enum option count
 MAX_STRING_LEN: int = 1_000  # single-line string value
 MAX_TEXT_LEN: int = 50_000  # textarea value; keeps doc well under DocumentDB 16MB
 MAX_ARRAY_ITEMS: int = 200  # array<string> item count
+# Admin-authored descriptor text (labels, display names, descriptions, enum
+# options). Bounded so a single descriptor can't bloat the cached snapshot that
+# every replica holds in memory.
+MAX_LABEL_LEN: int = 200  # field label / enum option / display name
+MAX_DESCRIPTION_LEN: int = 2_000  # type description
 
 # Envelope keys a custom field MUST NOT shadow (promoted/managed by
 # CustomEntityRecord), plus Mongo-interpreted keys that would collide at
@@ -76,7 +81,7 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-class CustomFieldType(str, Enum):
+class CustomFieldType(StrEnum):
     """Allowed datatypes for a custom-type field (v1: scalars + scalar arrays)."""
 
     STRING = "string"  # single-line text input
@@ -99,6 +104,7 @@ class CustomFieldDescriptor(BaseModel):
     )
     label: str | None = Field(
         default=None,
+        max_length=MAX_LABEL_LEN,
         description="Optional display label; omit to fall back to humanized name",
     )
     datatype: CustomFieldType
@@ -132,11 +138,17 @@ class CustomFieldDescriptor(BaseModel):
 
     @model_validator(mode="after")
     def _enum_values_consistency(self) -> "CustomFieldDescriptor":
-        """Enforce that enum_values is present iff datatype is enum."""
+        """Enforce that enum_values is present iff datatype is enum, and bound item length."""
         if self.datatype == CustomFieldType.ENUM and not self.enum_values:
             raise ValueError(f"field '{self.name}': enum datatype requires non-empty enum_values")
         if self.datatype != CustomFieldType.ENUM and self.enum_values:
             raise ValueError(f"field '{self.name}': enum_values only valid for enum datatype")
+        # Per-item length cap (the field's max_length only bounds the list count).
+        for opt in self.enum_values or []:
+            if len(opt) > MAX_LABEL_LEN:
+                raise ValueError(
+                    f"field '{self.name}': enum value exceeds {MAX_LABEL_LEN} characters"
+                )
         return self
 
 
@@ -157,8 +169,12 @@ class CustomTypeDescriptor(BaseModel):
         pattern=TYPE_NAME_PATTERN,
         description="URL-safe, IMMUTABLE type name; used as path prefix and entity_type",
     )
-    display_name: str | None = Field(default=None, description="Optional human label for the tab")
-    description: str | None = None
+    display_name: str | None = Field(
+        default=None,
+        max_length=MAX_LABEL_LEN,
+        description="Optional human label for the tab",
+    )
+    description: str | None = Field(default=None, max_length=MAX_DESCRIPTION_LEN)
     fields: list[CustomFieldDescriptor] = Field(
         ...,
         min_length=1,
@@ -192,6 +208,22 @@ class CustomTypeDescriptor(BaseModel):
         if len(names) != len(set(names)):
             raise ValueError("duplicate field names in descriptor")
         return v
+
+
+class CustomTypeUpdate(BaseModel):
+    """Partial update for a custom type's MUTABLE metadata only.
+
+    The type ``name`` (the URL-safe identifier, path prefix, and entity_type
+    discriminator) and the ``fields`` schema are IMMUTABLE in v1 -- changing
+    them would orphan existing records and embeddings. Only the human-facing
+    ``display_name`` and ``description`` can be edited. A field left None is
+    not touched (no-op); an explicit value (including empty string) overwrites.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str | None = Field(default=None, max_length=MAX_LABEL_LEN)
+    description: str | None = Field(default=None, max_length=MAX_DESCRIPTION_LEN)
 
 
 class CustomEntityRecord(BaseModel):

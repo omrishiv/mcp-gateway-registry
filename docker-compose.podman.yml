@@ -208,7 +208,8 @@ services:
       # Custom entity types (admin-defined, schema-driven catalog types)
       - CUSTOM_ENTITY_TYPES_ENABLED=${CUSTOM_ENTITY_TYPES_ENABLED:-false}
       - CUSTOM_TYPE_CACHE_TTL_SECONDS=${CUSTOM_TYPE_CACHE_TTL_SECONDS:-60}
-      - MAX_CUSTOM_RECORDS_PER_TYPE=${MAX_CUSTOM_RECORDS_PER_TYPE:-0}
+      - MAX_CUSTOM_RECORDS_PER_TYPE=${MAX_CUSTOM_RECORDS_PER_TYPE:-1000}
+      - MAX_CUSTOM_TYPES=${MAX_CUSTOM_TYPES:-50}
     ports:
       - "80:8080"   # Map host 80 to container 8080 (non-root nginx)
       - "443:8443"  # Map host 443 to container 8443 (non-root nginx)

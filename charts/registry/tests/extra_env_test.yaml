@@ -47,11 +47,12 @@ tests:
       # env[0]); DEPLOYMENT_MODE is env[1]; CODING_ASSISTANTS is env[7];
       # UI_TITLE is env[8]; the tool-level access control pair (issue #1026)
       # is env[9]/env[10]; MCP_ADVERTISED_SCOPES is env[11]; the custom-entity-
-      # types trio (CUSTOM_ENTITY_TYPES_ENABLED, CUSTOM_TYPE_CACHE_TTL_SECONDS,
-      # MAX_CUSTOM_RECORDS_PER_TYPE) is env[12]/env[13]/env[14];
-      # KEYCLOAK_ADMIN_PASSWORD (conditional on keycloak provider) is env[15];
+      # types quartet (CUSTOM_ENTITY_TYPES_ENABLED, CUSTOM_TYPE_CACHE_TTL_SECONDS,
+      # MAX_CUSTOM_RECORDS_PER_TYPE, MAX_CUSTOM_TYPES) is
+      # env[12]/env[13]/env[14]/env[15];
+      # KEYCLOAK_ADMIN_PASSWORD (conditional on keycloak provider) is env[16];
       # PF_ADMIN_URL/PF_ADMIN_USER (registry-only, always rendered) are
-      # env[16]/env[17]; user extraEnv entries are appended at the end.
+      # env[17]/env[18]; user extraEnv entries are appended at the end.
       #
       # NOTE: The indices below assume global.authProvider.type=keycloak
       # (set at the suite level), awsRegistry.federationEnabled=false, and
@@ -93,18 +94,21 @@ tests:
           value: MAX_CUSTOM_RECORDS_PER_TYPE
       - equal:
           path: spec.template.spec.containers[0].env[15].name
-          value: KEYCLOAK_ADMIN_PASSWORD
+          value: MAX_CUSTOM_TYPES
       - equal:
           path: spec.template.spec.containers[0].env[16].name
-          value: PF_ADMIN_URL
+          value: KEYCLOAK_ADMIN_PASSWORD
       - equal:
           path: spec.template.spec.containers[0].env[17].name
-          value: PF_ADMIN_USER
+          value: PF_ADMIN_URL
       - equal:
           path: spec.template.spec.containers[0].env[18].name
-          value: MY_FLAG
+          value: PF_ADMIN_USER
       - equal:
           path: spec.template.spec.containers[0].env[19].name
+          value: MY_FLAG
+      - equal:
+          path: spec.template.spec.containers[0].env[20].name
           value: MY_SECRET_VAR
 
   - it: appends extraEnvFrom entries after chart-managed envFrom sources
@@ -262,7 +266,12 @@ tests:
           path: spec.template.spec.containers[0].env
           content:
             name: MAX_CUSTOM_RECORDS_PER_TYPE
-            value: "0"
+            value: "1000"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MAX_CUSTOM_TYPES
+            value: "50"
 
   - it: emits custom-entity-types overrides when app values are set
     set:
@@ -270,6 +279,7 @@ tests:
         customEntityTypesEnabled: true
         customTypeCacheTtlSeconds: 120
         maxCustomRecordsPerType: 500
+        maxCustomTypes: 25
     asserts:
       - contains:
           path: spec.template.spec.containers[0].env
@@ -286,6 +296,11 @@ tests:
           content:
             name: MAX_CUSTOM_RECORDS_PER_TYPE
             value: "500"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MAX_CUSTOM_TYPES
+            value: "25"
 
   - it: fails when extraEnv contains CUSTOM_ENTITY_TYPES_ENABLED
     set:

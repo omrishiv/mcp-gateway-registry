@@ -23,11 +23,35 @@ interface UseCustomEntitiesReturn {
   deleteRecord: (uuid: string) => Promise<void>;
 }
 
-// Descriptors are immutable in v1 (no PUT — rename/restructure is delete+recreate),
-// so cache them per type across tab mounts. Without this, switching back into a
-// custom-entity tab refetches GET /api/custom-types/{name} every time, since the
-// tab unmounts when inactive and remounts fresh.
-const _descriptorCache = new Map<string, CustomTypeDescriptor>();
+// Descriptors are cached per type across tab mounts so switching back into a
+// custom-entity tab doesn't refetch GET /api/custom-types/{name} every time
+// (the tab unmounts when inactive and remounts fresh).
+//
+// Bounded TTL (not cache-forever): v1 has no descriptor PUT, but a type CAN be
+// deleted and recreated under the same name with a DIFFERENT schema. A
+// name-keyed forever-cache would then render the old schema for the whole page
+// lifetime. The TTL bounds that staleness to a short window (mirrors the
+// backend's custom_type_cache_ttl_seconds) without refetching on every tab
+// switch. We cannot key by schema_version because we don't know it until after
+// the fetch.
+const _DESCRIPTOR_CACHE_TTL_MS = 60_000;
+
+interface CachedDescriptor {
+  descriptor: CustomTypeDescriptor;
+  fetchedAt: number;
+}
+
+const _descriptorCache = new Map<string, CachedDescriptor>();
+
+function _getCachedDescriptor(typeName: string): CustomTypeDescriptor | null {
+  const entry = _descriptorCache.get(typeName);
+  if (!entry) return null;
+  if (Date.now() - entry.fetchedAt > _DESCRIPTOR_CACHE_TTL_MS) {
+    _descriptorCache.delete(typeName);
+    return null;
+  }
+  return entry.descriptor;
+}
 
 function _uuidOf(path: string): string {
   // Synthetic path is /{type}/{uuid}; the uuid is the last segment.
@@ -63,7 +87,7 @@ export const useCustomEntities = (typeName: string): UseCustomEntitiesReturn => 
   // Resolve the immutable descriptor. Served from the module cache on a hit so
   // re-entering a tab doesn't refetch; only a cache miss hits the network.
   useEffect(() => {
-    const cached = _descriptorCache.get(typeName);
+    const cached = _getCachedDescriptor(typeName);
     if (cached) {
       setDescriptor(cached);
       setDescriptorLoading(false);
@@ -79,13 +103,16 @@ export const useCustomEntities = (typeName: string): UseCustomEntitiesReturn => 
     axios
       .get<CustomTypeDescriptor>(`/api/custom-types/${typeName}`)
       .then((res) => {
-        _descriptorCache.set(typeName, res.data);
+        _descriptorCache.set(typeName, { descriptor: res.data, fetchedAt: Date.now() });
         if (!cancelled) setDescriptor(res.data);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
         const status = axios.isAxiosError(err) ? err.response?.status : undefined;
         if (status === 404) {
+          // Type no longer exists — drop any stale cache entry so a later
+          // recreate under the same name re-fetches the new schema.
+          _descriptorCache.delete(typeName);
           setNotFound(true);
         } else {
           console.error(`Failed to load custom type ${typeName}:`, err);

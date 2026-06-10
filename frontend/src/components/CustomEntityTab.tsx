@@ -1,8 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import {
   PlusIcon,
   ArrowPathIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   MagnifyingGlassIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
@@ -20,6 +22,12 @@ interface CurrentUser {
   username?: string;
   is_admin?: boolean;
 }
+
+// Records per page in the local listing. Records for a type are loaded into the
+// shared context in one fetch (like servers/agents), so pagination here is
+// client-side: it keeps the grid manageable when a type has many records
+// (e.g. dozens of model cards) without changing the data flow.
+const PAGE_SIZE = 24;
 
 interface CustomEntityTabProps {
   typeName: string;
@@ -63,6 +71,8 @@ const CustomEntityTab: React.FC<CustomEntityTabProps> = ({
   // Set on Enter to run a semantic search (mirrors the built-in Dashboard tabs);
   // typing alone only filters locally.
   const [committedQuery, setCommittedQuery] = useState('');
+  // Current page (0-based) for the local listing.
+  const [page, setPage] = useState(0);
 
   // Cross-type semantic search, matching the built-in tabs: pressing Enter
   // searches across ALL entity types (servers, agents, skills, custom, ...),
@@ -109,6 +119,21 @@ const CustomEntityTab: React.FC<CustomEntityTabProps> = ({
         );
       })
     : tagFiltered;
+
+  // Client-side pagination over the filtered set.
+  const totalPages = Math.max(1, Math.ceil(visibleRecords.length / PAGE_SIZE));
+  // Clamp the page if the filtered set shrank (e.g. a new search narrows results).
+  const safePage = Math.min(page, totalPages - 1);
+  const pagedRecords = useMemo(
+    () => visibleRecords.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE),
+    [visibleRecords, safePage],
+  );
+
+  // Reset to the first page whenever the filter inputs change, so the user
+  // isn't stranded on an out-of-range page after narrowing the results.
+  useEffect(() => {
+    setPage(0);
+  }, [query, selectedTags, typeName]);
 
   const openCreate = () => {
     setEditing(null);
@@ -218,7 +243,11 @@ const CustomEntityTab: React.FC<CustomEntityTabProps> = ({
       {!semanticEnabled && (
         <div className="flex items-center justify-between">
           <p className="text-sm text-gray-500 dark:text-gray-300">
-            Showing {visibleRecords.length} {displayName}
+            {visibleRecords.length === 0
+              ? `Showing 0 ${displayName}`
+              : `Showing ${safePage * PAGE_SIZE + 1}–${
+                  safePage * PAGE_SIZE + pagedRecords.length
+                } of ${visibleRecords.length} ${displayName}`}
           </p>
           {descriptor.description && (
             <p className="text-xs text-gray-400 dark:text-gray-500">
@@ -274,21 +303,56 @@ const CustomEntityTab: React.FC<CustomEntityTabProps> = ({
           </div>
         )
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {visibleRecords.map((record) => (
-            <CustomEntityCard
-              key={record.path}
-              descriptor={descriptor}
-              record={record}
-              canModify={canModify(record)}
-              onView={setViewing}
-              onEdit={openEdit}
-              onDelete={setDeleting}
-              authToken={authToken}
-              onShowToast={onShowToast}
-            />
-          ))}
-        </div>
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {pagedRecords.map((record) => (
+              <CustomEntityCard
+                key={record.path}
+                descriptor={descriptor}
+                record={record}
+                canModify={canModify(record)}
+                onView={setViewing}
+                onEdit={openEdit}
+                onDelete={setDeleting}
+                authToken={authToken}
+                onShowToast={onShowToast}
+              />
+            ))}
+          </div>
+
+          {/* Pagination controls (shown only when there's more than one page) */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-center gap-4 pt-2">
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                disabled={safePage === 0}
+                className="inline-flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-lg
+                           text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700
+                           hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors
+                           disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <ChevronLeftIcon className="h-4 w-4" />
+                Previous
+              </button>
+              <span className="text-sm text-gray-500 dark:text-gray-400">
+                Page {safePage + 1} of {totalPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                disabled={safePage >= totalPages - 1}
+                className="inline-flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-lg
+                           text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700
+                           hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors
+                           disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Next
+                <ChevronRightIcon className="h-4 w-4" />
+              </button>
+            </div>
+          )}
+        </>
       )}
 
       {showForm && (

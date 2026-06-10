@@ -1224,13 +1224,24 @@ variable "custom_type_cache_ttl_seconds" {
 }
 
 variable "max_custom_records_per_type" {
-  description = "Soft cap on records per custom type (0 = unlimited). When non-zero, record creation is rejected with HTTP 409 once a type reaches the cap. Guards against runaway imports hitting the embedding-collection scaling ceiling."
+  description = "Soft cap on records per custom type (0 = unlimited). When non-zero, record creation is rejected with HTTP 409 once a type reaches the cap. Best-effort (concurrent creates may overshoot slightly); guards against runaway imports hitting the embedding-collection scaling ceiling."
   type        = number
-  default     = 0
+  default     = 1000
 
   validation {
     condition     = var.max_custom_records_per_type >= 0
     error_message = "max_custom_records_per_type must be 0 (unlimited) or a positive integer"
+  }
+}
+
+variable "max_custom_types" {
+  description = "Cap on the number of custom entity types an admin can define (0 = unlimited). When non-zero, type creation is rejected with HTTP 409 once the limit is reached. Each type carries its own embedding collection, so this guards against unbounded type creation."
+  type        = number
+  default     = 50
+
+  validation {
+    condition     = var.max_custom_types >= 0
+    error_message = "max_custom_types must be 0 (unlimited) or a positive integer"
   }
 }
 

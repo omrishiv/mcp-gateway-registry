@@ -102,3 +102,14 @@ class CustomTypeRecordCapError(CustomEntityError):
         self.type_name = type_name
         self.cap = cap
         super().__init__(f"Custom type '{type_name}' has reached the record cap of {cap}")
+
+
+class CustomTypeLimitError(CustomEntityError):
+    """create_type when the fleet is at MAX_CUSTOM_TYPES (HTTP 409)."""
+
+    def __init__(
+        self,
+        cap: int,
+    ):
+        self.cap = cap
+        super().__init__(f"Cannot create custom type: the limit of {cap} custom types has been reached")

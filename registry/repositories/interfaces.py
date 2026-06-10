@@ -1753,6 +1753,20 @@ class CustomTypeRepositoryBase(ABC):
         """Delete a type descriptor. Returns True if a document was removed."""
         pass
 
+    @abstractmethod
+    async def update_metadata(
+        self,
+        name: str,
+        updates: dict[str, Any],
+    ) -> "CustomTypeDescriptor | None":
+        """Update mutable metadata (display_name/description) of a type.
+
+        Only the keys present in ``updates`` are written; the immutable
+        ``name``/``fields`` are never touched. Returns the updated descriptor,
+        or None if no type with this name exists.
+        """
+        pass
+
 
 class CustomEntityRepositoryBase(ABC):
     """Abstract base class for custom entity record storage (single collection)."""

@@ -9,8 +9,10 @@ service/config/search hot paths.
 import asyncio
 import logging
 import time
+from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorCollection
+from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from ...core.config import settings
@@ -174,6 +176,31 @@ class DocumentDBCustomTypeRepository(CustomTypeRepositoryBase):
             logger.info(f"Deleted custom type: {name}")
             return True
         return False
+
+    async def update_metadata(
+        self,
+        name: str,
+        updates: dict[str, Any],
+    ) -> CustomTypeDescriptor | None:
+        """Update mutable metadata (display_name/description) of a type.
+
+        Only the supplied keys are written via ``$set``; the immutable
+        ``_id``/``name``/``fields`` are never touched. Returns the updated
+        descriptor, or None if no type with this name exists.
+        """
+        if not updates:
+            # Nothing to change; return the current descriptor (or None).
+            return await self.get(name)
+        coll = await self._get_collection()
+        doc = await coll.find_one_and_update(
+            {"_id": name},
+            {"$set": updates},
+            return_document=ReturnDocument.AFTER,
+        )
+        if doc is None:
+            return None
+        logger.info(f"Updated custom type metadata: {name} ({list(updates.keys())})")
+        return CustomTypeDescriptor(**doc)
 
     async def count_types(self) -> int:
         """Count defined custom types (used by the metrics scrape gauge)."""

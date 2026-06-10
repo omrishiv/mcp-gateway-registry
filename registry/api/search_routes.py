@@ -780,8 +780,17 @@ async def semantic_search(
     # at query time, so every hit MUST pass the same public / private-owner /
     # group-restricted check used by the list/single-record paths
     # (see custom_entity_visibility._user_can_view) before being surfaced.
+    #
+    # Feature-flag symmetry: when CUSTOM_ENTITY_TYPES_ENABLED is off the feature
+    # is invisible (routers unregistered, tabs hidden, types excluded from the
+    # search scope). Gate this result loop too so a custom hit is never surfaced
+    # even if one reaches here (e.g. a stale scope cache), keeping all paths in
+    # agreement: off = feature invisible, existing records dormant.
+    custom_results = (
+        raw_results.get("custom", []) if settings.custom_entity_types_enabled else []
+    )
     filtered_custom: list[CustomEntitySearchResult] = []
-    for record in raw_results.get("custom", []):
+    for record in custom_results:
         record_path = record.get("path", "")
         if not record_path:
             continue
@@ -804,7 +813,10 @@ async def semantic_search(
                 tags=record.get("tags", []),
                 visibility=visibility,
                 owner=record.get("owner"),
-                is_enabled=record.get("is_enabled", False),
+                # Default True to match the CustomEntityRecord model default; a
+                # record whose embedding doc predates the field shouldn't be
+                # mislabeled disabled (which would hide it from default search).
+                is_enabled=record.get("is_enabled", True),
                 relevance_score=record.get("relevance_score", 0.0),
                 match_context=record.get("match_context"),
             )
