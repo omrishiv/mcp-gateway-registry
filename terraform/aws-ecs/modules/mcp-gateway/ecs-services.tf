@@ -121,7 +121,24 @@ module "ecs_service_auth" {
         },
         {
           name  = "AUTH_PROVIDER"
-          value = var.pingfederate_enabled ? "pingfederate" : (var.auth0_enabled ? "auth0" : (var.okta_enabled ? "okta" : (var.entra_enabled ? "entra" : (var.keycloak_domain != "" ? "keycloak" : "default"))))
+          value = var.pingfederate_enabled ? "pingfederate" : (var.auth0_enabled ? "auth0" : (var.okta_enabled ? "okta" : (var.entra_enabled ? "entra" : (var.cognito_enabled ? "cognito" : (var.keycloak_domain != "" ? "keycloak" : "default")))))
+        },
+        # Amazon Cognito configuration (COGNITO_CLIENT_SECRET via Secrets Manager below)
+        {
+          name  = "COGNITO_ENABLED"
+          value = tostring(var.cognito_enabled)
+        },
+        {
+          name  = "COGNITO_USER_POOL_ID"
+          value = var.cognito_user_pool_id
+        },
+        {
+          name  = "COGNITO_CLIENT_ID"
+          value = var.cognito_client_id
+        },
+        {
+          name  = "COGNITO_DOMAIN"
+          value = var.cognito_domain
         },
         {
           name  = "KEYCLOAK_URL"
@@ -480,6 +497,12 @@ module "ecs_service_auth" {
             valueFrom = aws_secretsmanager_secret.entra_client_secret[0].arn
           }
         ] : [],
+        var.cognito_enabled ? [
+          {
+            name      = "COGNITO_CLIENT_SECRET"
+            valueFrom = aws_secretsmanager_secret.cognito_client_secret[0].arn
+          }
+        ] : [],
         var.okta_enabled ? [
           {
             name      = "OKTA_CLIENT_SECRET"
@@ -689,6 +712,10 @@ module "ecs_service_registry" {
     var.aws_registry_federation_enabled ? {
       BedrockAgentCoreAccess = aws_iam_policy.bedrock_agentcore_access[0].arn
     } : {},
+    # Cognito read-only access for the registry IAM management UI (list groups/users)
+    var.cognito_enabled ? {
+      CognitoIamRead = aws_iam_policy.cognito_iam_read[0].arn
+    } : {},
     # Issue #1122: per-task ADOT sidecar needs AMP remote-write permission
     var.enable_observability ? {
       AMPRemoteWrite = aws_iam_policy.adot_amp_write[0].arn
@@ -781,7 +808,24 @@ module "ecs_service_registry" {
         },
         {
           name  = "AUTH_PROVIDER"
-          value = var.pingfederate_enabled ? "pingfederate" : (var.auth0_enabled ? "auth0" : (var.okta_enabled ? "okta" : (var.entra_enabled ? "entra" : (var.keycloak_domain != "" ? "keycloak" : "default"))))
+          value = var.pingfederate_enabled ? "pingfederate" : (var.auth0_enabled ? "auth0" : (var.okta_enabled ? "okta" : (var.entra_enabled ? "entra" : (var.cognito_enabled ? "cognito" : (var.keycloak_domain != "" ? "keycloak" : "default")))))
+        },
+        # Amazon Cognito configuration (COGNITO_CLIENT_SECRET via Secrets Manager below)
+        {
+          name  = "COGNITO_ENABLED"
+          value = tostring(var.cognito_enabled)
+        },
+        {
+          name  = "COGNITO_USER_POOL_ID"
+          value = var.cognito_user_pool_id
+        },
+        {
+          name  = "COGNITO_CLIENT_ID"
+          value = var.cognito_client_id
+        },
+        {
+          name  = "COGNITO_DOMAIN"
+          value = var.cognito_domain
         },
         {
           name  = "ENTRA_ENABLED"
@@ -1428,6 +1472,12 @@ module "ecs_service_registry" {
           {
             name      = "ENTRA_CLIENT_SECRET"
             valueFrom = aws_secretsmanager_secret.entra_client_secret[0].arn
+          }
+        ] : [],
+        var.cognito_enabled ? [
+          {
+            name      = "COGNITO_CLIENT_SECRET"
+            valueFrom = aws_secretsmanager_secret.cognito_client_secret[0].arn
           }
         ] : [],
         var.okta_enabled ? [
