@@ -1648,6 +1648,18 @@ class TestSemanticSearchCustomEntities:
     group-restricted check used by the list/single-record paths.
     """
 
+    @pytest.fixture(autouse=True)
+    def _enable_custom_entities(self):
+        """The custom-result bucket is only processed when the feature flag is
+        on (feature-invisible kill switch when off). These tests assert on the
+        custom bucket, so enable the flag for the whole class.
+        """
+        with patch(
+            "registry.api.search_routes.settings.custom_entity_types_enabled",
+            True,
+        ):
+            yield
+
     @pytest.mark.asyncio
     async def test_admin_sees_all_custom_records(
         self, mock_http_request, mock_search_repo, admin_user_context
