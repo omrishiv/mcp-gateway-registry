@@ -96,7 +96,7 @@ mongodb-kubernetes:
 mongodb:
   enabled: true
   user: &mongoUser my-user # username for MongoDB
-  password: &mongoPassword "" # Set the password for the MongoDB user or a random one is generated
+  password: &mongoPassword CHANGEME # Set the password for the MongoDB user
   database: &mongoDatabase mcp_registry
   existingPasswordSecret: "" # If set, skip creating my-user-password secret and use this name instead
   # connectionString: Full MongoDB URI override (MongoDB Atlas, externally-
