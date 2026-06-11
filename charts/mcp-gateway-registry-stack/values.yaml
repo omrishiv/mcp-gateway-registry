@@ -96,9 +96,9 @@ mongodb-kubernetes:
 mongodb:
   enabled: true
   user: &mongoUser my-user # username for MongoDB
-  password: &mongoPassword CHANGEME # Set the password for the MongoDB user
+  password: &mongoPassword "" # Set the password for the MongoDB user or a random one is generated
   database: &mongoDatabase mcp_registry
-  existingPasswordSecret: "" # If set, skip creating my-user-password secret and use this name instead
+  existingPasswordSecret: "" # BYO operator user password. When set, the MongoDBCommunity operator's passwordSecretRef points here (key: password). When unset, the operator reads from mongo-credentials.DOCUMENTDB_PASSWORD.
   # connectionString: Full MongoDB URI override (MongoDB Atlas, externally-
   # managed replica sets, etc.). When set, takes precedence over user/
   # password/host-based assembly throughout the stack. For production,

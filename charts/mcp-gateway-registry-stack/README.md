@@ -243,7 +243,7 @@ installed):
 
 ```bash
 helm dependency build && helm dependency update
-helm install mcp-gateway-registry -n MYNAMESPACE --create-namespace . 
+helm install mcp-gateway-registry -n MYNAMESPACE --create-namespace .
 ```
 
 This will deploy the necessary resources for a Kubernetes deployment of the MCP Gateway Registry
@@ -429,7 +429,7 @@ Navigate to the registry based on your routing mode:
 The username/password are displayed in the output of the `keycloak-configure job`
 
 ```bash
-kubectl get pods -l job-name=setup-keycloak -n MYNAMESPACE     
+kubectl get pods -l job-name=setup-keycloak -n MYNAMESPACE
 ```
 
 The output will look similar to:
@@ -588,7 +588,7 @@ can reference pre-existing secrets instead.
 | `global.existingSharedSecret` | `shared-secret` | SECRET_KEY and federation tokens shared by auth-server and registry |
 | `global.existingOauthProviderSecret` | `oauth-provider-secret` | Auth provider credentials (Keycloak/Entra/Okta/Auth0/Cognito) |
 | `global.existingMongoCredentialsSecret` | `mongo-credentials` | MongoDB connection credentials used by auth-server and registry. When set, `mongodb.connectionString` has no effect — deployment pods read their connection values directly from this existing secret. |
-| `mongodb.existingPasswordSecret` | `my-user-password` | MongoDB operator user password |
+| `mongodb.existingPasswordSecret` | _(unset)_ | MongoDB operator user password (BYO). When set, the operator's `passwordSecretRef` points at this Secret with key `password`. When unset, the operator reads the password from `mongo-credentials.DOCUMENTDB_PASSWORD` (managed by the chart). |
 
 ### Per-Service Existing Secrets
 
@@ -655,4 +655,3 @@ When an existing secret is specified:
 1. The chart skips creating the corresponding managed Secret resource (or skips that key for per-key references)
 2. Deployments and jobs reference the specified secret name instead
 3. The existing secret must contain the expected key (defaulting to the env var name)
-
