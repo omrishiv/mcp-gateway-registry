@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import axios from 'axios';
 import { getBaseURL } from '../utils/basePath';
 
@@ -64,14 +64,19 @@ interface AuthProviderProps {
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
-  const [csrfToken, setCsrfToken] = useState<string | null>(null);
+  // Hold CSRF token in a ref so updating it doesn't re-run the mount effect
+  // (a re-run would call checkAuth() again, which fetches /api/auth/me and
+  // /api/auth/csrf-token, sets the token, and triggers another re-run — a
+  // tight loop that surfaces transient 401s as spurious logouts).
+  const csrfTokenRef = useRef<string | null>(null);
 
   useEffect(() => {
     // Setup axios interceptor to include CSRF token in requests
     // (baseURL is already set at module-import time above)
     const interceptor = axios.interceptors.request.use((config) => {
-      if (csrfToken && config.method && ['post', 'put', 'delete', 'patch'].includes(config.method.toLowerCase())) {
-        config.headers['X-CSRF-Token'] = csrfToken;
+      const token = csrfTokenRef.current;
+      if (token && config.method && ['post', 'put', 'delete', 'patch'].includes(config.method.toLowerCase())) {
+        config.headers['X-CSRF-Token'] = token;
       }
       return config;
     });
@@ -82,7 +87,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     return () => {
       axios.interceptors.request.eject(interceptor);
     };
-  }, [csrfToken]);
+  }, []);
 
   const checkAuth = async () => {
     try {
@@ -104,15 +109,22 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       try {
         const csrfResponse = await axios.get('/api/auth/csrf-token');
         if (csrfResponse.data.csrf_token) {
-          setCsrfToken(csrfResponse.data.csrf_token);
+          csrfTokenRef.current = csrfResponse.data.csrf_token;
         }
       } catch (csrfError) {
         console.warn('Failed to fetch CSRF token:', csrfError);
       }
     } catch (error) {
-      // User not authenticated
-      setUser(null);
-      setCsrfToken(null);
+      // Only clear the user on a definite 401. Network errors, 5xx, or
+      // transient blips would otherwise flip an authenticated user to
+      // logged-out and bounce them to /login.
+      const status = axios.isAxiosError(error) ? error.response?.status : undefined;
+      if (status === 401) {
+        setUser(null);
+        csrfTokenRef.current = null;
+      } else {
+        console.warn('checkAuth failed (non-401), preserving user state:', error);
+      }
     } finally {
       setLoading(false);
     }
@@ -135,4 +147,4 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
-}; 
+};

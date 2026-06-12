@@ -1149,7 +1149,9 @@ try:
     from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
     if getattr(app, "_is_instrumented_by_opentelemetry", False):
-        logger.info("FastAPI already instrumented by opentelemetry-instrument; skipping programmatic instrument_app")
+        logger.info(
+            "FastAPI already instrumented by opentelemetry-instrument; skipping programmatic instrument_app"
+        )
     else:
         FastAPIInstrumentor.instrument_app(app)
         logger.info("Programmatic FastAPI auto-instrumentation enabled (issue #1122)")
@@ -2006,6 +2008,24 @@ async def validate_request(request: Request):
         # Initialize validation result
         validation_result = None
 
+        # Log which cookie names are present on the inbound /validate request.
+        # Distinguishes "browser didn't send mcp_gateway_session" (cookie scope
+        # / jar collision) from "nginx stripped it" (sub-request config drift)
+        # when diagnosing spurious 401s.
+        if cookie_header:
+            cookie_names = sorted(
+                {
+                    c.split("=", 1)[0].strip()
+                    for c in cookie_header.split(";")
+                    if c.strip() and "=" in c
+                }
+            )
+            mgs_count = cookie_header.count("mcp_gateway_session=")
+            logger.info(
+                f"Cookie names present: {cookie_names} "
+                f"(mcp_gateway_session occurrences: {mgs_count})"
+            )
+
         # FIRST: Check for session cookie if present
         if "mcp_gateway_session=" in cookie_header:
             logger.info("Session cookie detected, attempting session validation")
@@ -2174,9 +2194,7 @@ async def validate_request(request: Request):
             # values for direct-token paths where there's no `data`.
             data = validation_result.get("data") or {}
             user_provider = data.get("provider") or validation_result.get("method")
-            username_for_lookup = data.get("username") or validation_result.get(
-                "username", ""
-            )
+            username_for_lookup = data.get("username") or validation_result.get("username", "")
             current_user_groups = validation_result.get("groups", [])
 
             if should_enrich_user_groups(
