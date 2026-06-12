@@ -133,7 +133,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const logout = async () => {
     // Clear user state and CSRF token immediately for responsive UI
     setUser(null);
-    setCsrfToken(null);
+    csrfTokenRef.current = null;
     // Perform full-page redirect to logout endpoint
     // This allows the browser to follow the redirect chain: Registry → Auth-server → IdP → Registry
     // Using window.location.href avoids CORS issues with cross-origin redirects
