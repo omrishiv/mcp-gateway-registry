@@ -24,6 +24,28 @@ def _looks_like_guid(
     return bool(_GUID_RE.match(value or ""))
 
 
+def _flatten_server_access(
+    server_access: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Flatten a scope document's ``server_access`` into a flat rule list.
+
+    Handles two on-disk formats:
+    1. New format: ``{"scope_name": "...", "access_rules": [...]}``
+    2. Old/direct format: ``{"server": "...", "methods": [...], "tools": [...]}``
+
+    Entries that are neither (e.g. agent-permission blocks) are skipped.
+    Shared by ``get_server_scopes`` and ``get_server_scopes_bulk`` so the
+    single and batch paths produce byte-identical rule lists.
+    """
+    all_rules: list[dict[str, Any]] = []
+    for scope_entry in server_access:
+        if "access_rules" in scope_entry:
+            all_rules.extend(scope_entry.get("access_rules", []))
+        elif "server" in scope_entry:
+            all_rules.append(scope_entry)
+    return all_rules
+
+
 def _backfill_is_idp_managed(
     doc: dict,
 ) -> bool:
@@ -158,23 +180,8 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
                 logger.debug(f"DocumentDB READ: Scope '{scope_name}' not found")
                 return []
 
-            # Extract server access rules from the server_access array
-            server_access = group_doc.get("server_access", [])
-
-            # Flatten the access rules from all scope entries
-            # Handle two formats:
-            # 1. New format: {"scope_name": "...", "access_rules": [...]}
-            # 2. Old/direct format: {"server": "...", "methods": [...], "tools": [...]}
-            all_rules = []
-            for scope_entry in server_access:
-                # Check if this entry has "access_rules" (new format)
-                if "access_rules" in scope_entry:
-                    access_rules = scope_entry.get("access_rules", [])
-                    all_rules.extend(access_rules)
-                # Check if this entry is a direct server access rule (old format)
-                elif "server" in scope_entry:
-                    all_rules.append(scope_entry)
-                # Skip entries that are not server access rules (e.g., agent permissions)
+            # Extract and flatten the access rules from the server_access array.
+            all_rules = _flatten_server_access(group_doc.get("server_access", []))
 
             logger.debug(
                 f"DocumentDB READ: Found {len(all_rules)} access rules for scope '{scope_name}'"
@@ -183,6 +190,67 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
         except Exception as e:
             logger.error(f"Error getting server scopes for '{scope_name}': {e}", exc_info=True)
             return []
+
+    async def get_server_scopes_bulk(
+        self,
+        scope_names: list[str],
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Fetch server access rules for many scopes in a single ``$in`` query.
+
+        Collapses the per-scope ``find_one`` fan-out (one round-trip per
+        scope) into one round-trip. On a remote cluster a user with many
+        groups would otherwise pay one network latency per scope here.
+        """
+        unique = sorted({s for s in scope_names if s})
+        if not unique:
+            return {}
+
+        collection = await self._get_collection()
+        try:
+            cursor = collection.find({"_id": {"$in": unique}})
+            result: dict[str, list[dict[str, Any]]] = {}
+            async for doc in cursor:
+                rules = _flatten_server_access(doc.get("server_access", []))
+                if rules:
+                    result[doc["_id"]] = rules
+            logger.debug(
+                f"DocumentDB READ: bulk server scopes for {len(unique)} scopes "
+                f"-> {len(result)} with rules"
+            )
+            return result
+        except Exception as e:
+            logger.error(f"Error getting bulk server scopes: {e}", exc_info=True)
+            return {}
+
+    async def get_ui_scopes_bulk(
+        self,
+        group_names: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        """Fetch UI scopes for many groups/scopes in a single ``$in`` query.
+
+        Batch equivalent of ``get_ui_scopes``; same round-trip collapsing
+        rationale as ``get_server_scopes_bulk``.
+        """
+        unique = sorted({g for g in group_names if g})
+        if not unique:
+            return {}
+
+        collection = await self._get_collection()
+        try:
+            cursor = collection.find({"_id": {"$in": unique}})
+            result: dict[str, dict[str, Any]] = {}
+            async for doc in cursor:
+                ui_permissions = doc.get("ui_permissions", {})
+                if ui_permissions:
+                    result[doc["_id"]] = ui_permissions
+            logger.debug(
+                f"DocumentDB READ: bulk UI scopes for {len(unique)} groups "
+                f"-> {len(result)} with permissions"
+            )
+            return result
+        except Exception as e:
+            logger.error(f"Error getting bulk UI scopes: {e}", exc_info=True)
+            return {}
 
     async def add_server_scope(
         self,
@@ -294,9 +362,7 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
             self._scopes_cache.setdefault("UI-Scopes", {})[group_name] = {}
             self._scopes_cache.setdefault("group_mappings", {})[group_name] = []
 
-            logger.info(
-                f"Created group '{group_name}' (is_idp_managed={is_idp_managed})"
-            )
+            logger.info(f"Created group '{group_name}' (is_idp_managed={is_idp_managed})")
             return True
         except Exception as e:
             logger.error(f"Failed to create group in DocumentDB: {e}", exc_info=True)

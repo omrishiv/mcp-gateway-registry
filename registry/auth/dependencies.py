@@ -183,8 +183,14 @@ async def get_ui_permissions_for_user(user_scopes: list[str]) -> dict[str, list[
     ui_permissions = {}
     scope_repo = get_scope_repository()
 
+    # One round-trip for all scopes instead of one find_one per scope — on a
+    # remote cluster the per-scope fan-out dominated /api/auth/me latency for
+    # users with many groups. Iterate user_scopes (not the map) to keep the
+    # merge order deterministic.
+    scope_configs = await scope_repo.get_ui_scopes_bulk(user_scopes)
+
     for scope in user_scopes:
-        scope_config = await scope_repo.get_ui_scopes(scope)
+        scope_config = scope_configs.get(scope)
         if scope_config:
             logger.debug(f"Processing UI scope '{scope}' with config: {scope_config}")
 

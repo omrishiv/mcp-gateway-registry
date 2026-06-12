@@ -25,7 +25,6 @@ from registry.auth.access_resolver import (
     resolve_scope_access,
 )
 
-
 # =============================================================================
 # FIXTURES
 # =============================================================================
@@ -37,6 +36,20 @@ def mock_repo():
     repo = AsyncMock()
     repo.get_server_scopes = AsyncMock(return_value=[])
     repo.list_scope_names = AsyncMock(return_value=[])
+
+    # resolve_scope_access now batches via get_server_scopes_bulk. Delegate to
+    # the per-scope mock at call time so each test's return_value/side_effect on
+    # get_server_scopes still drives behavior, and a raising single still
+    # propagates (mirrors the base-class default impl, which doesn't swallow).
+    async def _bulk(scope_names: list[str]):
+        out: dict[str, list] = {}
+        for name in scope_names:
+            rules = await repo.get_server_scopes(name)
+            if rules:
+                out[name] = rules
+        return out
+
+    repo.get_server_scopes_bulk = AsyncMock(side_effect=_bulk)
     return repo
 
 
@@ -182,9 +195,7 @@ async def test_resolve_scope_access_union_of_two_scopes(patched_factory):
     access = await resolve_scope_access(["scope-a", "scope-b"])
 
     # Assert
-    assert access.tools == {
-        "current_time": {"current_time_by_timezone", "current_time_utc"}
-    }
+    assert access.tools == {"current_time": {"current_time_by_timezone", "current_time_utc"}}
 
 
 @pytest.mark.asyncio
@@ -326,9 +337,7 @@ async def test_get_user_accessible_tools_thin_wrapper(patched_factory):
 
 
 @pytest.mark.asyncio
-async def test_audit_legacy_scopes_no_warnings_on_clean_deployment(
-    patched_factory, caplog
-):
+async def test_audit_legacy_scopes_no_warnings_on_clean_deployment(patched_factory, caplog):
     """A deployment with only well-formed scopes emits zero warnings."""
     # Arrange
     patched_factory.list_scope_names.return_value = ["scope-a", "scope-b"]
@@ -358,9 +367,7 @@ async def test_audit_legacy_scopes_no_warnings_on_clean_deployment(
 
 
 @pytest.mark.asyncio
-async def test_audit_legacy_scopes_warns_on_missing_tools_key(
-    patched_factory, caplog
-):
+async def test_audit_legacy_scopes_warns_on_missing_tools_key(patched_factory, caplog):
     """A scope row missing the `tools` key triggers a WARN line."""
     # Arrange
     patched_factory.list_scope_names.return_value = ["tla-consumer-legacy"]
@@ -379,9 +386,7 @@ async def test_audit_legacy_scopes_warns_on_missing_tools_key(
 
 
 @pytest.mark.asyncio
-async def test_audit_legacy_scopes_warns_on_empty_tools_with_call_method(
-    patched_factory, caplog
-):
+async def test_audit_legacy_scopes_warns_on_empty_tools_with_call_method(patched_factory, caplog):
     """tools=[] combined with a call-capable method triggers a WARN."""
     # Arrange
     patched_factory.list_scope_names.return_value = ["tla-consumer-empty"]
@@ -427,6 +432,26 @@ async def test_audit_legacy_scopes_handles_repo_error(patched_factory, caplog):
 # =============================================================================
 
 
+def _wire_bulk_from_single(repo: AsyncMock) -> None:
+    """Wire get_server_scopes_bulk to delegate to the single getter.
+
+    resolve_scope_access batches via get_server_scopes_bulk; bare AsyncMock
+    repos that only configure get_server_scopes need the bulk method to defer
+    to it (matching the base-class default contract: dict keyed by scope,
+    empties omitted).
+    """
+
+    async def _bulk(scope_names: list[str]):
+        out: dict[str, list] = {}
+        for name in scope_names:
+            rules = await repo.get_server_scopes(name)
+            if rules:
+                out[name] = rules
+        return out
+
+    repo.get_server_scopes_bulk = AsyncMock(side_effect=_bulk)
+
+
 @pytest.mark.asyncio
 async def test_resolve_scope_access_tools_wildcard_as_bare_string(monkeypatch):
     """tools: "*" (string, not list) is treated as wildcard."""
@@ -435,9 +460,8 @@ async def test_resolve_scope_access_tools_wildcard_as_bare_string(monkeypatch):
     mock_repo.get_server_scopes.return_value = [
         {"server": "currenttime", "methods": ["all"], "tools": "*"},
     ]
-    monkeypatch.setattr(
-        "registry.repositories.factory.get_scope_repository", lambda: mock_repo
-    )
+    _wire_bulk_from_single(mock_repo)
+    monkeypatch.setattr("registry.repositories.factory.get_scope_repository", lambda: mock_repo)
 
     # Act
     access = await resolve_scope_access(["public-mcp-users"])
@@ -455,9 +479,8 @@ async def test_resolve_scope_access_tools_all_as_bare_string(monkeypatch):
     mock_repo.get_server_scopes.return_value = [
         {"server": "currenttime", "methods": ["all"], "tools": "all"},
     ]
-    monkeypatch.setattr(
-        "registry.repositories.factory.get_scope_repository", lambda: mock_repo
-    )
+    _wire_bulk_from_single(mock_repo)
+    monkeypatch.setattr("registry.repositories.factory.get_scope_repository", lambda: mock_repo)
 
     # Act
     access = await resolve_scope_access(["s"])
@@ -474,9 +497,8 @@ async def test_resolve_scope_access_tools_single_tool_as_bare_string(monkeypatch
     mock_repo.get_server_scopes.return_value = [
         {"server": "currenttime", "methods": ["tools/call"], "tools": "current_time_by_timezone"},
     ]
-    monkeypatch.setattr(
-        "registry.repositories.factory.get_scope_repository", lambda: mock_repo
-    )
+    _wire_bulk_from_single(mock_repo)
+    monkeypatch.setattr("registry.repositories.factory.get_scope_repository", lambda: mock_repo)
 
     # Act
     access = await resolve_scope_access(["s"])

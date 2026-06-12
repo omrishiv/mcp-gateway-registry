@@ -35,10 +35,10 @@ from registry.api.embeddings_admin_routes import router as embeddings_admin_rout
 from registry.api.export_routes import router as export_router
 from registry.api.federation_export_routes import router as federation_export_router
 from registry.api.federation_routes import router as federation_router
+from registry.api.iam_user_groups_routes import router as iam_user_groups_router
 from registry.api.internal_routes import router as internal_router
 from registry.api.log_routes import router as log_router
 from registry.api.m2m_management_routes import router as m2m_management_router
-from registry.api.iam_user_groups_routes import router as iam_user_groups_router
 from registry.api.management_routes import router as management_router
 from registry.api.okta_m2m_routes import router as okta_m2m_router
 from registry.api.peer_management_routes import router as peer_management_router
@@ -58,7 +58,6 @@ from registry.audit.routes import router as audit_router
 
 # Import auth dependencies
 from registry.auth.dependencies import (
-    get_ui_permissions_for_user,
     nginx_proxied_auth,
 )
 
@@ -131,18 +130,12 @@ def _resolve_internal_deployment_classification() -> None:
                 "is false; forcing to 'none'.",
                 current_type.value,
             )
-            object.__setattr__(
-                settings, "internal_deployment_type", InternalDeploymentType.NONE
-            )
+            object.__setattr__(settings, "internal_deployment_type", InternalDeploymentType.NONE)
         return
 
     if current_type == InternalDeploymentType.NONE:
-        logger.info(
-            "INTERNAL_ONLY_DEPLOYMENT is true with no type set; defaulting to 'dev'."
-        )
-        object.__setattr__(
-            settings, "internal_deployment_type", InternalDeploymentType.DEV
-        )
+        logger.info("INTERNAL_ONLY_DEPLOYMENT is true with no type set; defaulting to 'dev'.")
+        object.__setattr__(settings, "internal_deployment_type", InternalDeploymentType.DEV)
 
 
 def _log_startup_configuration() -> None:
@@ -1204,8 +1197,10 @@ async def get_current_user(user_context: dict[str, Any] = Depends(nginx_proxied_
     # Get user's scopes
     user_scopes = user_context.get("scopes", [])
 
-    # Get UI permissions for the user based on their scopes
-    ui_permissions = await get_ui_permissions_for_user(user_scopes)
+    # UI permissions are already derived by nginx_proxied_auth/_derive_user_context
+    # and carried on user_context — reuse them instead of re-querying the scope
+    # repo here, which previously ran a second per-scope fan-out per /me call.
+    ui_permissions = user_context.get("ui_permissions", {})
 
     # Return user info with scopes and UI permissions for token generation
     return {

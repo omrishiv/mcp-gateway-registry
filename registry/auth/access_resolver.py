@@ -12,7 +12,6 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -74,23 +73,27 @@ async def resolve_scope_access(
 
         scope_repo = get_scope_repository()
     except Exception as exc:
-        logger.error(
-            "resolve_scope_access: scope repo unavailable: %s", exc, exc_info=True
-        )
+        logger.error("resolve_scope_access: scope repo unavailable: %s", exc, exc_info=True)
         return UserAccess()
 
     servers: set[str] = set()
     tools: ToolAllowlist = {}
 
-    for scope in user_scopes:
-        try:
-            scope_config = await scope_repo.get_server_scopes(scope)
-        except Exception as exc:
-            logger.error(
-                "resolve_scope_access: get_server_scopes(%s) failed: %s", scope, exc
-            )
-            continue
+    # Fetch every scope's rules in one round-trip rather than one per scope.
+    # The sticky-wildcard / union semantics below depend on iterating
+    # `user_scopes` in order, NOT on DB return order, so we look each scope
+    # up in the prefetched map while preserving the original loop. Do NOT
+    # "optimize" this into `for scope in scope_rules:` — dict order is the
+    # $in/sort order, not the user's scope order, and that would let a later
+    # restricted scope lose to an earlier wildcard (or vice versa).
+    try:
+        scope_rules = await scope_repo.get_server_scopes_bulk(user_scopes)
+    except Exception as exc:
+        logger.error("resolve_scope_access: get_server_scopes_bulk failed: %s", exc, exc_info=True)
+        return UserAccess()
 
+    for scope in user_scopes:
+        scope_config = scope_rules.get(scope)
         if not scope_config:
             continue
 
@@ -209,17 +212,13 @@ async def audit_legacy_scopes_on_startup() -> int:
 
         scope_repo = get_scope_repository()
     except Exception as exc:
-        logger.error(
-            "audit_legacy_scopes_on_startup: scope repo unavailable: %s", exc
-        )
+        logger.error("audit_legacy_scopes_on_startup: scope repo unavailable: %s", exc)
         return 0
 
     try:
         scope_names = await scope_repo.list_scope_names()
     except Exception as exc:
-        logger.error(
-            "audit_legacy_scopes_on_startup: list_scope_names failed: %s", exc
-        )
+        logger.error("audit_legacy_scopes_on_startup: list_scope_names failed: %s", exc)
         return 0
 
     warnings_emitted = 0
@@ -254,11 +253,7 @@ async def audit_legacy_scopes_on_startup() -> int:
             elif (
                 isinstance(tools, list)
                 and not tools
-                and (
-                    "tools/call" in methods
-                    or "all" in methods
-                    or "*" in methods
-                )
+                and ("tools/call" in methods or "all" in methods or "*" in methods)
             ):
                 logger.warning(
                     "empty_tools_list_with_call_method scope=%s server=%s",

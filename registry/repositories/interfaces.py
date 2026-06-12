@@ -498,6 +498,60 @@ class ScopeRepositoryBase(ABC):
         """
         pass
 
+    async def get_server_scopes_bulk(
+        self,
+        scope_names: list[str],
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Get server access rules for many scopes in one call.
+
+        Batch equivalent of ``get_server_scopes``. On the cookie-auth hot
+        path a user with many groups resolves to many scopes, and issuing
+        one query per scope serializes a round-trip per scope — cheap on a
+        local Mongo, seconds on a remote Atlas cluster (Issue: scope
+        fan-out latency). Backends that can fetch all scopes in a single
+        query (DocumentDB ``$in``) override this; the default loops over
+        the per-scope method so in-memory backends (file) stay correct
+        with no extra cost.
+
+        Args:
+            scope_names: Scope names to fetch.
+
+        Returns:
+            Dict mapping scope name to its access-rule list. Scopes with no
+            rules are omitted (mirrors the empty-list return of the single
+            getter, while keeping the map compact).
+        """
+        result: dict[str, list[dict[str, Any]]] = {}
+        for scope_name in scope_names:
+            rules = await self.get_server_scopes(scope_name)
+            if rules:
+                result[scope_name] = rules
+        return result
+
+    async def get_ui_scopes_bulk(
+        self,
+        group_names: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        """Get UI scopes for many groups/scopes in one call.
+
+        Batch equivalent of ``get_ui_scopes`` — see ``get_server_scopes_bulk``
+        for the latency rationale. Backends with a single-query path override
+        this; the default loops over the per-scope getter.
+
+        Args:
+            group_names: Group/scope names to fetch.
+
+        Returns:
+            Dict mapping group/scope name to its UI-permissions dict. Names
+            with no UI permissions are omitted.
+        """
+        result: dict[str, dict[str, Any]] = {}
+        for group_name in group_names:
+            scopes = await self.get_ui_scopes(group_name)
+            if scopes:
+                result[group_name] = scopes
+        return result
+
     @abstractmethod
     async def load_all(self) -> None:
         """

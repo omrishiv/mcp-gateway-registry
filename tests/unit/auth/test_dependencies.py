@@ -212,10 +212,31 @@ def mock_scopes_config(sample_scopes_config: dict[str, Any], monkeypatch):
             return scope_config
         return []
 
+    # Bulk variants delegate to the single getters, mirroring the base-class
+    # default impl (dict keyed by scope name, empties omitted). Production code
+    # on the hot path now calls these instead of looping the singles.
+    async def mock_get_server_scopes_bulk(scope_names: list[str]):
+        out: dict[str, list] = {}
+        for name in scope_names:
+            rules = await mock_get_server_scopes(name)
+            if rules:
+                out[name] = rules
+        return out
+
+    async def mock_get_ui_scopes_bulk(group_names: list[str]):
+        out: dict[str, dict] = {}
+        for name in group_names:
+            scopes = await mock_get_ui_scopes(name)
+            if scopes:
+                out[name] = scopes
+        return out
+
     mock_repo.get_group_mappings.side_effect = mock_get_group_mappings
     mock_repo.get_all_group_mappings.side_effect = mock_get_all_group_mappings
     mock_repo.get_ui_scopes.side_effect = mock_get_ui_scopes
     mock_repo.get_server_scopes.side_effect = mock_get_server_scopes
+    mock_repo.get_server_scopes_bulk.side_effect = mock_get_server_scopes_bulk
+    mock_repo.get_ui_scopes_bulk.side_effect = mock_get_ui_scopes_bulk
 
     # Patch get_scope_repository to return our mock using patch context manager
     # Since it's imported locally in functions, we need to patch the import
