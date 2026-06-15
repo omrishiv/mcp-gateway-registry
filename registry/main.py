@@ -879,6 +879,10 @@ async def lifespan(app: FastAPI):
         await send_startup_ping()
         await start_heartbeat_scheduler()
 
+        # Start the GitHub-release update-check poller (admin banner; air-gap safe)
+        from registry.core.update_check import start_update_checker
+        await start_update_checker()
+
     except Exception as e:
         logger.error(f"❌ Failed to initialize services: {e}", exc_info=True)
         raise
@@ -907,6 +911,10 @@ async def lifespan(app: FastAPI):
         # Stop peer sync scheduler
         peer_sync_scheduler = get_peer_sync_scheduler()
         await peer_sync_scheduler.stop()
+
+        # Stop update-check poller
+        from registry.core.update_check import stop_update_checker
+        await stop_update_checker()
 
         # Shutdown audit logger if enabled
         if audit_logger is not None:

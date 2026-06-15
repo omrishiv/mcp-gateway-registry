@@ -237,6 +237,12 @@ spec:
             - name: PINGFEDERATE_GROUPS_CLAIM
               value: {{ .Values.pingfederate.groupsClaim | default "groups" | quote }}
             {{- end }}
+            # Update-check: poll GitHub Releases for newer registry versions
+            # (admin banner). Set updateCheck.enabled=false for air-gapped clusters.
+            - name: UPDATE_CHECK_ENABLED
+              value: {{ .Values.app.updateCheck.enabled | default true | toString | quote }}
+            - name: UPDATE_CHECK_INTERVAL_HOURS
+              value: {{ .Values.app.updateCheck.intervalHours | default 24 | toString | quote }}
             {{- if .Values.app.registryApiKeysExistingSecret }}
             - name: REGISTRY_API_KEYS
               valueFrom:

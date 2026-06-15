@@ -373,6 +373,21 @@ class Settings(BaseSettings):
         description="GitHub API base URL for App token exchange (for GHES: https://github.mycompany.com/api/v3)",
     )
 
+    # Update check (GitHub Releases API for newer registry versions)
+    update_check_enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable background polling of the GitHub Releases API to surface "
+            "newer registry versions to admins. Set false for air-gapped "
+            "deployments or to silence the admin banner."
+        ),
+    )
+    update_check_interval_hours: int = Field(
+        default=24,
+        ge=1,
+        description="Polling interval in hours for the update-check background task.",
+    )
+
     # Federation settings
     registry_id: str | None = None  # Unique identifier for this registry instance in federation
     federation_static_token_auth_enabled: bool = False  # Enable federation static token auth

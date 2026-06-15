@@ -217,6 +217,13 @@ app:
   appLogFileFormat: "json"         # "json" (default, Splunk-friendly) or "text" (legacy comma-separated)
   appLogConsoleFormat: "json"      # "json" (default, structured logging) or "text" (human-readable)
 
+  # Update-check: background poll of the GitHub Releases API to surface
+  # newer registry versions in an admin-only banner. Set updateCheck.enabled=false
+  # for air-gapped clusters or to silence the banner.
+  updateCheck:
+    enabled: true
+    intervalHours: 24
+
   # Tool-level access control (issue #1026)
   mcpToolsListFilterEnabled: true   # Registry-side awareness of the MCP tools/list filter (also read by auth-server)
   toolFilterAuditLogLevel: "INFO"   # Audit log level for tool-prune events (DEBUG, INFO, WARNING)

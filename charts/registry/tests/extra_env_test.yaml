@@ -84,7 +84,9 @@ tests:
       # env[16]/env[17]/env[18]/env[19];
       # KEYCLOAK_ADMIN_PASSWORD (conditional on keycloak provider) is env[20];
       # PF_ADMIN_URL/PF_ADMIN_USER (registry-only, always rendered) are
-      # env[21]/env[22]; user extraEnv entries are appended at the end.
+      # env[21]/env[22]; UPDATE_CHECK_ENABLED/UPDATE_CHECK_INTERVAL_HOURS
+      # (always rendered) are env[23]/env[24]; user extraEnv entries are
+      # appended at the end.
       #
       # NOTE: The indices below assume global.authProvider.type=keycloak
       # (set at the suite level), awsRegistry.federationEnabled=false, and
@@ -150,9 +152,15 @@ tests:
           value: PF_ADMIN_USER
       - equal:
           path: spec.template.spec.containers[0].env[23].name
-          value: MY_FLAG
+          value: UPDATE_CHECK_ENABLED
       - equal:
           path: spec.template.spec.containers[0].env[24].name
+          value: UPDATE_CHECK_INTERVAL_HOURS
+      - equal:
+          path: spec.template.spec.containers[0].env[25].name
+          value: MY_FLAG
+      - equal:
+          path: spec.template.spec.containers[0].env[26].name
           value: MY_SECRET_VAR
 
   - it: appends extraEnvFrom entries after chart-managed envFrom sources
