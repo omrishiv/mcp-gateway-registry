@@ -826,6 +826,32 @@ class Settings(BaseSettings):
         ),
     )
 
+    mcp_proxy_sig_ttl_seconds: int = Field(
+        default=30,
+        ge=5,
+        description=(
+            "Lifetime (seconds) of the /validate-minted /mcp-proxy internal "
+            "token; the replay-window cap. Short by design."
+        ),
+    )
+    mcp_proxy_sig_leeway_seconds: int = Field(
+        default=5,
+        ge=0,
+        description=(
+            "Clock-skew leeway (seconds) on the /mcp-proxy internal token "
+            "exp/iat checks."
+        ),
+    )
+    mcp_proxy_sig_enforce: bool = Field(
+        default=True,
+        description=(
+            "When true, mcp_proxy rejects requests whose /validate-minted "
+            "internal token is missing or invalid. Set false only for a staged "
+            "rollout: a missing token then falls back to the legacy header path "
+            "(fail-open); invalid tokens are always rejected."
+        ),
+    )
+
     @property
     def nginx_updates_enabled(self) -> bool:
         """Check if nginx updates should be performed."""

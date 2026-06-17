@@ -2606,10 +2606,36 @@ class TestForwardedResponseHeadersAllowlist:
         assert _select_forwarded_response_headers({}) == {}
 
 
+def _mcp_proxy_token_headers(
+    server_name: str = "office-docs",
+    upstream_url: str = "https://upstream.example/mcp",
+) -> dict:
+    """Build the X-Internal-Token nginx would forward to /mcp-proxy.
+
+    The verify_mcp_proxy_token dependency reads SECRET_KEY from the env (set
+    process-wide by the test conftest), and mint_mcp_proxy_token reads the same,
+    so a token minted here verifies in-process. Identity/scopes/upstream are read
+    from these claims; the handler ignores the inbound X-User/X-Scopes/X-Upstream-Url.
+    """
+    from auth_server.internal_request_token import mint_mcp_proxy_token
+
+    token = mint_mcp_proxy_token(
+        subject="test-user",
+        scopes=[],
+        server_name=server_name,
+        upstream_url=upstream_url,
+    )
+    return {"X-Internal-Token": token}
+
+
 class TestMcpProxyEndpointHeaderPassthrough:
     """End-to-end-style tests that drive the FastAPI /mcp-proxy/... route
     with a mocked httpx upstream and assert the client-visible response
     headers include the upstream Mcp-Session-Id.
+
+    Each request carries a valid X-Internal-Token (minted as nginx's /validate
+    hop would) so it passes the verify_mcp_proxy_token dependency; the upstream
+    URL is bound in the token, not the inbound header.
     """
 
     def test_session_id_forwarded_on_passthrough_branch(self):
@@ -2637,7 +2663,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
             response = client.post(
                 "/mcp-proxy/office-docs",
                 json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
-                headers={"X-Upstream-Url": "https://upstream.example/mcp"},
+                headers=_mcp_proxy_token_headers(),
             )
 
         assert response.status_code == 200
@@ -2677,7 +2703,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
             response = client.post(
                 "/mcp-proxy/office-docs",
                 json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
-                headers={"X-Upstream-Url": "https://upstream.example/mcp"},
+                headers=_mcp_proxy_token_headers(),
             )
 
         assert response.status_code == 200
@@ -2707,7 +2733,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
             response = client.post(
                 "/mcp-proxy/office-docs",
                 json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
-                headers={"X-Upstream-Url": "https://upstream.example/mcp"},
+                headers=_mcp_proxy_token_headers(),
             )
 
         assert response.status_code == 200
@@ -2738,15 +2764,16 @@ class TestMcpProxyEndpointHeaderPassthrough:
             response = client.post(
                 "/mcp-proxy/office-docs",
                 json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
-                headers={"X-Upstream-Url": "https://upstream.example/mcp"},
+                headers=_mcp_proxy_token_headers(),
             )
 
         assert response.status_code == 200
         assert response.headers.get("mcp-session-id") == "sess-flag-off-004"
 
-    def test_missing_upstream_url_header_rejected(self):
-        """Sanity: the existing 400 guard for missing X-Upstream-Url is
-        unaffected by the patch. Prevents accidental loosening.
+    def test_missing_internal_token_rejected(self):
+        """A request with no X-Internal-Token is rejected by the
+        verify_mcp_proxy_token dependency (default enforce) BEFORE the handler
+        runs.
         """
         import auth_server.server as server_module
 
@@ -2754,10 +2781,10 @@ class TestMcpProxyEndpointHeaderPassthrough:
         response = client.post(
             "/mcp-proxy/office-docs",
             json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+            headers={"X-Upstream-Url": "https://attacker.example/collect"},
         )
 
-        assert response.status_code == 400
-        assert "X-Upstream-Url" in response.json()["detail"]
+        assert response.status_code == 401
 
     def test_set_cookie_and_location_dropped_end_to_end(self):
         """End-to-end regression: even if an upstream MCP server emits
@@ -2789,7 +2816,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
             response = client.post(
                 "/mcp-proxy/office-docs",
                 json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
-                headers={"X-Upstream-Url": "https://upstream.example/mcp"},
+                headers=_mcp_proxy_token_headers(),
             )
 
         assert response.status_code == 200
@@ -2826,7 +2853,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
             response = client.post(
                 "/mcp-proxy/office-docs",
                 json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
-                headers={"X-Upstream-Url": "https://upstream.example/mcp"},
+                headers=_mcp_proxy_token_headers(),
             )
 
         assert response.status_code == 401

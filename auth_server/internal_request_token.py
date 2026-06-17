@@ -1,0 +1,238 @@
+"""Mint and verify short-lived internal JWTs for nginx->backend hops.
+
+The auth-server ``/validate`` endpoint is the only component that holds both the
+validated caller identity/scopes and (once nginx forwards ``$backend_url``) the
+resolved upstream URL. It mints a short-lived HS256 JWT over those fields, signed
+with the shared ``SECRET_KEY`` (the same key/pattern as
+``registry/auth/internal.py``). nginx forwards the token to the backend route via
+the existing ``auth_request_set`` plumbing. The backend route verifies the token
+and treats the claims as the source of truth for identity/scopes/destination,
+ignoring inbound ``X-User`` / ``X-Scopes`` / ``X-Upstream-Url`` headers entirely.
+"""
+
+import logging
+import os
+import time
+
+import jwt as pyjwt
+from fastapi import HTTPException, Request, status
+
+logger = logging.getLogger(__name__)
+
+# Reuse the existing internal issuer (matches registry/auth/internal.py).
+_ISSUER: str = "mcp-auth-server"
+
+# Audience for the /mcp-proxy hop. Distinct from the "mcp-registry" audience used
+# by registry/auth/internal.py service-to-service tokens, so one cannot be
+# replayed for the other (PyJWT verify_aud rejects audience mismatches).
+MCP_PROXY_AUDIENCE: str = "mcp-proxy"
+MCP_PROXY_TOKEN_USE: str = "mcp-proxy"
+
+# TTL is clamped to this floor so a misconfigured TTL of 0/negative cannot
+# combine with the leeway into a confusing always-valid window.
+_MIN_TTL_SECONDS: int = 5
+
+
+def _ttl_seconds() -> int:
+    raw = os.environ.get("MCP_PROXY_SIG_TTL_SECONDS", "30")
+    try:
+        candidate = int(raw)
+    except ValueError:
+        logger.warning(f"Invalid MCP_PROXY_SIG_TTL_SECONDS={raw!r}; using default 30")
+        return 30
+    if candidate < _MIN_TTL_SECONDS:
+        logger.warning(
+            f"MCP_PROXY_SIG_TTL_SECONDS={candidate} below floor; clamping to {_MIN_TTL_SECONDS}"
+        )
+        return _MIN_TTL_SECONDS
+    return candidate
+
+
+def _leeway_seconds() -> int:
+    raw = os.environ.get("MCP_PROXY_SIG_LEEWAY_SECONDS", "5")
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        logger.warning(f"Invalid MCP_PROXY_SIG_LEEWAY_SECONDS={raw!r}; using default 5")
+        return 5
+
+
+def _enforce() -> bool:
+    # Default-enforce: a security fix must not ship fail-open. Operators opt out
+    # of enforcement for a staged rollout by setting MCP_PROXY_SIG_ENFORCE to one
+    # of the documented false spellings; anything else (including unset) enforces.
+    raw = os.environ.get("MCP_PROXY_SIG_ENFORCE", "true").strip().lower()
+    return raw not in ("false", "0", "no", "off")
+
+
+def _get_secret_key() -> str:
+    secret_key = os.environ.get("SECRET_KEY")
+    if not secret_key:
+        raise ValueError("SECRET_KEY environment variable not set")
+    return secret_key
+
+
+def _mint_internal_token(
+    audience: str,
+    subject: str,
+    scopes: list[str],
+    extra_claims: dict | None = None,
+) -> str:
+    """Mint a short-lived HS256 internal JWT signed with SECRET_KEY.
+
+    Args:
+        audience: The intended verifier (e.g. "mcp-proxy").
+        subject: The validated caller identity (becomes ``sub``).
+        scopes: The validated entitlements (becomes ``scopes``, a JSON array).
+        extra_claims: Audience-specific claims (e.g. ``server``/``upstream_url``).
+
+    Returns:
+        Encoded JWT string.
+
+    Raises:
+        ValueError: If ``SECRET_KEY`` is unset or ``subject`` is empty.
+    """
+    if not subject:
+        # An empty subject would mint an anonymous-but-valid token. Refuse, so
+        # /validate returns 200 without a token, nginx forwards none, and the
+        # backend route rejects (fail-closed) rather than trusting "".
+        raise ValueError("Cannot mint internal token with empty subject")
+    secret_key = _get_secret_key()
+    now = int(time.time())
+    claims: dict = {
+        "iss": _ISSUER,
+        "aud": audience,
+        "sub": subject,
+        "scopes": list(scopes or []),
+        "iat": now,
+        "exp": now + _ttl_seconds(),
+    }
+    if extra_claims:
+        claims.update(extra_claims)
+    return pyjwt.encode(claims, secret_key, algorithm="HS256")
+
+
+def _decode_internal_token(
+    token: str,
+    audience: str,
+) -> dict:
+    """Decode and validate an internal JWT. Raises ``pyjwt`` errors on failure."""
+    secret_key = _get_secret_key()
+    return pyjwt.decode(
+        token,
+        secret_key,
+        algorithms=["HS256"],
+        issuer=_ISSUER,
+        audience=audience,
+        leeway=_leeway_seconds(),
+        options={
+            "verify_signature": True,
+            "verify_exp": True,
+            "verify_iat": True,
+            "verify_iss": True,
+            "verify_aud": True,
+        },
+    )
+
+
+# --------------------------------------------------------------------------- #
+# mcp-proxy wrappers (pin audience + required claims)
+# --------------------------------------------------------------------------- #
+
+
+def mint_mcp_proxy_token(
+    subject: str,
+    scopes: list[str],
+    server_name: str,
+    upstream_url: str,
+) -> str:
+    """Mint the per-request /mcp-proxy token in /validate's 200 path.
+
+    ``upstream_url`` is the resolved upstream **before** mcp_proxy's sub-path
+    append; mcp_proxy applies the append itself so the bound claim and /validate's
+    view agree exactly. ``server`` is the first path segment, used as a
+    path-traversal guard by the verifier.
+    """
+    return _mint_internal_token(
+        audience=MCP_PROXY_AUDIENCE,
+        subject=subject,
+        scopes=scopes,
+        extra_claims={
+            "server": server_name.split("/", 1)[0] if server_name else "",
+            "upstream_url": upstream_url,
+            "token_use": MCP_PROXY_TOKEN_USE,
+        },
+    )
+
+
+_warned_missing_token = False
+
+
+def _warn_once_missing_token() -> None:
+    global _warned_missing_token
+    if not _warned_missing_token:
+        logger.warning(
+            "mcp_proxy: X-Internal-Token missing and MCP_PROXY_SIG_ENFORCE is off; "
+            "allowing request via the legacy header path (FAIL-OPEN). Wire token "
+            "minting on every fronting nginx and remove the enforce opt-out."
+        )
+        _warned_missing_token = True
+
+
+async def verify_mcp_proxy_token(request: Request) -> None:
+    """FastAPI dependency on mcp_proxy.
+
+    On success stashes the verified claims on ``request.state.mcp_proxy_claims``
+    (the handler reads identity/scopes/upstream from there and ignores inbound
+    headers). On a verifiable failure raises 401. When the token is *missing* and
+    enforcement is disabled, allows the request via the legacy header path
+    (``request.state.mcp_proxy_claims = None``); an *invalid* (tampered / expired /
+    wrong-audience) token always raises 401 regardless of the enforce flag,
+    because that signals a malicious caller rather than a misconfiguration.
+    """
+    try:
+        # Presence check; _decode_internal_token re-reads SECRET_KEY itself.
+        _get_secret_key()
+    except ValueError:
+        logger.error("SECRET_KEY not set, cannot verify mcp-proxy token")
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server configuration error",
+        )
+
+    token = request.headers.get("X-Internal-Token")
+    if not token:
+        if not _enforce():
+            _warn_once_missing_token()
+            request.state.mcp_proxy_claims = None
+            return
+        logger.warning("mcp_proxy: missing X-Internal-Token (rejecting)")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Missing internal proxy token")
+
+    try:
+        claims = _decode_internal_token(token, audience=MCP_PROXY_AUDIENCE)
+    except pyjwt.ExpiredSignatureError:
+        logger.warning("mcp_proxy: expired internal token")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Internal proxy token expired")
+    except pyjwt.InvalidTokenError as exc:
+        logger.warning(f"mcp_proxy: invalid internal token: {exc}")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid internal proxy token")
+
+    if claims.get("token_use") != MCP_PROXY_TOKEN_USE:
+        logger.warning("mcp_proxy: wrong token_use in internal token")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid internal proxy token")
+    if not claims.get("upstream_url"):
+        logger.warning("mcp_proxy: internal token missing upstream binding")
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED, detail="Internal proxy token missing upstream"
+        )
+
+    # Path-traversal guard: the bound server must match the route's first segment.
+    path_server = (request.path_params.get("server_name") or "").split("/", 1)[0]
+    if claims.get("server") != path_server:
+        logger.warning(
+            f"mcp_proxy: server claim/path mismatch (claim={claims.get('server')!r} path={path_server!r})"
+        )
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Server claim/path mismatch")
+
+    request.state.mcp_proxy_claims = claims

@@ -125,6 +125,15 @@ tests:
       - failedTemplate:
           errorPattern: "\"DOCUMENTDB_PASSWORD\" is a reserved variable"
 
+  - it: fails when extraEnv contains the reserved mcp-proxy token enforce flag
+    set:
+      extraEnv:
+        - name: MCP_PROXY_SIG_ENFORCE
+          value: "false"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"MCP_PROXY_SIG_ENFORCE\" is a reserved variable"
+
   - it: fails on duplicate names within extraEnv
     set:
       extraEnv:

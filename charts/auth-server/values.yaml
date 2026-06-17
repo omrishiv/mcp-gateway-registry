@@ -70,6 +70,10 @@ app:
   mcpProxyMaxBodyBytes: "2097152"   # Max upstream tools/list body the proxy hop buffers; oversize returns HTTP 413
   toolFilterAuditLogLevel: "INFO"   # Audit log level for tool-prune events (DEBUG, INFO, WARNING)
 
+  mcpProxySigTtlSeconds: "30"       # Token lifetime (seconds); the replay-window cap (min 5)
+  mcpProxySigLeewaySeconds: "5"     # Clock-skew leeway (seconds) on token exp/iat
+  mcpProxySigEnforce: true          # Reject missing/invalid tokens
+
 # Authentication Provider Configuration
 # Choose ONE provider: keycloak, entra, okta, auth0, cognito, or pingfederate
 authProvider:

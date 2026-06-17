@@ -1202,6 +1202,34 @@ variable "tool_filter_audit_log_level" {
   }
 }
 
+variable "mcp_proxy_sig_ttl_seconds" {
+  description = "Lifetime (seconds) of the /validate-minted /mcp-proxy internal token; the replay-window cap. Minimum 5. Default 30."
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.mcp_proxy_sig_ttl_seconds >= 5
+    error_message = "mcp_proxy_sig_ttl_seconds must be at least 5"
+  }
+}
+
+variable "mcp_proxy_sig_leeway_seconds" {
+  description = "Clock-skew leeway (seconds) on the /mcp-proxy internal token exp/iat checks. Default 5."
+  type        = number
+  default     = 5
+
+  validation {
+    condition     = var.mcp_proxy_sig_leeway_seconds >= 0
+    error_message = "mcp_proxy_sig_leeway_seconds must be non-negative"
+  }
+}
+
+variable "mcp_proxy_sig_enforce" {
+  description = "When true, mcp_proxy rejects requests whose internal token is missing or invalid."
+  type        = bool
+  default     = true
+}
+
 # =============================================================================
 # CUSTOM ENTITY TYPES (admin-defined, schema-driven catalog types)
 # =============================================================================

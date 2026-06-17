@@ -1417,10 +1417,14 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         add_header X-MCP-Version-Routing "enabled" always;"""
         else:
             # Single-version server: forward the fixed upstream via X-Upstream-Url header.
-            # Quote the URL to prevent nginx from interpreting braces as variables
+            # Set $backend_url (in the rewrite phase) so the /validate subrequest can
+            # bind it into the internal token via X-Resolved-Upstream, matching what
+            # is forwarded here. Quote the URL so nginx does not interpret braces.
             proxy_directive = f"""
+        set $backend_url "{proxy_pass_url}";
+
         # Tell auth_server which upstream to forward to after filtering
-        proxy_set_header X-Upstream-Url "{proxy_pass_url}";
+        proxy_set_header X-Upstream-Url $backend_url;
 
         # Proxy to auth_server mcp-proxy hop (Issue #1026)
         proxy_pass {mcp_proxy_target};"""
@@ -1447,6 +1451,9 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         auth_request_set $auth_method $upstream_http_x_auth_method;
         auth_request_set $auth_server_name $upstream_http_x_server_name;
         auth_request_set $auth_tool_name $upstream_http_x_tool_name;
+        # Capture the /validate-minted internal JWT (binds identity/scopes/upstream).
+        # mcp_proxy verifies this instead of trusting the forgeable X-* headers below.
+        auth_request_set $auth_internal_token $upstream_http_x_internal_token;
 {proxy_directive}
         proxy_http_version 1.1;
         proxy_ssl_server_name on;
@@ -1476,6 +1483,8 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         proxy_set_header X-Auth-Method $auth_method;
         proxy_set_header X-Server-Name $auth_server_name;
         proxy_set_header X-Tool-Name $auth_tool_name;
+        # The internal JWT mcp_proxy verifies (it ignores the X-* headers above).
+        proxy_set_header X-Internal-Token $auth_internal_token;
 
         # Pass all original client headers
         proxy_pass_request_headers on;
