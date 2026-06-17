@@ -281,7 +281,6 @@ module "mcp_gateway" {
 
   mcp_proxy_sig_ttl_seconds    = var.mcp_proxy_sig_ttl_seconds
   mcp_proxy_sig_leeway_seconds = var.mcp_proxy_sig_leeway_seconds
-  mcp_proxy_sig_enforce        = var.mcp_proxy_sig_enforce
 
   # Custom entity types (admin-defined, schema-driven catalog types)
   custom_entity_types_enabled   = var.custom_entity_types_enabled

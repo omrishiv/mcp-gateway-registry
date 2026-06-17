@@ -57,14 +57,6 @@ def _leeway_seconds() -> int:
         return 5
 
 
-def _enforce() -> bool:
-    # Default-enforce: a security fix must not ship fail-open. Operators opt out
-    # of enforcement for a staged rollout by setting MCP_PROXY_SIG_ENFORCE to one
-    # of the documented false spellings; anything else (including unset) enforces.
-    raw = os.environ.get("MCP_PROXY_SIG_ENFORCE", "true").strip().lower()
-    return raw not in ("false", "0", "no", "off")
-
-
 def _get_secret_key() -> str:
     secret_key = os.environ.get("SECRET_KEY")
     if not secret_key:
@@ -165,30 +157,16 @@ def mint_mcp_proxy_token(
     )
 
 
-_warned_missing_token = False
-
-
-def _warn_once_missing_token() -> None:
-    global _warned_missing_token
-    if not _warned_missing_token:
-        logger.warning(
-            "mcp_proxy: X-Internal-Token missing and MCP_PROXY_SIG_ENFORCE is off; "
-            "allowing request via the legacy header path (FAIL-OPEN). Wire token "
-            "minting on every fronting nginx and remove the enforce opt-out."
-        )
-        _warned_missing_token = True
-
-
 async def verify_mcp_proxy_token(request: Request) -> None:
     """FastAPI dependency on mcp_proxy.
 
-    On success stashes the verified claims on ``request.state.mcp_proxy_claims``
-    (the handler reads identity/scopes/upstream from there and ignores inbound
-    headers). On a verifiable failure raises 401. When the token is *missing* and
-    enforcement is disabled, allows the request via the legacy header path
-    (``request.state.mcp_proxy_claims = None``); an *invalid* (tampered / expired /
-    wrong-audience) token always raises 401 regardless of the enforce flag,
-    because that signals a malicious caller rather than a misconfiguration.
+    Always fail-closed: a request to /mcp-proxy must carry a valid
+    /validate-minted ``X-Internal-Token``. On success the verified claims are
+    stashed on ``request.state.mcp_proxy_claims`` (the handler reads
+    identity/scopes/upstream from there and ignores the forgeable inbound
+    ``X-User`` / ``X-Scopes`` / ``X-Upstream-Url`` headers). Any failure --
+    missing, tampered, expired, wrong-audience, wrong token_use, missing upstream
+    binding, or server-claim/path mismatch -- raises 401 before any outbound call.
     """
     try:
         # Presence check; _decode_internal_token re-reads SECRET_KEY itself.
@@ -202,10 +180,6 @@ async def verify_mcp_proxy_token(request: Request) -> None:
 
     token = request.headers.get("X-Internal-Token")
     if not token:
-        if not _enforce():
-            _warn_once_missing_token()
-            request.state.mcp_proxy_claims = None
-            return
         logger.warning("mcp_proxy: missing X-Internal-Token (rejecting)")
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Missing internal proxy token")
 

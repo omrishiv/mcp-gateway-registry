@@ -505,7 +505,6 @@ auth-server:
 
     mcpProxySigTtlSeconds: "30"        # Token lifetime (seconds); the replay-window cap (min 5)
     mcpProxySigLeewaySeconds: "5"      # Clock-skew leeway (seconds) on token exp/iat
-    mcpProxySigEnforce: true           # Reject missing/invalid tokens
 
   keycloak:
     enabled: true

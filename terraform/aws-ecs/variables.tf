@@ -1224,12 +1224,6 @@ variable "mcp_proxy_sig_leeway_seconds" {
   }
 }
 
-variable "mcp_proxy_sig_enforce" {
-  description = "When true, mcp_proxy rejects requests whose internal token is missing or invalid."
-  type        = bool
-  default     = true
-}
-
 # =============================================================================
 # CUSTOM ENTITY TYPES (admin-defined, schema-driven catalog types)
 # =============================================================================

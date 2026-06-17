@@ -838,17 +838,7 @@ class Settings(BaseSettings):
         default=5,
         ge=0,
         description=(
-            "Clock-skew leeway (seconds) on the /mcp-proxy internal token "
-            "exp/iat checks."
-        ),
-    )
-    mcp_proxy_sig_enforce: bool = Field(
-        default=True,
-        description=(
-            "When true, mcp_proxy rejects requests whose /validate-minted "
-            "internal token is missing or invalid. Set false only for a staged "
-            "rollout: a missing token then falls back to the legacy header path "
-            "(fail-open); invalid tokens are always rejected."
+            "Clock-skew leeway (seconds) on the /mcp-proxy internal token " "exp/iat checks."
         ),
     )
 
@@ -1023,9 +1013,7 @@ class Settings(BaseSettings):
         if isinstance(v, InternalDeploymentType):
             return v.value
         if not isinstance(v, str):
-            raise ValueError(
-                f"INTERNAL_DEPLOYMENT_TYPE must be a string, got {type(v).__name__}"
-            )
+            raise ValueError(f"INTERNAL_DEPLOYMENT_TYPE must be a string, got {type(v).__name__}")
         normalized = v.strip().lower()
         valid = {t.value for t in InternalDeploymentType}
         if normalized not in valid:

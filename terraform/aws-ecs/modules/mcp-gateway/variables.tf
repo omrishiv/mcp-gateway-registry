@@ -1225,12 +1225,6 @@ variable "mcp_proxy_sig_leeway_seconds" {
   default     = 5
 }
 
-variable "mcp_proxy_sig_enforce" {
-  description = "When true, mcp_proxy rejects requests whose internal token is missing or invalid."
-  type        = bool
-  default     = true
-}
-
 variable "custom_entity_types_enabled" {
   description = "Main switch for the custom-entity-types feature (dynamic tabs + endpoints). Off by default = no behavior change for existing deployments."
   type        = bool

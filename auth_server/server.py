@@ -235,6 +235,7 @@ def _log_scopes_loaded(scopes_config: dict) -> None:
             f"Loaded scopes configuration on startup with {len(group_mappings)} group mappings"
         )
 
+
 # Static token auth: use static API key instead of IdP JWT for Registry API
 _registry_static_token_requested: bool = (
     os.environ.get("REGISTRY_STATIC_TOKEN_AUTH_ENABLED", "false").lower() == "true"
@@ -4227,24 +4228,13 @@ async def mcp_proxy(
     the upstream response is returned verbatim. For "tools/list", the
     result.tools array is filtered using filter_tools_list_response.
     """
-    claims = getattr(request.state, "mcp_proxy_claims", None)
-    if claims is not None:
-        # Trusted path: identity/scopes/destination come from the verified token.
-        upstream_url = claims["upstream_url"]
-        user_scopes: list[str] = list(claims.get("scopes") or [])
-    else:
-        # Fail-open legacy path (only reachable under MCP_PROXY_SIG_ENFORCE=false
-        # with a missing token). Trust the nginx-set headers as before.
-        upstream_url = request.headers.get("X-Upstream-Url")
-        raw_scopes = request.headers.get("X-Scopes", "")
-        user_scopes = [s for s in raw_scopes.split() if s]
-
-    if not upstream_url:
-        logger.warning(f"mcp_proxy: missing upstream URL for server={server_name}")
-        raise HTTPException(
-            status_code=400,
-            detail="Missing upstream URL",
-        )
+    # verify_mcp_proxy_token (route dependency) has already verified the token
+    # and stashed the claims; it raises 401 before reaching here on any failure,
+    # so claims is always present. Identity/scopes/destination come from the
+    # verified token -- the inbound X-User/X-Scopes/X-Upstream-Url are ignored.
+    claims = request.state.mcp_proxy_claims
+    upstream_url = claims["upstream_url"]
+    user_scopes: list[str] = list(claims.get("scopes") or [])
 
     # Append the MCP sub-path from the request. server_name captures the full
     # path after /mcp-proxy/ (e.g. "airegistry-tools/mcp"). The first segment

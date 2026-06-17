@@ -1,10 +1,10 @@
 """Unit tests for auth_server/internal_request_token.py.
 
 Covers the /validate-minted internal JWT: mint round-trips, the verify
-dependency's accept/reject paths (missing / expired / tampered / wrong-audience
-/ wrong-token_use / missing upstream / server-claim-path mismatch),
-the fail-open opt-out semantics, the sub-path-append parity that the bound upstream_url
-relies on, and the audience-parameterization seam the registry fast-follow reuses.
+dependency's accept/reject paths (missing / garbage / expired / tampered /
+wrong-audience / wrong-token_use / missing upstream / server-claim-path
+mismatch), the sub-path-append parity that the bound upstream_url relies on,
+and the audience-parameterization seam the registry fast-follow reuses.
 """
 
 import os
@@ -95,29 +95,21 @@ class TestVerify:
         assert req.state.mcp_proxy_claims["upstream_url"] == "https://u.example/mcp"
 
     @pytest.mark.asyncio
-    async def test_missing_token_enforced_raises_401(self) -> None:
-        with patch.dict(os.environ, {"MCP_PROXY_SIG_ENFORCE": "true"}, clear=False):
-            req = _request({})
-            with pytest.raises(HTTPException) as exc:
-                await verify_mcp_proxy_token(req)
-            assert exc.value.status_code == 401
-
-    @pytest.mark.asyncio
-    async def test_missing_token_not_enforced_allows_legacy_path(self) -> None:
-        with patch.dict(os.environ, {"MCP_PROXY_SIG_ENFORCE": "false"}, clear=False):
-            req = _request({})
+    async def test_missing_token_raises_401(self) -> None:
+        # Always fail-closed: no token -> 401.
+        req = _request({})
+        with pytest.raises(HTTPException) as exc:
             await verify_mcp_proxy_token(req)
-            assert req.state.mcp_proxy_claims is None  # handler uses legacy headers
+        assert exc.value.status_code == 401
+        assert exc.value.detail == "Missing internal proxy token"
 
     @pytest.mark.asyncio
-    async def test_invalid_token_rejected_even_when_not_enforced(self) -> None:
-        # A tampered/invalid token signals a malicious caller, so it 401s even
-        # under the enforce=false opt-out (only a *missing* token falls back).
-        with patch.dict(os.environ, {"MCP_PROXY_SIG_ENFORCE": "false"}, clear=False):
-            req = _request({"X-Internal-Token": "not.a.jwt"})
-            with pytest.raises(HTTPException) as exc:
-                await verify_mcp_proxy_token(req)
-            assert exc.value.status_code == 401
+    async def test_garbage_token_raises_401(self) -> None:
+        # A non-JWT / tampered token is rejected.
+        req = _request({"X-Internal-Token": "not.a.jwt"})
+        with pytest.raises(HTTPException) as exc:
+            await verify_mcp_proxy_token(req)
+        assert exc.value.status_code == 401
 
     @pytest.mark.asyncio
     async def test_expired_token_rejected(self) -> None:

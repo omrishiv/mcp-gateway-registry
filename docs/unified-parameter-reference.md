@@ -377,8 +377,7 @@ Controls the per-user tool allowlist filter applied at the registry REST endpoin
 | MCP proxy max body bytes | `MCP_PROXY_MAX_BODY_BYTES` | `mcp_proxy_max_body_bytes` | `auth-server.app.mcpProxyMaxBodyBytes` | Upper bound (bytes) the auth-server proxy hop buffers when filtering tools/list; oversize returns HTTP 413. Default `2097152` (2 MiB). |
 | Tool-filter audit log level | `TOOL_FILTER_AUDIT_LOG_LEVEL` | `tool_filter_audit_log_level` | `auth-server.app.toolFilterAuditLogLevel`, `registry.app.toolFilterAuditLogLevel` | Launch-window log level for prune audit lines: `DEBUG`, `INFO`, or `WARNING`. Default `INFO`; flip to `DEBUG` after two quiet weeks in production. |
 | MCP proxy token TTL | `MCP_PROXY_SIG_TTL_SECONDS` | `mcp_proxy_sig_ttl_seconds` | `auth-server.app.mcpProxySigTtlSeconds` | Lifetime (seconds) of the `/validate`-minted internal token that hardens the `/mcp-proxy` hop; the replay-window cap. Minimum 5. Default `30`. |
-| MCP proxy token leeway | `MCP_PROXY_SIG_LEEWAY_SECONDS` | `mcp_proxy_sig_leeway_seconds` | `auth-server.app.mcpProxySigLeewaySeconds` | Clock-skew leeway (seconds) on the `/mcp-proxy` internal token's `exp`/`iat` checks. Default `5`. |
-| MCP proxy token enforcement | `MCP_PROXY_SIG_ENFORCE` | `mcp_proxy_sig_enforce` | `auth-server.app.mcpProxySigEnforce` | When `true` (default), `mcp_proxy` rejects requests whose `/validate`-minted internal token is missing or invalid. |
+| MCP proxy token leeway | `MCP_PROXY_SIG_LEEWAY_SECONDS` | `mcp_proxy_sig_leeway_seconds` | `auth-server.app.mcpProxySigLeewaySeconds` | Clock-skew leeway (seconds) on the `/mcp-proxy` internal token's `exp`/`iat` checks. Default `5`. Verification is always enforced (fail-closed); there is no opt-out. Reuses `SECRET_KEY` — no new secret. |
 
 ---
 

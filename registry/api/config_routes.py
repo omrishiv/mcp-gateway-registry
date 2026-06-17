@@ -88,7 +88,6 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("tool_filter_audit_log_level", "Tool Filter Audit Log Level", False),
             ("mcp_proxy_sig_ttl_seconds", "MCP Proxy Token TTL (seconds)", False),
             ("mcp_proxy_sig_leeway_seconds", "MCP Proxy Token Leeway (seconds)", False),
-            ("mcp_proxy_sig_enforce", "MCP Proxy Token Enforcement", False),
             ("secret_key", "Secret Key", True),
         ],
     },

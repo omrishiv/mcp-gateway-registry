@@ -436,10 +436,6 @@ module "ecs_service_auth" {
           value = tostring(var.mcp_proxy_sig_leeway_seconds)
         },
         {
-          name  = "MCP_PROXY_SIG_ENFORCE"
-          value = tostring(var.mcp_proxy_sig_enforce)
-        },
-        {
           name  = "METRICS_LEGACY_HTTP_POST"
           value = "false"
         },
