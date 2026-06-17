@@ -34,26 +34,26 @@ _MIN_TTL_SECONDS: int = 5
 
 
 def _ttl_seconds() -> int:
-    raw = os.environ.get("MCP_PROXY_SIG_TTL_SECONDS", "30")
+    raw = os.environ.get("INTERNAL_TOKEN_TTL_SECONDS", "30")
     try:
         candidate = int(raw)
     except ValueError:
-        logger.warning(f"Invalid MCP_PROXY_SIG_TTL_SECONDS={raw!r}; using default 30")
+        logger.warning(f"Invalid INTERNAL_TOKEN_TTL_SECONDS={raw!r}; using default 30")
         return 30
     if candidate < _MIN_TTL_SECONDS:
         logger.warning(
-            f"MCP_PROXY_SIG_TTL_SECONDS={candidate} below floor; clamping to {_MIN_TTL_SECONDS}"
+            f"INTERNAL_TOKEN_TTL_SECONDS={candidate} below floor; clamping to {_MIN_TTL_SECONDS}"
         )
         return _MIN_TTL_SECONDS
     return candidate
 
 
 def _leeway_seconds() -> int:
-    raw = os.environ.get("MCP_PROXY_SIG_LEEWAY_SECONDS", "5")
+    raw = os.environ.get("INTERNAL_TOKEN_LEEWAY_SECONDS", "5")
     try:
         return max(0, int(raw))
     except ValueError:
-        logger.warning(f"Invalid MCP_PROXY_SIG_LEEWAY_SECONDS={raw!r}; using default 5")
+        logger.warning(f"Invalid INTERNAL_TOKEN_LEEWAY_SECONDS={raw!r}; using default 5")
         return 5
 
 

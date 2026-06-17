@@ -826,7 +826,7 @@ class Settings(BaseSettings):
         ),
     )
 
-    mcp_proxy_sig_ttl_seconds: int = Field(
+    internal_token_ttl_seconds: int = Field(
         default=30,
         ge=5,
         description=(
@@ -834,7 +834,7 @@ class Settings(BaseSettings):
             "token; the replay-window cap. Short by design."
         ),
     )
-    mcp_proxy_sig_leeway_seconds: int = Field(
+    internal_token_leeway_seconds: int = Field(
         default=5,
         ge=0,
         description=(

@@ -1202,25 +1202,25 @@ variable "tool_filter_audit_log_level" {
   }
 }
 
-variable "mcp_proxy_sig_ttl_seconds" {
+variable "internal_token_ttl_seconds" {
   description = "Lifetime (seconds) of the /validate-minted /mcp-proxy internal token; the replay-window cap. Minimum 5. Default 30."
   type        = number
   default     = 30
 
   validation {
-    condition     = var.mcp_proxy_sig_ttl_seconds >= 5
-    error_message = "mcp_proxy_sig_ttl_seconds must be at least 5"
+    condition     = var.internal_token_ttl_seconds >= 5
+    error_message = "internal_token_ttl_seconds must be at least 5"
   }
 }
 
-variable "mcp_proxy_sig_leeway_seconds" {
+variable "internal_token_leeway_seconds" {
   description = "Clock-skew leeway (seconds) on the /mcp-proxy internal token exp/iat checks. Default 5."
   type        = number
   default     = 5
 
   validation {
-    condition     = var.mcp_proxy_sig_leeway_seconds >= 0
-    error_message = "mcp_proxy_sig_leeway_seconds must be non-negative"
+    condition     = var.internal_token_leeway_seconds >= 0
+    error_message = "internal_token_leeway_seconds must be non-negative"
   }
 }
 

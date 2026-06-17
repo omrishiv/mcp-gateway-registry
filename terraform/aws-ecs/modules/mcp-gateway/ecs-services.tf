@@ -428,12 +428,12 @@ module "ecs_service_auth" {
           value = var.tool_filter_audit_log_level
         },
         {
-          name  = "MCP_PROXY_SIG_TTL_SECONDS"
-          value = tostring(var.mcp_proxy_sig_ttl_seconds)
+          name  = "INTERNAL_TOKEN_TTL_SECONDS"
+          value = tostring(var.internal_token_ttl_seconds)
         },
         {
-          name  = "MCP_PROXY_SIG_LEEWAY_SECONDS"
-          value = tostring(var.mcp_proxy_sig_leeway_seconds)
+          name  = "INTERNAL_TOKEN_LEEWAY_SECONDS"
+          value = tostring(var.internal_token_leeway_seconds)
         },
         {
           name  = "METRICS_LEGACY_HTTP_POST"

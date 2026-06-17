@@ -279,8 +279,8 @@ module "mcp_gateway" {
   mcp_proxy_max_body_bytes      = var.mcp_proxy_max_body_bytes
   tool_filter_audit_log_level   = var.tool_filter_audit_log_level
 
-  mcp_proxy_sig_ttl_seconds    = var.mcp_proxy_sig_ttl_seconds
-  mcp_proxy_sig_leeway_seconds = var.mcp_proxy_sig_leeway_seconds
+  internal_token_ttl_seconds    = var.internal_token_ttl_seconds
+  internal_token_leeway_seconds = var.internal_token_leeway_seconds
 
   # Custom entity types (admin-defined, schema-driven catalog types)
   custom_entity_types_enabled   = var.custom_entity_types_enabled

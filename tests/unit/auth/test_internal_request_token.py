@@ -116,7 +116,7 @@ class TestVerify:
         # Mint with a tiny TTL, wait past it + leeway.
         with patch.dict(
             os.environ,
-            {"MCP_PROXY_SIG_TTL_SECONDS": "5", "MCP_PROXY_SIG_LEEWAY_SECONDS": "0"},
+            {"INTERNAL_TOKEN_TTL_SECONDS": "5", "INTERNAL_TOKEN_LEEWAY_SECONDS": "0"},
             clear=False,
         ):
             now = int(time.time())

@@ -128,11 +128,11 @@ tests:
   - it: fails when extraEnv contains the reserved mcp-proxy token TTL
     set:
       extraEnv:
-        - name: MCP_PROXY_SIG_TTL_SECONDS
+        - name: INTERNAL_TOKEN_TTL_SECONDS
           value: "9999"
     asserts:
       - failedTemplate:
-          errorPattern: "\"MCP_PROXY_SIG_TTL_SECONDS\" is a reserved variable"
+          errorPattern: "\"INTERNAL_TOKEN_TTL_SECONDS\" is a reserved variable"
 
   - it: fails on duplicate names within extraEnv
     set:

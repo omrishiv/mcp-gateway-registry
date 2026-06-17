@@ -631,9 +631,9 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # tool_filter_audit_log_level = "INFO"
 
 # Lifetime (seconds) of the minted token; the replay-window cap. Minimum 5.
-# mcp_proxy_sig_ttl_seconds = 30
+# internal_token_ttl_seconds = 30
 # Clock-skew leeway (seconds) on the token exp/iat checks.
-# mcp_proxy_sig_leeway_seconds = 5
+# internal_token_leeway_seconds = 5
 
 # ============================================================================
 # CUSTOM ENTITY TYPES (admin-defined, schema-driven catalog types)
