@@ -495,7 +495,7 @@ def test_generate_transport_location_blocks_streamable_http(nginx_service):
     assert "proxy_pass http://auth-server:8888/mcp-proxy/test/" in blocks[0]
     # $backend_url is set in the rewrite phase so the /validate
     # subrequest can bind it into the internal token, then forwarded as X-Upstream-Url.
-    assert "set $backend_url \"http://localhost:8000/mcp\"" in blocks[0]
+    assert 'set $backend_url "http://localhost:8000/mcp"' in blocks[0]
     assert "proxy_set_header X-Upstream-Url $backend_url" in blocks[0]
 
 
@@ -513,7 +513,7 @@ def test_generate_transport_location_blocks_sse(nginx_service):
     assert "location {{ROOT_PATH}}/test" in blocks[0]
     # Issue #1026 - MCP traffic is routed through auth_server mcp-proxy.
     assert "proxy_pass http://auth-server:8888/mcp-proxy/test/" in blocks[0]
-    assert "set $backend_url \"http://localhost:8000/sse\"" in blocks[0]
+    assert 'set $backend_url "http://localhost:8000/sse"' in blocks[0]
     assert "proxy_set_header X-Upstream-Url $backend_url" in blocks[0]
 
 
@@ -562,7 +562,7 @@ def test_create_location_block_streamable_http(nginx_service):
     assert "location {{ROOT_PATH}}/test" in block
     # Issue #1026 - proxy hop lands on auth_server mcp-proxy, upstream goes in header.
     assert "proxy_pass http://auth-server:8888/mcp-proxy/test/" in block
-    assert "set $backend_url \"http://localhost:8000/mcp\"" in block
+    assert 'set $backend_url "http://localhost:8000/mcp"' in block
     assert "proxy_set_header X-Upstream-Url $backend_url" in block
     # capture + forward the /validate-minted internal token.
     assert "auth_request_set $auth_internal_token $upstream_http_x_internal_token" in block
@@ -579,7 +579,7 @@ def test_create_location_block_sse(nginx_service):
     assert "location {{ROOT_PATH}}/test" in block
     # Issue #1026 - proxy hop lands on auth_server mcp-proxy, upstream goes in header.
     assert "proxy_pass http://auth-server:8888/mcp-proxy/test/" in block
-    assert "set $backend_url \"http://localhost:8000/sse\"" in block
+    assert 'set $backend_url "http://localhost:8000/sse"' in block
     assert "proxy_set_header X-Upstream-Url $backend_url" in block
     assert "proxy_buffering off" in block
     assert "proxy_set_header Connection $http_connection" in block
@@ -595,7 +595,7 @@ def test_create_location_block_external_service(nginx_service):
     assert "location {{ROOT_PATH}}/test" in block
     # Issue #1026 - proxy hop lands on auth_server mcp-proxy, upstream goes in header.
     assert "proxy_pass http://auth-server:8888/mcp-proxy/test/" in block
-    assert "set $backend_url \"https://api.example.com/mcp\"" in block
+    assert 'set $backend_url "https://api.example.com/mcp"' in block
     assert "proxy_set_header X-Upstream-Url $backend_url" in block
     # Should use upstream hostname for external services
     assert "proxy_set_header Host api.example.com" in block
@@ -611,7 +611,7 @@ def test_create_location_block_internal_service(nginx_service):
     assert "location {{ROOT_PATH}}/test" in block
     # Issue #1026 - proxy hop lands on auth_server mcp-proxy, upstream goes in header.
     assert "proxy_pass http://auth-server:8888/mcp-proxy/test/" in block
-    assert "set $backend_url \"http://backend:8000/mcp\"" in block
+    assert 'set $backend_url "http://backend:8000/mcp"' in block
     assert "proxy_set_header X-Upstream-Url $backend_url" in block
     # Should preserve original host for internal services
     assert "proxy_set_header Host $host" in block
@@ -625,7 +625,7 @@ def test_create_location_block_direct_transport(nginx_service):
     assert "location {{ROOT_PATH}}/test" in block
     # Issue #1026 - proxy hop lands on auth_server mcp-proxy, upstream goes in header.
     assert "proxy_pass http://auth-server:8888/mcp-proxy/test/" in block
-    assert "set $backend_url \"http://localhost:8000\"" in block
+    assert 'set $backend_url "http://localhost:8000"' in block
     assert "proxy_set_header X-Upstream-Url $backend_url" in block
     assert "proxy_cache off" in block
 
@@ -638,7 +638,8 @@ def test_create_location_block_direct_transport(nginx_service):
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_generate_config_async_keycloak_parsing(
-    nginx_service, sample_servers, mock_health_service, mock_atomic_write):
+    nginx_service, sample_servers, mock_health_service, mock_atomic_write
+):
     """Test Keycloak URL parsing in configuration generation."""
     template_content = """
 server {
@@ -722,7 +723,8 @@ server {
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_generate_config_async_strips_keycloak_locations_for_entra(
-    nginx_service, sample_servers, mock_health_service, mock_atomic_write):
+    nginx_service, sample_servers, mock_health_service, mock_atomic_write
+):
     """Test that Keycloak location blocks are stripped when AUTH_PROVIDER is entra."""
     template_content = """
 server {
@@ -778,7 +780,8 @@ server {
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_generate_config_async_keeps_keycloak_locations_for_keycloak(
-    nginx_service, sample_servers, mock_health_service, mock_atomic_write):
+    nginx_service, sample_servers, mock_health_service, mock_atomic_write
+):
     """Test that Keycloak location blocks are kept when AUTH_PROVIDER is keycloak."""
     template_content = """
 server {
@@ -838,7 +841,8 @@ server {
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_generate_config_async_strips_keycloak_locations_for_cognito(
-    nginx_service, sample_servers, mock_health_service, mock_atomic_write):
+    nginx_service, sample_servers, mock_health_service, mock_atomic_write
+):
     """Test that Keycloak location blocks are stripped when AUTH_PROVIDER is cognito."""
     template_content = """
 server {
@@ -884,7 +888,8 @@ server {
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_generate_config_async_keycloak_https_default_port(
-    nginx_service, sample_servers, mock_health_service, mock_atomic_write):
+    nginx_service, sample_servers, mock_health_service, mock_atomic_write
+):
     """Test Keycloak URL parsing defaults to port 443 for HTTPS without explicit port."""
     template_content = """
 server {
@@ -921,7 +926,8 @@ server {
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_generate_config_async_keycloak_hostname_fallback(
-    nginx_service, sample_servers, mock_health_service, mock_atomic_write):
+    nginx_service, sample_servers, mock_health_service, mock_atomic_write
+):
     """Test Keycloak hostname fallback when hostname resolves to bare 'keycloak'."""
     template_content = """
 server {
@@ -958,7 +964,8 @@ server {
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_generate_config_async_keycloak_url_parse_exception(
-    nginx_service, sample_servers, mock_health_service, mock_atomic_write):
+    nginx_service, sample_servers, mock_health_service, mock_atomic_write
+):
     """Test Keycloak URL parsing falls back to defaults on exception."""
     template_content = """
 server {
@@ -997,3 +1004,44 @@ server {
                                 assert "http" in written_content
                                 assert "keycloak" in written_content
                                 assert "8080" in written_content
+
+
+# =============================================================================
+# server-scope $backend_url default must NOT exist in conf templates
+# =============================================================================
+
+
+@pytest.mark.unit
+def test_no_server_scope_backend_url_default_in_conf_templates():
+    """A server-scope `set $backend_url "";` re-runs inside the /validate
+    auth_request subrequest (subrequests share the parent's variable array and
+    re-run the server rewrite phase), blanking the per-server upstream the
+    /mcp-proxy/ location set. That makes /validate forward an empty
+    X-Resolved-Upstream, skip minting the internal token, and 401 every MCP
+    call with "Missing internal proxy token". $backend_url must be set ONLY in
+    the generated /mcp-proxy/ location blocks -- never at server scope.
+    """
+    import re
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[3]
+    conf_files = [
+        repo_root / "docker" / "nginx_rev_proxy_http_and_https.conf",
+        repo_root / "docker" / "nginx_rev_proxy_http_only.conf",
+    ]
+    # Match an actual directive (line starting with optional whitespace then
+    # `set $backend_url`), NOT the explanatory NOTE comments (which start with #).
+    directive = re.compile(r"^\s*set\s+\$backend_url\b", re.MULTILINE)
+    for conf in conf_files:
+        text = conf.read_text()
+        offenders = [
+            line
+            for line in text.splitlines()
+            if directive.match(line) and not line.lstrip().startswith("#")
+        ]
+        assert not offenders, (
+            f"{conf.name} contains a `set $backend_url` directive outside the "
+            f"generated /mcp-proxy/ blocks: {offenders}. This re-runs in the "
+            f"/validate subrequest and breaks internal-token minting. See the "
+            f"NOTE comment in the server block."
+        )
