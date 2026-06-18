@@ -14,6 +14,7 @@ import {
 } from '../types/customEntity';
 import { labelFor } from '../utils/humanize';
 import StarRatingWidget from './StarRatingWidget';
+import { TagList, ENTITY_ACCENTS } from './cards';
 
 interface CustomEntityCardProps {
   descriptor: CustomTypeDescriptor;
@@ -25,6 +26,8 @@ interface CustomEntityCardProps {
   authToken?: string | null;
   onShowToast?: (message: string, type: 'success' | 'error') => void;
 }
+
+const ACCENT = ENTITY_ACCENTS.custom;
 
 /** Render an attribute value as a TEXT NODE only (no HTML injection). */
 export function formatValue(
@@ -64,6 +67,12 @@ function visibilityColor(visibility: string): string {
   }
 }
 
+/**
+ * Compact card for a user-defined custom entity record. Custom types have no
+ * fixed brand color, so they use the neutral accent. The body is descriptor-
+ * driven (only fields flagged show_in_list are rendered), which is this card's
+ * entity-specific behavior; tag rendering is shared via TagList.
+ */
 const CustomEntityCard: React.FC<CustomEntityCardProps> = ({
   descriptor,
   record,
@@ -113,23 +122,7 @@ const CustomEntityCard: React.FC<CustomEntityCardProps> = ({
         </dl>
       )}
 
-      {record.tags.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {record.tags.slice(0, 3).map((tag) => (
-            <span
-              key={tag}
-              className="px-2 py-0.5 text-xs rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300"
-            >
-              {tag}
-            </span>
-          ))}
-          {record.tags.length > 3 && (
-            <span className="px-2 py-0.5 text-xs text-gray-400">
-              +{record.tags.length - 3}
-            </span>
-          )}
-        </div>
-      )}
+      <TagList tags={record.tags} accent={ACCENT} prefix="#" className="gap-1" />
 
       <div className="flex items-center justify-between gap-1 mt-auto pt-2 border-t border-gray-100 dark:border-gray-700">
         <StarRatingWidget
@@ -142,34 +135,34 @@ const CustomEntityCard: React.FC<CustomEntityCardProps> = ({
           onShowToast={onShowToast}
         />
         <div className="flex items-center gap-1">
-        <button
-          type="button"
-          onClick={() => onView(record)}
-          className="p-2 text-gray-400 hover:text-teal-600 dark:hover:text-teal-400 rounded-lg transition-colors"
-          aria-label="View details"
-        >
-          <InformationCircleIcon className="h-4 w-4" />
-        </button>
-        {canModify && (
-          <>
-            <button
-              type="button"
-              onClick={() => onEdit(record)}
-              className="p-2 text-gray-400 hover:text-teal-600 dark:hover:text-teal-400 rounded-lg transition-colors"
-              aria-label="Edit"
-            >
-              <PencilIcon className="h-4 w-4" />
-            </button>
-            <button
-              type="button"
-              onClick={() => onDelete(record)}
-              className="p-2 text-gray-400 hover:text-red-500 rounded-lg transition-colors"
-              aria-label="Delete"
-            >
-              <TrashIcon className="h-4 w-4" />
-            </button>
-          </>
-        )}
+          <button
+            type="button"
+            onClick={() => onView(record)}
+            className="p-2 text-gray-400 hover:text-teal-600 dark:hover:text-teal-400 rounded-lg transition-colors"
+            aria-label="View details"
+          >
+            <InformationCircleIcon className="h-4 w-4" />
+          </button>
+          {canModify && (
+            <>
+              <button
+                type="button"
+                onClick={() => onEdit(record)}
+                className="p-2 text-gray-400 hover:text-teal-600 dark:hover:text-teal-400 rounded-lg transition-colors"
+                aria-label="Edit"
+              >
+                <PencilIcon className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => onDelete(record)}
+                className="p-2 text-gray-400 hover:text-red-500 rounded-lg transition-colors"
+                aria-label="Delete"
+              >
+                <TrashIcon className="h-4 w-4" />
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>

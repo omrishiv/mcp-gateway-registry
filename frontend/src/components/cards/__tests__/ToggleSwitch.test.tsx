@@ -28,6 +28,27 @@ describe('ToggleSwitch', () => {
     expect(onChange).toHaveBeenCalledWith(false);
   });
 
+  it('uses the accent color for the on-state track', () => {
+    const { container } = render(
+      <ToggleSwitch
+        checked
+        onChange={() => {}}
+        ariaLabel="Enable widget"
+        accent="amber"
+      />,
+    );
+    const track = container.querySelector('div.w-12');
+    expect(track?.className).toContain('bg-amber-600');
+  });
+
+  it('defaults the on-state track to the neutral (blue) accent', () => {
+    const { container } = render(
+      <ToggleSwitch checked onChange={() => {}} ariaLabel="Enable widget" />,
+    );
+    const track = container.querySelector('div.w-12');
+    expect(track?.className).toContain('bg-blue-600');
+  });
+
   it('marks the input disabled so the browser suppresses interaction', () => {
     const onChange = jest.fn();
     render(

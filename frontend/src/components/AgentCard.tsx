@@ -1,13 +1,10 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import axios from 'axios';
 import {
-  StarIcon,
   ArrowPathIcon,
   PencilIcon,
   ClockIcon,
   CheckCircleIcon,
-  XCircleIcon,
-  QuestionMarkCircleIcon,
   ShieldCheckIcon,
   ShieldExclamationIcon,
   GlobeAltIcon,
@@ -18,11 +15,25 @@ import {
 import AgentDetailsModal from './AgentDetailsModal';
 import SecurityScanModal from './SecurityScanModal';
 import StarRatingWidget from './StarRatingWidget';
-import DeleteConfirmation from './DeleteConfirmation';
 import StatusBadge from './StatusBadge';
 import { ANSBadge } from './ANSBadge';
-import { formatRelativeTime } from '../utils/dateUtils';
+import { formatRelativeTime, formatTimeSince } from '../utils/dateUtils';
+import { normalizeHealthStatus } from '../utils/healthStatus';
 import { toScanSummary } from '../utils/securityScan';
+import {
+  CardShell,
+  CardHeader,
+  CardBody,
+  CardStatsRow,
+  CardFooter,
+  StatusDot,
+  StatusDivider,
+  TagList,
+  ToggleSwitch,
+  InlineDeleteConfirm,
+  ENTITY_ACCENTS,
+  type StatusTone,
+} from './cards';
 
 interface SyncMetadata {
   is_federated?: boolean;
@@ -102,65 +113,28 @@ interface AgentCardProps {
   authToken?: string | null;
 }
 
-/**
- * Helper function to format time since last checked.
- */
-const formatTimeSince = (timestamp: string | null | undefined): string | null => {
-  if (!timestamp) {
-    return null;
+const ACCENT = ENTITY_ACCENTS.agent;
+
+/** Map an agent health status to a StatusDot tone + label. */
+function healthDot(status: Agent['status']): { tone: StatusTone; label: string } {
+  switch (status) {
+    case 'healthy':
+      return { tone: 'emerald', label: 'Healthy' };
+    case 'healthy-auth-expired':
+      return { tone: 'orange', label: 'Healthy (Auth Expired)' };
+    case 'unhealthy':
+      return { tone: 'red', label: 'Unhealthy' };
+    default:
+      return { tone: 'amber', label: 'Unknown' };
   }
-
-  try {
-    const now = new Date();
-    const lastChecked = new Date(timestamp);
-
-    // Check if the date is valid
-    if (isNaN(lastChecked.getTime())) {
-      return null;
-    }
-
-    const diffMs = now.getTime() - lastChecked.getTime();
-
-    const diffSeconds = Math.floor(diffMs / 1000);
-    const diffMinutes = Math.floor(diffSeconds / 60);
-    const diffHours = Math.floor(diffMinutes / 60);
-    const diffDays = Math.floor(diffHours / 24);
-
-    let result;
-    if (diffSeconds < 0) {
-      result = 'just now';
-    } else if (diffDays > 0) {
-      result = `${diffDays}d ago`;
-    } else if (diffHours > 0) {
-      result = `${diffHours}h ago`;
-    } else if (diffMinutes > 0) {
-      result = `${diffMinutes}m ago`;
-    } else {
-      result = `${diffSeconds}s ago`;
-    }
-
-    return result;
-  } catch (error) {
-    console.error('formatTimeSince error:', error, 'for timestamp:', timestamp);
-    return null;
-  }
-};
-
-const normalizeHealthStatus = (status?: string | null): Agent['status'] => {
-  if (status === 'healthy' || status === 'healthy-auth-expired') {
-    return status;
-  }
-  if (status === 'unhealthy') {
-    return 'unhealthy';
-  }
-  return 'unknown';
-};
+}
 
 /**
  * AgentCard component for displaying A2A agents.
  *
- * Displays agent information with a distinct visual style from MCP servers,
- * using blue/cyan tones and robot-themed icons.
+ * Composes the shared card primitives with the cyan accent; the entity-specific
+ * behavior (trust/ANS badges, health refresh, security scan, details modal) is
+ * kept inline here.
  */
 const AgentCard: React.FC<AgentCardProps> = React.memo(({
   agent,
@@ -212,19 +186,6 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
     }
   }, [agent.security_scan, showSecurityScan]);
 
-  const getStatusIcon = () => {
-    switch (agent.status) {
-      case 'healthy':
-        return <CheckCircleIcon className="h-4 w-4 text-green-500" />;
-      case 'healthy-auth-expired':
-        return <CheckCircleIcon className="h-4 w-4 text-orange-500" />;
-      case 'unhealthy':
-        return <XCircleIcon className="h-4 w-4 text-red-500" />;
-      default:
-        return <QuestionMarkCircleIcon className="h-4 w-4 text-gray-400" />;
-    }
-  };
-
   const getTrustLevelColor = () => {
     switch (agent.trust_level) {
       case 'trusted':
@@ -271,7 +232,7 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
       // Update just this agent instead of triggering global refresh
       if (onAgentUpdate && response.data) {
         const updates: Partial<Agent> = {
-          status: normalizeHealthStatus(response.data.status),
+          status: normalizeHealthStatus(response.data.status) as Agent['status'],
           last_checked_time: response.data.last_checked_iso
         };
 
@@ -367,191 +328,170 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
     return { Icon: ShieldCheckIcon, color: 'text-green-500 dark:text-green-400', title: 'Security scan passed' };
   };
 
+  const health = healthDot(agent.status);
+
   return (
     <>
-      <div className="group rounded-2xl shadow-sm hover:shadow-xl transition-all duration-300 h-full flex flex-col bg-gradient-to-br from-cyan-50 to-blue-50 dark:from-cyan-900/20 dark:to-blue-900/20 border-2 border-cyan-200 dark:border-cyan-700 hover:border-cyan-300 dark:hover:border-cyan-600">
+      <CardShell accent={ACCENT}>
         {showDeleteConfirm ? (
-          /* Delete Confirmation - replaces card content when active */
-          <div className="p-5 h-full flex flex-col justify-center">
-            <DeleteConfirmation
-              entityType="agent"
-              entityName={agent.name || agent.path.replace(/^\//, '')}
-              entityPath={agent.path}
-              onConfirm={onDelete!}
-              onCancel={() => setShowDeleteConfirm(false)}
-            />
-          </div>
+          <InlineDeleteConfirm
+            entityType="agent"
+            entityName={agent.name || agent.path.replace(/^\//, '')}
+            entityPath={agent.path}
+            onConfirm={onDelete!}
+            onCancel={() => setShowDeleteConfirm(false)}
+          />
         ) : (
-          /* Normal card content */
           <>
-            {/* Header */}
-            <div className="p-5 pb-4">
-              <div className="flex items-start justify-between mb-4">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center flex-wrap gap-2 mb-3">
-                    <h3 className="text-lg font-bold text-gray-900 dark:text-white truncate">
-                      {agent.name}
-                    </h3>
-                    {agent.lifecycle_status && agent.lifecycle_status !== 'active' && (
-                      <StatusBadge status={agent.lifecycle_status} />
-                    )}
-                    {/* Check if this is an ASOR agent */}
-                    {(agent.tags?.includes('asor') || (agent as any).provider === 'ASOR') && (
-                      <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-orange-100 to-red-100 text-orange-700 dark:from-orange-900/30 dark:to-red-900/30 dark:text-orange-300 rounded-full flex-shrink-0 border border-orange-200 dark:border-orange-600">
-                        ASOR
-                      </span>
-                    )}
-                    {/* A2A tag badge (for AgentCore imported agents) */}
-                    {agent.tags?.includes('a2a') && (
-                      <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-emerald-100 to-teal-100 text-emerald-700 dark:from-emerald-900/30 dark:to-teal-900/30 dark:text-emerald-300 rounded-full flex-shrink-0 border border-emerald-200 dark:border-emerald-600">
-                        A2A
-                      </span>
-                    )}
-                    {/* Supported Protocol Badge */}
-                    {agent.supported_protocol === 'a2a' && !agent.tags?.includes('a2a') && (
-                      <span className="inline-flex items-center px-2 py-0.5 text-xs font-medium bg-cyan-50 dark:bg-cyan-900/30 text-cyan-700 dark:text-cyan-300 rounded border border-cyan-200 dark:border-cyan-700">
-                        A2A Protocol
-                      </span>
-                    )}
-                    {agent.trust_level && (
-                      <span className={`px-2 py-0.5 text-xs font-semibold rounded-full flex-shrink-0 flex items-center gap-1 ${getTrustLevelColor()}`}>
-                        {getTrustLevelIcon()}
-                        {agent.trust_level.toUpperCase()}
-                      </span>
-                    )}
-                    {agent.visibility && (
-                      <span className={`px-2 py-0.5 text-xs font-semibold rounded-full flex-shrink-0 flex items-center gap-1 ${
-                        agent.visibility === 'public'
-                          ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400 border border-blue-200 dark:border-blue-700'
-                          : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-600'
-                      }`}>
-                        {getVisibilityIcon()}
-                        {agent.visibility.toUpperCase()}
-                      </span>
-                    )}
-                    {/* Registry source badge - only show for federated (peer registry) items */}
-                    {isFederatedAgent && (
-                      <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-violet-100 to-purple-100 text-violet-700 dark:from-violet-900/30 dark:to-purple-900/30 dark:text-violet-300 rounded-full flex-shrink-0 border border-violet-200 dark:border-violet-600" title={`Synced from ${peerRegistryId}`}>
-                        {peerRegistryId?.toUpperCase().replace('PEER-REGISTRY-', '').replace('PEER-', '')}
-                      </span>
-                    )}
-                    {/* Orphaned badge - agent no longer exists on peer registry */}
-                    {isOrphanedAgent && (
-                      <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-red-100 to-rose-100 text-red-700 dark:from-red-900/30 dark:to-rose-900/30 dark:text-red-300 rounded-full flex-shrink-0 border border-red-200 dark:border-red-600" title="No longer exists on peer registry">
-                        ORPHANED
-                      </span>
-                    )}
-                  </div>
-                  {/* ANS Verified badge on its own row to avoid overlap */}
-                  {agent.ans_metadata && (
-                    <div className="mt-1">
-                      <ANSBadge ansMetadata={agent.ans_metadata} compact />
-                    </div>
+            <CardHeader
+              title={agent.name}
+              badges={
+                <>
+                  {agent.lifecycle_status && agent.lifecycle_status !== 'active' && (
+                    <StatusBadge status={agent.lifecycle_status} />
                   )}
-
-                  <code className="text-xs text-gray-600 dark:text-gray-300 bg-gray-50 dark:bg-gray-800/50 px-2 py-1 rounded font-mono">
-                    {agent.path}
-                  </code>
-                  {agent.version && (
-                    <span className="ml-2 text-xs text-gray-500 dark:text-gray-400">
-                      v{agent.version}
+                  {/* Check if this is an ASOR agent */}
+                  {(agent.tags?.includes('asor') || (agent as any).provider === 'ASOR') && (
+                    <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-orange-100 to-red-100 text-orange-700 dark:from-orange-900/30 dark:to-red-900/30 dark:text-orange-300 rounded-full flex-shrink-0 border border-orange-200 dark:border-orange-600">
+                      ASOR
                     </span>
                   )}
-                  {agent.url && (
-                    <a
-                      href={agent.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="mt-2 inline-flex items-center gap-1 text-xs text-cyan-700 dark:text-cyan-300 break-all hover:underline"
-                    >
-                      <span className="font-mono">{agent.url}</span>
-                    </a>
+                  {/* A2A tag badge (for AgentCore imported agents) */}
+                  {agent.tags?.includes('a2a') && (
+                    <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-emerald-100 to-teal-100 text-emerald-700 dark:from-emerald-900/30 dark:to-teal-900/30 dark:text-emerald-300 rounded-full flex-shrink-0 border border-emerald-200 dark:border-emerald-600">
+                      A2A
+                    </span>
                   )}
-                </div>
+                  {/* Supported Protocol Badge */}
+                  {agent.supported_protocol === 'a2a' && !agent.tags?.includes('a2a') && (
+                    <span className="inline-flex items-center px-2 py-0.5 text-xs font-medium bg-cyan-50 dark:bg-cyan-900/30 text-cyan-700 dark:text-cyan-300 rounded border border-cyan-200 dark:border-cyan-700">
+                      A2A Protocol
+                    </span>
+                  )}
+                  {agent.trust_level && (
+                    <span className={`px-2 py-0.5 text-xs font-semibold rounded-full flex-shrink-0 flex items-center gap-1 ${getTrustLevelColor()}`}>
+                      {getTrustLevelIcon()}
+                      {agent.trust_level.toUpperCase()}
+                    </span>
+                  )}
+                  {agent.visibility && (
+                    <span className={`px-2 py-0.5 text-xs font-semibold rounded-full flex-shrink-0 flex items-center gap-1 ${
+                      agent.visibility === 'public'
+                        ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400 border border-blue-200 dark:border-blue-700'
+                        : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-600'
+                    }`}>
+                      {getVisibilityIcon()}
+                      {agent.visibility.toUpperCase()}
+                    </span>
+                  )}
+                  {/* Registry source badge - only show for federated (peer registry) items */}
+                  {isFederatedAgent && (
+                    <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-violet-100 to-purple-100 text-violet-700 dark:from-violet-900/30 dark:to-purple-900/30 dark:text-violet-300 rounded-full flex-shrink-0 border border-violet-200 dark:border-violet-600" title={`Synced from ${peerRegistryId}`}>
+                      {peerRegistryId?.toUpperCase().replace('PEER-REGISTRY-', '').replace('PEER-', '')}
+                    </span>
+                  )}
+                  {/* Orphaned badge - agent no longer exists on peer registry */}
+                  {isOrphanedAgent && (
+                    <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-red-100 to-rose-100 text-red-700 dark:from-red-900/30 dark:to-rose-900/30 dark:text-red-300 rounded-full flex-shrink-0 border border-red-200 dark:border-red-600" title="No longer exists on peer registry">
+                      ORPHANED
+                    </span>
+                  )}
+                </>
+              }
+              actions={
+                <>
+                  {canModify && (
+                    <button
+                      className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg transition-all duration-200 flex-shrink-0"
+                      onClick={() => onEdit?.(agent)}
+                      title="Edit agent"
+                    >
+                      <PencilIcon className="h-4 w-4" />
+                    </button>
+                  )}
 
-                {canModify && (
+                  {/* Security Scan Button */}
                   <button
-                    className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg transition-all duration-200 flex-shrink-0"
-                    onClick={() => onEdit?.(agent)}
-                    title="Edit agent"
+                    onClick={handleViewSecurityScan}
+                    className={`p-2 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg transition-all duration-200 flex-shrink-0 ${getSecurityIconState().color}`}
+                    title={getSecurityIconState().title}
+                    aria-label="View security scan results"
                   >
-                    <PencilIcon className="h-4 w-4" />
+                    {React.createElement(getSecurityIconState().Icon, { className: "h-4 w-4" })}
                   </button>
-                )}
 
-                {/* Security Scan Button */}
-                <button
-                  onClick={handleViewSecurityScan}
-                  className={`p-2 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg transition-all duration-200 flex-shrink-0 ${getSecurityIconState().color}`}
-                  title={getSecurityIconState().title}
-                  aria-label="View security scan results"
-                >
-                  {React.createElement(getSecurityIconState().Icon, { className: "h-4 w-4" })}
-                </button>
-
-                {/* Full Details Button */}
-                <button
-                  onClick={async () => {
-                    setShowDetails(true);
-                    setLoadingDetails(true);
-                    try {
-                      const response = await axios.get(`/api/agents${agent.path}`);
-                      setFullAgentDetails(response.data);
-                    } catch (error) {
-                      console.error('Failed to fetch agent details:', error);
-                      if (onShowToast) {
-                        onShowToast('Failed to load full agent details', 'error');
+                  {/* Full Details Button */}
+                  <button
+                    onClick={async () => {
+                      setShowDetails(true);
+                      setLoadingDetails(true);
+                      try {
+                        const response = await axios.get(`/api/agents${agent.path}`);
+                        setFullAgentDetails(response.data);
+                      } catch (error) {
+                        console.error('Failed to fetch agent details:', error);
+                        if (onShowToast) {
+                          onShowToast('Failed to load full agent details', 'error');
+                        }
+                      } finally {
+                        setLoadingDetails(false);
                       }
-                    } finally {
-                      setLoadingDetails(false);
-                    }
-                  }}
-                  className="p-2 text-gray-400 hover:text-blue-600 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-700/50 rounded-lg transition-all duration-200 flex-shrink-0"
-                  title="View full agent details (JSON)"
-                >
-                  <InformationCircleIcon className="h-4 w-4" />
-                </button>
-
-                {/* Delete Button */}
-                {canDelete && (
-                  <button
-                    onClick={() => setShowDeleteConfirm(true)}
-                    className="p-2 text-gray-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-700/50 rounded-lg transition-all duration-200 flex-shrink-0"
-                    title="Delete agent"
-                    aria-label={`Delete ${agent.name}`}
+                    }}
+                    className="p-2 text-gray-400 hover:text-blue-600 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-700/50 rounded-lg transition-all duration-200 flex-shrink-0"
+                    title="View full agent details (JSON)"
                   >
-                    <TrashIcon className="h-4 w-4" />
+                    <InformationCircleIcon className="h-4 w-4" />
                   </button>
+
+                  {/* Delete Button */}
+                  {canDelete && (
+                    <button
+                      onClick={() => setShowDeleteConfirm(true)}
+                      className="p-2 text-gray-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-700/50 rounded-lg transition-all duration-200 flex-shrink-0"
+                      title="Delete agent"
+                      aria-label={`Delete ${agent.name}`}
+                    >
+                      <TrashIcon className="h-4 w-4" />
+                    </button>
+                  )}
+                </>
+              }
+            />
+
+            {/* ANS badge + path/version/url live just under the header row */}
+            <div className="px-5 -mt-2 pb-2 space-y-1">
+              {agent.ans_metadata && (
+                <div>
+                  <ANSBadge ansMetadata={agent.ans_metadata} compact />
+                </div>
+              )}
+              <div>
+                <code className="text-xs text-gray-600 dark:text-gray-300 bg-gray-50 dark:bg-gray-800/50 px-2 py-1 rounded font-mono">
+                  {agent.path}
+                </code>
+                {agent.version && (
+                  <span className="ml-2 text-xs text-gray-500 dark:text-gray-400">
+                    v{agent.version}
+                  </span>
                 )}
               </div>
-
-              {/* Description */}
-              <p className="text-gray-600 dark:text-gray-300 text-sm leading-relaxed line-clamp-2 mb-4">
-                {agent.description || 'No description available'}
-              </p>
-
-              {/* Tags */}
-              {agent.tags && agent.tags.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 mb-4">
-                  {agent.tags.slice(0, 3).map((tag) => (
-                    <span
-                      key={tag}
-                      className="px-2 py-1 text-xs font-medium bg-cyan-50 dark:bg-cyan-900/30 text-cyan-700 dark:text-cyan-300 rounded"
-                    >
-                      #{tag}
-                    </span>
-                  ))}
-                  {agent.tags.length > 3 && (
-                    <span className="px-2 py-1 text-xs font-medium bg-gray-50 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded">
-                      +{agent.tags.length - 3}
-                    </span>
-                  )}
-                </div>
+              {agent.url && (
+                <a
+                  href={agent.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-xs text-cyan-700 dark:text-cyan-300 break-all hover:underline"
+                >
+                  <span className="font-mono">{agent.url}</span>
+                </a>
               )}
             </div>
 
-            {/* Stats */}
-            <div className="px-5 pb-4">
+            <CardBody description={agent.description}>
+              <TagList tags={agent.tags || []} accent={ACCENT} prefix="#" />
+            </CardBody>
+
+            <CardStatsRow columns={1}>
               <StarRatingWidget
                 resourceType="agents"
                 path={agent.path}
@@ -567,46 +507,22 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                   }
                 }}
               />
-            </div>
+            </CardStatsRow>
 
-            {/* Footer */}
-            <div className="mt-auto px-5 py-4 border-t border-cyan-100 dark:border-cyan-700 bg-cyan-50/50 dark:bg-cyan-900/30 rounded-b-2xl">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                  {/* Status Indicators */}
-                  <div className="flex items-center gap-2">
-                    <div className={`w-3 h-3 rounded-full ${
-                      agent.enabled
-                        ? 'bg-green-400 shadow-lg shadow-green-400/30'
-                        : 'bg-gray-300 dark:bg-gray-600'
-                    }`} />
-                    <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                      {agent.enabled ? 'Enabled' : 'Disabled'}
-                    </span>
-                  </div>
-
-                  <div className="w-px h-4 bg-cyan-200 dark:bg-cyan-600" />
-
-                  <div className="flex items-center gap-2">
-                    <div className={`w-3 h-3 rounded-full ${
-                      agent.status === 'healthy'
-                        ? 'bg-emerald-400 shadow-lg shadow-emerald-400/30'
-                        : agent.status === 'healthy-auth-expired'
-                        ? 'bg-orange-400 shadow-lg shadow-orange-400/30'
-                        : agent.status === 'unhealthy'
-                        ? 'bg-red-400 shadow-lg shadow-red-400/30'
-                        : 'bg-amber-400 shadow-lg shadow-amber-400/30'
-                    }`} />
-                    <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                      {agent.status === 'healthy' ? 'Healthy' :
-                       agent.status === 'healthy-auth-expired' ? 'Healthy (Auth Expired)' :
-                       agent.status === 'unhealthy' ? 'Unhealthy' : 'Unknown'}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Controls */}
-                <div className="flex items-center gap-3">
+            <CardFooter
+              accent={ACCENT}
+              status={
+                <>
+                  <StatusDot
+                    tone={agent.enabled ? 'green' : 'off'}
+                    label={agent.enabled ? 'Enabled' : 'Disabled'}
+                  />
+                  <StatusDivider accent={ACCENT} />
+                  <StatusDot tone={health.tone} label={health.label} />
+                </>
+              }
+              controls={
+                <>
                   {/* Last Updated (source timestamp) */}
                   {agent.source_updated_at && (
                     <div className="text-xs text-gray-500 dark:text-gray-300 flex items-center gap-1.5">
@@ -642,33 +558,19 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
 
                   {/* Toggle Switch - only show if user has toggle_agent permission */}
                   {canToggle && (
-                    <label className="relative inline-flex items-center cursor-pointer" onClick={(e) => e.stopPropagation()}>
-                      <input
-                        type="checkbox"
-                        checked={agent.enabled}
-                        onChange={(e) => {
-                          e.stopPropagation();
-                          onToggle(agent.path, e.target.checked);
-                        }}
-                        className="sr-only peer"
-                      />
-                      <div className={`relative w-12 h-6 rounded-full transition-colors duration-200 ease-in-out ${
-                        agent.enabled
-                          ? 'bg-cyan-600'
-                          : 'bg-gray-300 dark:bg-gray-600'
-                      }`}>
-                        <div className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform duration-200 ease-in-out ${
-                          agent.enabled ? 'translate-x-6' : 'translate-x-0'
-                        }`} />
-                      </div>
-                    </label>
+                    <ToggleSwitch
+                      checked={agent.enabled}
+                      onChange={(checked) => onToggle(agent.path, checked)}
+                      ariaLabel={`Enable ${agent.name}`}
+                      accent={ACCENT}
+                    />
                   )}
-                </div>
-              </div>
-            </div>
+                </>
+              }
+            />
           </>
         )}
-      </div>
+      </CardShell>
 
       <AgentDetailsModal
         agent={agent}

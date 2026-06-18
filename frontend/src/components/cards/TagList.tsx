@@ -1,31 +1,32 @@
 import React from 'react';
 import clsx from 'clsx';
+import { ACCENTS, AccentToken } from '../../theme/accents';
 
 interface TagListProps {
   tags: string[];
+  /** Accent token — the default tag pill color follows the card accent. */
+  accent?: AccentToken;
   /** Max tags to show before collapsing the rest into a "+N" pill. */
   max?: number;
-  /** Prefix each tag (e.g. "#") — servers/agents use a hash, custom does not. */
+  /** Prefix each tag (e.g. "#"). All entity cards use a hash for consistency. */
   prefix?: string;
-  /** Pill shape. Servers use square `rounded`; custom entities use `rounded-full`. */
+  /** Pill shape. Square `rounded` by default; custom entities use `rounded-full`. */
   rounded?: 'rounded' | 'rounded-full';
   /** Optional per-tag class override (e.g. highlight security-pending tags). */
   tagClassName?: (tag: string) => string | undefined;
   className?: string;
 }
 
-const DEFAULT_TAG_CLASS =
-  'bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300';
-
 /**
  * Renders the first `max` tags as pills plus a "+N" overflow pill. Shared by
- * every card; styling knobs (prefix, shape, per-tag color) cover the small
- * differences between entity types without forking the layout.
+ * every card. The default pill color comes from the card accent so tags match
+ * the rest of the card; per-tag overrides (tagClassName) handle special states.
  *
  * Returns null when there are no tags so callers don't need a guard.
  */
 const TagList: React.FC<TagListProps> = ({
   tags,
+  accent = 'neutral',
   max = 3,
   prefix = '',
   rounded = 'rounded',
@@ -47,7 +48,7 @@ const TagList: React.FC<TagListProps> = ({
           className={clsx(
             'px-2 py-1 text-xs font-medium',
             rounded,
-            tagClassName?.(tag) ?? DEFAULT_TAG_CLASS,
+            tagClassName?.(tag) ?? ACCENTS[accent].tag,
           )}
         >
           {prefix}

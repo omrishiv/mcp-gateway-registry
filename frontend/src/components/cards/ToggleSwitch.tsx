@@ -1,24 +1,27 @@
 import React from 'react';
 import clsx from 'clsx';
+import { ACCENTS, AccentToken } from '../../theme/accents';
 
 interface ToggleSwitchProps {
   checked: boolean;
   onChange: (checked: boolean) => void;
   ariaLabel: string;
+  /** Accent token — the "on" color matches the card. Defaults to neutral (blue). */
+  accent?: AccentToken;
   disabled?: boolean;
 }
 
 /**
  * The enable/disable toggle shared by every entity card.
  *
- * Extracted verbatim from the per-card inline markup so all five cards render
- * an identical switch. The active color stays blue today; the theming phase
- * swaps it for an accent token.
+ * Markup is identical everywhere; only the "on" color follows the card accent
+ * so the toggle reads as part of the same surface as the rest of the card.
  */
 const ToggleSwitch: React.FC<ToggleSwitchProps> = ({
   checked,
   onChange,
   ariaLabel,
+  accent = 'neutral',
   disabled = false,
 }) => {
   return (
@@ -34,7 +37,7 @@ const ToggleSwitch: React.FC<ToggleSwitchProps> = ({
       <div
         className={clsx(
           'relative w-12 h-6 rounded-full transition-colors duration-200 ease-in-out',
-          checked ? 'bg-blue-600' : 'bg-gray-300 dark:bg-gray-600',
+          checked ? ACCENTS[accent].toggleOn : 'bg-gray-300 dark:bg-gray-600',
         )}
       >
         <div

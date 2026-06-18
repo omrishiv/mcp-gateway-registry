@@ -1,9 +1,13 @@
 import React from 'react';
 import clsx from 'clsx';
+import { ACCENTS, AccentToken } from '../../theme/accents';
 
 /**
  * Color tone for a status dot. `off` is the muted gray used for disabled /
  * inactive states; the rest map to the glow colors the card footers use.
+ *
+ * Tones describe *meaning* (healthy/degraded/down), not card identity — a
+ * green "Enabled" dot looks the same on every entity type for consistency.
  */
 export type StatusTone =
   | 'green'
@@ -53,9 +57,12 @@ const StatusDot: React.FC<StatusDotProps> = ({
   );
 };
 
-/** Thin vertical rule placed between two StatusDots in a footer. */
-export const StatusDivider: React.FC = () => (
-  <div className="w-px h-4 bg-gray-200 dark:bg-gray-600" />
-);
+/**
+ * Thin vertical rule placed between two StatusDots in a footer. Tinted by the
+ * card accent so the divider matches the footer it sits in.
+ */
+export const StatusDivider: React.FC<{ accent?: AccentToken }> = ({
+  accent = 'neutral',
+}) => <div className={clsx('w-px h-4', ACCENTS[accent].divider)} />;
 
 export default StatusDot;
