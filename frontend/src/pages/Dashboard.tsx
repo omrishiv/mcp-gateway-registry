@@ -24,6 +24,7 @@ import CustomEntityTab from '../components/CustomEntityTab';
 import CustomEntityForm from '../components/CustomEntityForm';
 import CustomEntityDetail from '../components/CustomEntityDetail';
 import ConfirmModal from '../components/ConfirmModal';
+import { EntityGrid, EmptyState } from '../components/entities';
 import { uuidFromPath } from '../hooks/useCustomEntities';
 import type {
   CustomEntityRecord,
@@ -1981,30 +1982,26 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         options?.showRegisterCta ?? (!searchTerm && activeFilter === 'all');
 
       return (
-        <div className="text-center py-16">
-          <div className="text-gray-400 text-xl mb-4">{title}</div>
-          <p className="text-gray-500 dark:text-gray-300 text-base max-w-md mx-auto">{subtitle}</p>
-          {shouldShowCta && (
-            <button
-              onClick={handleRegisterServer}
-              className="mt-6 inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-lg text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
-            >
-              <PlusIcon className="h-5 w-5 mr-2" />
-              Register Server
-            </button>
-          )}
-        </div>
+        <EmptyState
+          title={title}
+          subtitle={subtitle}
+          cta={
+            shouldShowCta ? (
+              <button
+                onClick={handleRegisterServer}
+                className="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-lg text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
+              >
+                <PlusIcon className="h-5 w-5 mr-2" />
+                Register Server
+              </button>
+            ) : undefined
+          }
+        />
       );
     }
 
     return (
-      <div
-        className="grid pb-12"
-        style={{
-          gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))',
-          gap: 'clamp(1.5rem, 3vw, 2.5rem)'
-        }}
-      >
+      <EntityGrid className="pb-12">
         {list.map((server) => (
           <ServerCard
             key={server.path}
@@ -2020,7 +2017,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
             authToken={agentApiToken}
           />
         ))}
-      </div>
+      </EntityGrid>
     );
   };
 
