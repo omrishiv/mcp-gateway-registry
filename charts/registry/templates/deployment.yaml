@@ -48,8 +48,11 @@ spec:
               name: http
             - containerPort: 8443
               name: https
-            - containerPort: 7860
-              name: registry
+            # The raw uvicorn app port (7860) is intentionally NOT declared here.
+            # The app binds 127.0.0.1:7860 and is reached only over loopback by the
+            # in-pod nginx; it is not a Service port and probes hit 8080 (nginx).
+            # containerPort is informational, so advertising 7860 would only imply a
+            # pod-reachable raw app port that does not exist. See service.yaml.
             - containerPort: 9464
               name: metrics
           resources:
