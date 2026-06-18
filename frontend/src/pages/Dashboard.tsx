@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { MagnifyingGlassIcon, PlusIcon, XMarkIcon, ArrowPathIcon, CheckCircleIcon, ExclamationCircleIcon, ChevronDownIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
+import { MagnifyingGlassIcon, PlusIcon, XMarkIcon, ArrowPathIcon, CheckCircleIcon, ExclamationCircleIcon } from '@heroicons/react/24/outline';
 import { useServerStats } from '../hooks/useServerStats';
 import { useSkills, Skill } from '../hooks/useSkills';
 import { useAuth } from '../contexts/AuthContext';
@@ -27,7 +27,28 @@ import ConfirmModal from '../components/ConfirmModal';
 import { EntityGrid, EmptyState } from '../components/entities';
 import SkillsSection from '../components/entities/sections/SkillsSection';
 import VirtualServersSection from '../components/entities/sections/VirtualServersSection';
+import RegistrySection, {
+  type RegistryAccent,
+} from '../components/entities/sections/RegistrySection';
 import { useEntityToggle } from '../hooks/useEntityToggle';
+
+// Federated-registry header accents (local groups are always green/emerald).
+const SERVER_REGISTRY_ACCENT: RegistryAccent = {
+  headerBg:
+    'bg-gradient-to-r from-cyan-50 to-blue-50 dark:from-cyan-900/20 dark:to-blue-900/20 hover:from-cyan-100 hover:to-blue-100 dark:hover:from-cyan-900/30 dark:hover:to-blue-900/30',
+  title: 'text-cyan-700 dark:text-cyan-300',
+  resyncButton:
+    'text-cyan-600 dark:text-cyan-400 hover:text-cyan-800 dark:hover:text-cyan-200 hover:bg-cyan-100 dark:hover:bg-cyan-900/30',
+  border: 'border-gray-200 dark:border-gray-700',
+};
+const AGENT_REGISTRY_ACCENT: RegistryAccent = {
+  headerBg:
+    'bg-gradient-to-r from-violet-50 to-purple-50 dark:from-violet-900/20 dark:to-purple-900/20 hover:from-violet-100 hover:to-purple-100 dark:hover:from-violet-900/30 dark:hover:to-purple-900/30',
+  title: 'text-violet-700 dark:text-violet-300',
+  resyncButton:
+    'text-violet-600 dark:text-violet-400 hover:text-violet-800 dark:hover:text-violet-200 hover:bg-violet-100 dark:hover:bg-violet-900/30',
+  border: 'border-cyan-200 dark:border-cyan-700',
+};
 import { uuidFromPath } from '../hooks/useCustomEntities';
 import type {
   CustomEntityRecord,
@@ -2109,144 +2130,65 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                   // When there's only one registry (local), skip the collapsible wrapper
                   const showRegistryHeader = registryIds.length > 1 || registryId !== 'local';
 
-                  // Render servers without registry header when it's the only registry
-                  if (!showRegistryHeader) {
-                    return (
-                      <div key={registryId} className="overflow-visible">
-                        <div
-                          className="grid overflow-visible"
-                          style={{
-                            gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))',
-                            gap: 'clamp(1.5rem, 3vw, 2.5rem)'
-                          }}
-                        >
-                          {filteredRegistryServers.slice(serverPage * PAGE_SIZE, (serverPage + 1) * PAGE_SIZE).map((server) => (
-                            <ServerCard
-                              key={server.path}
-                              server={server}
-                              onToggle={handleToggleServer}
-                              onEdit={handleEditServer}
-                              canModify={user?.can_modify_servers || false}
-                              canHealthCheck={user?.is_admin || hasUiPermission('health_check_service', server.path)}
-                              canToggle={user?.is_admin || hasUiPermission('toggle_service', server.path)}
-                              canDelete={(user?.is_admin || hasUiPermission('delete_service', server.path)) && !server.sync_metadata?.is_federated}
-                              onDelete={handleDeleteServer}
-                              onRefreshSuccess={refreshData}
-                              onShowToast={showToast}
-                              onServerUpdate={handleServerUpdate}
-                              authToken={agentApiToken}
-                            />
-                          ))}
-                          {/* Virtual MCP Servers in Local Registry */}
-                          {filteredVirtualServers.map((vs) => (
-                            <VirtualServerCard
-                              key={vs.path}
-                              virtualServer={vs}
-                              canModify={user?.can_modify_servers || user?.is_admin || false}
-                              onToggle={handleToggleVirtualServer}
-                              onEdit={handleEditVirtualServer}
-                              onDelete={handleDeleteVirtualServer}
-                              onShowToast={showToast}
-                              authToken={agentApiToken}
-                            />
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  }
+                  const pagedServers = filteredRegistryServers.slice(
+                    serverPage * PAGE_SIZE,
+                    (serverPage + 1) * PAGE_SIZE,
+                  );
+                  const localVirtualCount = registryId === 'local' ? filteredVirtualServers.length : 0;
+                  const serverCount = filteredRegistryServers.length + localVirtualCount;
+
+                  const renderServerCard = (server: Server) => (
+                    <ServerCard
+                      key={server.path}
+                      server={server}
+                      onToggle={handleToggleServer}
+                      onEdit={handleEditServer}
+                      canModify={user?.can_modify_servers || false}
+                      canHealthCheck={user?.is_admin || hasUiPermission('health_check_service', server.path)}
+                      canToggle={user?.is_admin || hasUiPermission('toggle_service', server.path)}
+                      canDelete={(user?.is_admin || hasUiPermission('delete_service', server.path)) && !server.sync_metadata?.is_federated}
+                      onDelete={handleDeleteServer}
+                      onRefreshSuccess={refreshData}
+                      onShowToast={showToast}
+                      onServerUpdate={handleServerUpdate}
+                      authToken={agentApiToken}
+                    />
+                  );
+
+                  // Virtual MCP servers are interleaved into the local registry group.
+                  const virtualCards = registryId === 'local'
+                    ? filteredVirtualServers.map((vs) => (
+                        <VirtualServerCard
+                          key={vs.path}
+                          virtualServer={vs}
+                          canModify={user?.can_modify_servers || user?.is_admin || false}
+                          onToggle={handleToggleVirtualServer}
+                          onEdit={handleEditVirtualServer}
+                          onDelete={handleDeleteVirtualServer}
+                          onShowToast={showToast}
+                          authToken={agentApiToken}
+                        />
+                      ))
+                    : null;
 
                   return (
-                    <div key={registryId} id={`server-registry-${registryId}`} className="border border-gray-200 dark:border-gray-700 rounded-xl scroll-mt-4">
-                      {/* Collapsible Header */}
-                      <button
-                        onClick={() => toggleRegistryGroup(registryId)}
-                        className={`w-full flex items-center justify-between px-4 py-3 text-left transition-colors ${
-                          registryId === 'local'
-                            ? 'bg-gradient-to-r from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 hover:from-green-100 hover:to-emerald-100 dark:hover:from-green-900/30 dark:hover:to-emerald-900/30'
-                            : 'bg-gradient-to-r from-cyan-50 to-blue-50 dark:from-cyan-900/20 dark:to-blue-900/20 hover:from-cyan-100 hover:to-blue-100 dark:hover:from-cyan-900/30 dark:hover:to-blue-900/30'
-                        }`}
-                      >
-                        <div className="flex items-center gap-3">
-                          {isExpanded ? (
-                            <ChevronDownIcon className="h-5 w-5 text-gray-500 dark:text-gray-400" />
-                          ) : (
-                            <ChevronRightIcon className="h-5 w-5 text-gray-500 dark:text-gray-400" />
-                          )}
-                          <span className={`font-semibold ${
-                            registryId === 'local'
-                              ? 'text-green-700 dark:text-green-300'
-                              : 'text-cyan-700 dark:text-cyan-300'
-                          }`}>
-                            {displayName}
-                          </span>
-                          {/* Registry URL */}
-                          <span className="text-xs text-gray-400 dark:text-gray-500 font-mono truncate max-w-[200px] lg:max-w-[300px]" title={registryId === 'local' ? localRegistryUrl : peerRegistryEndpoints[registryId]}>
-                            | {registryId === 'local' ? localRegistryUrl : (peerRegistryEndpoints[registryId] || 'Loading...')}
-                          </span>
-                          <span className="px-2 py-0.5 text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-full">
-                            {registryId === 'local'
-                              ? `${filteredRegistryServers.length + filteredVirtualServers.length} server${(filteredRegistryServers.length + filteredVirtualServers.length) !== 1 ? 's' : ''}`
-                              : `${filteredRegistryServers.length} server${filteredRegistryServers.length !== 1 ? 's' : ''}`
-                            }
-                          </span>
-                          {/* Resync button for federated registries */}
-                          {registryId !== 'local' && (
-                            <button
-                              onClick={(e) => handleSyncPeer(registryId, e)}
-                              disabled={syncingPeer === registryId}
-                              className="ml-2 p-1 text-cyan-600 dark:text-cyan-400 hover:text-cyan-800 dark:hover:text-cyan-200 hover:bg-cyan-100 dark:hover:bg-cyan-900/30 rounded-lg transition-colors disabled:opacity-50"
-                              title={`Resync from ${peerRegistryEndpoints[registryId] || registryId}`}
-                            >
-                              <ArrowPathIcon className={`h-4 w-4 ${syncingPeer === registryId ? 'animate-spin' : ''}`} />
-                            </button>
-                          )}
-                        </div>
-                      </button>
-
-                      {/* Collapsible Content */}
-                      {isExpanded && (
-                        <div className="p-4 bg-white dark:bg-gray-800 overflow-visible">
-                          <div
-                            className="grid overflow-visible"
-                            style={{
-                              gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))',
-                              gap: 'clamp(1.5rem, 3vw, 2.5rem)'
-                            }}
-                          >
-                            {filteredRegistryServers.slice(serverPage * PAGE_SIZE, (serverPage + 1) * PAGE_SIZE).map((server) => (
-                              <ServerCard
-                                key={server.path}
-                                server={server}
-                                onToggle={handleToggleServer}
-                                onEdit={handleEditServer}
-                                canModify={user?.can_modify_servers || false}
-                                canHealthCheck={user?.is_admin || hasUiPermission('health_check_service', server.path)}
-                                canToggle={user?.is_admin || hasUiPermission('toggle_service', server.path)}
-                                canDelete={(user?.is_admin || hasUiPermission('delete_service', server.path)) && !server.sync_metadata?.is_federated}
-                                onDelete={handleDeleteServer}
-                                onRefreshSuccess={refreshData}
-                                onShowToast={showToast}
-                                onServerUpdate={handleServerUpdate}
-                                authToken={agentApiToken}
-                              />
-                            ))}
-                            {/* Virtual MCP Servers in Local Registry (collapsible view) */}
-                            {registryId === 'local' && filteredVirtualServers.map((vs) => (
-                              <VirtualServerCard
-                                key={vs.path}
-                                virtualServer={vs}
-                                canModify={user?.can_modify_servers || user?.is_admin || false}
-                                onToggle={handleToggleVirtualServer}
-                                onEdit={handleEditVirtualServer}
-                                onDelete={handleDeleteVirtualServer}
-                                onShowToast={showToast}
-                                authToken={agentApiToken}
-                              />
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
+                    <RegistrySection
+                      key={registryId}
+                      registryId={registryId}
+                      domId={`server-registry-${registryId}`}
+                      items={pagedServers}
+                      expanded={isExpanded}
+                      onToggle={() => toggleRegistryGroup(registryId)}
+                      renderCard={renderServerCard}
+                      showHeader={showRegistryHeader}
+                      endpointUrl={registryId === 'local' ? localRegistryUrl : peerRegistryEndpoints[registryId]}
+                      countLabel={`${serverCount} server${serverCount !== 1 ? 's' : ''}`}
+                      displayName={displayName}
+                      accent={SERVER_REGISTRY_ACCENT}
+                      onResync={(e) => handleSyncPeer(registryId, e)}
+                      syncing={syncingPeer === registryId}
+                      extraCards={virtualCards}
+                    />
                   );
                 })}
               </div>
@@ -2383,125 +2325,51 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                   // When there's only one registry (local), skip the collapsible wrapper
                   const showRegistryHeader = agentRegistryIds.length > 1 || registryId !== 'local';
 
-                  // Render agents without registry header when it's the only registry
-                  if (!showRegistryHeader) {
-                    return (
-                      <div key={registryId} className="overflow-visible">
-                        <div
-                          className="grid overflow-visible"
-                          style={{
-                            gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))',
-                            gap: 'clamp(1.5rem, 3vw, 2.5rem)'
-                          }}
-                        >
-                          {filteredRegistryAgents.slice(agentPage * PAGE_SIZE, (agentPage + 1) * PAGE_SIZE).map((agent) => (
-                            <AgentCard
-                              key={agent.path}
-                              agent={agent}
-                              onToggle={handleToggleAgent}
-                              onEdit={handleEditAgent}
-                              canModify={user?.can_modify_servers || false}
-                              canHealthCheck={user?.is_admin || hasUiPermission('health_check_agent', agent.path)}
-                              canToggle={user?.is_admin || hasUiPermission('toggle_agent', agent.path)}
-                              canDelete={
-                                (user?.is_admin ||
-                                hasUiPermission('delete_agent', agent.path) ||
-                                agent.registered_by === user?.username) &&
-                                !agent.sync_metadata?.is_federated
-                              }
-                              onDelete={handleDeleteAgent}
-                              onRefreshSuccess={refreshData}
-                              onShowToast={showToast}
-                              onAgentUpdate={handleAgentUpdate}
-                              authToken={agentApiToken}
-                            />
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  }
+                  const pagedAgents = filteredRegistryAgents.slice(
+                    agentPage * PAGE_SIZE,
+                    (agentPage + 1) * PAGE_SIZE,
+                  );
+
+                  const renderAgentCard = (agent: Agent) => (
+                    <AgentCard
+                      key={agent.path}
+                      agent={agent}
+                      onToggle={handleToggleAgent}
+                      onEdit={handleEditAgent}
+                      canModify={user?.can_modify_servers || false}
+                      canHealthCheck={user?.is_admin || hasUiPermission('health_check_agent', agent.path)}
+                      canToggle={user?.is_admin || hasUiPermission('toggle_agent', agent.path)}
+                      canDelete={
+                        (user?.is_admin ||
+                        hasUiPermission('delete_agent', agent.path) ||
+                        agent.registered_by === user?.username) &&
+                        !agent.sync_metadata?.is_federated
+                      }
+                      onDelete={handleDeleteAgent}
+                      onRefreshSuccess={refreshData}
+                      onShowToast={showToast}
+                      onAgentUpdate={handleAgentUpdate}
+                      authToken={agentApiToken}
+                    />
+                  );
 
                   return (
-                    <div key={registryId} id={`agent-registry-${registryId}`} className="border border-cyan-200 dark:border-cyan-700 rounded-xl overflow-hidden scroll-mt-4">
-                      {/* Collapsible Header */}
-                      <button
-                        onClick={() => toggleRegistryGroup(`agents-${registryId}`)}
-                        className={`w-full flex items-center justify-between px-4 py-3 text-left transition-colors ${
-                          registryId === 'local'
-                            ? 'bg-gradient-to-r from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 hover:from-green-100 hover:to-emerald-100 dark:hover:from-green-900/30 dark:hover:to-emerald-900/30'
-                            : 'bg-gradient-to-r from-violet-50 to-purple-50 dark:from-violet-900/20 dark:to-purple-900/20 hover:from-violet-100 hover:to-purple-100 dark:hover:from-violet-900/30 dark:hover:to-purple-900/30'
-                        }`}
-                      >
-                        <div className="flex items-center gap-3">
-                          {isExpanded ? (
-                            <ChevronDownIcon className="h-5 w-5 text-gray-500 dark:text-gray-400" />
-                          ) : (
-                            <ChevronRightIcon className="h-5 w-5 text-gray-500 dark:text-gray-400" />
-                          )}
-                          <span className={`font-semibold ${
-                            registryId === 'local'
-                              ? 'text-green-700 dark:text-green-300'
-                              : 'text-violet-700 dark:text-violet-300'
-                          }`}>
-                            {displayName}
-                          </span>
-                          {/* Registry URL */}
-                          <span className="text-xs text-gray-400 dark:text-gray-500 font-mono truncate max-w-[200px] lg:max-w-[300px]" title={registryId === 'local' ? localRegistryUrl : peerRegistryEndpoints[registryId]}>
-                            | {registryId === 'local' ? localRegistryUrl : (peerRegistryEndpoints[registryId] || 'Loading...')}
-                          </span>
-                          <span className="px-2 py-0.5 text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-full">
-                            {filteredRegistryAgents.length} agent{filteredRegistryAgents.length !== 1 ? 's' : ''}
-                          </span>
-                          {/* Resync button for federated registries */}
-                          {registryId !== 'local' && (
-                            <button
-                              onClick={(e) => handleSyncPeer(registryId, e)}
-                              disabled={syncingPeer === registryId}
-                              className="ml-2 p-1 text-violet-600 dark:text-violet-400 hover:text-violet-800 dark:hover:text-violet-200 hover:bg-violet-100 dark:hover:bg-violet-900/30 rounded-lg transition-colors disabled:opacity-50"
-                              title={`Resync from ${peerRegistryEndpoints[registryId] || registryId}`}
-                            >
-                              <ArrowPathIcon className={`h-4 w-4 ${syncingPeer === registryId ? 'animate-spin' : ''}`} />
-                            </button>
-                          )}
-                        </div>
-                      </button>
-
-                      {/* Collapsible Content */}
-                      {isExpanded && (
-                        <div className="p-4 bg-white dark:bg-gray-800 overflow-visible">
-                          <div
-                            className="grid overflow-visible"
-                            style={{
-                              gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))',
-                              gap: 'clamp(1.5rem, 3vw, 2.5rem)'
-                            }}
-                          >
-                            {filteredRegistryAgents.slice(agentPage * PAGE_SIZE, (agentPage + 1) * PAGE_SIZE).map((agent) => (
-                              <AgentCard
-                                key={agent.path}
-                                agent={agent}
-                                onToggle={handleToggleAgent}
-                                onEdit={handleEditAgent}
-                                canModify={user?.can_modify_servers || false}
-                                canHealthCheck={user?.is_admin || hasUiPermission('health_check_agent', agent.path)}
-                                canToggle={user?.is_admin || hasUiPermission('toggle_agent', agent.path)}
-                                canDelete={
-                                  (user?.is_admin ||
-                                  hasUiPermission('delete_agent', agent.path) ||
-                                  agent.registered_by === user?.username) &&
-                                  !agent.sync_metadata?.is_federated
-                                }
-                                onDelete={handleDeleteAgent}
-                                onRefreshSuccess={refreshData}
-                                onShowToast={showToast}
-                                onAgentUpdate={handleAgentUpdate}
-                                authToken={agentApiToken}
-                              />
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
+                    <RegistrySection
+                      key={registryId}
+                      registryId={registryId}
+                      domId={`agent-registry-${registryId}`}
+                      items={pagedAgents}
+                      expanded={isExpanded}
+                      onToggle={() => toggleRegistryGroup(`agents-${registryId}`)}
+                      renderCard={renderAgentCard}
+                      showHeader={showRegistryHeader}
+                      endpointUrl={registryId === 'local' ? localRegistryUrl : peerRegistryEndpoints[registryId]}
+                      countLabel={`${filteredRegistryAgents.length} agent${filteredRegistryAgents.length !== 1 ? 's' : ''}`}
+                      displayName={displayName}
+                      accent={AGENT_REGISTRY_ACCENT}
+                      onResync={(e) => handleSyncPeer(registryId, e)}
+                      syncing={syncingPeer === registryId}
+                    />
                   );
                 })}
               </div>
