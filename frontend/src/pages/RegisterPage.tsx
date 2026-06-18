@@ -23,6 +23,8 @@ import LocalRuntimeFormPanel from '../components/LocalRuntimeFormPanel';
 import DuplicateCheckModal from '../components/DuplicateCheckModal';
 import { useDuplicateCheck } from '../hooks/useDuplicateCheck';
 import type { ExistingEntity } from '../types/duplicateCheck';
+import { FIELD, LABEL } from '../components/formFields';
+import { pathFromName } from '../utils/slug';
 
 
 // Toast notification component
@@ -217,14 +219,7 @@ const RegisterPage: React.FC = () => {
     useState<'mcp_server' | 'a2a_agent'>('mcp_server');
 
 
-  const generatePath = useCallback((name: string): string => {
-    if (!name) return '';
-    const slug = name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '');
-    return `/${slug}`;
-  }, []);
+  const generatePath = useCallback((name: string): string => pathFromName(name), []);
 
 
   const handleServerNameChange = useCallback((name: string) => {
@@ -807,8 +802,10 @@ const RegisterPage: React.FC = () => {
   }, [loading, agentForm, validateAgentForm, performAgentRegistration, runDuplicateCheck]);
 
 
-  const inputClass = "block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500";
-  const labelClass = "block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1";
+  // Field/label styling comes from the shared form-field primitives (identical
+  // to the previous local strings). errorClass keeps its text-sm/red-500 form.
+  const inputClass = FIELD;
+  const labelClass = LABEL;
   const errorClass = "mt-1 text-sm text-red-500 dark:text-red-400";
 
 

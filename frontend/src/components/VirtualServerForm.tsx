@@ -7,6 +7,7 @@ import {
   ToolMapping,
 } from '../types/virtualServer';
 import ToolSelector from './ToolSelector';
+import { pathFromName } from '../utils/slug';
 
 
 /**
@@ -38,11 +39,7 @@ type StepId = typeof STEPS[number]['id'];
  * Generate a URL path from a server name.
  */
 function _generatePathFromName(name: string): string {
-  const slug = name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '');
-  return `/virtual/${slug}`;
+  return pathFromName(name, 'virtual');
 }
 
 
