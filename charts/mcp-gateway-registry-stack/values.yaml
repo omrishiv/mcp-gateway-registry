@@ -371,6 +371,10 @@ registry:
     mcpToolsListFilterEnabled: true    # Registry-side awareness of the MCP tools/list filter (also read by auth-server)
     toolFilterAuditLogLevel: "INFO"    # Audit log level for tool-prune events (DEBUG, INFO, WARNING)
 
+    # Registry-UI internal token verification (the /api/ hop; minted by auth-server)
+    internalTokenTtlSeconds: "30"      # Token lifetime (seconds); the replay-window cap (min 5)
+    internalTokenLeewaySeconds: "5"    # Clock-skew leeway (seconds) on token exp/iat
+
     # Custom entity types (admin-defined, schema-driven catalog types)
     customEntityTypesEnabled: false    # Main switch for dynamic tabs + endpoints; off = no behavior change
     customTypeCacheTtlSeconds: 60      # TTL (s) for the in-process custom-type descriptor cache

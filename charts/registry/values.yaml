@@ -234,6 +234,12 @@ app:
   maxCustomRecordsPerType: 1000     # Soft cap on records per type (0 = unlimited); best-effort, rejects create at cap
   maxCustomTypes: 50                # Cap on number of custom types (0 = unlimited); rejects type create at limit
 
+  # Registry-UI internal token verification (the /api/ hop). The auth-server mints
+  # the token (using its own INTERNAL_TOKEN_TTL_SECONDS); the registry verifies it
+  # and uses the leeway below. Not secrets -- plain env. See docs/unified-parameter-reference.md.
+  internalTokenTtlSeconds: "30"     # Token lifetime (seconds); the replay-window cap (min 5)
+  internalTokenLeewaySeconds: "5"   # Clock-skew leeway (seconds) on token exp/iat
+
   # Override the `scopes_supported` array in the Protected Resource Metadata
   # document (`/.well-known/oauth-protected-resource`). Space-separated scope
   # names.

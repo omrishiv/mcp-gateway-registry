@@ -81,11 +81,13 @@ tests:
       # IDE_OAUTH_CALLBACK_PORT is env[14]/env[15]; the custom-entity-types
       # quartet (CUSTOM_ENTITY_TYPES_ENABLED, CUSTOM_TYPE_CACHE_TTL_SECONDS,
       # MAX_CUSTOM_RECORDS_PER_TYPE, MAX_CUSTOM_TYPES) is
-      # env[16]/env[17]/env[18]/env[19];
-      # KEYCLOAK_ADMIN_PASSWORD (conditional on keycloak provider) is env[20];
+      # env[16]/env[17]/env[18]/env[19]; the internal-token pair
+      # (INTERNAL_TOKEN_TTL_SECONDS, INTERNAL_TOKEN_LEEWAY_SECONDS) is
+      # env[20]/env[21];
+      # KEYCLOAK_ADMIN_PASSWORD (conditional on keycloak provider) is env[22];
       # PF_ADMIN_URL/PF_ADMIN_USER (registry-only, always rendered) are
-      # env[21]/env[22]; UPDATE_CHECK_ENABLED/UPDATE_CHECK_INTERVAL_HOURS
-      # (always rendered) are env[23]/env[24]; user extraEnv entries are
+      # env[23]/env[24]; UPDATE_CHECK_ENABLED/UPDATE_CHECK_INTERVAL_HOURS
+      # (always rendered) are env[25]/env[26]; user extraEnv entries are
       # appended at the end.
       #
       # NOTE: The indices below assume global.authProvider.type=keycloak
@@ -143,24 +145,30 @@ tests:
           value: MAX_CUSTOM_TYPES
       - equal:
           path: spec.template.spec.containers[0].env[20].name
-          value: KEYCLOAK_ADMIN_PASSWORD
+          value: INTERNAL_TOKEN_TTL_SECONDS
       - equal:
           path: spec.template.spec.containers[0].env[21].name
-          value: PF_ADMIN_URL
+          value: INTERNAL_TOKEN_LEEWAY_SECONDS
       - equal:
           path: spec.template.spec.containers[0].env[22].name
-          value: PF_ADMIN_USER
+          value: KEYCLOAK_ADMIN_PASSWORD
       - equal:
           path: spec.template.spec.containers[0].env[23].name
-          value: UPDATE_CHECK_ENABLED
+          value: PF_ADMIN_URL
       - equal:
           path: spec.template.spec.containers[0].env[24].name
-          value: UPDATE_CHECK_INTERVAL_HOURS
+          value: PF_ADMIN_USER
       - equal:
           path: spec.template.spec.containers[0].env[25].name
-          value: MY_FLAG
+          value: UPDATE_CHECK_ENABLED
       - equal:
           path: spec.template.spec.containers[0].env[26].name
+          value: UPDATE_CHECK_INTERVAL_HOURS
+      - equal:
+          path: spec.template.spec.containers[0].env[27].name
+          value: MY_FLAG
+      - equal:
+          path: spec.template.spec.containers[0].env[28].name
           value: MY_SECRET_VAR
 
   - it: appends extraEnvFrom entries after chart-managed envFrom sources
@@ -219,6 +227,15 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "\"SHOW_SKILLS_TAB\" is a reserved variable"
+
+  - it: fails when extraEnv contains an env-block reserved name (INTERNAL_TOKEN_TTL_SECONDS)
+    set:
+      extraEnv:
+        - name: INTERNAL_TOKEN_TTL_SECONDS
+          value: "999"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"INTERNAL_TOKEN_TTL_SECONDS\" is a reserved variable"
 
   - it: fails when extraEnv contains a reserved envFrom-sourced name (SECRET_KEY)
     set:

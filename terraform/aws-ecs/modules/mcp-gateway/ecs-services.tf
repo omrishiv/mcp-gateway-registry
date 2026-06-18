@@ -1176,6 +1176,15 @@ module "ecs_service_registry" {
           name  = "TOOL_FILTER_AUDIT_LOG_LEVEL"
           value = var.tool_filter_audit_log_level
         },
+        # Registry-UI internal token verification (the /api/ hop; minted by auth-server)
+        {
+          name  = "INTERNAL_TOKEN_TTL_SECONDS"
+          value = tostring(var.internal_token_ttl_seconds)
+        },
+        {
+          name  = "INTERNAL_TOKEN_LEEWAY_SECONDS"
+          value = tostring(var.internal_token_leeway_seconds)
+        },
         # Custom entity types (admin-defined, schema-driven catalog types)
         {
           name  = "CUSTOM_ENTITY_TYPES_ENABLED"
