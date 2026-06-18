@@ -1045,3 +1045,26 @@ def test_no_server_scope_backend_url_default_in_conf_templates():
             f"/validate subrequest and breaks internal-token minting. See the "
             f"NOTE comment in the server block."
         )
+
+
+def test_backend_url_declared_at_http_scope():
+    """$backend_url is referenced in the shared `location = /validate` block but only
+    `set` inside the generated /mcp-proxy/ blocks. When no such block renders (no healthy
+    MCP server / registry-only mode), an undeclared variable makes nginx fail to START
+    with `[emerg] unknown "backend_url" variable`. It must be DECLARED at http scope via
+    a `map ... { default ""; }` (clobber-safe, unlike a server-scope `set`)."""
+    import re
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[3]
+    conf_files = [
+        repo_root / "docker" / "nginx_rev_proxy_http_and_https.conf",
+        repo_root / "docker" / "nginx_rev_proxy_http_only.conf",
+    ]
+    backend_map = re.compile(r"^\s*map\s+\$\S+\s+\$backend_url\s*\{", re.MULTILINE)
+    for conf in conf_files:
+        text = conf.read_text()
+        assert backend_map.search(text), (
+            f"{conf.name} is missing the http-scope `map ... $backend_url {{ default \"\"; }}` "
+            f"declaration. Without it nginx fails to start when no /mcp-proxy/ block renders."
+        )
