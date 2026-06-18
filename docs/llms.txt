@@ -1463,7 +1463,7 @@ sudo apt-get update && sudo apt-get install -y docker.io docker-compose
 ./build_and_run.sh
 
 # 6. Access registry
-open http://localhost:7860
+open http://localhost
 ```
 
 ### 9.2. Pre-built Images (Instant Setup)
@@ -1490,7 +1490,7 @@ export DOCKERHUB_ORG=mcpgateway
 # Complete: Initialize Keycloak Configuration guide
 
 # Step 6: Access registry
-open http://localhost:7860
+open http://localhost
 
 # Step 7: Create first agent account
 # Complete: Create Your First AI Agent Account guide
@@ -1680,7 +1680,7 @@ docker-compose ps
 docker-compose logs -f
 
 # Test web interface
-open http://localhost:7860
+open http://localhost
 
 # Test authentication
 cd tests
@@ -2205,8 +2205,8 @@ cd credentials-provider && ./generate_creds.sh --verbose
 # Check port availability
 sudo netstat -tlnp | grep -E ':(80|443|7860|8080)'
 
-# Test internal services
-curl -v http://localhost:7860/health
+# Test the registry through nginx
+curl -v http://localhost/health
 ```
 
 **Permission denied errors:**
@@ -2248,7 +2248,7 @@ def log_auth_event(event_type: str, username: str = None, details: dict = None):
 
 **Health Check:**
 ```bash
-curl http://localhost:7860/health
+curl http://localhost/health
 ```
 
 ## 14. Code Organization & Patterns

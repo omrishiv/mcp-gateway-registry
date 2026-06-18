@@ -586,7 +586,7 @@ import httpx
 
 # Configure client
 client = httpx.Client(
-    base_url="http://localhost:7860",
+    base_url="http://localhost",
     headers={"Authorization": f"Bearer {token}"}
 )
 

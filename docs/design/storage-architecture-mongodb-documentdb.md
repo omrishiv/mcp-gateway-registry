@@ -778,7 +778,7 @@ docker exec -it mcp-mongodb mongosh --eval "rs.status()"
 # Should show: rs0 with 1 member (primary)
 
 # 4. Verify application can connect
-curl http://localhost:7860/health
+curl http://localhost/health
 # Should return: {"status": "healthy"}
 ```
 
@@ -1065,14 +1065,14 @@ variable "backup_retention_period" {
    ```bash
    # Re-register servers
    for file in /tmp/servers-backup/*.json; do
-       curl -X POST http://localhost:7860/servers \
+       curl -X POST http://localhost/servers \
            -H "Content-Type: application/json" \
            -d @"$file"
    done
 
    # Re-register agents
    for file in /tmp/agents-backup/*.json; do
-       curl -X POST http://localhost:7860/agents \
+       curl -X POST http://localhost/agents \
            -H "Content-Type: application/json" \
            -d @"$file"
    done
@@ -1081,10 +1081,10 @@ variable "backup_retention_period" {
 5. **Verify**
    ```bash
    # Check server count
-   curl http://localhost:7860/servers | jq 'length'
+   curl http://localhost/servers | jq 'length'
 
    # Test search
-   curl "http://localhost:7860/search?q=financial" | jq '.servers | length'
+   curl "http://localhost/search?q=financial" | jq '.servers | length'
    ```
 
 ### From MongoDB CE to AWS DocumentDB

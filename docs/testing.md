@@ -286,8 +286,8 @@ Use the `service_mgmt.sh` script for comprehensive server lifecycle management:
 # Check if services are running
 docker-compose ps
 
-# Test direct registry access
-curl http://localhost:7860/health
+# Test registry access through nginx
+curl http://localhost/health
 
 # Check if MCP server is responding
 uv run python cli/mcp_client.py ping

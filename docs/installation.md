@@ -94,8 +94,8 @@ chmod +x ./cli/bootstrap_user_and_m2m_setup.sh
 ./cli/bootstrap_user_and_m2m_setup.sh
 
 # 9. Access registry
-open http://localhost:7860  # macOS
-# xdg-open http://localhost:7860  # Linux
+open http://localhost  # macOS
+# xdg-open http://localhost  # Linux
 # Login: admin / <KEYCLOAK_ADMIN_PASSWORD>
 ```
 
@@ -203,7 +203,7 @@ open http://localhost:8080  # macOS
 
 **Podman Port Mapping:**
 - Main interface: `http://localhost:8080` (HTTP) or `https://localhost:8443` (HTTPS)
-- Registry API: `http://localhost:7860` (unchanged)
+- Registry API: `http://localhost:8080` (served through nginx on the main interface port)
 - Keycloak: `http://localhost:18080` (instead of 8080)
 - All other internal services: unchanged ports
 
@@ -369,7 +369,7 @@ Podman uses non-privileged host ports to avoid requiring root access:
 |---------|-------------|-------------|-------------|
 | Main UI (HTTP) | `http://localhost` | `http://localhost:8080` | Web interface |
 | Main UI (HTTPS) | `https://localhost` | `https://localhost:8443` | Secure web interface |
-| Registry API | `http://localhost:7860` | `http://localhost:7860` | API endpoint (unchanged) |
+| Registry API | `http://localhost` | `http://localhost:8080` | API endpoint (served through nginx on the Main UI port) |
 | Auth Server | `http://localhost:8888` | `http://localhost:8888` | Auth service (unchanged) |
 | Keycloak | `http://localhost:8080` | `http://localhost:18080` | IdP (Podman uses 18080 because 8080 is used by the Registry UI) |
 | Prometheus | `http://localhost:9090` | `http://localhost:9090` | Metrics (unchanged) |
@@ -579,7 +579,7 @@ graph TB
    ```
 
 2. **Test Web Interface**
-   - Navigate to `http://localhost:7860`
+   - Navigate to `http://localhost`
    - Login with admin credentials
    - Verify MCP server health status
 
@@ -639,8 +639,8 @@ cd credentials-provider && ./generate_creds.sh --verbose
 # Check port availability
 sudo netstat -tlnp | grep -E ':(80|443|7860|8080)'
 
-# Test internal services
-curl -v http://localhost:7860/health
+# Test the registry through nginx
+curl -v http://localhost/health
 ```
 
 For more troubleshooting help, see [Troubleshooting Guide](troubleshooting.md).

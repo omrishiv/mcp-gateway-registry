@@ -318,9 +318,9 @@ If you're running on EC2 and want to access from your local machine via SSH tunn
 
 ```bash
 # From your local machine, create SSH tunnels
-ssh -i your-key.pem -L 7860:localhost:7860 -L 8080:localhost:8080 -L 8888:localhost:8888 -L 80:localhost:80 ubuntu@your-ec2-ip
+ssh -i your-key.pem -L 80:localhost:80 -L 8888:localhost:8888 ubuntu@your-ec2-ip
 
-# Then access in your local browser: http://localhost:7860
+# Then access in your local browser: http://localhost
 ```
 
 **Option C: AWS EC2 with Remote Desktop (GUI Access)**
@@ -345,13 +345,13 @@ See [Remote Desktop Setup Guide](remote-desktop-setup.md) for detailed instructi
 
 ```bash
 # On macOS:
-open http://localhost:7860
+open http://localhost
 
 # On Linux (install xdg-utils if xdg-open is not available):
 # sudo apt install xdg-utils
-xdg-open http://localhost:7860
+xdg-open http://localhost
 
-# Or open http://localhost:7860 in your browser
+# Or open http://localhost in your browser
 ```
 
 Login with:

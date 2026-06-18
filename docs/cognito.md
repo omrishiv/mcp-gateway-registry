@@ -214,7 +214,7 @@ COGNITO_DOMAIN=your-custom-domain
 AWS_REGION=us-east-1
 
 # Registry URL (for callback configuration)
-REGISTRY_URL=http://localhost:7860
+REGISTRY_URL=http://localhost
 ```
 
 #### 5. CLI Authentication Tool Usage
@@ -578,7 +578,7 @@ Replace the following placeholder values with your actual Cognito configuration:
 3. **COGNITO_USER_POOL_ID**: Your User Pool ID from Step 1 of the [User Group Setup](#step-1-create-user-pool)
 4. **AWS_REGION**: The AWS region where your Cognito User Pool is located (e.g., `us-east-1`)
 5. **SECRET_KEY**: Generate a secure secret key using: `python -c 'import secrets; print(secrets.token_hex(32))'`
-6. **REGISTRY_URL**: Your MCP Gateway URL (e.g., `http://localhost:7860` for local development)
+6. **REGISTRY_URL**: Your MCP Gateway URL (e.g., `http://localhost` for local development)
 
 ### Step 4: Verify Configuration
 

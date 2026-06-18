@@ -695,7 +695,7 @@ cd ../..
 |---------|-------------|
 | **Main UI** | `http://localhost:8080` |
 | **Main UI (HTTPS)** | `https://localhost:8443` |
-| Registry API | `http://localhost:7860` |
+| Registry API | `http://localhost:8080` |
 | Keycloak Admin | `http://localhost:18080/admin` |
 | Auth Server | `http://localhost:8888` |
 | Prometheus | `http://localhost:9090` |
@@ -706,8 +706,8 @@ cd ../..
 # Main interface (note port 8080)
 open http://localhost:8080
 
-# Registry API (unchanged)
-open http://localhost:7860
+# Registry API (served through nginx on the Main UI port)
+open http://localhost:8080
 
 # Keycloak admin console
 open http://localhost:18080/admin
@@ -771,8 +771,8 @@ podman volume prune
 Update test scripts to use Podman ports:
 
 ```bash
-# Test registry health
-curl http://localhost:7860/health
+# Test registry health (served through nginx on the Main UI port)
+curl http://localhost:8080/health
 
 # Test main interface (note port 8080)
 curl http://localhost:8080/
@@ -924,7 +924,7 @@ podman ps
 # Check what's using ports
 lsof -i :80
 lsof -i :8080
-lsof -i :7860
+lsof -i :8888
 
 # Kill conflicting processes if needed
 sudo lsof -ti :80 | xargs kill

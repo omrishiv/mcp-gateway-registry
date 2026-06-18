@@ -15,7 +15,7 @@ The API uses JWT Bearer token authentication. You need to obtain a JWT token fro
 ### Generate JWT Token via UI (Admin Users)
 
 1. **Login to the Registry Web Interface**
-   - Navigate to your registry instance at `https://your-registry-domain/` or `http://localhost:7860/`
+   - Navigate to your registry instance at `https://your-registry-domain/` or `http://localhost/`
    - Login with your admin credentials
 
 2. **Access Token Management**

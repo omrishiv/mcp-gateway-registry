@@ -612,7 +612,7 @@ docker-compose logs -f nginx
 
 ```bash
 # Check if registry is ready
-curl http://localhost:7860/health
+curl http://localhost/health
 
 # Expected output:
 # {"status":"healthy","timestamp":"..."}
@@ -699,13 +699,13 @@ For detailed MongoDB CE architecture and configuration options, see [Storage Arc
 1. Open your web browser and navigate to:
    ```bash
    # On macOS:
-   open http://localhost:7860
+   open http://localhost
 
    # On Linux (install xdg-utils if the xdg-open command is not available):
    # sudo apt install xdg-utils
-   xdg-open http://localhost:7860
+   xdg-open http://localhost
 
-   # Or simply open http://localhost:7860 in your browser
+   # Or simply open http://localhost in your browser
    ```
 
 2. You should see the MCP Gateway Registry login page
@@ -799,7 +799,7 @@ The method to access the web UI depends on where you're running the MCP Gateway:
 #### Option A: Local Machine (Linux/macOS)
 
 If you're running on your local machine, simply open a browser and navigate to:
-- **Registry UI**: http://localhost:7860
+- **Registry UI**: http://localhost
 - **Keycloak Admin**: http://localhost:8080
 
 No additional setup required - you're already on localhost.
@@ -810,10 +810,10 @@ If you're running on EC2 and want to access from your local machine via SSH port
 
 ```bash
 # From your local machine, create SSH tunnels
-ssh -i your-key.pem -L 7860:localhost:7860 -L 8080:localhost:8080 -L 8888:localhost:8888 -L 80:localhost:80 ubuntu@your-ec2-ip
+ssh -i your-key.pem -L 80:localhost:80 -L 8080:localhost:8080 -L 8888:localhost:8888 ubuntu@your-ec2-ip
 
 # Then access in your local browser:
-# - Registry UI: http://localhost:7860
+# - Registry UI: http://localhost
 # - Keycloak Admin: http://localhost:8080
 ```
 
@@ -854,7 +854,7 @@ sudo apt install -y firefox
 
 **Connect from macOS**: Use Microsoft Remote Desktop app from the App Store.
 
-Once connected via remote desktop, open Firefox and navigate to http://localhost:7860 to access the Registry UI.
+Once connected via remote desktop, open Firefox and navigate to http://localhost to access the Registry UI.
 
 </details>
 
@@ -1079,7 +1079,7 @@ docker-compose restart keycloak
    docker compose up -d
    ```
 
-**Why this happens**: Cookies with `secure=true` are ONLY sent over HTTPS connections. If you access via HTTP (like `http://localhost:7860`), the browser will reject the cookie and login will fail.
+**Why this happens**: Cookies with `secure=true` are ONLY sent over HTTPS connections. If you access via HTTP (like `http://localhost`), the browser will reject the cookie and login will fail.
 
 #### Authentication Issues
 ```bash

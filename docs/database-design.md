@@ -757,7 +757,7 @@ else:
    ```bash
    # Use API to register from backup files
    for file in backup/*.json; do
-       curl -X POST http://localhost:7860/servers \
+       curl -X POST http://localhost/servers \
            -H "Content-Type: application/json" \
            -d @"$file"
    done

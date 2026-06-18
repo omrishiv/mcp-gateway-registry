@@ -1325,12 +1325,12 @@ FastAPI automatically generates OpenAPI (Swagger) specifications:
 
 **Local Access:**
 ```bash
-curl http://localhost:7860/openapi.json
+curl http://localhost/openapi.json
 ```
 
 **Browser Access:**
-- Swagger UI: http://localhost:7860/docs
-- ReDoc: http://localhost:7860/redoc
+- Swagger UI: http://localhost/docs
+- ReDoc: http://localhost/redoc
 
 ### Generate Spec Files
 
@@ -1338,14 +1338,14 @@ To download and save OpenAPI specs:
 
 ```bash
 # Get full OpenAPI spec as JSON
-curl -s http://localhost:7860/openapi.json > openapi.json
+curl -s http://localhost/openapi.json > openapi.json
 
 # Filter for specific tags
-curl -s http://localhost:7860/openapi.json | \
+curl -s http://localhost/openapi.json | \
   jq '.paths | keys[] | select(contains("/agents"))' > agents-endpoints.json
 
 # Generate Swagger YAML (requires conversion)
-curl -s http://localhost:7860/openapi.json | \
+curl -s http://localhost/openapi.json | \
   python3 -c "import sys, json, yaml; print(yaml.dump(json.load(sys.stdin)))" > openapi.yaml
 ```
 

@@ -544,9 +544,9 @@ nano .env
 export DOCKERHUB_ORG=mcpgateway
 ./build_and_run.sh --prebuilt
 
-# Access the Registry UI
-open http://localhost:7860  # macOS
-# xdg-open http://localhost:7860  # Linux
+# Access the Registry UI (served by nginx on port 80)
+open http://localhost  # macOS
+# xdg-open http://localhost  # Linux
 ```
 
 **[Complete Quick Start Guide](docs/quickstart.md)** - Full step-by-step instructions including:

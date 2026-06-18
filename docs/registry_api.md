@@ -46,7 +46,7 @@ Logs out the current user by invalidating their session.
 **Example:**
 
 ```bash
-curl -X POST http://localhost:7860/logout \
+curl -X POST http://localhost/logout \
   -b cookies.txt
 ```
 
@@ -93,7 +93,7 @@ Registers a new MCP service with the gateway.
 
 ```bash
 # Uses the session cookie from the login request
-curl -X POST http://localhost:7860/register \
+curl -X POST http://localhost/register \
   -b cookies.txt \
   -d "name=Weather Service&description=Provides weather forecasts&path=/weather&proxy_pass_url=http://localhost:8000&tags=weather,forecast&num_tools=3&num_stars=4&is_python=true&license=MIT"
 ```
@@ -117,12 +117,12 @@ Enables or disables a registered service.
 
 ```bash
 # Enable a service (requires session cookie)
-curl -X POST http://localhost:7860/toggle/weather \
+curl -X POST http://localhost/toggle/weather \
   -b cookies.txt \
   -d "enabled=on"
 
 # Disable a service (requires session cookie)
-curl -X POST http://localhost:7860/toggle/weather \
+curl -X POST http://localhost/toggle/weather \
   -b cookies.txt
 ```
 
@@ -152,7 +152,7 @@ Updates the details of an existing service.
 
 ```bash
 # Requires session cookie from login
-curl -X POST http://localhost:7860/edit/weather \
+curl -X POST http://localhost/edit/weather \
   -b cookies.txt \
   -d "name=Weather API&description=Updated weather service&proxy_pass_url=http://localhost:8001&tags=weather,api&num_tools=5&num_stars=5&is_python=true&license=MIT"
 ```
@@ -177,11 +177,11 @@ Retrieves detailed information about a registered service.
 
 ```bash
 # Get details for a specific service (requires session cookie)
-curl -X GET http://localhost:7860/api/server_details/weather \
+curl -X GET http://localhost/api/server_details/weather \
   -b cookies.txt
 
 # Get details for all services (requires session cookie)
-curl -X GET http://localhost:7860/api/server_details/all \
+curl -X GET http://localhost/api/server_details/all \
   -b cookies.txt
 ```
 
@@ -201,11 +201,11 @@ Retrieves the list of tools provided by a service.
 
 ```bash
 # Get tools for a specific service (requires session cookie)
-curl -X GET http://localhost:7860/api/tools/weather \
+curl -X GET http://localhost/api/tools/weather \
   -b cookies.txt
 
 # Get tools from all services (requires session cookie)
-curl -X GET http://localhost:7860/api/tools/all \
+curl -X GET http://localhost/api/tools/all \
   -b cookies.txt
 ```
 
@@ -225,7 +225,7 @@ Manually triggers a health check and tool discovery for a service.
 
 ```bash
 # Requires session cookie from login
-curl -X POST http://localhost:7860/api/refresh/weather \
+curl -X POST http://localhost/api/refresh/weather \
   -b cookies.txt
 ```
 
@@ -252,7 +252,7 @@ sudo chmod +x /usr/local/bin/websocat
 Then connect to the WebSocket endpoint:
 
 ```bash
-websocat ws://localhost:7860/ws/health_status
+websocat ws://localhost/ws/health_status
 ```
 
 This will display the JSON messages with health status updates in real-time in your terminal.
@@ -266,7 +266,7 @@ import json
 import websockets
 
 async def health_status_monitor():
-    uri = "ws://localhost:7860/ws/health_status"
+    uri = "ws://localhost/ws/health_status"
     async with websockets.connect(uri) as websocket:
         print("WebSocket connection established")
         
@@ -296,7 +296,7 @@ asyncio.run(health_status_monitor())
 
 2. **Programmatic Access**: For API access, obtain a JWT Bearer token from your OAuth2 provider and include it in the `Authorization` header:
    ```bash
-   curl -X GET http://localhost:7860/api/server_details/all \
+   curl -X GET http://localhost/api/server_details/all \
      -H "Authorization: Bearer <your-jwt-token>"
    ```
 

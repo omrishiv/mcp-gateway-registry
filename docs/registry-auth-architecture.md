@@ -298,7 +298,7 @@ The UI includes real-time health status updates via WebSocket:
 
 ```javascript
 // Health status WebSocket connection
-const ws = new WebSocket('ws://localhost:7860/ws/health_status');
+const ws = new WebSocket('ws://localhost/ws/health_status');
 
 ws.onmessage = function(event) {
     const healthData = JSON.parse(event.data);

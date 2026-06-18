@@ -33,7 +33,7 @@ This guide walks through configuring Okta as the identity provider for the MCP G
    - **Name**: `MCP Gateway Registry`
    - **Grant types**: Authorization Code, Refresh Token, Client Credentials
    - **Sign-in redirect URIs**: `http://localhost:8888/oauth2/callback/okta` (dev) or `https://your-auth-server-domain/oauth2/callback/okta` (production)
-   - **Sign-out redirect URIs**: `http://localhost:7860/logout` (dev) or `https://your-registry-domain/logout` (production)
+   - **Sign-out redirect URIs**: `http://localhost/logout` (dev) or `https://your-registry-domain/logout` (production)
    - **Controlled access**: Allow everyone in your organization
 4. Click **Save** and copy the **Client ID** and **Client Secret** immediately
 
