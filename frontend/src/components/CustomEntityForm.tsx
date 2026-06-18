@@ -12,6 +12,7 @@ import {
   MAX_TEXT_LEN,
 } from '../types/customEntity';
 import { labelFor } from '../utils/humanize';
+import { FormField, fieldClass } from './formFields';
 
 interface CustomEntityFormProps {
   descriptor: CustomTypeDescriptor;
@@ -23,10 +24,8 @@ interface CustomEntityFormProps {
 
 const VISIBILITIES = ['public', 'private', 'group-restricted'] as const;
 
-const INPUT_CLASS =
-  'w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg ' +
-  'bg-white dark:bg-gray-900 text-gray-900 dark:text-white ' +
-  'focus:ring-2 focus:ring-teal-500 focus:border-transparent';
+// Custom-entity forms use a teal focus accent.
+const INPUT_CLASS = fieldClass('teal');
 
 /** Comma/enter chip input — matches the agents allowed_groups widget. */
 function ChipInput({
@@ -130,12 +129,6 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
   const renderField = (field: CustomFieldDescriptor) => {
     const raw = attributes[field.name];
     const err = fieldErrors[field.name];
-    const label = (
-      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-        {labelFor(field)}
-        {field.required && <span className="text-red-500"> *</span>}
-      </label>
-    );
 
     let widget: React.ReactNode;
     switch (field.datatype) {
@@ -239,11 +232,9 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
     }
 
     return (
-      <div key={field.name}>
-        {label}
+      <FormField key={field.name} label={labelFor(field)} required={field.required} error={err}>
         {widget}
-        {err && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{err}</p>}
-      </div>
+      </FormField>
     );
   };
 
@@ -344,10 +335,7 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
           )}
 
           {/* --- Envelope (fixed, separate from attributes) --- */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Name <span className="text-red-500">*</span>
-            </label>
+          <FormField label="Name" required error={fieldErrors.name}>
             <input
               type="text"
               value={name}
@@ -355,15 +343,9 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
               onChange={(e) => setName(e.target.value)}
               className={INPUT_CLASS}
             />
-            {fieldErrors.name && (
-              <p className="mt-1 text-xs text-red-600 dark:text-red-400">{fieldErrors.name}</p>
-            )}
-          </div>
+          </FormField>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Description
-            </label>
+          <FormField label="Description">
             <textarea
               rows={3}
               maxLength={MAX_TEXT_LEN}
@@ -371,12 +353,9 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
               onChange={(e) => setDescription(e.target.value)}
               className={INPUT_CLASS}
             />
-          </div>
+          </FormField>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Visibility
-            </label>
+          <FormField label="Visibility">
             <select
               value={visibility}
               onChange={(e) => setVisibility(e.target.value)}
@@ -388,32 +367,21 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
                 </option>
               ))}
             </select>
-          </div>
+          </FormField>
 
           {visibility === 'group-restricted' && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Allowed Groups <span className="text-red-500">*</span>
-              </label>
+            <FormField label="Allowed Groups" required error={fieldErrors.allowed_groups}>
               <ChipInput
                 value={allowedGroups}
                 onChange={setAllowedGroups}
                 placeholder="Type a group name, press Enter"
               />
-              {fieldErrors.allowed_groups && (
-                <p className="mt-1 text-xs text-red-600 dark:text-red-400">
-                  {fieldErrors.allowed_groups}
-                </p>
-              )}
-            </div>
+            </FormField>
           )}
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Tags
-            </label>
+          <FormField label="Tags">
             <ChipInput value={tags} onChange={setTags} placeholder="Type a tag, press Enter" />
-          </div>
+          </FormField>
 
           {/* --- Per-type attributes (descriptor-driven) --- */}
           {descriptor.fields.length > 0 && (

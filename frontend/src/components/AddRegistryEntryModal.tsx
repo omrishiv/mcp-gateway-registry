@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 import DetailsModal from './DetailsModal';
+import { LABEL } from './formFields';
 
 
 /**
@@ -51,7 +52,9 @@ const SOURCE_TITLES: Record<RegistrySourceType, string> = {
 
 
 /**
- * CSS classes for form inputs.
+ * Input classes for this modal. Uses the ring-2 / rounded-lg / placeholder
+ * treatment (distinct from the standard entity-modal field), so it stays local
+ * rather than using the shared FIELD. The label, however, is the shared one.
  */
 const INPUT_CLASS =
   'w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg ' +
@@ -59,11 +62,7 @@ const INPUT_CLASS =
   'focus:ring-2 focus:ring-purple-500 focus:border-transparent ' +
   'placeholder-gray-400 dark:placeholder-gray-500 text-sm';
 
-
-/**
- * CSS classes for form labels.
- */
-const LABEL_CLASS = 'block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1';
+const LABEL_CLASS = LABEL;
 
 
 /**
