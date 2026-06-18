@@ -33,6 +33,12 @@ import RegistrySection, {
 import ServerEditModal, {
   type ServerEditForm,
 } from '../components/entities/forms/ServerEditModal';
+import AgentEditModal, {
+  type AgentEditForm,
+} from '../components/entities/forms/AgentEditModal';
+import SkillFormModal, {
+  type SkillForm,
+} from '../components/entities/forms/SkillFormModal';
 import { useEntityToggle } from '../hooks/useEntityToggle';
 import { filterEntities } from '../utils/entityFilters';
 
@@ -402,7 +408,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     return `${window.location.origin}${getBaseURL()}`;
   }, []);
 
-  const [editAgentForm, setEditAgentForm] = useState({
+  const [editAgentForm, setEditAgentForm] = useState<AgentEditForm>({
     name: '',
     path: '',
     url: '',
@@ -423,7 +429,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
   // Skill state management
   const [showSkillModal, setShowSkillModal] = useState(false);
   const [editingSkill, setEditingSkill] = useState<Skill | null>(null);
-  const [skillForm, setSkillForm] = useState({
+  const [skillForm, setSkillForm] = useState<SkillForm>({
     name: '',
     description: '',
     skill_md_url: '',
@@ -2900,228 +2906,16 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
 
       {/* Edit Agent Modal */}
       {editingAgent && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-              Edit Agent: {editingAgent.name}
-            </h3>
-
-            <form
-              onSubmit={async (e) => {
-                e.preventDefault();
-                await handleSaveEditAgent();
-              }}
-              className="space-y-4"
-            >
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                  Agent Name *
-                </label>
-                <input
-                  type="text"
-                  value={editAgentForm.name}
-                  onChange={(e) => setEditAgentForm(prev => ({ ...prev, name: e.target.value }))}
-                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-cyan-500 focus:border-cyan-500"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                  Description
-                </label>
-                <textarea
-                  value={editAgentForm.description}
-                  onChange={(e) => setEditAgentForm(prev => ({ ...prev, description: e.target.value }))}
-                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-cyan-500 focus:border-cyan-500"
-                  rows={3}
-                  placeholder="Brief description of the agent"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                  Lifecycle Status
-                </label>
-                <select
-                  value={editAgentForm.status}
-                  onChange={(e) => setEditAgentForm(prev => ({ ...prev, status: e.target.value as 'active' | 'draft' | 'deprecated' | 'beta' }))}
-                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-cyan-500 focus:border-cyan-500"
-                >
-                  <option value="active">Active</option>
-                  <option value="draft">Draft</option>
-                  <option value="beta">Beta</option>
-                  <option value="deprecated">Deprecated</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                  Version
-                </label>
-                <input
-                  type="text"
-                  value={editAgentForm.version}
-                  onChange={(e) => setEditAgentForm(prev => ({ ...prev, version: e.target.value }))}
-                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-cyan-500 focus:border-cyan-500"
-                  placeholder="1.0.0"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                  Visibility
-                </label>
-                <select
-                  value={editAgentForm.visibility}
-                  onChange={(e) => setEditAgentForm(prev => ({ ...prev, visibility: e.target.value as 'public' | 'private' | 'group-restricted' }))}
-                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-cyan-500 focus:border-cyan-500"
-                >
-                  <option value="private">Private</option>
-                  <option value="public">Public</option>
-                  <option value="group-restricted">Group Restricted</option>
-                </select>
-              </div>
-
-              {editAgentForm.visibility === 'group-restricted' && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                    Allowed Groups
-                  </label>
-                  <input
-                    type="text"
-                    value={editAgentForm.allowed_groups}
-                    onChange={(e) => setEditAgentForm(prev => ({ ...prev, allowed_groups: e.target.value }))}
-                    className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-cyan-500 focus:border-cyan-500"
-                    placeholder="e.g. finance-team, engineering"
-                  />
-                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    Comma-separated list of groups that can access this agent
-                  </p>
-                  {editAgentForm.allowed_groups.trim() === '' && (
-                    <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
-                      At least one group is required for group-restricted visibility
-                    </p>
-                  )}
-                </div>
-              )}
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                  Trust Level
-                </label>
-                <select
-                  value={editAgentForm.trust_level}
-                  onChange={(e) => setEditAgentForm(prev => ({ ...prev, trust_level: e.target.value as 'community' | 'verified' | 'trusted' | 'unverified' }))}
-                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-cyan-500 focus:border-cyan-500"
-                >
-                  <option value="unverified">Unverified</option>
-                  <option value="community">Community</option>
-                  <option value="verified">Verified</option>
-                  <option value="trusted">Trusted</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                  Supported Protocol
-                </label>
-                <select
-                  value={editAgentForm.supported_protocol}
-                  onChange={(e) => setEditAgentForm(prev => ({ ...prev, supported_protocol: e.target.value as 'a2a' | 'other' }))}
-                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-cyan-500 focus:border-cyan-500"
-                >
-                  <option value="a2a">A2A</option>
-                  <option value="other">Other</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                  Tags
-                </label>
-                <input
-                  type="text"
-                  value={editAgentForm.tags.join(',')}
-                  onChange={(e) => setEditAgentForm(prev => ({ ...prev, tags: e.target.value.split(',').map(t => t.trim()).filter(t => t) }))}
-                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-cyan-500 focus:border-cyan-500"
-                  placeholder="tag1,tag2,tag3"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                  Custom Metadata (JSON, optional)
-                </label>
-                <textarea
-                  value={editAgentForm.metadata}
-                  onChange={(e) => setEditAgentForm(prev => ({ ...prev, metadata: e.target.value }))}
-                  rows={4}
-                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-cyan-500 focus:border-cyan-500 font-mono text-sm"
-                  placeholder='{"team": "platform", "owner": "alice@example.com", "cost_center": "CC-1001"}'
-                />
-                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  Custom key-value pairs for organization, compliance, or integration purposes
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                  Skills (JSON array)
-                </label>
-                <textarea
-                  value={editAgentForm.skillsJson}
-                  onChange={(e) => {
-                    setEditAgentForm(prev => ({ ...prev, skillsJson: e.target.value }));
-                    setSkillsJsonError(null);
-                  }}
-                  className={`block w-full px-3 py-2 border rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white font-mono text-xs focus:ring-cyan-500 focus:border-cyan-500 ${
-                    skillsJsonError
-                      ? 'border-red-500 dark:border-red-400'
-                      : 'border-gray-300 dark:border-gray-600'
-                  }`}
-                  rows={8}
-                  placeholder='[{"id": "skill-1", "name": "My Skill", "description": "What this skill does"}]'
-                />
-                {skillsJsonError && (
-                  <p className="mt-1 text-xs text-red-600 dark:text-red-400">{skillsJsonError}</p>
-                )}
-                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  Each skill needs at least: id, name, description. Saving triggers a security rescan.
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                  Path (read-only)
-                </label>
-                <input
-                  type="text"
-                  value={editAgentForm.path}
-                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-300"
-                  disabled
-                />
-              </div>
-
-              <div className="flex space-x-3 pt-4">
-                <button
-                  type="submit"
-                  disabled={editAgentLoading}
-                  className="flex-1 px-4 py-2 text-sm font-medium text-white bg-cyan-600 hover:bg-cyan-700 disabled:opacity-50 rounded-md transition-colors"
-                >
-                  {editAgentLoading ? 'Saving...' : 'Save Changes'}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleCloseEdit}
-                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-md transition-colors"
-                >
-                  Cancel
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+        <AgentEditModal
+          agentName={editingAgent.name}
+          form={editAgentForm}
+          setForm={setEditAgentForm}
+          loading={editAgentLoading}
+          skillsJsonError={skillsJsonError}
+          onSkillsJsonChange={() => setSkillsJsonError(null)}
+          onSave={handleSaveEditAgent}
+          onClose={handleCloseEdit}
+        />
       )}
 
       <DuplicateCheckModal
@@ -3134,351 +2928,20 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         isLoading={skillFormLoading}
       />
 
-      {/* Register/Edit Skill Modal */}
+      {/* Register/Edit Skill Modal (create + edit share one modal) */}
       {showSkillModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-              {editingSkill ? `Edit Skill: ${editingSkill.name}` : 'Register New Skill'}
-            </h3>
-
-            <form
-              onSubmit={handleSaveSkill}
-              className="space-y-4"
-            >
-              {/* Auto-fill toggle - only for new skills */}
-              {!editingSkill && (
-                <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
-                  <div>
-                    <span className="text-sm font-medium text-gray-700 dark:text-gray-200">
-                      Auto-fill from SKILL.md
-                    </span>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      Parse name and description from the SKILL.md file
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setSkillAutoFill(!skillAutoFill)}
-                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                      skillAutoFill ? 'bg-amber-600' : 'bg-gray-300 dark:bg-gray-600'
-                    }`}
-                  >
-                    <span
-                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                        skillAutoFill ? 'translate-x-6' : 'translate-x-1'
-                      }`}
-                    />
-                  </button>
-                </div>
-              )}
-
-              {/* SKILL.md URL with Parse button */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                  SKILL.md URL *
-                </label>
-                <div className="flex space-x-2">
-                  <input
-                    type="url"
-                    value={skillForm.skill_md_url}
-                    onChange={(e) => setSkillForm(prev => ({ ...prev, skill_md_url: e.target.value }))}
-                    className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-amber-500 focus:border-amber-500"
-                    placeholder="https://raw.githubusercontent.com/org/repo/main/SKILL.md"
-                    required
-                  />
-                  {skillAutoFill && !editingSkill && (
-                    <button
-                      type="button"
-                      onClick={handleParseSkillMd}
-                      disabled={!skillForm.skill_md_url || skillParseLoading}
-                      className="px-3 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-md transition-colors whitespace-nowrap"
-                    >
-                      {skillParseLoading ? 'Parsing...' : 'Parse'}
-                    </button>
-                  )}
-                </div>
-                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  Use raw content URL (e.g., raw.githubusercontent.com)
-                </p>
-              </div>
-
-              {/* Name field */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                  Skill Name *
-                </label>
-                <input
-                  type="text"
-                  value={skillForm.name}
-                  onChange={(e) => {
-                    const formatted = e.target.value
-                      .toLowerCase()
-                      .replace(/[^a-z0-9-]/g, '-')
-                      .replace(/-+/g, '-')
-                      .replace(/^-|-$/g, '');
-                    setSkillForm(prev => ({ ...prev, name: formatted }));
-                  }}
-                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-amber-500 focus:border-amber-500"
-                  placeholder="my-skill-name"
-                  pattern="^[a-z0-9]+(-[a-z0-9]+)*$"
-                  title="Lowercase alphanumeric with hyphens (e.g., my-skill-name)"
-                  required
-                  disabled={!!editingSkill}
-                />
-                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  Lowercase letters, numbers, and hyphens only
-                </p>
-              </div>
-
-              {/* Description field */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                  Description *
-                </label>
-                <textarea
-                  value={skillForm.description}
-                  onChange={(e) => setSkillForm(prev => ({ ...prev, description: e.target.value }))}
-                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-amber-500 focus:border-amber-500"
-                  rows={3}
-                  placeholder="Describe what this skill does and when to use it"
-                  required
-                />
-              </div>
-
-              {/* Repository URL */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                  Repository URL (optional)
-                </label>
-                <input
-                  type="url"
-                  value={skillForm.repository_url}
-                  onChange={(e) => setSkillForm(prev => ({ ...prev, repository_url: e.target.value }))}
-                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-amber-500 focus:border-amber-500"
-                  placeholder="https://github.com/org/repo"
-                />
-              </div>
-
-              {/* Version field */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                  Version (optional)
-                </label>
-                <input
-                  type="text"
-                  value={skillForm.version}
-                  onChange={(e) => setSkillForm(prev => ({ ...prev, version: e.target.value }))}
-                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-amber-500 focus:border-amber-500"
-                  placeholder="1.0.0"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                  Visibility
-                </label>
-                <select
-                  value={skillForm.visibility}
-                  onChange={(e) => setSkillForm(prev => ({ ...prev, visibility: e.target.value as 'public' | 'private' | 'group' }))}
-                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-amber-500 focus:border-amber-500"
-                >
-                  <option value="public">Public</option>
-                  <option value="private">Private</option>
-                  <option value="group">Group</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                  Lifecycle Status
-                </label>
-                <select
-                  value={skillForm.status}
-                  onChange={(e) => setSkillForm(prev => ({ ...prev, status: e.target.value as 'active' | 'draft' | 'deprecated' | 'beta' }))}
-                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-amber-500 focus:border-amber-500"
-                >
-                  <option value="active">Active</option>
-                  <option value="draft">Draft</option>
-                  <option value="beta">Beta</option>
-                  <option value="deprecated">Deprecated</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                  Tags
-                </label>
-                <input
-                  type="text"
-                  value={skillForm.tags}
-                  onChange={(e) => setSkillForm(prev => ({ ...prev, tags: e.target.value }))}
-                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-amber-500 focus:border-amber-500"
-                  placeholder="automation, productivity, code-review"
-                />
-                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  Comma-separated tags for categorization
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                  Target Agents
-                </label>
-                <input
-                  type="text"
-                  value={skillForm.target_agents}
-                  onChange={(e) => setSkillForm(prev => ({ ...prev, target_agents: e.target.value }))}
-                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-amber-500 focus:border-amber-500"
-                  placeholder="claude-code, cursor, windsurf"
-                />
-                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  Comma-separated list of compatible coding assistants
-                </p>
-              </div>
-
-              {/* Source Authentication */}
-              <div className="border-t border-gray-200 dark:border-gray-600 pt-4 mt-4">
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                  Source Authentication
-                </label>
-                <select
-                  value={skillForm.auth_scheme}
-                  onChange={(e) => {
-                    const newScheme = e.target.value as 'none' | 'global_credentials' | 'bearer' | 'api_key';
-                    setSkillForm(prev => ({
-                      ...prev,
-                      auth_scheme: newScheme,
-                      auth_credential: (newScheme === 'none' || newScheme === 'global_credentials') ? '' : prev.auth_credential,
-                      auth_header_name: newScheme === 'api_key' ? prev.auth_header_name : '',
-                    }));
-                  }}
-                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-amber-500 focus:border-amber-500"
-                >
-                  <option value="none">None (public repo, no auth)</option>
-                  <option value="global_credentials">Use global credentials (registry PAT)</option>
-                  <option value="bearer">Bearer token (per-skill)</option>
-                  <option value="api_key">API key (per-skill, custom header)</option>
-                </select>
-                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  How the registry authenticates when fetching SKILL.md from the source
-                </p>
-                {skillAutoFill && skillForm.auth_scheme === 'global_credentials' && skillForm.skill_md_url && (
-                  <button
-                    type="button"
-                    onClick={handleParseSkillMd}
-                    disabled={skillParseLoading}
-                    className="mt-2 px-3 py-1.5 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-md transition-colors"
-                  >
-                    {skillParseLoading ? 'Parsing...' : 'Re-parse with global credentials'}
-                  </button>
-                )}
-              </div>
-
-              {(skillForm.auth_scheme === 'bearer' || skillForm.auth_scheme === 'api_key') && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                    {skillForm.auth_scheme === 'bearer' ? 'Bearer Token' : 'API Key'} *
-                  </label>
-                  <div className="flex space-x-2">
-                    <input
-                      type="password"
-                      value={skillForm.auth_credential}
-                      onChange={(e) => setSkillForm(prev => ({ ...prev, auth_credential: e.target.value }))}
-                      className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-amber-500 focus:border-amber-500"
-                      placeholder={editingSkill ? 'Leave blank to keep existing credential' : (skillForm.auth_scheme === 'bearer' ? 'Enter bearer token (e.g., ghp_...)' : 'Enter API key')}
-                    />
-                    {skillAutoFill && skillForm.skill_md_url && skillForm.auth_credential && (
-                      <button
-                        type="button"
-                        onClick={handleParseSkillMd}
-                        disabled={skillParseLoading}
-                        className="px-3 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-md transition-colors whitespace-nowrap"
-                      >
-                        {skillParseLoading ? 'Parsing...' : 'Re-parse'}
-                      </button>
-                    )}
-                  </div>
-                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    Encrypted before storage. Never displayed after saving.
-                  </p>
-                </div>
-              )}
-
-              {skillForm.auth_scheme === 'api_key' && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                    Header Name
-                  </label>
-                  <input
-                    type="text"
-                    value={skillForm.auth_header_name}
-                    onChange={(e) => setSkillForm(prev => ({ ...prev, auth_header_name: e.target.value }))}
-                    className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-amber-500 focus:border-amber-500"
-                    placeholder="PRIVATE-TOKEN"
-                  />
-                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    HTTP header name for the API key (default: PRIVATE-TOKEN)
-                  </p>
-                </div>
-              )}
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                  Custom Metadata (JSON, optional)
-                </label>
-                <textarea
-                  value={skillForm.metadata}
-                  onChange={(e) => setSkillForm(prev => ({ ...prev, metadata: e.target.value }))}
-                  rows={4}
-                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-amber-500 focus:border-amber-500 font-mono text-sm"
-                  placeholder='{"category": "data-processing", "framework": "langchain"}'
-                />
-                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  Key-value pairs in JSON format for searchable custom metadata
-                </p>
-              </div>
-
-              {editingSkill && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                    Path (read-only)
-                  </label>
-                  <input
-                    type="text"
-                    value={editingSkill.path}
-                    className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-300"
-                    disabled
-                  />
-                </div>
-              )}
-
-              <div className="flex space-x-3 pt-4">
-                <button
-                  type="submit"
-                  disabled={skillFormLoading}
-                  className="flex-1 px-4 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 rounded-md transition-colors"
-                >
-                  {skillFormLoading
-                    ? (editingSkill ? 'Saving...' : 'Registering & Scanning...')
-                    : (editingSkill ? 'Save Changes' : 'Register Skill')}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleCloseSkillModal}
-                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-md transition-colors"
-                >
-                  Cancel
-                </button>
-              </div>
-              {!editingSkill && (
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-2 text-center">
-                  Registration includes a security scan and may take a few seconds
-                </p>
-              )}
-            </form>
-          </div>
-        </div>
+        <SkillFormModal
+          editing={editingSkill ? { name: editingSkill.name, path: editingSkill.path } : null}
+          form={skillForm}
+          setForm={setSkillForm}
+          loading={skillFormLoading}
+          autoFill={skillAutoFill}
+          setAutoFill={setSkillAutoFill}
+          parseLoading={skillParseLoading}
+          onParse={handleParseSkillMd}
+          onSubmit={handleSaveSkill}
+          onClose={handleCloseSkillModal}
+        />
       )}
 
       {/* Delete Skill Confirmation Modal */}
