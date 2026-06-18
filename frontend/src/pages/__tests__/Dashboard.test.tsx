@@ -213,6 +213,58 @@ describe('Dashboard entity collections', () => {
     expect(screen.getByTestId('virtual-card')).toHaveTextContent('VS One');
   });
 
+  it('groups servers into collapsible registries when a federated server exists', () => {
+    stats.servers = [
+      makeServer('LocalOne'),
+      makeServer('PeerOne', {
+        sync_metadata: { is_federated: true, source_peer_id: 'peer-registry-lob1' },
+      }),
+    ];
+    renderDashboard();
+    fireEvent.click(screen.getByRole('button', { name: 'MCP Servers' }));
+
+    // Both registry group headers render (local + the federated peer).
+    expect(screen.getByText('Local Registry')).toBeInTheDocument();
+    expect(screen.getByText(/LOB1 \(Federated\)/)).toBeInTheDocument();
+    // Both cards are visible while the groups are expanded by default.
+    expect(screen.getByText('LocalOne')).toBeInTheDocument();
+    expect(screen.getByText('PeerOne')).toBeInTheDocument();
+  });
+
+  it('collapses a server registry group when its header is clicked', () => {
+    stats.servers = [
+      makeServer('LocalOne'),
+      makeServer('PeerOne', {
+        sync_metadata: { is_federated: true, source_peer_id: 'peer-registry-lob1' },
+      }),
+    ];
+    renderDashboard();
+    fireEvent.click(screen.getByRole('button', { name: 'MCP Servers' }));
+    expect(screen.getByText('LocalOne')).toBeInTheDocument();
+
+    // Collapsing the local group hides its card but keeps the header.
+    fireEvent.click(screen.getByText('Local Registry'));
+    expect(screen.queryByText('LocalOne')).not.toBeInTheDocument();
+    expect(screen.getByText('Local Registry')).toBeInTheDocument();
+    // The other group stays expanded.
+    expect(screen.getByText('PeerOne')).toBeInTheDocument();
+  });
+
+  it('groups agents into collapsible registries when a federated agent exists', () => {
+    stats.agents = [
+      makeAgent('LocalAgent'),
+      makeAgent('PeerAgent', {
+        sync_metadata: { is_federated: true, source_peer_id: 'peer-registry-lob2' },
+      }),
+    ];
+    renderDashboard();
+    fireEvent.click(screen.getByRole('button', { name: 'Agents' }));
+    expect(screen.getByText('Local Registry')).toBeInTheDocument();
+    expect(screen.getByText(/LOB2 \(Federated\)/)).toBeInTheDocument();
+    expect(screen.getByText('LocalAgent')).toBeInTheDocument();
+    expect(screen.getByText('PeerAgent')).toBeInTheDocument();
+  });
+
   it('switches collections when tabs change', () => {
     stats.servers = [makeServer('Alpha')];
     skillsState.skills = [makeSkill('doc-writer')];
