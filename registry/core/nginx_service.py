@@ -429,6 +429,12 @@ class NginxConfigService:
             ):
                 protected_api_block = """    # Protected API endpoints - require authentication
     location {{ROOT_PATH}}/api/ {
+        # Mark this as a registry-API request (rewrite phase) so the shared
+        # /validate subrequest forwards X-Registry-Api-Auth and /validate mints
+        # the registry-UI internal token. Set inside the location (NOT a
+        # server-scope default), which the auth_request subrequest would clobber.
+        set $registry_api_auth "1";
+
         # Authenticate request via auth server (validates JWT Bearer tokens)
         auth_request /validate;
 
@@ -438,6 +444,9 @@ class NginxConfigService:
         auth_request_set $auth_client_id $upstream_http_x_client_id;
         auth_request_set $auth_scopes $upstream_http_x_scopes;
         auth_request_set $auth_method $upstream_http_x_auth_method;
+        # Capture the /validate-minted registry-UI token (binds verified identity).
+        # The registry verifies this instead of trusting the forgeable X-* headers.
+        auth_request_set $auth_internal_token_registry $upstream_http_x_internal_token_registry;
 
         # Proxy to FastAPI service
         proxy_pass http://127.0.0.1:7860/api/;
@@ -453,6 +462,8 @@ class NginxConfigService:
         proxy_set_header X-Client-Id $auth_client_id;
         proxy_set_header X-Scopes $auth_scopes;
         proxy_set_header X-Auth-Method $auth_method;
+        # The internal token the registry verifies (it ignores the X-* headers above).
+        proxy_set_header X-Internal-Token-Registry $auth_internal_token_registry;
 
         # Pass through original Authorization header
         proxy_set_header Authorization $http_authorization;
