@@ -25,6 +25,8 @@ import CustomEntityForm from '../components/CustomEntityForm';
 import CustomEntityDetail from '../components/CustomEntityDetail';
 import ConfirmModal from '../components/ConfirmModal';
 import { EntityGrid, EmptyState } from '../components/entities';
+import SkillsSection from '../components/entities/sections/SkillsSection';
+import VirtualServersSection from '../components/entities/sections/VirtualServersSection';
 import { useEntityToggle } from '../hooks/useEntityToggle';
 import { uuidFromPath } from '../hooks/useCustomEntities';
 import type {
@@ -2511,151 +2513,48 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
       {/* Agent Skills Section */}
       {registryConfig?.features.skills !== false &&
         (viewFilter === 'skills') && (
-          <div className="mb-8">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-bold text-gray-900 dark:text-white">
-                Agent Skills
-              </h2>
-              {user?.can_modify_servers && (
-                <button
-                  onClick={() => handleOpenSkillModal()}
-                  className="inline-flex items-center px-3 py-1.5 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 rounded-lg transition-colors"
-                >
-                  <PlusIcon className="h-4 w-4 mr-1" />
-                  Add Skill
-                </button>
-              )}
-            </div>
-
-            {skillTotalPages > 1 && (
-              <div className="flex justify-center mb-4">
-                <Pagination
-                  currentPage={skillPage}
-                  totalPages={skillTotalPages}
-                  totalItems={filteredSkills.length}
-                  pageSize={PAGE_SIZE}
-                  onPageChange={setSkillPage}
-                />
-              </div>
-            )}
-
-            {skillsError ? (
-              <div className="text-center py-12 bg-red-50 dark:bg-red-900/20 rounded-lg border border-red-200 dark:border-red-800">
-                <div className="text-red-500 text-lg mb-2">Failed to load skills</div>
-                <p className="text-red-600 dark:text-red-400 text-sm">{skillsError}</p>
-              </div>
-            ) : skillsLoading ? (
-              <div className="flex items-center justify-center py-12">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-amber-600"></div>
-              </div>
-            ) : filteredSkills.length === 0 ? (
-              <div className="text-center py-12 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-800">
-                <div className="text-gray-400 text-lg mb-2">No skills found</div>
-                <p className="text-gray-500 dark:text-gray-300 text-sm">
-                  {searchTerm || activeFilter !== 'all'
-                    ? 'Press Enter in the search bar to search semantically'
-                    : 'No skills are registered yet'}
-                </p>
-                {!searchTerm && activeFilter === 'all' && user?.can_modify_servers && (
-                  <button
-                    onClick={() => handleOpenSkillModal()}
-                    className="mt-4 inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-amber-600 hover:bg-amber-700 transition-colors"
-                  >
-                    <PlusIcon className="h-4 w-4 mr-2" />
-                    Register Skill
-                  </button>
-                )}
-              </div>
-            ) : (
-              <div
-                className="grid"
-                style={{
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))',
-                  gap: 'clamp(1.5rem, 3vw, 2.5rem)'
-                }}
-              >
-                {paginatedSkills.map((skill) => (
-                  <SkillCard
-                    key={skill.path}
-                    skill={skill}
-                    onToggle={handleToggleSkill}
-                    onEdit={handleEditSkill}
-                    onDelete={(path: string) => setShowDeleteSkillConfirm(path)}
-                    canModify={user?.can_modify_servers || false}
-                    canToggle={user?.is_admin || hasUiPermission('toggle_skill', skill.path)}
-                    onRefreshSuccess={refreshSkills}
-                    onShowToast={showToast}
-                    onSkillUpdate={handleSkillUpdate}
-                    authToken={agentApiToken}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
+          <SkillsSection
+            paginatedSkills={paginatedSkills}
+            filteredCount={filteredSkills.length}
+            loading={skillsLoading}
+            error={skillsError}
+            isFiltered={!!searchTerm || activeFilter !== 'all'}
+            canModify={user?.can_modify_servers || false}
+            page={skillPage}
+            totalPages={skillTotalPages}
+            pageSize={PAGE_SIZE}
+            onPageChange={setSkillPage}
+            authToken={agentApiToken}
+            onAddSkill={() => handleOpenSkillModal()}
+            onToggle={handleToggleSkill}
+            onEdit={handleEditSkill}
+            onDelete={(path: string) => setShowDeleteSkillConfirm(path)}
+            onRefreshSuccess={refreshSkills}
+            onShowToast={showToast}
+            onSkillUpdate={handleSkillUpdate}
+            canToggleSkill={(skill) =>
+              user?.is_admin || hasUiPermission('toggle_skill', skill.path)
+            }
+          />
         )}
 
 
       {/* Virtual MCP Servers Section */}
       {registryConfig?.features.virtual_servers !== false &&
-        (viewFilter === 'virtual') &&
-        (filteredVirtualServers.length > 0 || viewFilter === 'virtual') && (
-          <div className="mb-8">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-bold text-gray-900 dark:text-white">
-                Virtual MCP Servers
-              </h2>
-              {(user?.can_modify_servers || user?.is_admin) && (
-                <button
-                  onClick={() => navigate('/settings/virtual-mcp/servers')}
-                  className="inline-flex items-center px-4 py-2 text-sm font-medium text-white bg-teal-600 hover:bg-teal-700 rounded-lg transition-colors"
-                >
-                  <PlusIcon className="h-4 w-4 mr-2" />
-                  Add Virtual Server
-                </button>
-              )}
-            </div>
-
-            {virtualServersError ? (
-              <div className="text-center py-12 bg-red-50 dark:bg-red-900/20 rounded-lg border border-red-200 dark:border-red-800">
-                <div className="text-red-500 text-lg mb-2">Failed to load virtual servers</div>
-                <p className="text-red-600 dark:text-red-400 text-sm">{virtualServersError}</p>
-              </div>
-            ) : virtualServersLoading ? (
-              <div className="flex items-center justify-center py-12">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-teal-600"></div>
-              </div>
-            ) : filteredVirtualServers.length === 0 ? (
-              <div className="text-center py-12 bg-teal-50 dark:bg-teal-900/20 rounded-lg border border-teal-200 dark:border-teal-800">
-                <div className="text-gray-400 text-lg mb-2">No virtual servers found</div>
-                <p className="text-gray-500 dark:text-gray-300 text-sm">
-                  {searchTerm || activeFilter !== 'all'
-                    ? 'Try adjusting your search or filter'
-                    : 'No virtual servers are configured yet'}
-                </p>
-              </div>
-            ) : (
-              <div
-                className="grid"
-                style={{
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))',
-                  gap: 'clamp(1.5rem, 3vw, 2.5rem)'
-                }}
-              >
-                {filteredVirtualServers.map((vs) => (
-                  <VirtualServerCard
-                    key={vs.path}
-                    virtualServer={vs}
-                    canModify={user?.can_modify_servers || user?.is_admin || false}
-                    onToggle={handleToggleVirtualServer}
-                    onEdit={handleEditVirtualServer}
-                    onDelete={handleDeleteVirtualServer}
-                    onShowToast={showToast}
-                    authToken={agentApiToken}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
+        (viewFilter === 'virtual') && (
+          <VirtualServersSection
+            servers={filteredVirtualServers}
+            loading={virtualServersLoading}
+            error={virtualServersError}
+            isFiltered={!!searchTerm || activeFilter !== 'all'}
+            canModify={user?.can_modify_servers || user?.is_admin || false}
+            authToken={agentApiToken}
+            onAdd={() => navigate('/settings/virtual-mcp/servers')}
+            onToggle={handleToggleVirtualServer}
+            onEdit={handleEditVirtualServer}
+            onDelete={handleDeleteVirtualServer}
+            onShowToast={showToast}
+          />
         )}
 
       {/* External Registries Section */}
