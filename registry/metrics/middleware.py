@@ -130,13 +130,28 @@ class RegistryMetricsMiddleware(BaseHTTPMiddleware):
         }
 
     def extract_user_info(self, request: Request) -> str:
-        """Extract user information from request headers or auth context."""
-        # Try to get user from various headers
-        user_id = request.headers.get("X-User", "")
-        if not user_id:
-            user_id = request.headers.get("X-Username", "")
+        """Extract a hashed user id for the metric's ``user`` label.
 
-        return hash_user_id(user_id)
+        This is an OBSERVABILITY label, not an authorization decision -- enforcement
+        (incl. fail-closed rejection of forged headers) happens in the
+        ``nginx_proxied_auth`` dependency, which runs and either authenticates or
+        401s the request before this middleware records anything in its ``finally``.
+
+        Reads the VERIFIED ``request.state.user_context`` (set by that dependency),
+        NEVER the forgeable inbound ``X-User``/``X-Username`` headers, so a forged
+        header can no longer poison the label. Must be called AFTER ``call_next`` so
+        the dependency has populated the context.
+
+        Returns ``hash_user_id("anonymous")`` when there is no authenticated
+        principal -- a real and expected state for the requests this middleware also
+        wraps: health checks, the login page, public ``/api/health``/``/api/version``,
+        OAuth callbacks, and the 401 responses themselves. "anonymous" is the
+        accurate label for those; the middleware cannot refuse to emit a metric, so
+        there is nothing to "fail closed" here.
+        """
+        user_context = getattr(request.state, "user_context", None) or {}
+        username = user_context.get("username") or "anonymous"
+        return hash_user_id(username)
 
     def should_track_request(self, request: Request) -> bool:
         """Determine if the request should be tracked for metrics."""
@@ -168,9 +183,11 @@ class RegistryMetricsMiddleware(BaseHTTPMiddleware):
         if not operation_info:
             return await call_next(request)
 
-        # Extract user and header information
-        user_hash = self.extract_user_info(request)
+        # Extract header information. User identity is read AFTER call_next from the
+        # verified auth context (request.state.user_context), not from forgeable
+        # inbound headers -- so it defaults to anonymous until the dependency runs.
         headers_info = extract_headers_for_analysis(dict(request.headers))
+        user_hash = hash_user_id("anonymous")
 
         # Process the request
         response = None
@@ -183,6 +200,10 @@ class RegistryMetricsMiddleware(BaseHTTPMiddleware):
             # Work around Starlette BaseHTTPMiddleware bug with 204 responses
             if response.status_code == 204:
                 response = Response(status_code=204, headers=dict(response.headers))
+
+            # The auth dependency has now run and populated request.state.user_context
+            # (when authenticated); read the verified identity from there.
+            user_hash = self.extract_user_info(request)
 
             # Determine success based on response status
             success = 200 <= response.status_code < 400

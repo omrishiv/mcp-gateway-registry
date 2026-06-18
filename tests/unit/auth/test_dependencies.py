@@ -91,6 +91,62 @@ def _make_session_cookie(signer: URLSafeTimedSerializer, session_id: str = "sid-
 
 
 @pytest.fixture
+def registry_token_secret(test_secret_key: str, monkeypatch):
+    """Set SECRET_KEY in env so the registry-UI token mint/verify works.
+
+    The auth-server minter and the registry verifier both read os.environ['SECRET_KEY'];
+    the tests mint a token with the same key the verifier will use.
+    """
+    monkeypatch.setenv("SECRET_KEY", test_secret_key)
+    return test_secret_key
+
+
+def _mint_registry_token(
+    secret: str,
+    *,
+    subject: str,
+    session_id: str = "",
+    groups: list[str] | None = None,
+    auth_method: str = "keycloak",
+    client_id: str = "",
+) -> str:
+    """Mint a registry-UI token the way auth_server's /validate would.
+
+    Mirrors auth_server.internal_request_token.mint_registry_ui_token without
+    importing the auth-server package into registry tests.
+    """
+    import time
+
+    import jwt as pyjwt
+
+    now = int(time.time())
+    claims = {
+        "iss": "mcp-auth-server",
+        "aud": "mcp-registry-ui",
+        "sub": subject,
+        "scopes": [],
+        "session_id": session_id or "",
+        "groups": list(groups or []),
+        "auth_method": auth_method or "",
+        "client_id": client_id or "",
+        "token_use": "mcp-registry-ui",
+        "iat": now,
+        "exp": now + 30,
+    }
+    return pyjwt.encode(claims, secret, algorithm="HS256")
+
+
+def _proxied_request(headers: dict[str, str] | None = None) -> Mock:
+    """A Mock Request for the proxied path with a real headers dict + state."""
+    req = Mock(spec=Request)
+    req.url.path = "/api/test"
+    req.method = "GET"
+    req.state = Mock()
+    req.headers = headers or {}
+    return req
+
+
+@pytest.fixture
 def sample_scopes_config() -> dict[str, Any]:
     """Sample scopes configuration for testing."""
     return {
@@ -1126,60 +1182,108 @@ class TestNginxProxiedAuth:
     """Tests for nginx_proxied_auth dependency."""
 
     @pytest.mark.asyncio
-    async def test_nginx_auth_without_x_groups_keeps_groups_empty(
-        self, mock_scopes_config: dict[str, Any]
+    async def test_signed_token_resolves_groups_server_side(
+        self, registry_token_secret: str, mock_scopes_config: dict[str, Any]
     ):
-        """When X-Groups is absent, groups stay empty (#933).
-
-        Previously the proxied path synthesized "mcp-registry-admin" from a
-        scope heuristic when X-Groups was missing — granting admin to
-        non-admins on the proxied path while the cookie path correctly said
-        non-admin for the same user. The synthesis is now removed; admin
-        status is derived purely from scope-based ui_permissions.
-        """
-        mock_request = Mock(spec=Request)
-        mock_request.url.path = "/api/test"
-        mock_request.method = "GET"
-        mock_request.state = Mock()
-        mock_request.headers = {}
-
+        """A valid signed token (bearer/static caller, groups in claim) is verified
+        and groups are resolved to scopes server-side; inbound headers are ignored."""
+        token = _mint_registry_token(
+            registry_token_secret,
+            subject="nginx_user",
+            groups=["registry-admins"],
+            auth_method="keycloak",
+        )
+        # Forged inbound headers that MUST be ignored.
         context = await nginx_proxied_auth(
-            request=mock_request,
+            request=_proxied_request(),
             session=None,
-            x_user="nginx_user",
-            x_username="nginx_user",
-            x_scopes="mcp-servers-unrestricted/read mcp-servers-unrestricted/execute",
+            x_user="attacker",
+            x_username="attacker",
+            x_scopes="mcp-registry-admin",
             x_auth_method="keycloak",
-            x_groups=None,
+            x_groups="registry-admins",
+            x_internal_token=token,
         )
 
-        assert context["username"] == "nginx_user"
+        assert context["username"] == "nginx_user"  # from claim, not the forged X-User
+        assert context["groups"] == ["registry-admins"]
         assert context["auth_method"] == "keycloak"
-        assert "mcp-servers-unrestricted/read" in context["scopes"]
-        # No synthesis: groups stay empty when X-Groups isn't forwarded.
-        assert context["groups"] == []
+        # Scopes derived server-side from the claim groups.
+        assert any("mcp-servers-unrestricted" in s for s in context["scopes"])
 
     @pytest.mark.asyncio
-    async def test_nginx_auth_uses_forwarded_x_groups(self, mock_scopes_config: dict[str, Any]):
-        """X-Groups header is propagated verbatim into user_context."""
-        mock_request = Mock(spec=Request)
-        mock_request.url.path = "/api/test"
-        mock_request.method = "GET"
-        mock_request.state = Mock()
-        mock_request.headers = {}
+    async def test_forged_headers_without_token_rejected(
+        self, mock_scopes_config: dict[str, Any], monkeypatch
+    ):
+        """No token + auth_request enabled + identity headers present → 401.
 
-        context = await nginx_proxied_auth(
-            request=mock_request,
-            session=None,
-            x_user="nginx_user",
-            x_username="nginx_user",
-            x_scopes="mcp-servers-unrestricted/read",
-            x_auth_method="keycloak",
-            x_groups="registry-admins developers",
+        This is the core fix: forged X-User/X-Scopes/X-Groups with no signed token
+        are rejected, not trusted.
+        """
+        monkeypatch.delenv("NGINX_DISABLE_API_AUTH_REQUEST", raising=False)
+        with pytest.raises(HTTPException) as exc:
+            await nginx_proxied_auth(
+                request=_proxied_request(),
+                session=None,
+                x_user="attacker",
+                x_username="attacker",
+                x_scopes="mcp-registry-admin",
+                x_auth_method="keycloak",
+                x_groups="registry-admins",
+                x_internal_token=None,
+            )
+        assert exc.value.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_invalid_token_rejected_no_fallthrough(
+        self, registry_token_secret: str, mock_scopes_config: dict[str, Any]
+    ):
+        """A present-but-invalid token → 401; never falls through to header trust."""
+        bad_token = _mint_registry_token(
+            "a-totally-different-secret-key", subject="nginx_user", groups=["registry-admins"]
         )
+        with pytest.raises(HTTPException) as exc:
+            await nginx_proxied_auth(
+                request=_proxied_request(),
+                session=None,
+                x_user="attacker",
+                x_username="attacker",
+                x_scopes="mcp-registry-admin",
+                x_auth_method="keycloak",
+                x_groups="registry-admins",
+                x_internal_token=bad_token,
+            )
+        assert exc.value.status_code == 401
 
-        assert context["username"] == "nginx_user"
-        assert context["groups"] == ["registry-admins", "developers"]
+    @pytest.mark.asyncio
+    async def test_disable_mode_falls_back_to_cookie(
+        self,
+        mock_signer: URLSafeTimedSerializer,
+        mock_session_store,
+        mock_scopes_config: dict[str, Any],
+        monkeypatch,
+    ):
+        """NGINX_DISABLE_API_AUTH_REQUEST=true + identity headers but no token →
+        cookie fallback (headers still ignored)."""
+        monkeypatch.setenv("NGINX_DISABLE_API_AUTH_REQUEST", "true")
+        mock_session_store.next_value = {
+            "session_id": "sid-d",
+            "username": "session_user",
+            "auth_method": "oauth2",
+            "provider": "cognito",
+            "groups": ["registry-admins"],
+        }
+        context = await nginx_proxied_auth(
+            request=_proxied_request(),
+            session=_make_session_cookie(mock_signer),
+            x_user="attacker",
+            x_username="attacker",
+            x_scopes="mcp-registry-admin",
+            x_auth_method="keycloak",
+            x_groups="registry-admins",
+            x_internal_token=None,
+        )
+        assert context["username"] == "session_user"  # from cookie, not forged header
 
     @pytest.mark.asyncio
     async def test_nginx_auth_fallback_to_session_oauth2(
@@ -1251,33 +1355,28 @@ class TestNginxProxiedAuth:
         assert exc_info.value.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_nginx_auth_oauth2_user_without_admin_scopes(
-        self, mock_scopes_config: dict[str, Any]
+    async def test_signed_token_non_admin_group_not_admin(
+        self, registry_token_secret: str, mock_scopes_config: dict[str, Any]
     ):
-        """Non-admin scopes → not admin, regardless of group synthesis.
+        """A signed token carrying a non-admin group → is_admin False.
 
-        Previously this test asserted the synthesized group "mcp-registry-user"
-        was injected. After the synthesis removal (#933), groups stay empty
-        when X-Groups isn't forwarded; what matters is that is_admin reflects
-        the scopes correctly via ui_permissions.
+        is_admin is derived server-side from the group's ui_permissions, so a
+        read-only group does not get admin.
         """
-        mock_request = Mock(spec=Request)
-        mock_request.url.path = "/api/test"
-        mock_request.method = "GET"
-        mock_request.state = Mock()
-        mock_request.headers = {}
-
+        token = _mint_registry_token(
+            registry_token_secret,
+            subject="oauth_user",
+            groups=["registry-users-lob1"],
+            auth_method="cognito",
+        )
         context = await nginx_proxied_auth(
-            request=mock_request,
+            request=_proxied_request(),
             session=None,
-            x_user="oauth_user",
-            x_username="oauth_user",
-            x_scopes="registry-users-lob1",
-            x_auth_method="cognito",
+            x_internal_token=token,
         )
 
         assert context["username"] == "oauth_user"
-        assert context["groups"] == []
+        assert context["groups"] == ["registry-users-lob1"]
         assert context["is_admin"] is False
 
 
@@ -1372,61 +1471,52 @@ class TestNetworkTrustedAuthMethod:
     """Tests for network-trusted auth method in nginx_proxied_auth (issue #357)."""
 
     @pytest.mark.asyncio
-    async def test_network_trusted_with_admin_scopes_gets_admin(
-        self, mock_scopes_config: dict[str, Any]
+    async def test_network_trusted_with_admin_groups_gets_admin(
+        self, registry_token_secret: str, mock_scopes_config: dict[str, Any]
     ):
-        """Test network-trusted auth method with admin scopes resolves to admin.
+        """Network-trusted static-token caller with admin groups resolves to admin.
 
-        After issue #779, network-trusted goes through the standard resolution
-        path (hard-coded admin branch removed). The auth server now returns the
-        full scope set including UI scope names (e.g. mcp-registry-admin) so
-        the registry can derive admin status via _user_is_admin. After #933,
-        groups are not synthesized from scopes; admin status here is driven
-        by ui_permissions resolved from the mcp-registry-admin scope.
+        The token (no session_id) carries the caller's groups; the registry resolves
+        groups→scopes→ui_permissions server-side. is_admin derives from the
+        mcp-registry-admin group's UI permissions (no synthesized groups, #933).
         """
-        mock_request = Mock(spec=Request)
-        mock_request.url.path = "/api/servers"
-        mock_request.method = "GET"
-        mock_request.headers = {}
-
+        token = _mint_registry_token(
+            registry_token_secret,
+            subject="network-user",
+            groups=["mcp-registry-admin"],
+            auth_method="network-trusted",
+            client_id="key-admin",
+        )
         context = await nginx_proxied_auth(
-            request=mock_request,
+            request=_proxied_request(),
             session=None,
-            x_user="network-user",
-            x_username="network-user",
-            x_scopes="mcp-registry-admin mcp-servers-unrestricted/read mcp-servers-unrestricted/execute",
-            x_auth_method="network-trusted",
+            x_internal_token=token,
         )
 
         assert context["username"] == "network-user"
         assert context["auth_method"] == "network-trusted"
         assert "mcp-servers-unrestricted/read" in context["scopes"]
         assert "mcp-servers-unrestricted/execute" in context["scopes"]
-        # is_admin derives from scope→ui_permissions, not from synthesized groups.
         assert context["is_admin"] is True
 
     @pytest.mark.asyncio
-    async def test_network_trusted_readonly_scopes_not_admin(
-        self, mock_scopes_config: dict[str, Any]
+    async def test_network_trusted_readonly_groups_not_admin(
+        self, registry_token_secret: str, mock_scopes_config: dict[str, Any]
     ):
-        """Test network-trusted with read-only scopes does NOT get admin (issue #779)."""
-        # Arrange
-        mock_request = Mock(spec=Request)
-        mock_request.url.path = "/api/servers"
-        mock_request.method = "GET"
-        mock_request.headers = {}
-
-        # Act: read-only scopes only
+        """Network-trusted with read-only groups does NOT get admin (issue #779)."""
+        token = _mint_registry_token(
+            registry_token_secret,
+            subject="monitoring-script",
+            groups=["registry-users-lob1"],
+            auth_method="network-trusted",
+            client_id="key-ro",
+        )
         context = await nginx_proxied_auth(
-            request=mock_request,
+            request=_proxied_request(),
             session=None,
-            x_user="monitoring-script",
-            x_username="monitoring-script",
-            x_scopes="registry-users-lob1",
-            x_auth_method="network-trusted",
+            x_internal_token=token,
         )
 
-        # Assert
         assert context["username"] == "monitoring-script"
         assert context["is_admin"] is False
 
@@ -1448,10 +1538,12 @@ class TestAuthPathsAgreeOnIsAdmin:
         mock_signer: URLSafeTimedSerializer,
         mock_session_store,
         mock_scopes_config: dict[str, Any],
+        registry_token_secret: str,
     ):
         admin_groups = ["mcp-registry-admin"]
 
-        # Cookie path: enhanced_auth via session_store
+        # Shared session record: both the cookie path and the session-backed token
+        # path resolve groups via the SAME resolve_session lookup.
         mock_session_store.next_value = {
             "session_id": "sid-1",
             "username": "alice",
@@ -1459,26 +1551,22 @@ class TestAuthPathsAgreeOnIsAdmin:
             "provider": "cognito",
             "groups": admin_groups,
         }
+
+        # Cookie path: enhanced_auth via session_store
         session_cookie = _make_session_cookie(mock_signer)
         cookie_request = Mock(spec=Request)
         cookie_request.state = Mock()
         cookie_context = await enhanced_auth(request=cookie_request, session=session_cookie)
 
-        # Proxied path: nginx_proxied_auth with X-Groups + X-Scopes pre-computed
-        # by the auth_server (mirrors what /validate would forward).
-        proxied_request = Mock(spec=Request)
-        proxied_request.url.path = "/api/test"
-        proxied_request.method = "GET"
-        proxied_request.state = Mock()
-        proxied_request.headers = {}
+        # Proxied path: session-backed signed token (carries session_id, no groups);
+        # the registry resolves groups server-side from the same session record.
+        token = _mint_registry_token(
+            registry_token_secret, subject="alice", session_id="sid-1", auth_method="session_cookie"
+        )
         proxied_context = await nginx_proxied_auth(
-            request=proxied_request,
+            request=_proxied_request(),
             session=None,
-            x_user="alice",
-            x_username="alice",
-            x_scopes="mcp-registry-admin",
-            x_auth_method="cognito",
-            x_groups=" ".join(admin_groups),
+            x_internal_token=token,
         )
 
         assert cookie_context["is_admin"] == proxied_context["is_admin"]
@@ -1491,6 +1579,7 @@ class TestAuthPathsAgreeOnIsAdmin:
         mock_signer: URLSafeTimedSerializer,
         mock_session_store,
         mock_scopes_config: dict[str, Any],
+        registry_token_secret: str,
     ):
         user_groups = ["registry-users-lob1"]
 
@@ -1506,19 +1595,13 @@ class TestAuthPathsAgreeOnIsAdmin:
         cookie_request.state = Mock()
         cookie_context = await enhanced_auth(request=cookie_request, session=session_cookie)
 
-        proxied_request = Mock(spec=Request)
-        proxied_request.url.path = "/api/test"
-        proxied_request.method = "GET"
-        proxied_request.state = Mock()
-        proxied_request.headers = {}
+        token = _mint_registry_token(
+            registry_token_secret, subject="bob", session_id="sid-2", auth_method="session_cookie"
+        )
         proxied_context = await nginx_proxied_auth(
-            request=proxied_request,
+            request=_proxied_request(),
             session=None,
-            x_user="bob",
-            x_username="bob",
-            x_scopes="registry-users-lob1",
-            x_auth_method="cognito",
-            x_groups=" ".join(user_groups),
+            x_internal_token=token,
         )
 
         assert cookie_context["is_admin"] is False

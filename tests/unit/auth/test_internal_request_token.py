@@ -18,9 +18,11 @@ from fastapi import HTTPException
 
 from auth_server.internal_request_token import (
     MCP_PROXY_AUDIENCE,
+    MCP_REGISTRY_UI_AUDIENCE,
     _decode_internal_token,
     _mint_internal_token,
     mint_mcp_proxy_token,
+    mint_registry_ui_token,
     verify_mcp_proxy_token,
 )
 
@@ -275,3 +277,63 @@ class TestAudienceParameterization:
         # But succeeds against the minted audience.
         claims = _decode_internal_token(token, audience="mcp-registry-ui")
         assert claims["sub"] == "alice"
+
+
+# --------------------------------------------------------------------------- #
+# Mint registry-UI token (the registry /api/ hop)
+# --------------------------------------------------------------------------- #
+
+
+class TestMintRegistryUi:
+    def test_session_backed_roundtrips_expected_claims(self) -> None:
+        # Browser/session-backed caller: session_id carried, groups left empty
+        # (the registry resolves live groups from the session store).
+        token = mint_registry_ui_token(
+            subject="alice",
+            session_id="sess-abc123",
+            groups=[],
+            auth_method="keycloak",
+            client_id="ui-client",
+        )
+        claims = _decode_internal_token(token, audience=MCP_REGISTRY_UI_AUDIENCE)
+        assert claims["sub"] == "alice"
+        assert claims["session_id"] == "sess-abc123"
+        assert claims["groups"] == []
+        assert claims["auth_method"] == "keycloak"
+        assert claims["client_id"] == "ui-client"
+        assert claims["token_use"] == "mcp-registry-ui"
+        assert claims["aud"] == "mcp-registry-ui"
+        assert claims["iss"] == "mcp-auth-server"
+        # Thin identity assertion: no scopes encoded.
+        assert claims["scopes"] == []
+
+    def test_bearer_static_binds_groups_not_session(self) -> None:
+        # Bearer/static-token caller: no session row, so groups ride the claim.
+        token = mint_registry_ui_token(
+            subject="svc-key-1",
+            session_id="",
+            groups=["registry-admins", "team-a"],
+            auth_method="network-trusted",
+            client_id="key-1",
+        )
+        claims = _decode_internal_token(token, audience=MCP_REGISTRY_UI_AUDIENCE)
+        assert claims["sub"] == "svc-key-1"
+        assert claims["session_id"] == ""
+        assert claims["groups"] == ["registry-admins", "team-a"]
+        assert claims["auth_method"] == "network-trusted"
+
+    def test_empty_subject_raises(self) -> None:
+        # Fail-closed: an empty subject must not mint an anonymous-but-valid token.
+        with pytest.raises(ValueError, match="empty subject"):
+            mint_registry_ui_token("", "", [], "keycloak", "")
+
+    def test_without_secret_raises(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            with pytest.raises(ValueError, match="SECRET_KEY"):
+                mint_registry_ui_token("alice", "sess", [], "keycloak", "")
+
+    def test_registry_ui_token_not_replayable_as_mcp_proxy(self) -> None:
+        # Cross-audience separation: a registry-UI token must not verify as mcp-proxy.
+        token = mint_registry_ui_token("alice", "sess", [], "keycloak", "")
+        with pytest.raises(pyjwt.InvalidTokenError):
+            _decode_internal_token(token, audience=MCP_PROXY_AUDIENCE)

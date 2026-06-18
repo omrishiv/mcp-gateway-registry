@@ -28,6 +28,12 @@ _ISSUER: str = "mcp-auth-server"
 MCP_PROXY_AUDIENCE: str = "mcp-proxy"
 MCP_PROXY_TOKEN_USE: str = "mcp-proxy"
 
+# Audience for the registry /api/ hop. Distinct from both "mcp-proxy" (above) and
+# the "mcp-registry" service-to-service audience, so a registry-UI token cannot be
+# replayed as an mcp-proxy token, a service token, or vice-versa.
+MCP_REGISTRY_UI_AUDIENCE: str = "mcp-registry-ui"
+MCP_REGISTRY_UI_TOKEN_USE: str = "mcp-registry-ui"
+
 # TTL is clamped to this floor so a misconfigured TTL of 0/negative cannot
 # combine with the leeway into a confusing always-valid window.
 _MIN_TTL_SECONDS: int = 5
@@ -153,6 +159,49 @@ def mint_mcp_proxy_token(
             "server": server_name.split("/", 1)[0] if server_name else "",
             "upstream_url": upstream_url,
             "token_use": MCP_PROXY_TOKEN_USE,
+        },
+    )
+
+
+# --------------------------------------------------------------------------- #
+# registry-UI wrapper (pin audience; thin identity assertion)
+# --------------------------------------------------------------------------- #
+
+
+def mint_registry_ui_token(
+    subject: str,
+    session_id: str,
+    groups: list[str],
+    auth_method: str,
+    client_id: str,
+) -> str:
+    """Mint the per-request registry /api/ token in /validate's 200 path.
+
+    A thin identity assertion: it binds *who* the caller is, NOT their resolved
+    entitlements. The registry derives groups->scopes->permissions server-side
+    (mirroring its cookie path), so no scopes are encoded and the token stays a
+    constant size regardless of group count.
+
+    ``session_id`` is the opaque server-side session identifier for browser/
+    session-backed callers (the registry resolves live groups via the session
+    store); it is empty for bearer/IdP-JWT and static-token callers, which have
+    no session row and instead rely on the ``groups`` claim. ``groups`` is the
+    fallback for those non-session callers (small, machine-identity group sets).
+
+    ``_mint_internal_token`` refuses an empty subject (fail-closed): if minting
+    raises, /validate attaches no token and the registry rejects the request
+    rather than trusting unsigned headers.
+    """
+    return _mint_internal_token(
+        audience=MCP_REGISTRY_UI_AUDIENCE,
+        subject=subject,
+        scopes=[],
+        extra_claims={
+            "session_id": session_id or "",
+            "groups": list(groups or []),
+            "auth_method": auth_method or "",
+            "client_id": client_id or "",
+            "token_use": MCP_REGISTRY_UI_TOKEN_USE,
         },
     )
 

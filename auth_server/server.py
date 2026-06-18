@@ -37,6 +37,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response
 # Import metrics middleware
 from internal_request_token import (
     mint_mcp_proxy_token,
+    mint_registry_ui_token,
     verify_mcp_proxy_token,
 )
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
@@ -186,6 +187,41 @@ def _attach_mcp_proxy_token(
         )
     except ValueError as exc:
         logger.error(f"/validate: could not mint mcp-proxy token: {exc}")
+
+
+def _attach_registry_ui_token(
+    request: "Request",
+    response: "JSONResponse",
+    subject: str,
+    session_id: str,
+    groups: list[str],
+    auth_method: str,
+    client_id: str,
+) -> None:
+    """Mint and attach the X-Internal-Token-Registry for the registry /api/ hop.
+
+    Only mints when nginx forwarded the registry-API marker (``X-Registry-Api-Auth``)
+    into this /validate subrequest -- i.e. this validation backs a registry /api/
+    request, not an MCP-proxy or other location. Carries its own header
+    (X-Internal-Token-Registry) distinct from the /mcp-proxy hop's X-Internal-Token,
+    so the two never collide on a shared /validate response. The token is a thin
+    identity assertion (sub/session_id/groups/auth_method/client_id); the registry
+    resolves entitlements server-side. If minting fails (e.g. empty subject), no
+    token is attached: the registry then rejects (fail-closed) rather than trusting
+    unsigned headers.
+    """
+    if not request.headers.get("X-Registry-Api-Auth"):
+        return
+    try:
+        response.headers["X-Internal-Token-Registry"] = mint_registry_ui_token(
+            subject=subject,
+            session_id=session_id,
+            groups=groups,
+            auth_method=auth_method,
+            client_id=client_id,
+        )
+    except ValueError as exc:
+        logger.error(f"/validate: could not mint registry-ui token: {exc}")
 
 
 def _read_mcp_proxy_max_body_bytes() -> int:
@@ -2003,6 +2039,19 @@ async def validate_request(request: Request):
                     scopes=federation_scopes,
                     server_name="",
                 )
+                # Federation peers have no session row; the registry resolves
+                # nothing server-side (no groups), and _derive_user_context
+                # short-circuits auth_method == "federation-static" to a
+                # no-access context. Minting here keeps /api/federation reachable.
+                _attach_registry_ui_token(
+                    request,
+                    response,
+                    subject="federation-peer",
+                    session_id="",
+                    groups=[],
+                    auth_method="federation-static",
+                    client_id="federation-static",
+                )
 
                 return response
 
@@ -2059,6 +2108,18 @@ async def validate_request(request: Request):
                         subject=identity["username"],
                         scopes=identity["scopes"],
                         server_name="",
+                    )
+                    # Network-trusted static-token callers have no session row;
+                    # the registry uses the claim's groups directly. Minting here
+                    # keeps REGISTRY_API_KEYS access to /api/* working.
+                    _attach_registry_ui_token(
+                        request,
+                        response,
+                        subject=identity["username"],
+                        session_id="",
+                        groups=identity["groups"],
+                        auth_method="network-trusted",
+                        client_id=identity["client_id"],
                     )
 
                     return response
@@ -2651,6 +2712,23 @@ async def validate_request(request: Request):
             subject=validation_result.get("username") or "",
             scopes=user_scopes,
             server_name=server_name or "",
+        )
+
+        # Registry /api/ hop token. Discriminate cookie vs JWT-bearer: the cookie
+        # sub-path has an opaque server-side session_id (the registry resolves live
+        # groups from the session store); the JWT-bearer sub-path has no session
+        # row, so session_id is empty and the registry uses the groups claim.
+        _registry_session_id = ""
+        if validation_result.get("method") == "session_cookie":
+            _registry_session_id = (validation_result.get("data") or {}).get("session_id") or ""
+        _attach_registry_ui_token(
+            request,
+            response,
+            subject=validation_result.get("username") or "",
+            session_id=_registry_session_id,
+            groups=validation_result.get("groups", []),
+            auth_method=validation_result.get("method") or "",
+            client_id=validation_result.get("client_id") or "",
         )
 
         return response

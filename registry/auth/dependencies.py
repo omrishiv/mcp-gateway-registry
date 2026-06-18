@@ -9,6 +9,10 @@ from .access_resolver import (
     get_user_accessible_tools,  # noqa: F401 - re-exported for external callers
     resolve_scope_access,
 )
+from .proxied_token import (
+    _api_auth_request_enabled,
+    verify_registry_ui_token,
+)
 from .session_store import resolve_session as _store_resolve_session
 
 logger = logging.getLogger(__name__)
@@ -529,6 +533,96 @@ async def _derive_user_context(
     }
 
 
+async def _resolve_context_from_groups(
+    *,
+    username: str,
+    groups: list[str],
+    auth_method: str,
+    provider: str,
+    session_id: str | None = None,
+    client_id: str = "",
+) -> dict[str, Any]:
+    """Derive the canonical user_context from groups, server-side.
+
+    Single source of truth shared by ``enhanced_auth`` (cookie path) and
+    ``nginx_proxied_auth`` (signed-token path): both map the same ``groups`` to
+    scopes via ``map_cognito_groups_to_scopes`` and then ``_derive_user_context``,
+    so a given user produces an identical authorization result regardless of how
+    they were authenticated (guards #933).
+    """
+    scopes = await map_cognito_groups_to_scopes(groups)
+    logger.info(f"User {username} with groups {groups} mapped to scopes: {scopes}")
+    if not groups:
+        logger.warning(
+            f"User {username} has no groups! This user may not have proper group assignments."
+        )
+    return await _derive_user_context(
+        username=username,
+        groups=groups,
+        scopes=scopes,
+        auth_method=auth_method,
+        provider=provider,
+        session_id=session_id,
+        client_id=client_id,
+    )
+
+
+async def _context_from_internal_token(
+    request: Request,
+    token: str,
+) -> dict[str, Any]:
+    """Verify the registry-UI internal token and resolve the user_context.
+
+    The token is a thin identity assertion; entitlements are resolved server-side
+    here, mirroring the cookie path:
+
+    - Session-backed callers (``session_id`` present): resolve live groups from the
+      session store. If the session does not resolve (missing/expired/store-error),
+      this is a hard 401 -- we do NOT fall back to claim groups, header trust, or the
+      cookie. The session record's ``auth_method``/``provider`` are used (not the
+      claim's, whose ``auth_method`` is the transport ``"session_cookie"``), for
+      audit-label parity with the cookie-direct path.
+    - Bearer/static-token callers (no ``session_id``): use the claim's ``groups``
+      directly -- the auth_server is the single point of group enrichment.
+
+    Raises HTTPException(401) on any token failure (verification raises it directly).
+    """
+    claims = verify_registry_ui_token(token)  # raises 401/500 on failure
+    username = claims.get("sub") or ""
+    session_id = claims.get("session_id") or ""
+
+    if session_id:
+        session_data = await _store_resolve_session(session_id)
+        if session_data is None or not session_data.get("username"):
+            # Present token bound to a session that no longer resolves: fail closed.
+            logger.warning(
+                "signed-token auth: session_id in token did not resolve; rejecting"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required",
+            )
+        return await _resolve_context_from_groups(
+            username=session_data.get("username") or username,
+            groups=session_data.get("groups", []),
+            auth_method=session_data.get("auth_method") or "oauth2",
+            provider=session_data.get("provider", "local"),
+            session_id=session_id,
+            client_id=claims.get("client_id") or "",
+        )
+
+    # No session row (bearer / IdP-JWT / static-token caller): trust the claim's
+    # groups (signed by the auth_server, the single enrichment point).
+    auth_method = claims.get("auth_method") or ""
+    return await _resolve_context_from_groups(
+        username=username,
+        groups=list(claims.get("groups") or []),
+        auth_method=auth_method,
+        provider=auth_method,
+        client_id=claims.get("client_id") or "",
+    )
+
+
 async def enhanced_auth(
     request: Request,
     session: Annotated[str | None, Cookie(alias=settings.session_cookie_name)] = None,
@@ -546,18 +640,9 @@ async def enhanced_auth(
 
     logger.info(f"Enhanced auth debug for {username}: groups={groups}, auth_method={auth_method}")
 
-    # Map groups to scopes via OAuth2 group-to-scope mapping
-    scopes = await map_cognito_groups_to_scopes(groups)
-    logger.info(f"OAuth2 user {username} with groups {groups} mapped to scopes: {scopes}")
-    if not groups:
-        logger.warning(
-            f"OAuth2 user {username} has no groups! This user may not have proper group assignments."
-        )
-
-    user_context = await _derive_user_context(
+    user_context = await _resolve_context_from_groups(
         username=username,
         groups=groups,
-        scopes=scopes,
         auth_method=auth_method,
         provider=session_data.get("provider", "local"),
         session_id=session_data.get("session_id"),
@@ -583,6 +668,9 @@ async def nginx_proxied_auth(
     ] = None,
     x_client_id: Annotated[str | None, Header(alias="X-Client-Id", include_in_schema=False)] = None,
     x_groups: Annotated[str | None, Header(alias="X-Groups", include_in_schema=False)] = None,
+    x_internal_token: Annotated[
+        str | None, Header(alias="X-Internal-Token-Registry", include_in_schema=False)
+    ] = None,
 ) -> dict[str, Any]:
     """
     Authentication dependency that works with both nginx-proxied requests and direct requests.
@@ -624,60 +712,42 @@ async def nginx_proxied_auth(
     }
     logger.debug(f"[NGINX_AUTH_DEBUG] ALL REQUEST HEADERS: {all_headers}")
 
-    # First, try to get user context from nginx headers (JWT Bearer token flow)
-    if x_user or x_username:
-        username = x_username or x_user
-
-        # Parse scopes from space-separated header
-        scopes = x_scopes.split() if x_scopes else []
-
-        # Parse groups from X-Groups header (set by auth server from JWT claims).
-        # If X-Groups is missing, groups stay empty: admin status is then
-        # derived purely from scope-based ui_permissions (which the auth_server
-        # already computed when it set X-Scopes). Synthesizing groups from a
-        # scope heuristic — the previous behavior — granted admin to non-admins
-        # via the proxied path while the cookie path correctly said non-admin
-        # for the same user (#933).
-        groups = x_groups.split() if x_groups else []
-
-        logger.info(
-            f"nginx-proxied auth for user: {username}, method: {x_auth_method}, "
-            f"groups: {groups}, scopes: {scopes}"
-        )
-
-        # Defaulting auth_method/provider when X-Auth-Method is absent is a
-        # legacy fallback for misconfigured nginx (the auth_server should
-        # always set this header). Warn so operators can fix the upstream
-        # config rather than seeing every header-auth request silently
-        # labeled "keycloak" in audit logs.
-        if not x_auth_method:
-            logger.warning(
-                f"nginx-proxied auth for {username}: X-Auth-Method header missing; "
-                "defaulting to 'keycloak' (audit logs may be inaccurate). "
-                "Verify auth_server is setting X-Auth-Method on proxied requests."
-            )
-
-        user_context = await _derive_user_context(
-            username=username,
-            groups=groups,
-            scopes=scopes,
-            auth_method=x_auth_method or "keycloak",
-            provider=x_auth_method or "keycloak",
-            client_id=x_client_id or "",
-        )
-
-        # Set user context on request state for audit logging middleware
+    # Signed-token path. The auth_server's /validate mints an HS256 token
+    # (X-Internal-Token-Registry) bound to the validated identity; nginx forwards
+    # it on the /api/ hop. We verify it and read identity from the verified claims,
+    # IGNORING the forgeable inbound X-User/X-Scopes/X-Groups/etc. headers entirely.
+    # This closes the header-forgery bypass: a direct hit on the raw app with forged
+    # headers carries no valid token and is rejected.
+    if x_internal_token:
+        user_context = await _context_from_internal_token(request, x_internal_token)
         request.state.user_context = user_context
-
         logger.debug(
-            f"nginx-proxied auth context for {username} "
-            f"(is_admin={user_context['is_admin']}): {user_context}"
+            f"signed-token auth context for {user_context.get('username')} "
+            f"(is_admin={user_context['is_admin']})"
         )
         return user_context
 
-    # Fallback to session cookie authentication
+    # No token. If nginx is fronting /api/ with auth_request (the normal/secure
+    # deployment) and yet identity headers arrived without a token, this is the
+    # forged-header attack (or a badly misconfigured nginx) -- reject. The header
+    # values are NEVER trusted; we only use their presence as an attack signal.
+    if _api_auth_request_enabled() and (x_user or x_username):
+        logger.warning(
+            "nginx-proxied auth: identity headers present without a valid "
+            "X-Internal-Token-Registry while auth_request is enabled; rejecting "
+            "(forged-header attempt or misconfigured nginx)."
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+        )
+
+    # Fallback to session cookie authentication. Reached when there is no token and
+    # either no identity headers, or NGINX_DISABLE_API_AUTH_REQUEST is set (local-dev
+    # mode where FastAPI authenticates the cookie/bearer itself). The inbound identity
+    # headers are ignored in every case.
     logger.info(
-        "[NGINX_AUTH_FALLBACK] No nginx auth headers found, falling back to session cookie auth"
+        "[NGINX_AUTH_FALLBACK] No internal token; falling back to session cookie auth"
     )
     logger.info(
         f"[NGINX_AUTH_FALLBACK] Session cookie value: {session[:20] if session else 'None'}..."
