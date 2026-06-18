@@ -6,30 +6,33 @@ module.exports = {
   darkMode: 'class',
   theme: {
     extend: {
+      // Color scales resolve through CSS variables (defined in src/index.css)
+      // so themes can remap the palette at runtime. Defaults match the original
+      // hex values, so existing primary-*/gray-*/dark: classes are unchanged.
       colors: {
         primary: {
-          50: '#f7f5ff',
-          100: '#f0edff',
-          200: '#e2dcff',
-          300: '#cdc0ff',
-          400: '#b199ff',
-          500: '#9573ff',
-          600: '#7a00cc',
-          700: '#6b46c1',
-          800: '#553c9a',
-          900: '#483177',
+          50: 'var(--color-primary-50)',
+          100: 'var(--color-primary-100)',
+          200: 'var(--color-primary-200)',
+          300: 'var(--color-primary-300)',
+          400: 'var(--color-primary-400)',
+          500: 'var(--color-primary-500)',
+          600: 'var(--color-primary-600)',
+          700: 'var(--color-primary-700)',
+          800: 'var(--color-primary-800)',
+          900: 'var(--color-primary-900)',
         },
         gray: {
-          50: '#f8f9fa',
-          100: '#f1f3f4',
-          200: '#e8eaed',
-          300: '#dadce0',
-          400: '#bdc1c6',
-          500: '#9aa0a6',
-          600: '#80868b',
-          700: '#5f6368',
-          800: '#3c4043',
-          900: '#202124',
+          50: 'var(--color-gray-50)',
+          100: 'var(--color-gray-100)',
+          200: 'var(--color-gray-200)',
+          300: 'var(--color-gray-300)',
+          400: 'var(--color-gray-400)',
+          500: 'var(--color-gray-500)',
+          600: 'var(--color-gray-600)',
+          700: 'var(--color-gray-700)',
+          800: 'var(--color-gray-800)',
+          900: 'var(--color-gray-900)',
         }
       },
       fontFamily: {

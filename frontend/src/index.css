@@ -4,6 +4,71 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Design tokens as CSS custom properties.
+ *
+ * The `primary` and `gray` Tailwind scales resolve through these variables
+ * (see tailwind.config.cjs), so a theme can remap the whole palette at runtime
+ * by toggling a class on <html> — no rebuild required. The default :root values
+ * are the original palette, so existing `primary-*` / `gray-*` / `dark:` classes
+ * render identically until another theme is selected.
+ *
+ * To add a theme: add an `html.<name> { ... }` block overriding the tokens you
+ * want to change, then register the name in ThemeContext's availableThemes.
+ */
+:root {
+  --color-primary-50: #f7f5ff;
+  --color-primary-100: #f0edff;
+  --color-primary-200: #e2dcff;
+  --color-primary-300: #cdc0ff;
+  --color-primary-400: #b199ff;
+  --color-primary-500: #9573ff;
+  --color-primary-600: #7a00cc;
+  --color-primary-700: #6b46c1;
+  --color-primary-800: #553c9a;
+  --color-primary-900: #483177;
+
+  --color-gray-50: #f8f9fa;
+  --color-gray-100: #f1f3f4;
+  --color-gray-200: #e8eaed;
+  --color-gray-300: #dadce0;
+  --color-gray-400: #bdc1c6;
+  --color-gray-500: #9aa0a6;
+  --color-gray-600: #80868b;
+  --color-gray-700: #5f6368;
+  --color-gray-800: #3c4043;
+  --color-gray-900: #202124;
+}
+
+/*
+ * High-contrast theme (sample). Darkens the primary scale and pushes grays
+ * toward black/white for stronger contrast. Demonstrates runtime remapping;
+ * extend or replace with brand themes as needed.
+ */
+html.high-contrast {
+  --color-primary-50: #f3e8ff;
+  --color-primary-100: #e9d5ff;
+  --color-primary-200: #d8b4fe;
+  --color-primary-300: #c084fc;
+  --color-primary-400: #a855f7;
+  --color-primary-500: #9333ea;
+  --color-primary-600: #6b21a8;
+  --color-primary-700: #581c87;
+  --color-primary-800: #3b0764;
+  --color-primary-900: #2e1065;
+
+  --color-gray-50: #ffffff;
+  --color-gray-100: #f4f4f5;
+  --color-gray-200: #e4e4e7;
+  --color-gray-300: #d4d4d8;
+  --color-gray-400: #a1a1aa;
+  --color-gray-500: #71717a;
+  --color-gray-600: #52525b;
+  --color-gray-700: #3f3f46;
+  --color-gray-800: #27272a;
+  --color-gray-900: #000000;
+}
+
 @layer base {
   html {
     font-family: 'Inter', system-ui, sans-serif;
