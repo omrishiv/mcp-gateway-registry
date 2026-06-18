@@ -25,7 +25,6 @@ import { Skill, SkillResourceManifest } from '../types/skill';
 import StatusBadge from './StatusBadge';
 import StarRatingWidget from './StarRatingWidget';
 import SecurityScanModal from './SecurityScanModal';
-import useEscapeKey from '../hooks/useEscapeKey';
 import ResourceBoundTokenButton from './ResourceBoundTokenButton';
 import SkillResources from './SkillResources';
 import { formatTimeSince } from '../utils/dateUtils';
@@ -42,6 +41,7 @@ import {
   ENTITY_ACCENTS,
   type StatusTone,
 } from './cards';
+import { EntityModal } from './modals';
 
 const ACCENT = ENTITY_ACCENTS.skill;
 
@@ -134,7 +134,6 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
   // makes so the Resources section can render against the modal-scoped data.
   const [resourceManifest, setResourceManifest] = useState<SkillResourceManifest | null>(null);
 
-  useEscapeKey(() => setShowDetails(false), showDetails);
   const [loadingToolCheck, setLoadingToolCheck] = useState(false);
   const [toolCheckResult, setToolCheckResult] = useState<any>(null);
   const [loadingHealthCheck, setLoadingHealthCheck] = useState(false);
@@ -602,24 +601,15 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
         />
       </CardShell>
 
-      {/* Skill Details Modal */}
-      {showDetails && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-4xl max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-                {skill.name}
-              </h3>
-              <button
-                onClick={() => setShowDetails(false)}
-                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-              >
-                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-
+      {/* Skill Details Modal (SKILL.md viewer) */}
+      <EntityModal
+        isOpen={showDetails}
+        onClose={() => setShowDetails(false)}
+        loading={loadingDetails}
+        maxWidth="4xl"
+        title={skill.name}
+      >
+        <div>
             {skill.path && (
               <div className="mb-4">
                 <ResourceBoundTokenButton
@@ -691,11 +681,7 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
               )}
             </div>
 
-            {loadingDetails ? (
-              <div className="flex items-center justify-center py-12">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-amber-600"></div>
-              </div>
-            ) : skillMdContent ? (
+            {skillMdContent ? (
               (() => {
                 const { frontmatter, body } = parseYamlFrontmatter(skillMdContent);
                 return (
@@ -757,9 +743,8 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
                 </p>
               </div>
             )}
-          </div>
         </div>
-      )}
+      </EntityModal>
       {/* Security Scan Modal */}
       <SecurityScanModal
         resourceName={skill.name}
