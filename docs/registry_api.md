@@ -20,33 +20,41 @@ This document provides a comprehensive overview of all API endpoints available i
 
 ## Authentication
 
-> **IMPORTANT**: Most endpoints in this API require authentication via OAuth2 (Keycloak). Users authenticate through the browser-based OAuth2 flow, which sets a session cookie. The examples below use `-b cookies.txt` to include the session cookie in requests. For programmatic API access, use a JWT Bearer token obtained from your OAuth2 provider.
+> **IMPORTANT**: Most endpoints in this API require authentication via OAuth2 (Keycloak). Users authenticate through the browser-based OAuth2 flow, which sets a session cookie. The examples below use `-b cookies.txt` to include the session cookie in requests. For programmatic API access, use a JWT Bearer token obtained from your OAuth2 provider (`-H "Authorization: Bearer <token>"`). A static API token is also accepted via the same `Authorization: Bearer <token>` header when `REGISTRY_STATIC_TOKEN_AUTH_ENABLED=true`.
 
 ### OAuth2 Login
 
-Authentication is handled via OAuth2 providers (Keycloak). Navigate to `/login` in your browser to initiate the OAuth2 flow.
+Authentication is handled via OAuth2 providers (Keycloak). Navigate to `/login` in your
+browser to open the login page; selecting a provider kicks off the OAuth2 flow via
+`/oauth2/login/{provider}`. After successful authentication a session cookie is set.
 
 **URL:** `/login`
 **Method:** `GET`
-**Response:** Login page with OAuth2 provider buttons
+**Response:** Login page (served by the web UI) with OAuth2 provider buttons
 
-**URL:** `/auth/{provider}`
+Supporting API routes the login page uses:
+
+**URL:** `/api/auth/providers`
 **Method:** `GET`
-**Description:** Redirects to the OAuth2 provider for authentication. After successful authentication, a session cookie is set automatically.
+**Description:** Returns the enabled OAuth2 providers shown on the login page.
+
+**URL:** `/api/auth/me`
+**Method:** `GET`
+**Description:** Returns the authenticated user's identity, scopes, groups, and permissions.
 
 ### Logout
 
 Logs out the current user by invalidating their session.
 
-**URL:** `/logout`  
-**Method:** `POST`  
-**Authentication:** Required (session cookie)  
-**Response:** Redirects to `/login`
+**URL:** `/api/auth/logout`
+**Method:** `POST` (also `GET`)
+**Authentication:** Required (session cookie)
+**Response:** `303` redirect; clears the session cookie. (The web UI exposes this as `/logout`.)
 
 **Example:**
 
 ```bash
-curl -X POST http://localhost/logout \
+curl -X POST http://localhost/api/auth/logout \
   -b cookies.txt
 ```
 
@@ -58,7 +66,7 @@ curl -X POST http://localhost/logout \
 
 Registers a new MCP service with the gateway.
 
-**URL:** `/register`  
+**URL:** `/api/servers/register`  
 **Method:** `POST`  
 **Content-Type:** `application/x-www-form-urlencoded`  
 **Authentication:** Required (session cookie)  
@@ -69,8 +77,6 @@ Registers a new MCP service with the gateway.
 - `proxy_pass_url` (required): URL to proxy requests to
 - `tags` (optional): Comma-separated list of tags
 - `num_tools` (optional): Number of tools provided by the service
-- `num_stars` (optional): Star rating for the service
-- `is_python` (optional): Whether the service is Python-based
 - `license` (optional): License information
 - `metadata` (optional): JSON object with custom metadata for organization, compliance, and integration tracking. Fully searchable via semantic search.
 
@@ -93,44 +99,46 @@ Registers a new MCP service with the gateway.
 
 ```bash
 # Uses the session cookie from the login request
-curl -X POST http://localhost/register \
+curl -X POST http://localhost/api/servers/register \
   -b cookies.txt \
-  -d "name=Weather Service&description=Provides weather forecasts&path=/weather&proxy_pass_url=http://localhost:8000&tags=weather,forecast&num_tools=3&num_stars=4&is_python=true&license=MIT"
+  -d "name=Weather Service&description=Provides weather forecasts&path=/weather&proxy_pass_url=http://localhost:8000&tags=weather,forecast&num_tools=3&license=MIT"
 ```
 
 ### Toggle Service Status
 
 Enables or disables a registered service.
 
-**URL:** `/toggle/{service_path}`  
-**Method:** `POST`  
-**Content-Type:** `application/x-www-form-urlencoded`  
-**Authentication:** Required (session cookie)  
-**URL Parameters:**
-- `service_path`: Path of the service to toggle
+**URL:** `/api/servers/toggle`
+**Method:** `POST`
+**Content-Type:** `application/x-www-form-urlencoded` (form fields)
+**Authentication:** Required (session cookie or Bearer token)
 **Form Parameters:**
-- `enabled`: "on" to enable, omit to disable
+- `path` (required): Path of the service to toggle (in the body, not the URL)
+- `new_state` (required): `true` to enable, `false` to disable
 
-**Response:** JSON with updated service status
+**Response:** JSON with the updated service status
 
 **Example:**
 
 ```bash
-# Enable a service (requires session cookie)
-curl -X POST http://localhost/toggle/weather \
+# Enable a service
+curl -X POST http://localhost/api/servers/toggle \
   -b cookies.txt \
-  -d "enabled=on"
+  -F "path=/weather" \
+  -F "new_state=true"
 
-# Disable a service (requires session cookie)
-curl -X POST http://localhost/toggle/weather \
-  -b cookies.txt
+# Disable a service
+curl -X POST http://localhost/api/servers/toggle \
+  -b cookies.txt \
+  -F "path=/weather" \
+  -F "new_state=false"
 ```
 
 ### Edit Service Details
 
 Updates the details of an existing service.
 
-**URL:** `/edit/{service_path}`  
+**URL:** `/api/edit/{service_path}`  
 **Method:** `POST`  
 **Content-Type:** `application/x-www-form-urlencoded`  
 **Authentication:** Required (session cookie)  
@@ -142,8 +150,6 @@ Updates the details of an existing service.
 - `description` (optional): Description of the service
 - `tags` (optional): Comma-separated list of tags
 - `num_tools` (optional): Number of tools provided by the service
-- `num_stars` (optional): Star rating for the service
-- `is_python` (optional): Whether the service is Python-based
 - `license` (optional): License information
 
 **Response:** Redirects to the main page on success
@@ -152,9 +158,9 @@ Updates the details of an existing service.
 
 ```bash
 # Requires session cookie from login
-curl -X POST http://localhost/edit/weather \
+curl -X POST http://localhost/api/edit/weather \
   -b cookies.txt \
-  -d "name=Weather API&description=Updated weather service&proxy_pass_url=http://localhost:8001&tags=weather,api&num_tools=5&num_stars=5&is_python=true&license=MIT"
+  -d "name=Weather API&description=Updated weather service&proxy_pass_url=http://localhost:8001&tags=weather,api&num_tools=5&license=MIT"
 ```
 
 ## API Endpoints
@@ -163,13 +169,18 @@ curl -X POST http://localhost/edit/weather \
 
 ### Get Server Details
 
-Retrieves detailed information about a registered service.
+Retrieves detailed information about registered services. Use `GET /api/servers` to list all servers, or `GET /api/servers/{path}` to fetch a single server.
 
-**URL:** `/api/server_details/{service_path}`  
+**URL:** `/api/servers`  
+**Method:** `GET`  
+**Authentication:** Required (session cookie)  
+**Description:** Lists all registered services.
+
+**URL:** `/api/servers/{path}`  
 **Method:** `GET`  
 **Authentication:** Required (session cookie)  
 **URL Parameters:**
-- `service_path`: Path of the service to get details for, or "all" to get details for all services
+- `path`: Path of the service to get details for
 
 **Response:** JSON with server details
 
@@ -177,11 +188,11 @@ Retrieves detailed information about a registered service.
 
 ```bash
 # Get details for a specific service (requires session cookie)
-curl -X GET http://localhost/api/server_details/weather \
+curl -X GET http://localhost/api/servers/weather \
   -b cookies.txt
 
-# Get details for all services (requires session cookie)
-curl -X GET http://localhost/api/server_details/all \
+# List all services (requires session cookie)
+curl -X GET http://localhost/api/servers \
   -b cookies.txt
 ```
 
@@ -211,13 +222,13 @@ curl -X GET http://localhost/api/tools/all \
 
 ### Refresh Service
 
-Manually triggers a health check and tool discovery for a service.
+Manually triggers a health check and tool discovery (rescan) for a service.
 
-**URL:** `/api/refresh/{service_path}`  
+**URL:** `/api/servers/{path}/rescan`  
 **Method:** `POST`  
 **Authentication:** Required (session cookie)  
 **URL Parameters:**
-- `service_path`: Path of the service to refresh
+- `path`: Path of the service to rescan
 
 **Response:** JSON with updated service status
 
@@ -225,7 +236,7 @@ Manually triggers a health check and tool discovery for a service.
 
 ```bash
 # Requires session cookie from login
-curl -X POST http://localhost/api/refresh/weather \
+curl -X POST http://localhost/api/servers/weather/rescan \
   -b cookies.txt
 ```
 
@@ -235,7 +246,7 @@ curl -X POST http://localhost/api/refresh/weather \
 
 Provides real-time updates on the health status of all registered services.
 
-**URL:** `/ws/health_status`  
+**URL:** `/api/health/ws/health_status`  
 **Protocol:** WebSocket  
 **Authentication:** Not required (public endpoint)  
 **Response:** JSON messages with health status updates
@@ -252,7 +263,7 @@ sudo chmod +x /usr/local/bin/websocat
 Then connect to the WebSocket endpoint:
 
 ```bash
-websocat ws://localhost/ws/health_status
+websocat ws://localhost/api/health/ws/health_status
 ```
 
 This will display the JSON messages with health status updates in real-time in your terminal.
@@ -266,7 +277,7 @@ import json
 import websockets
 
 async def health_status_monitor():
-    uri = "ws://localhost/ws/health_status"
+    uri = "ws://localhost/api/health/ws/health_status"
     async with websockets.connect(uri) as websocket:
         print("WebSocket connection established")
         
@@ -294,25 +305,26 @@ asyncio.run(health_status_monitor())
 
 1. **Login**: Navigate to `/login` in your browser and authenticate via your OAuth2 provider (Keycloak). The session cookie is set automatically after successful authentication.
 
-2. **Programmatic Access**: For API access, obtain a JWT Bearer token from your OAuth2 provider and include it in the `Authorization` header:
+2. **Programmatic Access**: For API access, obtain a JWT Bearer token from your OAuth2 provider (or use a static API token when `REGISTRY_STATIC_TOKEN_AUTH_ENABLED=true`) and include it in the `Authorization` header:
    ```bash
-   curl -X GET http://localhost/api/server_details/all \
-     -H "Authorization: Bearer <your-jwt-token>"
+   curl -X GET http://localhost/api/servers \
+     -H "Authorization: Bearer <token>"
    ```
 
 3. **Session Expiration**: The session cookie is valid for 8 hours. After expiration, you'll need to login again.
 
 ## API Summary
 
-* `GET /login`: Display login page with OAuth2 provider options.
-* `GET /auth/{provider}`: Redirect to OAuth2 provider for authentication.
-* `POST /logout`: Log out user and invalidate session cookie.
+* `GET /login`: Login page (web UI) with OAuth2 provider options.
+* `GET /api/auth/providers`: List enabled OAuth2 providers.
+* `GET /api/auth/me`: Authenticated user's identity, scopes, groups, and permissions.
+* `POST /api/auth/logout`: Log out user and invalidate session cookie (also accepts `GET`; web UI exposes `/logout`).
 * `GET /`: Main dashboard (web UI, requires authentication).
-* `GET /edit/{service_path}`: Edit service form (web UI, requires authentication).
-* `POST /register`: Register a new service (requires authentication).
-* `POST /toggle/{service_path}`: Enable/disable a service (requires authentication).
-* `POST /edit/{service_path}`: Update service details (requires authentication).
-* `GET /api/server_details/{service_path}`: Get full details for a service (requires authentication).
+* `POST /api/servers/register`: Register a new service (requires authentication).
+* `POST /api/servers/toggle`: Enable/disable a service; form fields `path` + `new_state` (requires authentication).
+* `POST /api/edit/{service_path}`: Update service details (requires authentication).
+* `GET /api/servers`: List all registered services (requires authentication).
+* `GET /api/servers/{path}`: Get full details for a single service (requires authentication).
 * `GET /api/tools/{service_path}`: Get the discovered tool list for a service (requires authentication).
-* `POST /api/refresh/{service_path}`: Manually trigger a health check/tool update (requires authentication).
-* `WebSocket /ws/health_status`: Real-time connection for receiving server health status updates.
+* `POST /api/servers/{path}/rescan`: Manually trigger a health check/tool update (requires authentication).
+* `WebSocket /api/health/ws/health_status`: Real-time connection for receiving server health status updates.
