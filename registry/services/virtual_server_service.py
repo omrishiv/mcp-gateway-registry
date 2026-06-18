@@ -246,11 +246,23 @@ class VirtualServerService:
         if not existing:
             raise VirtualServerNotFoundError(path)
 
+        from .search_index_cleanup import remove_from_search_index_with_retry
+
+        if not await remove_from_search_index_with_retry(
+            get_search_repository(),
+            path,
+            entity_type="virtual_server",
+        ):
+            logger.error(
+                "Aborting virtual server delete for %s: search index removal failed",
+                path,
+            )
+            return False
+
         success = await self._repo.delete(path)
 
         if success:
             await self._trigger_nginx_reload()
-            await self._remove_from_search(path)
             logger.info(f"Deleted virtual server: {path}")
         return success
 

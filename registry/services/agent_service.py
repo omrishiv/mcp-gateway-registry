@@ -230,16 +230,24 @@ class AgentService:
         try:
             agent_name = existing_agent.name
 
-            await self._repo.delete(path)
+            from .search_index_cleanup import remove_from_search_index_with_retry
 
-            try:
-                await self._search_repo.remove_entity(path)
-            except Exception as e:
-                logger.error(f"Failed to remove agent {path} from search: {e}")
+            if not await remove_from_search_index_with_retry(
+                self._search_repo,
+                path,
+                entity_type="a2a_agent",
+            ):
+                raise ValueError(
+                    f"Failed to remove agent '{path}' from search index; delete aborted"
+                )
+
+            await self._repo.delete(path)
 
             logger.info(f"Successfully deleted agent '{agent_name}' from path '{path}'")
             return True
 
+        except ValueError:
+            raise
         except Exception as e:
             logger.error(f"Failed to delete agent at path '{path}': {e}", exc_info=True)
             raise ValueError(f"Failed to delete agent: {e}")

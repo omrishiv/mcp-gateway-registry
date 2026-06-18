@@ -1120,8 +1120,13 @@ class SearchRepositoryBase(ABC):
     async def remove_entity(
         self,
         path: str,
-    ) -> None:
-        """Remove entity from search index."""
+    ) -> bool:
+        """Remove entity from search index.
+
+        Returns:
+            True if removal succeeded (including idempotent not-found).
+            False if removal failed.
+        """
         pass
 
     @abstractmethod

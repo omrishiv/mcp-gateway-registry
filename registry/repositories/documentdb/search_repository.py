@@ -1386,8 +1386,13 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
     async def remove_entity(
         self,
         path: str,
-    ) -> None:
-        """Remove entity from search index."""
+    ) -> bool:
+        """Remove entity from search index.
+
+        Returns:
+            True if removal succeeded (including idempotent not-found).
+            False if removal failed.
+        """
         collection = await self._get_collection()
 
         try:
@@ -1396,8 +1401,10 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 logger.info(f"Removed entity '{path}' from search index")
             else:
                 logger.warning(f"Entity '{path}' not found in search index")
+            return True
         except Exception as e:
             logger.error(f"Failed to remove entity from search index: {e}", exc_info=True)
+            return False
 
     async def find_missing_embeddings(self) -> dict[str, Any]:
         """Find documents in source collections that have no embedding indexed.
@@ -1453,6 +1460,115 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             "total_missing": len(missing),
             "total_indexed": len(indexed_ids),
             "total_source": total_source,
+        }
+
+    async def find_stale_embeddings(self) -> dict[str, Any]:
+        """Find embedding-index documents with no matching source registry record.
+
+        Inverse of :meth:`find_missing_embeddings` — detects orphaned vectors
+        left behind when delete-time cleanup failed (issue #1145).
+
+        NOTE: This performs an unbounded full scan of the embeddings collection
+        and all source collections. For very large registries, add pagination
+        (follow-up) before running this in production on a hot path.
+
+        Returns:
+            Dictionary with stale list, counts, and summary.
+        """
+        db = await get_documentdb_client()
+
+        source_collections = [
+            (get_collection_name("mcp_servers"), "mcp_server"),
+            (get_collection_name("mcp_agents"), "a2a_agent"),
+            (get_collection_name("agent_skills"), "skill"),
+            (get_collection_name("virtual_servers"), "virtual_server"),
+        ]
+
+        source_ids: set[str] = set()
+        total_source = 0
+
+        for col_name, _entity_type in source_collections:
+            collection = db[col_name]
+            cursor = collection.find({}, {"_id": 1})
+            source_docs = await cursor.to_list(length=None)
+            total_source += len(source_docs)
+            source_ids.update(doc["_id"] for doc in source_docs)
+
+        embeddings_collection = await self._get_collection()
+        indexed_cursor = embeddings_collection.find(
+            {},
+            {"_id": 1, "entity_type": 1, "name": 1, "is_enabled": 1},
+        )
+        indexed_docs = await indexed_cursor.to_list(length=None)
+
+        stale = []
+        for doc in indexed_docs:
+            doc_id = doc["_id"]
+            if doc_id not in source_ids:
+                stale.append({
+                    "path": doc_id,
+                    "entity_type": doc.get("entity_type", "unknown"),
+                    "name": doc.get("name") or doc_id,
+                    "is_enabled": doc.get("is_enabled", True),
+                })
+
+        stale.sort(key=lambda x: (x["entity_type"], x["path"]))
+
+        return {
+            "stale": stale,
+            "total_stale": len(stale),
+            "total_indexed": len(indexed_docs),
+            "total_source": total_source,
+        }
+
+    async def remove_stale_embeddings(
+        self,
+        paths: list[str],
+    ) -> dict[str, Any]:
+        """Remove orphaned embedding documents by path.
+
+        Args:
+            paths: Embedding index paths to remove (max 100).
+
+        Returns:
+            Dictionary with success/failed counts and per-path details.
+        """
+        details = []
+
+        for path in paths:
+            try:
+                removed = await self.remove_entity(path)
+                if removed:
+                    details.append({"path": path, "status": "success"})
+                else:
+                    details.append({
+                        "path": path,
+                        "status": "failed",
+                        "error": "Failed to remove stale embedding",
+                    })
+            except Exception as e:
+                logger.error("Failed to remove stale embedding '%s': %s", path, e)
+                details.append({
+                    "path": path,
+                    "status": "failed",
+                    "error": "Failed to remove stale embedding",
+                })
+
+        success_count = sum(1 for d in details if d["status"] == "success")
+        failed_count = sum(1 for d in details if d["status"] == "failed")
+
+        logger.info(
+            "Stale embedding cleanup: %d success, %d failed out of %d paths",
+            success_count,
+            failed_count,
+            len(paths),
+        )
+
+        return {
+            "success": success_count,
+            "failed": failed_count,
+            "total": len(paths),
+            "details": details,
         }
 
     async def reindex_paths(

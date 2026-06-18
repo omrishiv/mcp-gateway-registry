@@ -220,13 +220,17 @@ class TestReconcileAgentcoreAgents:
             _make_agent("Agent A", "/agents/agentcore-a", tags=["agentcore"]),
         ]
 
-        result = await _reconcile_agentcore_agents(
-            expected_paths={"/agents/agentcore-a"},
-            agent_repo=agent_repo,
-        )
+        with patch(
+            "registry.services.agent_service.agent_service.remove_agent",
+            new_callable=AsyncMock,
+        ) as mock_remove:
+            result = await _reconcile_agentcore_agents(
+                expected_paths={"/agents/agentcore-a"},
+                agent_repo=agent_repo,
+            )
         assert result["removed"] == []
         assert result["errors"] == []
-        agent_repo.delete.assert_not_called()
+        mock_remove.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_stale_agents_removed(self):
@@ -236,15 +240,19 @@ class TestReconcileAgentcoreAgents:
             _make_agent("Agent A", "/agents/agentcore-a", tags=["agentcore"]),
             _make_agent("Agent B", "/agents/agentcore-b", tags=["agentcore"]),
         ]
-        agent_repo.delete.return_value = True
 
-        result = await _reconcile_agentcore_agents(
-            expected_paths={"/agents/agentcore-a"},
-            agent_repo=agent_repo,
-        )
+        with patch(
+            "registry.services.agent_service.agent_service.remove_agent",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as mock_remove:
+            result = await _reconcile_agentcore_agents(
+                expected_paths={"/agents/agentcore-a"},
+                agent_repo=agent_repo,
+            )
         assert result["removed"] == ["Agent B"]
         assert result["errors"] == []
-        agent_repo.delete.assert_called_once_with("/agents/agentcore-b")
+        mock_remove.assert_called_once_with("/agents/agentcore-b")
 
     @pytest.mark.asyncio
     async def test_non_agentcore_agents_ignored(self):
@@ -256,26 +264,34 @@ class TestReconcileAgentcoreAgents:
             _make_agent("Right Path No Tag", "/agents/agentcore-x", tags=["other"]),
         ]
 
-        result = await _reconcile_agentcore_agents(
-            expected_paths=set(),
-            agent_repo=agent_repo,
-        )
+        with patch(
+            "registry.services.agent_service.agent_service.remove_agent",
+            new_callable=AsyncMock,
+        ) as mock_remove:
+            result = await _reconcile_agentcore_agents(
+                expected_paths=set(),
+                agent_repo=agent_repo,
+            )
         assert result["removed"] == []
-        agent_repo.delete.assert_not_called()
+        mock_remove.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_delete_failure_records_error(self):
-        """When agent_repo.delete returns False, an error is recorded."""
+        """When remove_agent returns False, an error is recorded."""
         agent_repo = AsyncMock()
         agent_repo.list_all.return_value = [
             _make_agent("Agent A", "/agents/agentcore-a", tags=["agentcore"]),
         ]
-        agent_repo.delete.return_value = False
 
-        result = await _reconcile_agentcore_agents(
-            expected_paths=set(),
-            agent_repo=agent_repo,
-        )
+        with patch(
+            "registry.services.agent_service.agent_service.remove_agent",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            result = await _reconcile_agentcore_agents(
+                expected_paths=set(),
+                agent_repo=agent_repo,
+            )
         assert result["removed"] == []
         assert len(result["errors"]) == 1
 
@@ -297,13 +313,18 @@ class TestReconcileAgentcoreSkills:
             _make_skill("Skill X", "/skills/agentcore-x", tags=["agentcore"]),
         ]
 
-        result = await _reconcile_agentcore_skills(
-            expected_paths={"/skills/agentcore-x"},
-            skill_repo=skill_repo,
-        )
+        mock_service = AsyncMock()
+        with patch(
+            "registry.services.skill_service.get_skill_service",
+            return_value=mock_service,
+        ):
+            result = await _reconcile_agentcore_skills(
+                expected_paths={"/skills/agentcore-x"},
+                skill_repo=skill_repo,
+            )
         assert result["removed"] == []
         assert result["errors"] == []
-        skill_repo.delete.assert_not_called()
+        mock_service.delete_skill.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_stale_skills_removed(self):
@@ -313,14 +334,20 @@ class TestReconcileAgentcoreSkills:
             _make_skill("Skill X", "/skills/agentcore-x", tags=["agentcore"]),
             _make_skill("Skill Y", "/skills/agentcore-y", tags=["agentcore"]),
         ]
-        skill_repo.delete.return_value = True
 
-        result = await _reconcile_agentcore_skills(
-            expected_paths={"/skills/agentcore-x"},
-            skill_repo=skill_repo,
-        )
+        mock_service = AsyncMock()
+        mock_service.delete_skill.return_value = True
+        with patch(
+            "registry.services.skill_service.get_skill_service",
+            return_value=mock_service,
+        ):
+            result = await _reconcile_agentcore_skills(
+                expected_paths={"/skills/agentcore-x"},
+                skill_repo=skill_repo,
+            )
         assert result["removed"] == ["Skill Y"]
         assert result["errors"] == []
+        mock_service.delete_skill.assert_called_once_with("/skills/agentcore-y")
 
     @pytest.mark.asyncio
     async def test_non_agentcore_skills_ignored(self):
@@ -332,12 +359,17 @@ class TestReconcileAgentcoreSkills:
             _make_skill("Right Path No Tag", "/skills/agentcore-z", tags=["other"]),
         ]
 
-        result = await _reconcile_agentcore_skills(
-            expected_paths=set(),
-            skill_repo=skill_repo,
-        )
+        mock_service = AsyncMock()
+        with patch(
+            "registry.services.skill_service.get_skill_service",
+            return_value=mock_service,
+        ):
+            result = await _reconcile_agentcore_skills(
+                expected_paths=set(),
+                skill_repo=skill_repo,
+            )
         assert result["removed"] == []
-        skill_repo.delete.assert_not_called()
+        mock_service.delete_skill.assert_not_called()
 
 
 # =============================================================================
@@ -412,14 +444,14 @@ class TestReconcileAgentcoreRecords:
         agent_repo.list_all.return_value = [
             _make_agent("Stale Agent", "/agents/agentcore-old", tags=["agentcore"]),
         ]
-        agent_repo.delete.return_value = True
 
-        # Skill repo: one stale skill
         skill_repo = AsyncMock()
         skill_repo.list_all.return_value = [
             _make_skill("Stale Skill", "/skills/agentcore-old", tags=["agentcore"]),
         ]
-        skill_repo.delete.return_value = True
+
+        mock_skill_service = AsyncMock()
+        mock_skill_service.delete_skill.return_value = True
 
         synced_paths = {
             "servers": set(),
@@ -427,7 +459,18 @@ class TestReconcileAgentcoreRecords:
             "skills": set(),
         }
 
-        with patch("registry.services.federation_reconciliation._record_reconciliation_metrics"):
+        with (
+            patch("registry.services.federation_reconciliation._record_reconciliation_metrics"),
+            patch(
+                "registry.services.agent_service.agent_service.remove_agent",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "registry.services.skill_service.get_skill_service",
+                return_value=mock_skill_service,
+            ),
+        ):
             result = await reconcile_agentcore_records(
                 config=config,
                 server_service=server_service,
@@ -462,12 +505,18 @@ class TestReconcileAgentcoreRecords:
         agent_repo.list_all.return_value = [
             _make_agent("Agent X", "/agents/agentcore-x", tags=["agentcore"]),
         ]
-        agent_repo.delete.return_value = True
 
         skill_repo = AsyncMock()
         skill_repo.list_all.return_value = []
 
-        with patch("registry.services.federation_reconciliation._record_reconciliation_metrics"):
+        with (
+            patch("registry.services.federation_reconciliation._record_reconciliation_metrics"),
+            patch(
+                "registry.services.agent_service.agent_service.remove_agent",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
             result = await reconcile_agentcore_records(
                 config=config,
                 server_service=server_service,

@@ -832,8 +832,10 @@ async def _deregister_skills_from_registry(
         List of skill paths that were deregistered
     """
     from ..repositories.factory import get_skill_repository
+    from ..services.skill_service import get_skill_service
 
     skill_repo = get_skill_repository()
+    skill_service = get_skill_service()
     all_skills = await skill_repo.list_all()
 
     matching_paths = set()
@@ -858,7 +860,7 @@ async def _deregister_skills_from_registry(
     deregistered = []
     for path in matching_paths:
         try:
-            removed = await skill_repo.delete(path)
+            removed = await skill_service.delete_skill(path)
             if removed:
                 deregistered.append(path)
                 logger.info(f"Deregistered skill {path} from registry {registry_id}")
