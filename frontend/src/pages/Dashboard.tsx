@@ -30,6 +30,9 @@ import VirtualServersSection from '../components/entities/sections/VirtualServer
 import RegistrySection, {
   type RegistryAccent,
 } from '../components/entities/sections/RegistrySection';
+import ServerEditModal, {
+  type ServerEditForm,
+} from '../components/entities/forms/ServerEditModal';
 import { useEntityToggle } from '../hooks/useEntityToggle';
 import { filterEntities } from '../utils/entityFilters';
 
@@ -63,7 +66,6 @@ import {
   buildLocalRuntimeForm,
   buildLocalRuntimeJson,
 } from '../utils/localRuntime';
-import LocalRuntimeFormPanel from '../components/LocalRuntimeFormPanel';
 import type { LocalRuntime } from '../types/server';
 import Pagination from '../components/Pagination';
 import DuplicateCheckModal from '../components/DuplicateCheckModal';
@@ -265,7 +267,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
   const [registerLoading, setRegisterLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [editingServer, setEditingServer] = useState<Server | null>(null);
-  const [editForm, setEditForm] = useState({
+  const [editForm, setEditForm] = useState<ServerEditForm>({
     name: '',
     path: '',
     proxyPass: '',
@@ -2886,323 +2888,14 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
 
       {/* Edit Server Modal */}
       {editingServer && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-              Edit Server: {editingServer.name}
-            </h3>
-
-            <form
-              onSubmit={async (e) => {
-                e.preventDefault();
-                await handleSaveEdit();
-              }}
-              className="space-y-4"
-            >
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                  Server Name *
-                </label>
-                <input
-                  type="text"
-                  value={editForm.name}
-                  onChange={(e) => setEditForm(prev => ({ ...prev, name: e.target.value }))}
-                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
-                  required
-                />
-              </div>
-
-              {/* Deployment type indicator (read-only — switching types is unusual
-                  enough to require re-registration). */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                  Deployment
-                </label>
-                <div className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-900 text-gray-700 dark:text-gray-300">
-                  {editForm.deployment === 'local' ? 'Local (stdio)' : 'Remote (HTTP)'}
-                </div>
-              </div>
-
-              {editForm.deployment === 'remote' && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                    Proxy Pass URL *
-                  </label>
-                  <input
-                    type="url"
-                    value={editForm.proxyPass}
-                    onChange={(e) => setEditForm(prev => ({ ...prev, proxyPass: e.target.value }))}
-                    className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
-                    placeholder="http://localhost:8080"
-                    required
-                  />
-                </div>
-              )}
-
-              {editForm.deployment === 'local' && (
-                <LocalRuntimeFormPanel
-                  runtime={editForm.local_runtime}
-                  onChange={(next) => setEditForm(prev => ({ ...prev, local_runtime: next }))}
-                />
-              )}
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                  Description
-                </label>
-                <textarea
-                  value={editForm.description}
-                  onChange={(e) => setEditForm(prev => ({ ...prev, description: e.target.value }))}
-                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
-                  rows={3}
-                  placeholder="Brief description of the server"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                  Lifecycle Status
-                </label>
-                <select
-                  value={editForm.status}
-                  onChange={(e) => setEditForm(prev => ({ ...prev, status: e.target.value as 'active' | 'draft' | 'deprecated' | 'beta' }))}
-                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
-                >
-                  <option value="active">Active</option>
-                  <option value="draft">Draft</option>
-                  <option value="beta">Beta</option>
-                  <option value="deprecated">Deprecated</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                  Tags
-                </label>
-                <input
-                  type="text"
-                  value={editForm.tags.join(',')}
-                  onChange={(e) => setEditForm(prev => ({ ...prev, tags: e.target.value.split(',').map(t => t.trim()).filter(t => t) }))}
-                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
-                  placeholder="tag1,tag2,tag3"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                    Number of Tools
-                  </label>
-                  <input
-                    type="number"
-                    value={editForm.num_tools}
-                    onChange={(e) => setEditForm(prev => ({ ...prev, num_tools: parseInt(e.target.value) || 0 }))}
-                    className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
-                    min="0"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                  License
-                </label>
-                <input
-                  type="text"
-                  value={editForm.license}
-                  onChange={(e) => setEditForm(prev => ({ ...prev, license: e.target.value }))}
-                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
-                  placeholder="MIT, Apache-2.0, etc."
-                />
-              </div>
-
-              {editForm.deployment === 'remote' && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                    MCP Endpoint (optional)
-                  </label>
-                  <input
-                    type="url"
-                    value={editForm.mcp_endpoint}
-                    onChange={(e) => setEditForm(prev => ({ ...prev, mcp_endpoint: e.target.value }))}
-                    className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
-                    placeholder="Custom MCP endpoint URL (overrides default)"
-                  />
-                </div>
-              )}
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                  Custom Metadata (JSON, optional)
-                </label>
-                <textarea
-                  value={editForm.metadata}
-                  onChange={(e) => setEditForm(prev => ({ ...prev, metadata: e.target.value }))}
-                  rows={4}
-                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500 font-mono text-sm"
-                  placeholder='{"team": "platform", "owner": "alice@example.com"}'
-                />
-              </div>
-
-              {/* Backend Authentication — only meaningful for remote servers.
-                  Local servers handle auth via env vars on the user's machine. */}
-              {editForm.deployment === 'remote' && (
-                <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
-                  <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">
-                    Backend Authentication
-                  </h4>
-
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                        Authentication Scheme
-                      </label>
-                      <select
-                        value={editForm.auth_scheme}
-                        onChange={(e) => {
-                          const newScheme = e.target.value;
-                          setEditForm(prev => ({
-                            ...prev,
-                            auth_scheme: newScheme,
-                            auth_credential: newScheme === 'none' ? '' : prev.auth_credential,
-                            auth_header_name: newScheme === 'api_key' ? prev.auth_header_name : 'X-API-Key',
-                          }));
-                        }}
-                        className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
-                      >
-                        <option value="none">None</option>
-                        <option value="bearer">Bearer Token</option>
-                        <option value="api_key">API Key</option>
-                      </select>
-                    </div>
-
-                    {editForm.auth_scheme !== 'none' && (
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                          {editForm.auth_scheme === 'bearer' ? 'Bearer Token' : 'API Key'}
-                        </label>
-                        <input
-                          type="password"
-                          value={editForm.auth_credential}
-                          onChange={(e) => setEditForm(prev => ({ ...prev, auth_credential: e.target.value }))}
-                          className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
-                          placeholder="Leave blank to keep current credential"
-                        />
-                        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                          Leave blank to keep the existing credential unchanged.
-                        </p>
-                      </div>
-                    )}
-
-                    {editForm.auth_scheme === 'api_key' && (
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                          Header Name
-                        </label>
-                        <input
-                          type="text"
-                          value={editForm.auth_header_name}
-                          onChange={(e) => setEditForm(prev => ({ ...prev, auth_header_name: e.target.value }))}
-                          className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
-                          placeholder="X-API-Key"
-                        />
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Custom Headers */}
-              <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
-                <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-2">
-                  Additional Headers
-                </h4>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
-                  Fixed HTTP headers your MCP server requires beyond authentication. Leave value blank to keep existing encrypted value.
-                </p>
-                {editForm.custom_headers.map((h, idx) => (
-                  <div key={idx} className="flex gap-2 mb-2">
-                    <input
-                      type="text"
-                      placeholder="X-My-Header"
-                      value={h.name}
-                      onChange={(e) => {
-                        const updated = [...editForm.custom_headers];
-                        updated[idx] = { ...updated[idx], name: e.target.value };
-                        setEditForm(prev => ({ ...prev, custom_headers: updated }));
-                      }}
-                      className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500 text-sm"
-                    />
-                    <input
-                      type="text"
-                      placeholder="header value (blank = keep existing)"
-                      value={h.value}
-                      onChange={(e) => {
-                        const updated = [...editForm.custom_headers];
-                        updated[idx] = { ...updated[idx], value: e.target.value };
-                        setEditForm(prev => ({ ...prev, custom_headers: updated }));
-                      }}
-                      className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500 text-sm"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const updated = editForm.custom_headers.filter((_, i) => i !== idx);
-                        setEditForm(prev => ({ ...prev, custom_headers: updated }));
-                      }}
-                      className="px-3 py-2 text-sm text-red-600 hover:text-red-800 dark:text-red-400"
-                    >
-                      Remove
-                    </button>
-                  </div>
-                ))}
-                {editForm.custom_headers.length < 10 && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setEditForm(prev => ({
-                        ...prev,
-                        custom_headers: [...prev.custom_headers, { name: '', value: '' }],
-                      }));
-                    }}
-                    className="text-sm text-purple-600 hover:text-purple-800 dark:text-purple-400"
-                  >
-                    + Add header
-                  </button>
-                )}
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                  Path (read-only)
-                </label>
-                <input
-                  type="text"
-                  value={editForm.path}
-                  className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-300"
-                  disabled
-                />
-              </div>
-
-              <div className="flex space-x-3 pt-4">
-                <button
-                  type="submit"
-                  disabled={editLoading}
-                  className="flex-1 px-4 py-2 text-sm font-medium text-white bg-purple-600 hover:bg-purple-700 disabled:opacity-50 rounded-md transition-colors"
-                >
-                  {editLoading ? 'Saving...' : 'Save Changes'}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleCloseEdit}
-                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-md transition-colors"
-                >
-                  Cancel
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+        <ServerEditModal
+          serverName={editingServer.name}
+          form={editForm}
+          setForm={setEditForm}
+          loading={editLoading}
+          onSave={handleSaveEdit}
+          onClose={handleCloseEdit}
+        />
       )}
 
       {/* Edit Agent Modal */}
