@@ -29,6 +29,7 @@ import VirtualServersSection from '../components/entities/sections/VirtualServer
 import RegistrySection, {
   type RegistryAccent,
 } from '../components/entities/sections/RegistrySection';
+import ExternalRegistriesSection from '../components/entities/sections/ExternalRegistriesSection';
 import ServerEditModal, {
   type ServerEditForm,
 } from '../components/entities/forms/ServerEditModal';
@@ -2264,148 +2265,70 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
 
       {/* External Registries Section */}
       {registryConfig?.features.federation !== false && viewFilter === 'external' && (
-        <div className="mb-8">
-          <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4">
-            External Registries
-          </h2>
-
-          {/* Source tabs - only show when there are sources */}
-          {availableExternalSources.length > 0 && (
-            <div className="flex border-b border-gray-200 dark:border-gray-700 mb-6">
-              {availableExternalSources.map((source) => (
-                <button
-                  key={source}
-                  onClick={() => setExternalSourceTab(source)}
-                  className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-                    externalSourceTab === source
-                      ? 'border-green-500 text-green-600 dark:text-green-400'
-                      : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
-                  }`}
-                >
-                  {SOURCE_LABELS[source] || source}
-                </button>
-              ))}
-            </div>
+        <ExternalRegistriesSection
+          availableSources={availableExternalSources}
+          sourceLabels={SOURCE_LABELS}
+          activeSource={externalSourceTab}
+          onSelectSource={setExternalSourceTab}
+          servers={filteredExternalServers}
+          agents={filteredExternalAgents}
+          skills={filteredExternalSkills}
+          hasAnyExternal={
+            externalServers.length > 0 ||
+            externalAgents.length > 0 ||
+            externalSkills.length > 0
+          }
+          renderServerCard={(server) => (
+            <ServerCard
+              key={server.path}
+              server={server}
+              onToggle={handleToggleServer}
+              onEdit={handleEditServer}
+              canModify={user?.can_modify_servers || false}
+              canDelete={(user?.is_admin || hasUiPermission('delete_service', server.path)) && !server.sync_metadata?.is_federated}
+              onRefreshSuccess={refreshData}
+              onShowToast={showToast}
+              onServerUpdate={handleServerUpdate}
+              onDelete={handleDeleteServer}
+              authToken={agentApiToken}
+            />
           )}
-
-          {filteredExternalServers.length === 0 && filteredExternalAgents.length === 0 && filteredExternalSkills.length === 0 ? (
-            <div className="text-center py-12 bg-gray-50 dark:bg-gray-800 rounded-lg border border-dashed border-gray-300 dark:border-gray-600">
-              <div className="text-gray-400 text-lg mb-2">
-                {externalServers.length === 0 && externalAgents.length === 0 && externalSkills.length === 0
-                  ? 'No External Registries Available'
-                  : 'No Results Found'}
-              </div>
-              <p className="text-gray-500 dark:text-gray-300 text-sm max-w-md mx-auto">
-                {externalServers.length === 0 && externalAgents.length === 0 && externalSkills.length === 0
-                  ? 'External registry integrations (Anthropic, AWS Agents, and more) will appear here when configured'
-                  : 'Press Enter in the search bar to search semantically'}
-              </p>
-            </div>
-          ) : (
-            <div>
-              {/* External Servers */}
-              {filteredExternalServers.length > 0 && (
-                <div className="mb-6">
-                  <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-3">
-                    Servers
-                  </h3>
-                  <div
-                    className="grid"
-                    style={{
-                      gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))',
-                      gap: 'clamp(1.5rem, 3vw, 2.5rem)'
-                    }}
-                  >
-                    {filteredExternalServers.map((server) => (
-                      <ServerCard
-                        key={server.path}
-                        server={server}
-                        onToggle={handleToggleServer}
-                        onEdit={handleEditServer}
-                        canModify={user?.can_modify_servers || false}
-                        canDelete={(user?.is_admin || hasUiPermission('delete_service', server.path)) && !server.sync_metadata?.is_federated}
-                        onRefreshSuccess={refreshData}
-                        onShowToast={showToast}
-                        onServerUpdate={handleServerUpdate}
-                        onDelete={handleDeleteServer}
-                        authToken={agentApiToken}
-                      />
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* External Agents */}
-              {filteredExternalAgents.length > 0 && (
-                <div className="mb-6">
-                  <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-3">
-                    Agents
-                  </h3>
-                  <div
-                    className="grid"
-                    style={{
-                      gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))',
-                      gap: 'clamp(1.5rem, 3vw, 2.5rem)'
-                    }}
-                  >
-                    {filteredExternalAgents.map((agent) => (
-                      <AgentCard
-                        key={agent.path}
-                        agent={agent}
-                        onToggle={handleToggleAgent}
-                        onEdit={handleEditAgent}
-                        canModify={user?.can_modify_servers || false}
-                        canHealthCheck={user?.is_admin || hasUiPermission('health_check_agent', agent.path)}
-                        canToggle={user?.is_admin || hasUiPermission('toggle_agent', agent.path)}
-                        canDelete={
-                          (user?.is_admin ||
-                          hasUiPermission('delete_agent', agent.path) ||
-                          agent.registered_by === user?.username) &&
-                          !agent.sync_metadata?.is_federated
-                        }
-                        onDelete={handleDeleteAgent}
-                        onRefreshSuccess={refreshData}
-                        onShowToast={showToast}
-                        onAgentUpdate={handleAgentUpdate}
-                      />
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* External Skills */}
-              {filteredExternalSkills.length > 0 && (
-                <div>
-                  <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-3">
-                    Skills
-                  </h3>
-                  <div
-                    className="grid"
-                    style={{
-                      gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))',
-                      gap: 'clamp(1.5rem, 3vw, 2.5rem)'
-                    }}
-                  >
-                    {filteredExternalSkills.map((skill) => (
-                      <SkillCard
-                        key={skill.path}
-                        skill={skill}
-                        onToggle={handleToggleSkill}
-                        onEdit={handleEditSkill}
-                        onDelete={(path: string) => setShowDeleteSkillConfirm(path)}
-                        canModify={user?.can_modify_servers || false}
-                        canToggle={user?.is_admin || hasUiPermission('toggle_skill', skill.path)}
-                        onRefreshSuccess={refreshSkills}
-                        onShowToast={showToast}
-                        onSkillUpdate={handleSkillUpdate}
-                      />
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
+          renderAgentCard={(agent) => (
+            <AgentCard
+              key={agent.path}
+              agent={agent}
+              onToggle={handleToggleAgent}
+              onEdit={handleEditAgent}
+              canModify={user?.can_modify_servers || false}
+              canHealthCheck={user?.is_admin || hasUiPermission('health_check_agent', agent.path)}
+              canToggle={user?.is_admin || hasUiPermission('toggle_agent', agent.path)}
+              canDelete={
+                (user?.is_admin ||
+                hasUiPermission('delete_agent', agent.path) ||
+                agent.registered_by === user?.username) &&
+                !agent.sync_metadata?.is_federated
+              }
+              onDelete={handleDeleteAgent}
+              onRefreshSuccess={refreshData}
+              onShowToast={showToast}
+              onAgentUpdate={handleAgentUpdate}
+            />
           )}
-        </div>
+          renderSkillCard={(skill) => (
+            <SkillCard
+              key={skill.path}
+              skill={skill}
+              onToggle={handleToggleSkill}
+              onEdit={handleEditSkill}
+              onDelete={(path) => setShowDeleteSkillConfirm(path)}
+              canModify={user?.can_modify_servers || false}
+              canToggle={user?.is_admin || hasUiPermission('toggle_skill', skill.path)}
+              onRefreshSuccess={refreshSkills}
+              onShowToast={showToast}
+              onSkillUpdate={handleSkillUpdate}
+            />
+          )}
+        />
       )}
 
       {/* Empty state when all are filtered out */}

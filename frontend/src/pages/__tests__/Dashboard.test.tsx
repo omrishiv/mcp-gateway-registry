@@ -265,6 +265,28 @@ describe('Dashboard entity collections', () => {
     expect(screen.getByText('PeerAgent')).toBeInTheDocument();
   });
 
+  it('renders the External Registries tab with federated cards grouped by type', () => {
+    stats.servers = [
+      makeServer('ExtServer', {
+        sync_metadata: { is_federated: true, source_peer_id: 'anthropic' },
+        tags: ['anthropic-registry'],
+      }),
+    ];
+    renderDashboard();
+    fireEvent.click(screen.getByRole('button', { name: 'External Registries' }));
+    // The federated server shows under the Servers subsection.
+    expect(screen.getByRole('heading', { name: 'Servers' })).toBeInTheDocument();
+    expect(screen.getByText('ExtServer')).toBeInTheDocument();
+  });
+
+  it('shows the external empty state when no external registries are configured', () => {
+    renderDashboard();
+    fireEvent.click(screen.getByRole('button', { name: 'External Registries' }));
+    expect(
+      screen.getByText('No External Registries Available'),
+    ).toBeInTheDocument();
+  });
+
   it('switches collections when tabs change', () => {
     stats.servers = [makeServer('Alpha')];
     skillsState.skills = [makeSkill('doc-writer')];
