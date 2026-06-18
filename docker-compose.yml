@@ -335,7 +335,6 @@ services:
     ports:
       - "80:8080"   # Map host 80 to container 8080 (non-root nginx)
       - "443:8443"  # Map host 443 to container 8443 (non-root nginx)
-      - "7860:7860"
     security_opt:
       - no-new-privileges:true
     cap_drop:

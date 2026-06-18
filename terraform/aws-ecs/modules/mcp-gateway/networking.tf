@@ -98,18 +98,12 @@ module "alb" {
           ip_protocol = "tcp"
           cidr_ipv4   = cidr
         }
-        "auth_port_${idx}" = {
-          from_port   = 8888
-          to_port     = 8888
-          ip_protocol = "tcp"
-          cidr_ipv4   = cidr
-        }
-        "gradio_port_${idx}" = {
-          from_port   = 7860
-          to_port     = 7860
-          ip_protocol = "tcp"
-          cidr_ipv4   = cidr
-        }
+        # NOTE: the public :8888 (auth) and :7860 (gradio) raw-app ALB exposures
+        # were removed (registry internal-auth hardening). The auth-server is
+        # reached internally via Service Connect (auth-server:8888 -> container
+        # 18888), and external OAuth URLs resolve to the nginx-fronted :443/:80 --
+        # neither needs a public raw-app listener. The registry app (:7860) is
+        # nginx-fronted and loopback-bound. Only http/https remain.
       }
     ]...),
     {
@@ -131,22 +125,9 @@ module "alb" {
           target_group_key = "registry"
         }
       }
-      auth = {
-        port            = 8888
-        protocol        = var.enable_https ? "HTTPS" : "HTTP"
-        certificate_arn = var.enable_https ? var.certificate_arn : null
-        ssl_policy      = var.enable_https ? "ELBSecurityPolicy-TLS13-1-2-2021-06" : null
-        forward = {
-          target_group_key = "auth"
-        }
-      }
-      gradio = {
-        port     = 7860
-        protocol = "HTTP"
-        forward = {
-          target_group_key = "gradio"
-        }
-      }
+      # The public auth (:8888) and gradio (:7860) raw-app listeners were removed
+      # (registry internal-auth hardening). Internal callers use Service Connect;
+      # external traffic uses the nginx-fronted http/https listeners.
     },
     var.enable_https ? {
       https = {
@@ -183,48 +164,10 @@ module "alb" {
 
       create_attachment = false
     }
-    auth = {
-      backend_protocol                  = "HTTP"
-      backend_port                      = 18888
-      target_type                       = "ip"
-      deregistration_delay              = 5
-      load_balancing_cross_zone_enabled = true
-
-      health_check = {
-        enabled             = true
-        healthy_threshold   = 2
-        interval            = 30
-        matcher             = "200"
-        path                = "/health"
-        port                = "traffic-port"
-        protocol            = "HTTP"
-        timeout             = 5
-        unhealthy_threshold = 2
-      }
-
-      create_attachment = false
-    }
-    gradio = {
-      backend_protocol                  = "HTTP"
-      backend_port                      = 7860
-      target_type                       = "ip"
-      deregistration_delay              = 5
-      load_balancing_cross_zone_enabled = true
-
-      health_check = {
-        enabled             = true
-        healthy_threshold   = 2
-        interval            = 30
-        matcher             = "200"
-        path                = "/health"
-        port                = "traffic-port"
-        protocol            = "HTTP"
-        timeout             = 5
-        unhealthy_threshold = 2
-      }
-
-      create_attachment = false
-    }
+    # The "auth" (:18888) and "gradio" (:7860) target groups were removed with
+    # their public listeners (registry internal-auth hardening). The registry
+    # target group (nginx :8080) is the only ALB attachment; auth-server is
+    # reached via Service Connect, not the ALB.
   }
 
   tags = local.common_tags

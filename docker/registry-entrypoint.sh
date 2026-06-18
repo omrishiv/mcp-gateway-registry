@@ -313,10 +313,18 @@ export EMBEDDINGS_PROVIDER=$EMBEDDINGS_PROVIDER
 export EMBEDDINGS_MODEL_NAME=$EMBEDDINGS_MODEL_NAME
 export EMBEDDINGS_MODEL_DIMENSIONS=$EMBEDDINGS_MODEL_DIMENSIONS
 
-# Default binds to all IPv4 interfaces inside the container. Operators who
-# need IPv6 dual-stack can set BIND_HOST=:: — but see docs/TELEMETRY.md for
-# the net.ipv6.bindv6only=0 host-side requirement.
-BIND_HOST="${BIND_HOST:-0.0.0.0}"
+# Default binds to loopback only: nginx (the only client) reaches uvicorn over
+# 127.0.0.1 inside this same container, and the in-container HEALTHCHECK curls
+# localhost:7860. Binding loopback means the raw app port is NOT reachable on the
+# pod/container IP, closing the network path to the auth-bypassing raw app
+# (defense-in-depth for the header-forgery fix; the signed-token check is the
+# primary, topology-independent closure).
+#
+# Operators who need IPv6 dual-stack can set BIND_HOST=:: — but note that ::
+# binds ALL IPv6 interfaces (loopback is ::1), so it RE-EXPOSES the raw app port
+# pod-IP-wide; use it only when you understand that trade-off. See
+# docs/TELEMETRY.md for the net.ipv6.bindv6only=0 host-side requirement.
+BIND_HOST="${BIND_HOST:-127.0.0.1}"
 
 echo "Starting MCP Registry in the background..."
 cd /app

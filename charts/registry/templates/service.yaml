@@ -18,10 +18,12 @@ spec:
       targetPort: https
       protocol: TCP
       name: https
-    - port: 7860
-      targetPort: registry
-      protocol: TCP
-      name: registry
+    # NOTE: the raw uvicorn app port (7860) is intentionally NOT exposed as a
+    # Service port. nginx fronts the registry on http/https; the app is reached
+    # over loopback inside the pod. Probes hit 8080 (nginx), not 7860. Dropping
+    # this Service port narrows the surface, but the real closure is the
+    # loopback bind in registry-entrypoint.sh (the app no longer listens on the
+    # pod IP) plus the signed-token check in nginx_proxied_auth.
   selector:
     app.kubernetes.io/name: {{ .Values.app.name }}
     app.kubernetes.io/component: {{ .Values.app.name }}
