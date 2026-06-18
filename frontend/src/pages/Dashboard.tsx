@@ -24,7 +24,6 @@ import CustomEntityTab from '../components/CustomEntityTab';
 import CustomEntityForm from '../components/CustomEntityForm';
 import CustomEntityDetail from '../components/CustomEntityDetail';
 import ConfirmModal from '../components/ConfirmModal';
-import { EntityGrid, EmptyState } from '../components/entities';
 import SkillsSection from '../components/entities/sections/SkillsSection';
 import VirtualServersSection from '../components/entities/sections/VirtualServersSection';
 import RegistrySection, {
@@ -39,6 +38,9 @@ import AgentEditModal, {
 import SkillFormModal, {
   type SkillForm,
 } from '../components/entities/forms/SkillFormModal';
+import ServerRegisterModal, {
+  type ServerRegisterForm,
+} from '../components/entities/forms/ServerRegisterModal';
 import { useEntityToggle } from '../hooks/useEntityToggle';
 import { filterEntities } from '../utils/entityFilters';
 
@@ -262,13 +264,13 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paramString]);
   const [showRegisterModal, setShowRegisterModal] = useState(false);
-  const [registerForm, setRegisterForm] = useState({
+  const [registerForm, setRegisterForm] = useState<ServerRegisterForm>({
     name: '',
     path: '',
     proxyPass: '',
     description: '',
     official: false,
-    tags: [] as string[]
+    tags: [],
   });
   const [registerLoading, setRegisterLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -1816,60 +1818,6 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     }
   }, [registerForm, registerLoading, refreshData, showToast]);
 
-  const renderServerGrid = (
-    list: Server[],
-    options?: { emptyTitle?: string; emptySubtitle?: string; showRegisterCta?: boolean }
-  ) => {
-    if (list.length === 0) {
-      const title = options?.emptyTitle ?? 'No servers found';
-      const subtitle =
-        options?.emptySubtitle ??
-        (searchTerm || activeFilter !== 'all'
-          ? 'Press Enter in the search bar to search semantically'
-          : 'No servers are registered yet');
-      const shouldShowCta =
-        options?.showRegisterCta ?? (!searchTerm && activeFilter === 'all');
-
-      return (
-        <EmptyState
-          title={title}
-          subtitle={subtitle}
-          cta={
-            shouldShowCta ? (
-              <button
-                onClick={handleRegisterServer}
-                className="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-lg text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
-              >
-                <PlusIcon className="h-5 w-5 mr-2" />
-                Register Server
-              </button>
-            ) : undefined
-          }
-        />
-      );
-    }
-
-    return (
-      <EntityGrid className="pb-12">
-        {list.map((server) => (
-          <ServerCard
-            key={server.path}
-            server={server}
-            onToggle={handleToggleServer}
-            onEdit={handleEditServer}
-            canModify={user?.can_modify_servers || false}
-            canDelete={(user?.is_admin || hasUiPermission('delete_service', server.path)) && !server.sync_metadata?.is_federated}
-            onRefreshSuccess={refreshData}
-            onShowToast={showToast}
-            onServerUpdate={handleServerUpdate}
-            onDelete={handleDeleteServer}
-            authToken={agentApiToken}
-          />
-        ))}
-      </EntityGrid>
-    );
-  };
-
   const renderDashboardCollections = () => (
     <>
       {/* MCP Servers Section - Grouped by Registry */}
@@ -2785,111 +2733,13 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
 
       {/* Register Server Modal */}
       {showRegisterModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-lg max-w-md w-full max-h-[90vh] overflow-y-auto">
-            <form onSubmit={handleRegisterSubmit} className="p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-                  Register New Server
-                </h3>
-                <button
-                  type="button"
-                  onClick={() => setShowRegisterModal(false)}
-                  className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-                >
-                  <XMarkIcon className="h-6 w-6" />
-                </button>
-              </div>
-
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                    Server Name *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
-                    value={registerForm.name}
-                    onChange={(e) => setRegisterForm(prev => ({ ...prev, name: e.target.value }))}
-                    placeholder="e.g., My Custom Server"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                    Path *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
-                    value={registerForm.path}
-                    onChange={(e) => setRegisterForm(prev => ({ ...prev, path: e.target.value }))}
-                    placeholder="/my-server"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                    Proxy URL *
-                  </label>
-                  <input
-                    type="url"
-                    required
-                    className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
-                    value={registerForm.proxyPass}
-                    onChange={(e) => setRegisterForm(prev => ({ ...prev, proxyPass: e.target.value }))}
-                    placeholder="http://localhost:8080"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                    Description
-                  </label>
-                  <textarea
-                    className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
-                    rows={3}
-                    value={registerForm.description}
-                    onChange={(e) => setRegisterForm(prev => ({ ...prev, description: e.target.value }))}
-                    placeholder="Brief description of the server"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
-                    Tags
-                  </label>
-                  <input
-                    type="text"
-                    value={registerForm.tags.join(',')}
-                    onChange={(e) => setRegisterForm(prev => ({ ...prev, tags: e.target.value.split(',').map(t => t.trim()).filter(t => t) }))}
-                    className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
-                    placeholder="tag1,tag2,tag3"
-                  />
-                </div>
-              </div>
-
-              <div className="flex justify-end space-x-3 mt-6">
-                <button
-                  type="button"
-                  onClick={() => setShowRegisterModal(false)}
-                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-md transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={registerLoading}
-                  className="px-4 py-2 text-sm font-medium text-white bg-purple-600 hover:bg-purple-700 disabled:opacity-50 rounded-md transition-colors"
-                >
-                  {registerLoading ? 'Registering...' : 'Register Server'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+        <ServerRegisterModal
+          form={registerForm}
+          setForm={setRegisterForm}
+          loading={registerLoading}
+          onSubmit={handleRegisterSubmit}
+          onClose={() => setShowRegisterModal(false)}
+        />
       )}
 
       {/* Edit Server Modal */}
