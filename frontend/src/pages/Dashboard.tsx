@@ -31,6 +31,7 @@ import RegistrySection, {
   type RegistryAccent,
 } from '../components/entities/sections/RegistrySection';
 import { useEntityToggle } from '../hooks/useEntityToggle';
+import { filterEntities } from '../utils/entityFilters';
 
 // Federated-registry header accents (local groups are always green/emerald).
 const SERVER_REGISTRY_ACCENT: RegistryAccent = {
@@ -809,197 +810,92 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
 
   // Filter servers based on activeFilter, searchTerm, and selectedTags
   const filteredServers = useMemo(() => {
-    let filtered = internalServers;
-
-    // Apply filter first
-    if (activeFilter === 'enabled') filtered = filtered.filter(s => s.enabled);
-    else if (activeFilter === 'disabled') filtered = filtered.filter(s => !s.enabled);
-    else if (activeFilter === 'unhealthy') filtered = filtered.filter(s => s.status === 'unhealthy');
-
-    // Hide deprecated by default; show all when deprecated toggle is active
-    if (activeFilter !== 'deprecated') {
-      filtered = filtered.filter(s => s.lifecycle_status !== 'deprecated');
-    }
-
-    // Apply sidebar tag filter
-    if (selectedTags.length > 0) {
-      filtered = filtered.filter(s => matchesSelectedTags(s.tags));
-    }
-
-    // Apply #tag and text search from search box
-    if (parsedSearch.hashTags.length > 0) {
-      filtered = filtered.filter(s => matchesHashTags(s.tags));
-    }
-    if (parsedSearch.textQuery) {
-      const query = parsedSearch.textQuery;
-      filtered = filtered.filter(server =>
-        server.name.toLowerCase().includes(query) ||
-        (server.description || '').toLowerCase().includes(query) ||
-        server.path.toLowerCase().includes(query) ||
-        (server.tags || []).some(tag => tag.toLowerCase().includes(query))
-      );
-    }
-
-    return filtered;
+    return filterEntities(internalServers, {
+      activeFilter,
+      enabledField: 'enabled',
+      statusField: 'status',
+      lifecycleField: 'lifecycle_status',
+      selectedTags,
+      matchesSelectedTags,
+      parsedSearch,
+      matchesHashTags,
+      getTags: (s) => s.tags,
+      getSearchText: (s) => [s.name, s.description, s.path, ...(s.tags || [])],
+    });
   }, [internalServers, activeFilter, selectedTags, matchesSelectedTags, parsedSearch, matchesHashTags]);
 
   // Filter external servers based on source tab, searchTerm, and selectedTags
   const filteredExternalServers = useMemo(() => {
-    let filtered = externalServers;
-
-    // Filter by active source tab
-    if (externalSourceTab) {
-      filtered = filtered.filter(s => _itemMatchesSource(s.tags, externalSourceTab));
-    }
-
-    if (selectedTags.length > 0) {
-      filtered = filtered.filter(s => matchesSelectedTags(s.tags));
-    }
-
-    if (parsedSearch.hashTags.length > 0) {
-      filtered = filtered.filter(s => matchesHashTags(s.tags));
-    }
-    if (parsedSearch.textQuery) {
-      const query = parsedSearch.textQuery;
-      filtered = filtered.filter(server =>
-        server.name.toLowerCase().includes(query) ||
-        (server.description || '').toLowerCase().includes(query) ||
-        server.path.toLowerCase().includes(query) ||
-        (server.tags || []).some(tag => tag.toLowerCase().includes(query))
-      );
-    }
-
-    return filtered;
+    return filterEntities(externalServers, {
+      sourceTab: externalSourceTab,
+      matchesSource: _itemMatchesSource,
+      selectedTags,
+      matchesSelectedTags,
+      parsedSearch,
+      matchesHashTags,
+      getTags: (s) => s.tags,
+      getSearchText: (s) => [s.name, s.description, s.path, ...(s.tags || [])],
+    });
   }, [externalServers, externalSourceTab, _itemMatchesSource, selectedTags, matchesSelectedTags, parsedSearch, matchesHashTags]);
 
   // Filter external agents based on source tab, searchTerm, and selectedTags
   const filteredExternalAgents = useMemo(() => {
-    let filtered = externalAgents;
-
-    // Filter by active source tab
-    if (externalSourceTab) {
-      filtered = filtered.filter(a => _itemMatchesSource(a.tags, externalSourceTab));
-    }
-
-    if (selectedTags.length > 0) {
-      filtered = filtered.filter(a => matchesSelectedTags(a.tags));
-    }
-
-    if (parsedSearch.hashTags.length > 0) {
-      filtered = filtered.filter(a => matchesHashTags(a.tags));
-    }
-    if (parsedSearch.textQuery) {
-      const query = parsedSearch.textQuery;
-      filtered = filtered.filter(agent =>
-        agent.name.toLowerCase().includes(query) ||
-        (agent.description || '').toLowerCase().includes(query) ||
-        agent.path.toLowerCase().includes(query) ||
-        (agent.tags || []).some(tag => tag.toLowerCase().includes(query))
-      );
-    }
-
-    return filtered;
+    return filterEntities(externalAgents, {
+      sourceTab: externalSourceTab,
+      matchesSource: _itemMatchesSource,
+      selectedTags,
+      matchesSelectedTags,
+      parsedSearch,
+      matchesHashTags,
+      getTags: (a) => a.tags,
+      getSearchText: (a) => [a.name, a.description, a.path, ...(a.tags || [])],
+    });
   }, [externalAgents, externalSourceTab, _itemMatchesSource, selectedTags, matchesSelectedTags, parsedSearch, matchesHashTags]);
 
   // Filter external skills based on source tab, searchTerm, and selectedTags
   const filteredExternalSkills = useMemo(() => {
-    let filtered = externalSkills;
-
-    // Filter by active source tab
-    if (externalSourceTab) {
-      filtered = filtered.filter(s => _itemMatchesSource(s.tags, externalSourceTab));
-    }
-
-    if (selectedTags.length > 0) {
-      filtered = filtered.filter(s => matchesSelectedTags(s.tags));
-    }
-
-    if (parsedSearch.hashTags.length > 0) {
-      filtered = filtered.filter(s => matchesHashTags(s.tags));
-    }
-    if (parsedSearch.textQuery) {
-      const query = parsedSearch.textQuery;
-      filtered = filtered.filter(skill =>
-        skill.name.toLowerCase().includes(query) ||
-        (skill.description || '').toLowerCase().includes(query) ||
-        skill.path.toLowerCase().includes(query) ||
-        (skill.tags || []).some(tag => tag.toLowerCase().includes(query))
-      );
-    }
-
-    return filtered;
+    return filterEntities(externalSkills, {
+      sourceTab: externalSourceTab,
+      matchesSource: _itemMatchesSource,
+      selectedTags,
+      matchesSelectedTags,
+      parsedSearch,
+      matchesHashTags,
+      getTags: (s) => s.tags,
+      getSearchText: (s) => [s.name, s.description, s.path, ...(s.tags || [])],
+    });
   }, [externalSkills, externalSourceTab, _itemMatchesSource, selectedTags, matchesSelectedTags, parsedSearch, matchesHashTags]);
 
   // Filter agents based on activeFilter, searchTerm, and selectedTags
   const filteredAgents = useMemo(() => {
-    let filtered = internalAgents;
-
-    // Apply filter first
-    if (activeFilter === 'enabled') filtered = filtered.filter(a => a.enabled);
-    else if (activeFilter === 'disabled') filtered = filtered.filter(a => !a.enabled);
-    else if (activeFilter === 'unhealthy') filtered = filtered.filter(a => a.status === 'unhealthy');
-
-    // Hide deprecated by default; show all when deprecated toggle is active
-    if (activeFilter !== 'deprecated') {
-      filtered = filtered.filter(a => a.lifecycle_status !== 'deprecated');
-    }
-
-    // Apply sidebar tag filter
-    if (selectedTags.length > 0) {
-      filtered = filtered.filter(a => matchesSelectedTags(a.tags));
-    }
-
-    // Apply #tag and text search from search box
-    if (parsedSearch.hashTags.length > 0) {
-      filtered = filtered.filter(a => matchesHashTags(a.tags));
-    }
-    if (parsedSearch.textQuery) {
-      const query = parsedSearch.textQuery;
-      filtered = filtered.filter(agent =>
-        agent.name.toLowerCase().includes(query) ||
-        (agent.description || '').toLowerCase().includes(query) ||
-        agent.path.toLowerCase().includes(query) ||
-        (agent.tags || []).some(tag => tag.toLowerCase().includes(query))
-      );
-    }
-
-    return filtered;
+    return filterEntities(internalAgents, {
+      activeFilter,
+      enabledField: 'enabled',
+      statusField: 'status',
+      lifecycleField: 'lifecycle_status',
+      selectedTags,
+      matchesSelectedTags,
+      parsedSearch,
+      matchesHashTags,
+      getTags: (a) => a.tags,
+      getSearchText: (a) => [a.name, a.description, a.path, ...(a.tags || [])],
+    });
   }, [internalAgents, activeFilter, selectedTags, matchesSelectedTags, parsedSearch, matchesHashTags]);
 
   // Filter skills based on activeFilter, searchTerm, and selectedTags
   const filteredSkills = useMemo(() => {
-    let filtered = skills;
-
-    // Apply filter first
-    if (activeFilter === 'enabled') filtered = filtered.filter(s => s.is_enabled);
-    else if (activeFilter === 'disabled') filtered = filtered.filter(s => !s.is_enabled);
-
-    // Hide deprecated by default; show all when deprecated toggle is active
-    if (activeFilter !== 'deprecated') {
-      filtered = filtered.filter(s => s.status !== 'deprecated');
-    }
-
-    // Apply sidebar tag filter
-    if (selectedTags.length > 0) {
-      filtered = filtered.filter(s => matchesSelectedTags(s.tags));
-    }
-
-    // Apply #tag and text search from search box
-    if (parsedSearch.hashTags.length > 0) {
-      filtered = filtered.filter(s => matchesHashTags(s.tags));
-    }
-    if (parsedSearch.textQuery) {
-      const query = parsedSearch.textQuery;
-      filtered = filtered.filter(skill =>
-        skill.name.toLowerCase().includes(query) ||
-        (skill.description || '').toLowerCase().includes(query) ||
-        skill.path.toLowerCase().includes(query) ||
-        (skill.tags || []).some(tag => tag.toLowerCase().includes(query)) ||
-        (skill.author || '').toLowerCase().includes(query)
-      );
-    }
-
-    return filtered;
+    return filterEntities(skills, {
+      activeFilter,
+      enabledField: 'is_enabled',
+      // Skills have no 'unhealthy' filter; lifecycle lives in `status`.
+      lifecycleField: 'status',
+      selectedTags,
+      matchesSelectedTags,
+      parsedSearch,
+      matchesHashTags,
+      getTags: (s) => s.tags,
+      getSearchText: (s) => [s.name, s.description, s.path, s.author, ...(s.tags || [])],
+    });
   }, [skills, activeFilter, selectedTags, matchesSelectedTags, parsedSearch, matchesHashTags]);
 
   // Paginated slice of skills (servers/agents paginate inline in the render)
@@ -1014,32 +910,17 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
 
   // Filter virtual servers based on activeFilter, searchTerm, and selectedTags
   const filteredVirtualServers = useMemo(() => {
-    let filtered = virtualServers;
-
-    // Apply filter
-    if (activeFilter === 'enabled') filtered = filtered.filter(s => s.is_enabled);
-    else if (activeFilter === 'disabled') filtered = filtered.filter(s => !s.is_enabled);
-
-    // Apply sidebar tag filter
-    if (selectedTags.length > 0) {
-      filtered = filtered.filter(vs => matchesSelectedTags(vs.tags));
-    }
-
-    // Apply #tag and text search from search box
-    if (parsedSearch.hashTags.length > 0) {
-      filtered = filtered.filter(vs => matchesHashTags(vs.tags));
-    }
-    if (parsedSearch.textQuery) {
-      const query = parsedSearch.textQuery;
-      filtered = filtered.filter(vs =>
-        vs.server_name.toLowerCase().includes(query) ||
-        (vs.description || '').toLowerCase().includes(query) ||
-        vs.path.toLowerCase().includes(query) ||
-        (vs.tags || []).some(tag => tag.toLowerCase().includes(query))
-      );
-    }
-
-    return filtered;
+    return filterEntities(virtualServers, {
+      activeFilter,
+      enabledField: 'is_enabled',
+      // Virtual servers have no lifecycle status, so deprecated isn't hidden.
+      selectedTags,
+      matchesSelectedTags,
+      parsedSearch,
+      matchesHashTags,
+      getTags: (vs) => vs.tags,
+      getSearchText: (vs) => [vs.server_name, vs.description, vs.path, ...(vs.tags || [])],
+    });
   }, [virtualServers, activeFilter, selectedTags, matchesSelectedTags, parsedSearch, matchesHashTags]);
 
   // Virtual server action handlers
