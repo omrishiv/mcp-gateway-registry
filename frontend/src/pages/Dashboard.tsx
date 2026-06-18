@@ -25,6 +25,7 @@ import CustomEntityForm from '../components/CustomEntityForm';
 import CustomEntityDetail from '../components/CustomEntityDetail';
 import ConfirmModal from '../components/ConfirmModal';
 import { EntityGrid, EmptyState } from '../components/entities';
+import { useEntityToggle } from '../hooks/useEntityToggle';
 import { uuidFromPath } from '../hooks/useCustomEntities';
 import type {
   CustomEntityRecord,
@@ -1515,43 +1516,19 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     }
   };
 
-  const handleToggleServer = useCallback(async (path: string, enabled: boolean) => {
-    // Optimistically update the UI first
-    setServers(prevServers =>
-      prevServers.map(server =>
-        server.path === path
-          ? { ...server, enabled }
-          : server
-      )
-    );
-
-    try {
+  const handleToggleServer = useEntityToggle({
+    setItems: setServers,
+    enabledField: 'enabled',
+    label: 'Server',
+    showToast,
+    apiCall: async (path, enabled) => {
       const formData = new FormData();
       formData.append('enabled', enabled ? 'on' : 'off');
-
       await axios.post(`/api/toggle${path}`, formData, {
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       });
-
-      // No need to refresh all data - the optimistic update is enough
-      showToast(`Server ${enabled ? 'enabled' : 'disabled'} successfully!`, 'success');
-    } catch (error: any) {
-      console.error('Failed to toggle server:', error);
-
-      // Revert the optimistic update on error
-      setServers(prevServers =>
-        prevServers.map(server =>
-          server.path === path
-            ? { ...server, enabled: !enabled }
-            : server
-        )
-      );
-
-      showToast(error.response?.data?.detail || 'Failed to toggle server', 'error');
-    }
-  }, [setServers, showToast]);
+    },
+  });
 
   const handleDeleteServer = useCallback(async (path: string) => {
     const formData = new FormData();
@@ -1576,35 +1553,15 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     notifyDataChanged();
   }, [setAgents, showToast]);
 
-  const handleToggleAgent = useCallback(async (path: string, enabled: boolean) => {
-    // Optimistically update the UI first
-    setAgents(prevAgents =>
-      prevAgents.map(agent =>
-        agent.path === path
-          ? { ...agent, enabled }
-          : agent
-      )
-    );
-
-    try {
+  const handleToggleAgent = useEntityToggle({
+    setItems: setAgents,
+    enabledField: 'enabled',
+    label: 'Agent',
+    showToast,
+    apiCall: async (path, enabled) => {
       await axios.post(`/api/agents${path}/toggle?enabled=${enabled}`);
-
-      showToast(`Agent ${enabled ? 'enabled' : 'disabled'} successfully!`, 'success');
-    } catch (error: any) {
-      console.error('Failed to toggle agent:', error);
-
-      // Revert the optimistic update on error
-      setAgents(prevAgents =>
-        prevAgents.map(agent =>
-          agent.path === path
-            ? { ...agent, enabled: !enabled }
-            : agent
-        )
-      );
-
-      showToast(error.response?.data?.detail || 'Failed to toggle agent', 'error');
-    }
-  }, [setAgents, showToast]);
+    },
+  });
 
   const handleServerUpdate = useCallback((path: string, updates: Partial<Server>) => {
     setServers(prevServers =>
@@ -1616,37 +1573,17 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     );
   }, [setServers]);
 
-  const handleToggleSkill = useCallback(async (path: string, enabled: boolean) => {
-    // Optimistically update the UI first
-    setSkills(prevSkills =>
-      prevSkills.map(skill =>
-        skill.path === path
-          ? { ...skill, is_enabled: enabled }
-          : skill
-      )
-    );
-
-    try {
+  const handleToggleSkill = useEntityToggle({
+    setItems: setSkills,
+    enabledField: 'is_enabled',
+    label: 'Skill',
+    showToast,
+    apiCall: async (path, enabled) => {
       // Convert full path to API path (e.g., /skills/pdf -> /pdf)
       const apiPath = path.startsWith('/skills/') ? path.replace('/skills/', '/') : path;
       await axios.post(`/api/skills${apiPath}/toggle`, { enabled });
-
-      showToast(`Skill ${enabled ? 'enabled' : 'disabled'} successfully!`, 'success');
-    } catch (error: any) {
-      console.error('Failed to toggle skill:', error);
-
-      // Revert the optimistic update on error
-      setSkills(prevSkills =>
-        prevSkills.map(skill =>
-          skill.path === path
-            ? { ...skill, is_enabled: !enabled }
-            : skill
-        )
-      );
-
-      showToast(error.response?.data?.detail || 'Failed to toggle skill', 'error');
-    }
-  }, [setSkills, showToast]);
+    },
+  });
 
   const handleSkillUpdate = useCallback((path: string, updates: Partial<Skill>) => {
     setSkills(prevSkills =>
