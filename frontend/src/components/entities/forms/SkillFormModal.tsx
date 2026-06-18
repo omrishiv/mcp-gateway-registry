@@ -1,4 +1,14 @@
 import React from 'react';
+import {
+  StatusField,
+  MetadataField,
+  FIELD_BASE,
+  FIELD_FOCUS,
+  LABEL,
+} from '../../formFields';
+
+// Skill forms use an amber focus accent.
+const FIELD = `${FIELD_BASE} ${FIELD_FOCUS.amber}`;
 
 /**
  * Shape of the skill form state, owned by the Dashboard. This modal handles
@@ -36,10 +46,6 @@ interface SkillFormModalProps {
   onSubmit: (e: React.FormEvent) => void;
   onClose: () => void;
 }
-
-const FIELD =
-  'block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-amber-500 focus:border-amber-500';
-const LABEL = 'block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1';
 
 /**
  * Create/edit form for an Agent Skill. A single modal covers both modes — create
@@ -203,24 +209,11 @@ const SkillFormModal: React.FC<SkillFormModalProps> = ({
             </select>
           </div>
 
-          <div>
-            <label className={LABEL}>Lifecycle Status</label>
-            <select
-              value={form.status}
-              onChange={(e) =>
-                setForm((prev) => ({
-                  ...prev,
-                  status: e.target.value as 'active' | 'draft' | 'deprecated' | 'beta',
-                }))
-              }
-              className={FIELD}
-            >
-              <option value="active">Active</option>
-              <option value="draft">Draft</option>
-              <option value="beta">Beta</option>
-              <option value="deprecated">Deprecated</option>
-            </select>
-          </div>
+          <StatusField
+            value={form.status}
+            accent="amber"
+            onChange={(status) => setForm((prev) => ({ ...prev, status }))}
+          />
 
           <div>
             <label className={LABEL}>Tags</label>
@@ -349,19 +342,13 @@ const SkillFormModal: React.FC<SkillFormModalProps> = ({
             </div>
           )}
 
-          <div>
-            <label className={LABEL}>Custom Metadata (JSON, optional)</label>
-            <textarea
-              value={form.metadata}
-              onChange={(e) => setForm((prev) => ({ ...prev, metadata: e.target.value }))}
-              rows={4}
-              className={`${FIELD} font-mono text-sm`}
-              placeholder='{"category": "data-processing", "framework": "langchain"}'
-            />
-            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              Key-value pairs in JSON format for searchable custom metadata
-            </p>
-          </div>
+          <MetadataField
+            value={form.metadata}
+            accent="amber"
+            hint="Key-value pairs in JSON format for searchable custom metadata"
+            placeholder='{"category": "data-processing", "framework": "langchain"}'
+            onChange={(metadata) => setForm((prev) => ({ ...prev, metadata }))}
+          />
 
           {editing && (
             <div>

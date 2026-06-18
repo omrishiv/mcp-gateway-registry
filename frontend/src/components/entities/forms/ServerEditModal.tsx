@@ -1,6 +1,16 @@
 import React from 'react';
 import LocalRuntimeFormPanel from '../../LocalRuntimeFormPanel';
 import type { LocalRuntimeFormData } from '../../../utils/localRuntime';
+import {
+  FormField,
+  TagsField,
+  StatusField,
+  MetadataField,
+  AuthSchemeFields,
+  type AuthScheme,
+  FIELD,
+  LABEL,
+} from '../../formFields';
 
 /**
  * Shape of the server edit form state. Owned by the Dashboard (kept as state
@@ -34,10 +44,6 @@ interface ServerEditModalProps {
   onSave: () => Promise<void> | void;
   onClose: () => void;
 }
-
-const FIELD =
-  'block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500';
-const LABEL = 'block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1';
 
 /**
  * Edit form for a registered MCP server. Controlled by the Dashboard's editForm
@@ -118,44 +124,18 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
             />
           </div>
 
-          <div>
-            <label className={LABEL}>Lifecycle Status</label>
-            <select
-              value={form.status}
-              onChange={(e) =>
-                setForm((prev) => ({
-                  ...prev,
-                  status: e.target.value as 'active' | 'draft' | 'deprecated' | 'beta',
-                }))
-              }
-              className={FIELD}
-            >
-              <option value="active">Active</option>
-              <option value="draft">Draft</option>
-              <option value="beta">Beta</option>
-              <option value="deprecated">Deprecated</option>
-            </select>
-          </div>
+          <StatusField
+            value={form.status}
+            onChange={(status) => setForm((prev) => ({ ...prev, status }))}
+          />
 
-          <div>
-            <label className={LABEL}>Tags</label>
-            <input
-              type="text"
-              value={form.tags.join(',')}
-              onChange={(e) =>
-                setForm((prev) => ({
-                  ...prev,
-                  tags: e.target.value.split(',').map((t) => t.trim()).filter((t) => t),
-                }))
-              }
-              className={FIELD}
-              placeholder="tag1,tag2,tag3"
-            />
-          </div>
+          <TagsField
+            value={form.tags}
+            onChange={(tags) => setForm((prev) => ({ ...prev, tags }))}
+          />
 
           <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className={LABEL}>Number of Tools</label>
+            <FormField label="Number of Tools">
               <input
                 type="number"
                 value={form.num_tools}
@@ -165,11 +145,10 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
                 className={FIELD}
                 min="0"
               />
-            </div>
+            </FormField>
           </div>
 
-          <div>
-            <label className={LABEL}>License</label>
+          <FormField label="License">
             <input
               type="text"
               value={form.license}
@@ -177,11 +156,10 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
               className={FIELD}
               placeholder="MIT, Apache-2.0, etc."
             />
-          </div>
+          </FormField>
 
           {form.deployment === 'remote' && (
-            <div>
-              <label className={LABEL}>MCP Endpoint (optional)</label>
+            <FormField label="MCP Endpoint (optional)">
               <input
                 type="url"
                 value={form.mcp_endpoint}
@@ -189,87 +167,38 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
                 className={FIELD}
                 placeholder="Custom MCP endpoint URL (overrides default)"
               />
-            </div>
+            </FormField>
           )}
 
-          <div>
-            <label className={LABEL}>Custom Metadata (JSON, optional)</label>
-            <textarea
-              value={form.metadata}
-              onChange={(e) => setForm((prev) => ({ ...prev, metadata: e.target.value }))}
-              rows={4}
-              className={`${FIELD} font-mono text-sm`}
-              placeholder='{"team": "platform", "owner": "alice@example.com"}'
-            />
-          </div>
+          <MetadataField
+            value={form.metadata}
+            onChange={(metadata) => setForm((prev) => ({ ...prev, metadata }))}
+          />
 
           {/* Backend Authentication — only meaningful for remote servers.
               Local servers handle auth via env vars on the user's machine. */}
           {form.deployment === 'remote' && (
-            <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
-              <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">
-                Backend Authentication
-              </h4>
-
-              <div className="space-y-4">
-                <div>
-                  <label className={LABEL}>Authentication Scheme</label>
-                  <select
-                    value={form.auth_scheme}
-                    onChange={(e) => {
-                      const newScheme = e.target.value;
-                      setForm((prev) => ({
-                        ...prev,
-                        auth_scheme: newScheme,
-                        auth_credential: newScheme === 'none' ? '' : prev.auth_credential,
-                        auth_header_name:
-                          newScheme === 'api_key' ? prev.auth_header_name : 'X-API-Key',
-                      }));
-                    }}
-                    className={FIELD}
-                  >
-                    <option value="none">None</option>
-                    <option value="bearer">Bearer Token</option>
-                    <option value="api_key">API Key</option>
-                  </select>
-                </div>
-
-                {form.auth_scheme !== 'none' && (
-                  <div>
-                    <label className={LABEL}>
-                      {form.auth_scheme === 'bearer' ? 'Bearer Token' : 'API Key'}
-                    </label>
-                    <input
-                      type="password"
-                      value={form.auth_credential}
-                      onChange={(e) =>
-                        setForm((prev) => ({ ...prev, auth_credential: e.target.value }))
-                      }
-                      className={FIELD}
-                      placeholder="Leave blank to keep current credential"
-                    />
-                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                      Leave blank to keep the existing credential unchanged.
-                    </p>
-                  </div>
-                )}
-
-                {form.auth_scheme === 'api_key' && (
-                  <div>
-                    <label className={LABEL}>Header Name</label>
-                    <input
-                      type="text"
-                      value={form.auth_header_name}
-                      onChange={(e) =>
-                        setForm((prev) => ({ ...prev, auth_header_name: e.target.value }))
-                      }
-                      className={FIELD}
-                      placeholder="X-API-Key"
-                    />
-                  </div>
-                )}
-              </div>
-            </div>
+            <AuthSchemeFields
+              scheme={form.auth_scheme as AuthScheme}
+              credential={form.auth_credential}
+              headerName={form.auth_header_name}
+              editing
+              onSchemeChange={(newScheme) =>
+                setForm((prev) => ({
+                  ...prev,
+                  auth_scheme: newScheme,
+                  auth_credential: newScheme === 'none' ? '' : prev.auth_credential,
+                  auth_header_name:
+                    newScheme === 'api_key' ? prev.auth_header_name : 'X-API-Key',
+                }))
+              }
+              onCredentialChange={(v) =>
+                setForm((prev) => ({ ...prev, auth_credential: v }))
+              }
+              onHeaderNameChange={(v) =>
+                setForm((prev) => ({ ...prev, auth_header_name: v }))
+              }
+            />
           )}
 
           {/* Custom Headers */}

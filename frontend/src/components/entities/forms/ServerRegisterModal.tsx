@@ -1,5 +1,6 @@
 import React from 'react';
 import { XMarkIcon } from '@heroicons/react/24/outline';
+import { TagsField, FIELD, LABEL } from '../../formFields';
 
 /**
  * Shape of the new-server registration form, owned by the Dashboard.
@@ -24,10 +25,6 @@ interface ServerRegisterModalProps {
   onSubmit: (e: React.FormEvent) => void;
   onClose: () => void;
 }
-
-const FIELD =
-  'block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500';
-const LABEL = 'block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1';
 
 /**
  * Minimal "Register New Server" form. Controlled by the Dashboard's registerForm
@@ -105,21 +102,10 @@ const ServerRegisterModal: React.FC<ServerRegisterModalProps> = ({
               />
             </div>
 
-            <div>
-              <label className={LABEL}>Tags</label>
-              <input
-                type="text"
-                value={form.tags.join(',')}
-                onChange={(e) =>
-                  setForm((prev) => ({
-                    ...prev,
-                    tags: e.target.value.split(',').map((t) => t.trim()).filter((t) => t),
-                  }))
-                }
-                className={FIELD}
-                placeholder="tag1,tag2,tag3"
-              />
-            </div>
+            <TagsField
+              value={form.tags}
+              onChange={(tags) => setForm((prev) => ({ ...prev, tags }))}
+            />
           </div>
 
           <div className="flex justify-end space-x-3 mt-6">

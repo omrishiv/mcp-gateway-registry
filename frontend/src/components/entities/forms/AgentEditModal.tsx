@@ -1,4 +1,17 @@
 import React from 'react';
+import {
+  FormField,
+  TagsField,
+  StatusField,
+  VisibilityField,
+  MetadataField,
+  FIELD_BASE,
+  FIELD_FOCUS,
+  LABEL,
+} from '../../formFields';
+
+// Agent forms use a cyan focus accent.
+const FIELD = `${FIELD_BASE} ${FIELD_FOCUS.cyan}`;
 
 /**
  * Shape of the agent edit form state, owned by the Dashboard. This modal is a
@@ -32,10 +45,6 @@ interface AgentEditModalProps {
   onSave: () => Promise<void> | void;
   onClose: () => void;
 }
-
-const FIELD =
-  'block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-cyan-500 focus:border-cyan-500';
-const LABEL = 'block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1';
 
 /**
  * Edit form for an A2A agent. Controlled by the Dashboard's editAgentForm state.
@@ -87,27 +96,13 @@ const AgentEditModal: React.FC<AgentEditModalProps> = ({
             />
           </div>
 
-          <div>
-            <label className={LABEL}>Lifecycle Status</label>
-            <select
-              value={form.status}
-              onChange={(e) =>
-                setForm((prev) => ({
-                  ...prev,
-                  status: e.target.value as 'active' | 'draft' | 'deprecated' | 'beta',
-                }))
-              }
-              className={FIELD}
-            >
-              <option value="active">Active</option>
-              <option value="draft">Draft</option>
-              <option value="beta">Beta</option>
-              <option value="deprecated">Deprecated</option>
-            </select>
-          </div>
+          <StatusField
+            value={form.status}
+            accent="cyan"
+            onChange={(status) => setForm((prev) => ({ ...prev, status }))}
+          />
 
-          <div>
-            <label className={LABEL}>Version</label>
+          <FormField label="Version">
             <input
               type="text"
               value={form.version}
@@ -115,46 +110,17 @@ const AgentEditModal: React.FC<AgentEditModalProps> = ({
               className={FIELD}
               placeholder="1.0.0"
             />
-          </div>
+          </FormField>
 
-          <div>
-            <label className={LABEL}>Visibility</label>
-            <select
-              value={form.visibility}
-              onChange={(e) =>
-                setForm((prev) => ({
-                  ...prev,
-                  visibility: e.target.value as 'public' | 'private' | 'group-restricted',
-                }))
-              }
-              className={FIELD}
-            >
-              <option value="private">Private</option>
-              <option value="public">Public</option>
-              <option value="group-restricted">Group Restricted</option>
-            </select>
-          </div>
-
-          {form.visibility === 'group-restricted' && (
-            <div>
-              <label className={LABEL}>Allowed Groups</label>
-              <input
-                type="text"
-                value={form.allowed_groups}
-                onChange={(e) => setForm((prev) => ({ ...prev, allowed_groups: e.target.value }))}
-                className={FIELD}
-                placeholder="e.g. finance-team, engineering"
-              />
-              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                Comma-separated list of groups that can access this agent
-              </p>
-              {form.allowed_groups.trim() === '' && (
-                <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
-                  At least one group is required for group-restricted visibility
-                </p>
-              )}
-            </div>
-          )}
+          <VisibilityField
+            value={form.visibility}
+            accent="cyan"
+            onChange={(visibility) => setForm((prev) => ({ ...prev, visibility }))}
+            allowedGroups={form.allowed_groups}
+            onAllowedGroupsChange={(allowed_groups) =>
+              setForm((prev) => ({ ...prev, allowed_groups }))
+            }
+          />
 
           <div>
             <label className={LABEL}>Trust Level</label>
@@ -196,35 +162,19 @@ const AgentEditModal: React.FC<AgentEditModalProps> = ({
             </select>
           </div>
 
-          <div>
-            <label className={LABEL}>Tags</label>
-            <input
-              type="text"
-              value={form.tags.join(',')}
-              onChange={(e) =>
-                setForm((prev) => ({
-                  ...prev,
-                  tags: e.target.value.split(',').map((t) => t.trim()).filter((t) => t),
-                }))
-              }
-              className={FIELD}
-              placeholder="tag1,tag2,tag3"
-            />
-          </div>
+          <TagsField
+            value={form.tags}
+            accent="cyan"
+            onChange={(tags) => setForm((prev) => ({ ...prev, tags }))}
+          />
 
-          <div>
-            <label className={LABEL}>Custom Metadata (JSON, optional)</label>
-            <textarea
-              value={form.metadata}
-              onChange={(e) => setForm((prev) => ({ ...prev, metadata: e.target.value }))}
-              rows={4}
-              className={`${FIELD} font-mono text-sm`}
-              placeholder='{"team": "platform", "owner": "alice@example.com", "cost_center": "CC-1001"}'
-            />
-            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              Custom key-value pairs for organization, compliance, or integration purposes
-            </p>
-          </div>
+          <MetadataField
+            value={form.metadata}
+            accent="cyan"
+            hint="Custom key-value pairs for organization, compliance, or integration purposes"
+            placeholder='{"team": "platform", "owner": "alice@example.com", "cost_center": "CC-1001"}'
+            onChange={(metadata) => setForm((prev) => ({ ...prev, metadata }))}
+          />
 
           <div>
             <label className={LABEL}>Skills (JSON array)</label>
