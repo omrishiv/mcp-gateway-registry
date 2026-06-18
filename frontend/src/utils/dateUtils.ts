@@ -71,3 +71,52 @@ export function formatDateWithTooltip(date: string | Date | null | undefined): {
     absolute: formatAbsoluteDate(date),
   };
 }
+
+/**
+ * Format a timestamp as a compact "time since" label (e.g., "2d ago", "5m ago").
+ *
+ * This is the terse footer format the entity cards use for health-check
+ * timestamps. It differs from formatRelativeTime (date-fns long form like
+ * "about 2 hours ago") by emitting short unit suffixes. Returns null for
+ * missing or invalid timestamps so callers can omit the row entirely.
+ *
+ * @param timestamp - ISO 8601 date string
+ * @returns Compact relative label, or null if absent/invalid
+ */
+export function formatTimeSince(
+  timestamp: string | null | undefined
+): string | null {
+  if (!timestamp) {
+    return null;
+  }
+
+  try {
+    const now = new Date();
+    const lastChecked = new Date(timestamp);
+
+    if (isNaN(lastChecked.getTime())) {
+      return null;
+    }
+
+    const diffMs = now.getTime() - lastChecked.getTime();
+    const diffSeconds = Math.floor(diffMs / 1000);
+    const diffMinutes = Math.floor(diffSeconds / 60);
+    const diffHours = Math.floor(diffMinutes / 60);
+    const diffDays = Math.floor(diffHours / 24);
+
+    if (diffSeconds < 0) {
+      return 'just now';
+    } else if (diffDays > 0) {
+      return `${diffDays}d ago`;
+    } else if (diffHours > 0) {
+      return `${diffHours}h ago`;
+    } else if (diffMinutes > 0) {
+      return `${diffMinutes}m ago`;
+    } else {
+      return `${diffSeconds}s ago`;
+    }
+  } catch (error) {
+    console.error('formatTimeSince error:', error, 'for timestamp:', timestamp);
+    return null;
+  }
+}
