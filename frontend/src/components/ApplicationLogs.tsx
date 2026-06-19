@@ -226,14 +226,14 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
         <div className="flex items-center gap-2">
           <button
             onClick={handleRefresh}
-            className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
+            className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
             title="Refresh"
           >
             <ArrowPathIcon className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
           <button
             onClick={handleExport}
-            className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
+            className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
             title="Export as JSONL"
           >
             <ArrowDownTrayIcon className="h-4 w-4" />
@@ -249,7 +249,7 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
           className={`flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-lg border transition-colors ${
             filterCount > 0
               ? 'text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-900/20 border-purple-300 dark:border-purple-700'
-              : 'text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600'
+              : 'text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-800'
           }`}
         >
           <FunnelIcon className="h-4 w-4" />
@@ -483,7 +483,7 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
                 <button
                   onClick={handlePrevPage}
                   disabled={offset === 0}
-                  className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                 >
                   <ChevronLeftIcon className="h-4 w-4 text-gray-600 dark:text-gray-400" />
                 </button>
@@ -493,7 +493,7 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
                 <button
                   onClick={handleNextPage}
                   disabled={!hasNext}
-                  className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                 >
                   <ChevronRightIcon className="h-4 w-4 text-gray-600 dark:text-gray-400" />
                 </button>

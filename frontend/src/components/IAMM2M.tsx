@@ -378,7 +378,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
 
         <div className="flex justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
           <button onClick={() => { setFormGroups(new Set()); setEditTarget(null); setErrors({}); setGroupSearch(''); setView('list'); }}
-            className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600">
+            className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-800">
             Cancel
           </button>
           <button onClick={handleUpdate} disabled={isUpdating}
@@ -457,7 +457,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
 
         <div className="flex justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
           <button onClick={() => { resetCreateForm(); setGroupSearch(''); setView('list'); }}
-            className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600">
+            className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-800">
             Cancel
           </button>
           <button onClick={handleCreate} disabled={isCreating}
@@ -552,7 +552,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
 
         <div className="flex justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
           <button onClick={() => { resetRegisterForm(); setView('list'); }}
-            className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600">
+            className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-800">
             Cancel
           </button>
           <button onClick={handleRegister} disabled={isRegistering}
@@ -580,7 +580,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
             <InformationCircleIcon className="h-5 w-5" />
           </button>
           <button onClick={() => { resetRegisterForm(); setView('register'); }}
-            className="flex items-center px-3 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600"
+            className="flex items-center px-3 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-800"
             title="Register a client_id that already exists in your IdP (no IdP Admin API token required)">
             <PlusIcon className="h-4 w-4 mr-1" /> Register existing client
           </button>

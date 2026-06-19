@@ -984,7 +984,7 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
           <button
             onClick={() => { resetForm(); setView('list'); }}
             className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700
-                       rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600"
+                       rounded-lg hover:bg-gray-200 dark:hover:bg-gray-800"
           >
             Cancel
           </button>
@@ -1275,7 +1275,7 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
               <button
                 onClick={() => { resetForm(); setEditingGroup(null); setGroupDetail(null); setView('list'); }}
                 className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700
-                           rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600"
+                           rounded-lg hover:bg-gray-200 dark:hover:bg-gray-800"
               >
                 Cancel
               </button>

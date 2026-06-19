@@ -59,7 +59,7 @@ const CopyButton: React.FC<CopyButtonProps> = ({
   );
   const subtle = clsx(
     'inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg transition-colors',
-    'text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50',
+    'text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-800 disabled:opacity-50',
   );
 
   const iconClass = variant === 'subtle' ? 'h-4 w-4' : 'h-4 w-4';
