@@ -1,8 +1,10 @@
 """Egress credential vault API routes.
 
-Phase 3 ships only the internal vend endpoint used by auth_server's mcp_proxy
-hop. The public operator/end-user endpoints (configure, consent-initiate,
-callback, connections, disconnect) are added in Phase 4.
+- POST /internal/egress-token: internal vend endpoint for auth_server's
+  mcp_proxy hop (Phase 3).
+- POST/GET /servers/{path}/egress-auth: operator config (admin-only, Phase 4).
+- POST /egress-auth/initiate, GET /oauth2/egress/callback,
+  GET/DELETE /egress-auth/connections/...: end-user consent + management (Phase 4).
 
 Security model for POST /internal/egress-token (B2-1/B2-3/B2-4):
 - validate_internal_auth gates the caller (auth_server presents a fresh
@@ -21,19 +23,34 @@ import logging
 from typing import Annotated
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+from registry.auth.csrf import verify_csrf_token_flexible
+from registry.auth.dependencies import nginx_proxied_auth
 from registry.auth.internal import validate_internal_auth
 from registry.auth.proxied_token import verify_mcp_proxy_token
 from registry.core.config import settings
 from registry.egress_auth.factory import get_egress_auth_service
-from registry.egress_auth.service import is_per_user_auth_method
+from registry.egress_auth.providers import list_provider_names, resolve_provider
+from registry.egress_auth.service import EgressAuthError, is_per_user_auth_method
 from registry.repositories.factory import get_server_repository
+from registry.services.server_service import server_service
+from registry.utils.credential_encryption import encrypt_credential
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _feature_enabled_or_404() -> None:
+    if not settings.egress_auth_enabled:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="egress auth disabled")
+
+
+def _callback_url() -> str:
+    return settings.egress_oauth_callback_base_url.rstrip("/") + "/oauth2/egress/callback"
 
 
 class EgressTokenRequest(BaseModel):
@@ -143,3 +160,260 @@ async def vend_egress_token(
     if access_token is None:
         return EgressTokenResponse(consent_required=True)
     return EgressTokenResponse(access_token=access_token)
+
+
+# ---------------------------------------------------------------------------- #
+# Public endpoints (Phase 4). Operator config + end-user consent/connections.
+# ---------------------------------------------------------------------------- #
+
+
+class EgressConfigRequest(BaseModel):
+    """Configure per-user egress OAuth on a server (admin/registrant)."""
+
+    egress_auth_mode: str = "oauth_user"  # "none" | "oauth_user"
+    egress_provider: str = ""
+    client_id: str = ""
+    client_secret: str | None = None  # write-only; encrypted, never echoed
+    scopes: list[str] = []
+    custom_authorize_url: str | None = None
+    custom_token_url: str | None = None
+    custom_scope_separator: str | None = None
+    custom_token_auth_style: str | None = None
+
+
+def _egress_config_view(server: dict) -> dict:
+    """Non-secret view of a server's egress config + the callback URL to register."""
+    eo = server.get("egress_oauth") or {}
+    return {
+        "path": server.get("path"),
+        "egress_auth_mode": server.get("egress_auth_mode", "none"),
+        "egress_provider": eo.get("provider"),
+        "scopes": eo.get("scopes", []),
+        "callback_url": _callback_url(),
+        "custom_authorize_url": eo.get("custom_authorize_url"),
+        "custom_token_url": eo.get("custom_token_url"),
+    }
+
+
+def _require_admin(user_context: dict) -> None:
+    if not user_context.get("is_admin"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="admin required")
+
+
+@router.post("/servers/{server_path:path}/egress-auth")
+async def configure_egress_auth(
+    request: Request,
+    server_path: str,
+    body: EgressConfigRequest,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)],
+):
+    """Configure (or disable) per-user egress OAuth on a server. Admin only.
+
+    The client_secret is Fernet-encrypted and never returned. Returns the
+    callback URL the operator must register in the provider's OAuth app.
+    """
+    _feature_enabled_or_404()
+    _require_admin(user_context)
+
+    if not server_path.startswith("/"):
+        server_path = "/" + server_path
+
+    server = await server_service.get_server_info(server_path, include_credentials=True)
+    if not server:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="server not found")
+
+    if body.egress_auth_mode == "none":
+        server["egress_auth_mode"] = "none"
+        server["egress_oauth"] = None
+    elif body.egress_auth_mode == "oauth_user":
+        if body.egress_provider not in list_provider_names():
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail=f"unknown provider; valid: {list_provider_names()}",
+            )
+        eo: dict = {
+            "provider": body.egress_provider,
+            "client_id": body.client_id,
+            "scopes": body.scopes,
+            "custom_authorize_url": body.custom_authorize_url,
+            "custom_token_url": body.custom_token_url,
+            "custom_scope_separator": body.custom_scope_separator,
+            "custom_token_auth_style": body.custom_token_auth_style,
+        }
+        # Validate provider resolution (custom requires URLs) before persisting.
+        try:
+            resolve_provider(eo)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        # Encrypt the secret; keep the prior one if the field is omitted on edit.
+        if body.client_secret:
+            eo["client_secret_encrypted"] = encrypt_credential(body.client_secret)
+        else:
+            prior = (server.get("egress_oauth") or {}).get("client_secret_encrypted")
+            eo["client_secret_encrypted"] = prior
+        if not eo["client_secret_encrypted"]:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="client_secret required")
+        server["egress_auth_mode"] = "oauth_user"
+        server["egress_oauth"] = eo
+    else:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid egress_auth_mode")
+
+    if not await server_service.update_server(server_path, server):
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="update failed")
+    return _egress_config_view(server)
+
+
+@router.get("/servers/{server_path:path}/egress-auth")
+async def get_egress_auth_config(
+    server_path: str,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+):
+    """Read a server's egress config (secret stripped). Admin only."""
+    _feature_enabled_or_404()
+    _require_admin(user_context)
+    if not server_path.startswith("/"):
+        server_path = "/" + server_path
+    server = await server_service.get_server_info(server_path, include_credentials=False)
+    if not server:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="server not found")
+    return _egress_config_view(server)
+
+
+class InitiateRequest(BaseModel):
+    server_path: str
+
+
+@router.post("/egress-auth/initiate")
+async def initiate_consent(
+    request: Request,
+    body: InitiateRequest,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)],
+):
+    """Begin the OAuth consent for the current user; returns the authorize URL."""
+    _feature_enabled_or_404()
+    server_path = body.server_path
+    if not server_path.startswith("/"):
+        server_path = "/" + server_path
+    server = await server_service.get_server_info(server_path, include_credentials=True)
+    if (
+        not server
+        or server.get("egress_auth_mode") != "oauth_user"
+        or not server.get("egress_oauth")
+    ):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, detail="server has no per-user egress auth configured"
+        )
+
+    auth_method = user_context.get("auth_method") or ""
+    if not is_per_user_auth_method(auth_method):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, detail="this caller cannot connect a per-user account"
+        )
+
+    url = get_egress_auth_service().build_consent_url(
+        auth_method=auth_method,
+        user_id=user_context.get("username") or "",
+        client_id_audit=user_context.get("client_id") or "",
+        session_id=user_context.get("session_id") or "",
+        server_path=server_path,
+        egress_oauth=server["egress_oauth"],
+    )
+    return {"authorize_url": url}
+
+
+@router.get("/oauth2/egress/callback")
+async def egress_callback(
+    request: Request,
+    code: str = "",
+    state: str = "",
+):
+    """Provider redirect target. No ingress auth -- the signed+encrypted state is
+    the authority. Verifies state (TTL + single-use + account-swap), exchanges the
+    code, and stores the token. Reached via nginx -> registry (no /validate)."""
+    _feature_enabled_or_404()
+    if not code or not state:
+        return HTMLResponse("<h3>Connection failed: missing code/state.</h3>", status_code=400)
+
+    # The provider+server are bound in the signed state; we resolve the server's
+    # egress config to get client_id/secret for the code exchange. We decode the
+    # state-bound server_path indirectly via handle_callback, so fetch by the
+    # state after a light pre-decode is avoided -- instead the service needs the
+    # egress_oauth; resolve it from the state's server_path.
+    from registry.egress_auth.state_codec import InvalidState, decode_state
+
+    try:
+        st = decode_state(state)
+    except InvalidState:
+        return HTMLResponse("<h3>Connection failed: invalid state.</h3>", status_code=400)
+
+    server = await server_service.get_server_info(st.server_path, include_credentials=True)
+    if not server or not server.get("egress_oauth"):
+        return HTMLResponse("<h3>Connection failed: server not configured.</h3>", status_code=400)
+
+    # Account-swap guard: cross-check the live session principal when present.
+    # The provider redirect often lands in a fresh tab with a valid session
+    # cookie (same browser), in which case we enforce it; if there is no live
+    # session, the signed+single-use state remains the authority (handle_callback
+    # still enforces TTL + replay + the state-bound (user, auth_method)).
+    current_user = None
+    current_method = None
+    if request.cookies.get(settings.session_cookie_name):
+        try:
+            ctx = await nginx_proxied_auth(request)
+            current_user = ctx.get("username")
+            current_method = ctx.get("auth_method")
+        except Exception:
+            pass
+
+    try:
+        conn = await get_egress_auth_service().handle_callback(
+            code=code,
+            state_blob=state,
+            egress_oauth=server["egress_oauth"],
+            current_user_id=current_user,
+            current_auth_method=current_method,
+        )
+    except EgressAuthError as exc:
+        logger.warning("egress callback failed: %s", exc)
+        return HTMLResponse(f"<h3>Connection failed: {exc}.</h3>", status_code=400)
+
+    return HTMLResponse(
+        f"<h3>Connected {conn.provider} for {conn.server_path}.</h3>"
+        "<p>You can close this tab and retry your request.</p>"
+    )
+
+
+@router.get("/egress-auth/connections")
+async def list_connections(
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+):
+    """List the current user's egress connections (tokens stripped)."""
+    _feature_enabled_or_404()
+    conns = await get_egress_auth_service().list_connections(
+        auth_method=user_context.get("auth_method") or "",
+        user_id=user_context.get("username") or "",
+    )
+    return [c.model_dump() for c in conns]
+
+
+@router.delete("/egress-auth/connections/{provider}/{server_path:path}")
+async def disconnect(
+    request: Request,
+    provider: str,
+    server_path: str,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)],
+):
+    """Delete the current user's vault entry for (provider, server_path)."""
+    _feature_enabled_or_404()
+    if not server_path.startswith("/"):
+        server_path = "/" + server_path
+    await get_egress_auth_service().disconnect(
+        auth_method=user_context.get("auth_method") or "",
+        user_id=user_context.get("username") or "",
+        provider=provider,
+        server_path=server_path,
+    )
+    return {"status": "revoked"}
