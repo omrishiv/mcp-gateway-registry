@@ -33,6 +33,7 @@ import type {
 } from '../types/customEntity';
 import axios from 'axios';
 import { getBaseURL } from '../utils/basePath';
+import { isEgressAuthEnabled } from '../utils/egressAuth';
 import {
   buildLocalRuntimeForm,
   buildLocalRuntimeJson,
@@ -264,7 +265,15 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
       envRows: [] as { key: string; value: string; required: boolean }[],
     },
     custom_headers: [] as Array<{ name: string; value: string }>,
+    // Per-user egress credential vault (admin config). egress_provider empty == off.
+    egress_provider: '',
+    egress_client_id: '',
+    egress_client_secret: '',  // write-only; blank on edit keeps the stored one
+    egress_scopes: '',  // comma/space separated
+    egress_custom_authorize_url: '',
+    egress_custom_token_url: '',
   });
+  const [egressEnabled, setEgressEnabled] = useState(false);
   const [editLoading, setEditLoading] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
@@ -297,6 +306,18 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     setAgentPage(0);
     setSkillPage(0);
   }, [activeFilter, selectedTags, viewFilter]);
+
+  // Probe whether the per-user egress vault feature is enabled (gates the
+  // egress section in the server-edit modal).
+  useEffect(() => {
+    let active = true;
+    void isEgressAuthEnabled().then(enabled => {
+      if (active) setEgressEnabled(enabled);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // Reset viewFilter to 'discover' when the active tab is hidden by config
   useEffect(() => {
@@ -1223,6 +1244,12 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         deployment,
         local_runtime: buildLocalRuntimeForm(localRuntimeRaw),
         custom_headers: (serverDetails.custom_header_names || []).map((name: string) => ({ name, value: '' })),
+        egress_provider: serverDetails.egress_oauth?.provider || '',
+        egress_client_id: serverDetails.egress_oauth?.client_id || '',
+        egress_client_secret: '',  // never round-trip the secret
+        egress_scopes: (serverDetails.egress_oauth?.scopes || []).join(', '),
+        egress_custom_authorize_url: serverDetails.egress_oauth?.custom_authorize_url || '',
+        egress_custom_token_url: serverDetails.egress_oauth?.custom_token_url || '',
       });
     } catch (error) {
       console.error('Failed to fetch server details:', error);
@@ -1246,6 +1273,12 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         deployment,
         local_runtime: buildLocalRuntimeForm(server.local_runtime),
         custom_headers: [],
+        egress_provider: '',
+        egress_client_id: '',
+        egress_client_secret: '',
+        egress_scopes: '',
+        egress_custom_authorize_url: '',
+        egress_custom_token_url: '',
       });
     }
   }, []);
@@ -1418,6 +1451,46 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
           'Content-Type': 'application/x-www-form-urlencoded',
         },
       });
+
+      // Per-user egress credential vault (separate admin endpoint; the server
+      // must exist first, which it does on edit). Only when the feature is on.
+      if (egressEnabled) {
+        try {
+          const csrf = await axios.get('/api/auth/csrf-token');
+          const csrfHeaders: Record<string, string> = {};
+          if (csrf.data?.csrf_token) csrfHeaders['X-CSRF-Token'] = csrf.data.csrf_token;
+          const provider = editForm.egress_provider.trim();
+          if (!provider) {
+            await axios.post(
+              `/api/servers${editingServer.path}/egress-auth`,
+              { egress_auth_mode: 'none' },
+              { headers: csrfHeaders }
+            );
+          } else {
+            await axios.post(
+              `/api/servers${editingServer.path}/egress-auth`,
+              {
+                egress_auth_mode: 'oauth_user',
+                egress_provider: provider,
+                client_id: editForm.egress_client_id.trim(),
+                // Blank secret on edit keeps the stored one (backend semantics).
+                client_secret: editForm.egress_client_secret || undefined,
+                scopes: editForm.egress_scopes
+                  .split(/[,\s]+/)
+                  .map(s => s.trim())
+                  .filter(Boolean),
+                custom_authorize_url: editForm.egress_custom_authorize_url || undefined,
+                custom_token_url: editForm.egress_custom_token_url || undefined,
+              },
+              { headers: csrfHeaders }
+            );
+          }
+        } catch (egressErr: any) {
+          // Surface but don't lose the successful server edit.
+          const d = egressErr.response?.data?.detail;
+          showToast(`Server saved, but egress config failed: ${d || egressErr.message}`, 'error');
+        }
+      }
 
       // Refresh server list
       await refreshData();
@@ -3525,6 +3598,129 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                           placeholder="X-API-Key"
                         />
                       </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Per-user egress credential vault (admin config) */}
+              {egressEnabled && editForm.deployment !== 'local' && (
+                <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
+                  <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-2">
+                    Per-User Egress Auth (OAuth)
+                  </h4>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+                    Let each user connect their own third-party account (GitHub, Slack, …). The
+                    gateway injects the user&apos;s token on egress. Leave provider blank to disable.
+                    Register this callback URL in your OAuth app:{' '}
+                    <code className="text-purple-600 dark:text-purple-400">
+                      /oauth2/egress/callback
+                    </code>
+                  </p>
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
+                        Provider
+                      </label>
+                      <select
+                        value={editForm.egress_provider}
+                        onChange={(e) =>
+                          setEditForm(prev => ({ ...prev, egress_provider: e.target.value }))
+                        }
+                        className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
+                      >
+                        <option value="">Disabled</option>
+                        <option value="github">GitHub</option>
+                        <option value="google">Google</option>
+                        <option value="atlassian">Atlassian</option>
+                        <option value="microsoft">Microsoft</option>
+                        <option value="slack">Slack</option>
+                        <option value="custom">Custom OIDC</option>
+                      </select>
+                    </div>
+                    {editForm.egress_provider && (
+                      <>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
+                            Client ID
+                          </label>
+                          <input
+                            type="text"
+                            value={editForm.egress_client_id}
+                            onChange={(e) =>
+                              setEditForm(prev => ({ ...prev, egress_client_id: e.target.value }))
+                            }
+                            className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
+                            Client Secret
+                          </label>
+                          <input
+                            type="password"
+                            value={editForm.egress_client_secret}
+                            onChange={(e) =>
+                              setEditForm(prev => ({ ...prev, egress_client_secret: e.target.value }))
+                            }
+                            placeholder="leave blank to keep current"
+                            autoComplete="new-password"
+                            className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
+                            Scopes
+                          </label>
+                          <input
+                            type="text"
+                            value={editForm.egress_scopes}
+                            onChange={(e) =>
+                              setEditForm(prev => ({ ...prev, egress_scopes: e.target.value }))
+                            }
+                            placeholder="repo, read:user"
+                            className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
+                          />
+                        </div>
+                        {editForm.egress_provider === 'custom' && (
+                          <>
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
+                                Authorize URL
+                              </label>
+                              <input
+                                type="text"
+                                value={editForm.egress_custom_authorize_url}
+                                onChange={(e) =>
+                                  setEditForm(prev => ({
+                                    ...prev,
+                                    egress_custom_authorize_url: e.target.value,
+                                  }))
+                                }
+                                placeholder="https://idp.example/authorize"
+                                className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
+                                Token URL
+                              </label>
+                              <input
+                                type="text"
+                                value={editForm.egress_custom_token_url}
+                                onChange={(e) =>
+                                  setEditForm(prev => ({
+                                    ...prev,
+                                    egress_custom_token_url: e.target.value,
+                                  }))
+                                }
+                                placeholder="https://idp.example/token"
+                                className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500"
+                              />
+                            </div>
+                          </>
+                        )}
+                      </>
                     )}
                   </div>
                 </div>
