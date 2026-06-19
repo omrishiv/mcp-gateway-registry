@@ -18,6 +18,7 @@ import VersionBadge from './VersionBadge';
 import VersionSelectorModal from './VersionSelectorModal';
 import ConfirmModal from './ConfirmModal';
 import StatusBadge from './StatusBadge';
+import Badge from './Badge';
 import { ANSBadge } from './ANSBadge';
 import ServerDetailsModal from './ServerDetailsModal';
 import useEscapeKey from '../hooks/useEscapeKey';
@@ -458,9 +459,7 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                   </span>
                 )}
                 {server.official && (
-                  <span className="px-2 py-0.5 text-xs font-semibold bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300 rounded-full flex-shrink-0">
-                    OFFICIAL
-                  </span>
+                  <Badge tone="purple">OFFICIAL</Badge>
                 )}
                 {isAnthropicServer && (
                   <span className="px-2 py-0.5 text-xs font-semibold bg-gradient-to-r from-purple-100 to-indigo-100 text-purple-700 dark:from-purple-900/30 dark:to-indigo-900/30 dark:text-purple-300 rounded-full flex-shrink-0 border border-purple-200 dark:border-purple-600">
