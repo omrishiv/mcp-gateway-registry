@@ -967,6 +967,16 @@ class Settings(BaseSettings):
             "which fronts the internal-only location."
         ),
     )
+    auth_server_nginx_marker_secret: str = Field(
+        default="",
+        description=(
+            "Shared secret (B2-4b): nginx force-sets it as X-Validate-Source-Secret on "
+            "the /validate subrequest; auth_server only mints the egress-capable mcp-proxy "
+            "token when it matches, so a direct :8888 /validate call with a forged "
+            "X-Resolved-Upstream cannot obtain one. Empty = marker disabled (mints "
+            "unconditionally, pre-B2-4b behavior). Treat as a secret."
+        ),
+    )
     aws_secrets_region: str = Field(
         default="",
         description="AWS region for Secrets Manager (secret_store_backend=secrets-manager).",

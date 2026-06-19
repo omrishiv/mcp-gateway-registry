@@ -94,6 +94,40 @@ class _InMemoryReplayGuard:
             return True
 
 
+class LeaseManager(Protocol):
+    """Cross-replica single-flight lease for refresh (Phase 3 backs with Mongo).
+
+    ``acquire`` returns True if this caller now holds the lease for ``key``;
+    ``release`` drops it iff still held. The post-acquire double-check in the
+    service is the correctness anchor -- the lease only prevents refresh storms.
+    """
+
+    async def acquire(self, key: str, holder: str, ttl_seconds: int) -> bool: ...
+    async def release(self, key: str, holder: str) -> None: ...
+
+
+class _InProcessLeaseManager:
+    """Default single-process lease (Phase 2 / tests). Per-key asyncio.Lock."""
+
+    def __init__(self) -> None:
+        self._locks: dict[str, asyncio.Lock] = {}
+        self._guard = asyncio.Lock()
+        self._held: set[str] = set()
+
+    async def acquire(self, key: str, holder: str, ttl_seconds: int) -> bool:
+        async with self._guard:
+            lock = self._locks.setdefault(key, asyncio.Lock())
+        await lock.acquire()
+        self._held.add(key)
+        return True
+
+    async def release(self, key: str, holder: str) -> None:
+        lock = self._locks.get(key)
+        if lock and lock.locked():
+            self._held.discard(key)
+            lock.release()
+
+
 def canonical_auth_method(validation_result: dict) -> str:
     """The ONE canonical egress principal method (B2-0).
 
@@ -124,14 +158,18 @@ class EgressAuthService:
         refresh_skew_seconds: int = 300,
         state_ttl_seconds: int = 600,
         replay_guard: ReplayGuard | None = None,
+        lease_manager: LeaseManager | None = None,
+        lease_ttl_seconds: int = 30,
     ) -> None:
         self._store = secret_store
         self._callback_url = callback_base_url.rstrip("/") + "/oauth2/egress/callback"
         self._skew = refresh_skew_seconds
         self._state_ttl = state_ttl_seconds
         self._replay = replay_guard or _InMemoryReplayGuard()
-        self._locks: dict[tuple, asyncio.Lock] = {}
-        self._locks_guard = asyncio.Lock()
+        self._lease = lease_manager or _InProcessLeaseManager()
+        self._lease_ttl = lease_ttl_seconds
+        # Stable per-process holder id for lease ownership/release.
+        self._holder = f"egress-{id(self)}"
 
     # -- helpers -------------------------------------------------------------- #
 
@@ -156,14 +194,6 @@ class EgressAuthService:
             return True
         remaining = (exp - datetime.now(UTC)).total_seconds()
         return remaining <= self._skew
-
-    async def _lock_for(self, key: tuple) -> asyncio.Lock:
-        async with self._locks_guard:
-            lock = self._locks.get(key)
-            if lock is None:
-                lock = asyncio.Lock()
-                self._locks[key] = lock
-            return lock
 
     # -- consent -------------------------------------------------------------- #
 
@@ -311,16 +341,25 @@ class EgressAuthService:
         egress_oauth: dict,
         token: StoredToken,
     ) -> StoredToken | None:
-        """In-process single-flight refresh with post-acquire double-check.
+        """Single-flight refresh: cross-replica lease + post-acquire double-check.
 
-        The double-check (re-read after acquiring) is the correctness anchor; the
-        lock is the performance optimization. Phase 3 wraps this with the
-        cross-replica Mongo lease.
+        The post-acquire re-read is the CORRECTNESS anchor (a second waiter that
+        finds a fresh token after acquiring does nothing); the lease only prevents
+        refresh storms / rotating-refresh churn across replicas. The lease key is
+        the canonical vault tuple so it matches the vault namespacing exactly.
         """
         provider = egress_oauth["provider"]
-        key = (auth_method, user_id, provider, server_path)
-        lock = await self._lock_for(key)
-        async with lock:
+        key = f"{auth_method}|{user_id}|{provider}|{server_path}"
+
+        acquired = await self._lease.acquire(key, self._holder, self._lease_ttl)
+        if not acquired:
+            # Could not take the lease (another replica is refreshing). Re-read
+            # once -- if it refreshed, use that; else fall back to the stale token
+            # rather than racing a concurrent refresh against a rotating provider.
+            current = await self._store.get_token(auth_method, user_id, provider, server_path)
+            return current if current and current.status != "refresh_failed" else None
+
+        try:
             current = await self._store.get_token(auth_method, user_id, provider, server_path)
             if current and not self._is_near_expiry(current):
                 return current  # another waiter already refreshed
@@ -347,6 +386,8 @@ class EgressAuthService:
                 return None
             await self._store.put_token(auth_method, user_id, provider, server_path, new)
             return new
+        finally:
+            await self._lease.release(key, self._holder)
 
     # -- list / disconnect ---------------------------------------------------- #
 

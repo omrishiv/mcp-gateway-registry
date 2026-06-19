@@ -195,9 +195,26 @@ def _attach_mcp_proxy_token(
     ``auth_method`` is the canonical egress principal method (B2-0/B2-1); pass
     ``_canonical_auth_method(validation_result)`` at the call sites, NOT the raw
     ``validation_result["method"]``.
+
+    B2-4b: when ``AUTH_SERVER_NGINX_MARKER_SECRET`` is configured, the token is
+    minted ONLY if nginx force-set the matching ``X-Validate-Source-Secret`` on
+    this subrequest. This closes the direct-:8888 forge: a caller hitting
+    /validate directly (bypassing nginx) cannot supply the marker, so they get no
+    egress-capable token even with a forged X-Resolved-Upstream. Empty marker =
+    disabled (mints unconditionally; B2-4a upstream cross-check still applies).
     """
     resolved_upstream = request.headers.get("X-Resolved-Upstream", "")
     if not resolved_upstream:
+        return
+
+    marker = settings.auth_server_nginx_marker_secret
+    if marker and not secrets.compare_digest(
+        request.headers.get("X-Validate-Source-Secret", ""), marker
+    ):
+        logger.warning(
+            "/validate: X-Resolved-Upstream present but nginx marker missing/mismatched; "
+            "refusing to mint mcp-proxy token (possible direct-:8888 bypass)"
+        )
         return
     try:
         response.headers["X-Internal-Token"] = mint_mcp_proxy_token(
@@ -4346,7 +4363,7 @@ async def _vend_egress_token(
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
-                f"{base}/_internal/egress-token",
+                f"{base}/_egress_internal/egress-token",
                 json={"server_path": server_first_segment},
                 headers={
                     "Authorization": f"Bearer {service_token}",
