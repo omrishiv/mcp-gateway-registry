@@ -38,6 +38,35 @@
   --color-gray-700: #5f6368;
   --color-gray-800: #3c4043;
   --color-gray-900: #202124;
+
+  /*
+   * Semantic interaction tokens (light-mode defaults).
+   *
+   * These define the surface/hover/text for the shared Button component so that
+   * contrast and color are tuned in ONE place per mode. The dark-mode block
+   * below overrides the secondary/ghost values so hover DARKENS (away from the
+   * light text) instead of lightening into it — the a11y bug we hit.
+   */
+  --btn-secondary-bg: var(--color-gray-100);
+  --btn-secondary-bg-hover: var(--color-gray-200);
+  --btn-secondary-text: var(--color-gray-900);
+
+  --btn-ghost-bg-hover: var(--color-gray-100);
+  --btn-ghost-text: var(--color-gray-700);
+}
+
+/*
+ * Dark-mode interaction tokens. Applied via the `dark` class on <html>
+ * (Tailwind darkMode: 'class'). Secondary/ghost hover surfaces go DARKER than
+ * their base so they keep clear contrast with light-gray text (WCAG AA).
+ */
+html.dark {
+  --btn-secondary-bg: var(--color-gray-700);
+  --btn-secondary-bg-hover: var(--color-gray-800);
+  --btn-secondary-text: var(--color-gray-100);
+
+  --btn-ghost-bg-hover: var(--color-gray-800);
+  --btn-ghost-text: var(--color-gray-300);
 }
 
 /*
@@ -73,21 +102,61 @@ html.high-contrast {
   html {
     font-family: 'Inter', system-ui, sans-serif;
   }
-  
+
   body {
     margin: 0;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
+
+  /*
+   * Text-selection highlight. The browser default can render near-white, which
+   * makes light text (e.g. log lines in dark mode) invisible when selected.
+   * Define it once here with an explicit, contrasting pair for both modes.
+   */
+  ::selection {
+    background-color: var(--color-primary-200);
+    color: var(--color-gray-900);
+  }
+  html.dark ::selection {
+    background-color: var(--color-primary-700);
+    color: #ffffff;
+  }
 }
 
 @layer components {
-  .btn-primary {
-    @apply bg-primary-600 hover:bg-primary-700 text-white font-medium px-4 py-2 rounded-lg transition-colors duration-200;
+  /*
+   * Button surfaces. Layout (padding/radius/weight) is shared via .btn-base;
+   * color comes from the semantic interaction tokens above so light/dark and
+   * future contrast tweaks are one edit. The Button component composes these.
+   */
+  .btn-base {
+    @apply inline-flex items-center justify-center font-medium px-4 py-2 rounded-lg transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed;
   }
-  
+
+  .btn-primary {
+    @apply btn-base bg-primary-600 hover:bg-primary-700 text-white;
+  }
+
   .btn-secondary {
-    @apply bg-gray-100 hover:bg-gray-200 text-gray-900 font-medium px-4 py-2 rounded-lg transition-colors duration-200;
+    @apply btn-base;
+    background-color: var(--btn-secondary-bg);
+    color: var(--btn-secondary-text);
+  }
+  .btn-secondary:hover {
+    background-color: var(--btn-secondary-bg-hover);
+  }
+
+  .btn-danger {
+    @apply btn-base bg-red-600 hover:bg-red-700 text-white;
+  }
+
+  .btn-ghost {
+    @apply btn-base bg-transparent;
+    color: var(--btn-ghost-text);
+  }
+  .btn-ghost:hover {
+    background-color: var(--btn-ghost-bg-hover);
   }
   
   .card {
