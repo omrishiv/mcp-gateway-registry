@@ -159,12 +159,29 @@ def _read_mcp_filter_enabled() -> bool:
     return raw in ("true", "1", "yes")
 
 
+def _canonical_auth_method(validation_result: dict) -> str:
+    """The ONE canonical egress principal method, stamped into both internal tokens.
+
+    The cookie path reports ``method == "session_cookie"`` but the real value
+    (``"oauth2"``) lives at ``data.auth_method`` in the session record; every
+    other path's ``method`` is already canonical. The per-user egress vault keys
+    on this value, so consent-write (registry side, resolves ``oauth2`` for cookie
+    users) and vend-read (this token's claim) MUST agree -- otherwise a web-UI
+    user loops on consent forever (B2-0). Mirrors
+    ``registry.egress_auth.service.canonical_auth_method``.
+    """
+    if validation_result.get("method") == "session_cookie":
+        return (validation_result.get("data") or {}).get("auth_method") or "oauth2"
+    return validation_result.get("method") or ""
+
+
 def _attach_mcp_proxy_token(
     request: "Request",
     response: "JSONResponse",
     subject: str,
     scopes: list[str],
     server_name: str,
+    auth_method: str = "",
 ) -> None:
     """Mint and attach the X-Internal-Token for the /mcp-proxy hop.
 
@@ -174,6 +191,10 @@ def _attach_mcp_proxy_token(
     mcp_proxy can ignore the forgeable inbound headers. If minting fails (e.g.
     empty subject), no token is attached: mcp_proxy then rejects (fail-closed)
     rather than trusting unsigned headers.
+
+    ``auth_method`` is the canonical egress principal method (B2-0/B2-1); pass
+    ``_canonical_auth_method(validation_result)`` at the call sites, NOT the raw
+    ``validation_result["method"]``.
     """
     resolved_upstream = request.headers.get("X-Resolved-Upstream", "")
     if not resolved_upstream:
@@ -184,6 +205,7 @@ def _attach_mcp_proxy_token(
             scopes=scopes,
             server_name=server_name,
             upstream_url=resolved_upstream,
+            auth_method=auth_method,
         )
     except ValueError as exc:
         logger.error(f"/validate: could not mint mcp-proxy token: {exc}")
@@ -2038,6 +2060,7 @@ async def validate_request(request: Request):
                     subject="federation-peer",
                     scopes=federation_scopes,
                     server_name="",
+                    auth_method="federation-static",
                 )
                 # Federation peers have no session row; the registry resolves
                 # nothing server-side (no groups), and _derive_user_context
@@ -2108,6 +2131,7 @@ async def validate_request(request: Request):
                         subject=identity["username"],
                         scopes=identity["scopes"],
                         server_name="",
+                        auth_method="network-trusted",
                     )
                     # Network-trusted static-token callers have no session row;
                     # the registry uses the claim's groups directly. Minting here
@@ -2706,12 +2730,18 @@ async def validate_request(request: Request):
         response.headers["X-Tool-Name"] = tool_name or ""
         response.headers["X-Groups"] = " ".join(validation_result.get("groups", []))
 
+        # Canonical egress principal method (B2-0): cookie callers resolve to
+        # "oauth2" (the session record's value), not the literal "session_cookie".
+        # Both internal tokens stamp THIS so consent-write and vend-read agree.
+        _canon_auth_method = _canonical_auth_method(validation_result)
+
         _attach_mcp_proxy_token(
             request,
             response,
             subject=validation_result.get("username") or "",
             scopes=user_scopes,
             server_name=server_name or "",
+            auth_method=_canon_auth_method,
         )
 
         # Registry /api/ hop token. Discriminate cookie vs JWT-bearer: the cookie
@@ -2727,7 +2757,10 @@ async def validate_request(request: Request):
             subject=validation_result.get("username") or "",
             session_id=_registry_session_id,
             groups=validation_result.get("groups", []),
-            auth_method=validation_result.get("method") or "",
+            # Canonical (B2-0): was validation_result["method"] (== "session_cookie"
+            # for cookie users) while the registry overrides to "oauth2" -- the two
+            # disagreed. Stamp the canonical value so they match.
+            auth_method=_canon_auth_method,
             client_id=validation_result.get("client_id") or "",
         )
 
@@ -4263,6 +4296,77 @@ def _forward_headers(
     return forwarded
 
 
+# Headers that MUST be stripped before injecting a vaulted egress token (B2-2):
+# the user's gateway IdP JWT / session cookie / X-Authorization are full gateway
+# credentials and must never reach a third-party SaaS upstream; the X-User*/
+# X-Internal-Token/X-Scopes family is gateway-internal identity/routing. Only
+# applied on the oauth_user egress path (other servers keep existing behavior).
+_EGRESS_STRIP_HEADERS: frozenset[str] = frozenset(
+    {
+        "authorization",
+        "x-authorization",
+        "proxy-authorization",
+        "cookie",
+        "x-user",
+        "x-username",
+        "x-client-id",
+        "x-scopes",
+        "x-auth-method",
+        "x-server-name",
+        "x-tool-name",
+        "x-groups",
+        "x-internal-token",
+        "x-user-pool-id",
+        "x-region",
+        "x-original-url",
+    }
+)
+
+
+async def _vend_egress_token(
+    internal_proxy_token: str,
+    server_first_segment: str,
+) -> dict | None:
+    """Call the registry's internal egress-token vend endpoint (B2-3).
+
+    Forwards the verified X-Internal-Token; the registry re-verifies it,
+    re-derives sub/auth_method from the signed claims, runs the B2-1 allowlist
+    and B2-4 upstream cross-check, and vends. Returns the JSON response dict, or
+    None on transport failure (treated as a clean miss -> consent).
+    """
+    from registry.auth.internal import generate_internal_token
+
+    base = settings.egress_registry_internal_url.rstrip("/")
+    try:
+        service_token = generate_internal_token(subject="auth-server", purpose="egress-token-vend")
+    except ValueError as exc:
+        logger.error(f"egress vend: cannot mint internal service token: {exc}")
+        return None
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{base}/_internal/egress-token",
+                json={"server_path": server_first_segment},
+                headers={
+                    "Authorization": f"Bearer {service_token}",
+                    "X-Internal-Token": internal_proxy_token,
+                    "Content-Type": "application/json",
+                },
+            )
+    except httpx.HTTPError as exc:
+        logger.error(f"egress vend: registry unreachable: {exc}")
+        return None
+
+    if resp.status_code != 200:
+        logger.warning(f"egress vend: registry returned {resp.status_code}")
+        return None
+    try:
+        return resp.json()
+    except ValueError:
+        return None
+
+
 def _select_forwarded_response_headers(
     upstream_headers: Mapping[str, str],
 ) -> dict[str, str]:
@@ -4357,6 +4461,25 @@ async def mcp_proxy(
     filter_enabled = _read_mcp_filter_enabled()
     max_body_bytes = _read_mcp_proxy_max_body_bytes()
     forward_headers = _forward_headers(dict(request.headers))
+
+    # Per-user egress credential vault (Phase 3). When the feature is on, ask the
+    # registry to vend this user's third-party token for the resolved server. The
+    # registry re-verifies the signed proxy token, enforces per-user/upstream
+    # authz (B2-1/B2-4), and returns consent_required for non-oauth_user servers
+    # -- so we only mutate headers on a real vend. On a vend we strip the user's
+    # own gateway credentials/identity (B2-2) before injecting the vaulted token.
+    if settings.egress_auth_enabled:
+        internal_proxy_token = request.headers.get("X-Internal-Token", "")
+        if internal_proxy_token:
+            server_first_segment = (server_name or "").split("/", 1)[0]
+            vend = await _vend_egress_token(internal_proxy_token, server_first_segment)
+            if vend and vend.get("access_token"):
+                forward_headers = {
+                    k: v
+                    for k, v in forward_headers.items()
+                    if k.lower() not in _EGRESS_STRIP_HEADERS
+                }
+                forward_headers["Authorization"] = f"Bearer {vend['access_token']}"
 
     logger.info(
         f"mcp_proxy: server={server_name} method={incoming_method} filter_enabled={filter_enabled}"

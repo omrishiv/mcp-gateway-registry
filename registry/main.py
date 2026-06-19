@@ -31,6 +31,7 @@ from registry.api.auth0_m2m_routes import router as auth0_m2m_router
 from registry.api.config_routes import router as config_router
 from registry.api.custom_entity_routes import router as custom_entity_router
 from registry.api.custom_type_routes import router as custom_type_router
+from registry.api.egress_auth_routes import router as egress_auth_router
 from registry.api.embeddings_admin_routes import router as embeddings_admin_router
 from registry.api.export_routes import router as export_router
 from registry.api.federation_export_routes import router as federation_export_router
@@ -881,6 +882,7 @@ async def lifespan(app: FastAPI):
 
         # Start the GitHub-release update-check poller (admin banner; air-gap safe)
         from registry.core.update_check import start_update_checker
+
         await start_update_checker()
 
     except Exception as e:
@@ -914,6 +916,7 @@ async def lifespan(app: FastAPI):
 
         # Stop update-check poller
         from registry.core.update_check import stop_update_checker
+
         await stop_update_checker()
 
         # Shutdown audit logger if enabled
@@ -1126,6 +1129,9 @@ if settings.custom_entity_types_enabled:
     app.include_router(custom_entity_router, prefix="/api", tags=["custom-entities"])
     logger.info("Custom entity types feature enabled; registered custom-type/custom routes")
 app.include_router(internal_router, prefix="/api")
+# Egress credential vault: /api/internal/egress-token (internal vend path, Phase 3).
+# Public operator/end-user egress routers are added in Phase 4.
+app.include_router(egress_auth_router, prefix="/api")
 app.include_router(health_router, prefix="/api/health", tags=["Health Monitoring"])
 app.include_router(federation_export_router)
 app.include_router(peer_management_router)

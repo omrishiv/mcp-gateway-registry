@@ -958,6 +958,15 @@ class Settings(BaseSettings):
         default="",
         description="Directory for dev-fernet egress secret files; blank = <servers_dir>/../egress_secrets.",
     )
+    egress_registry_internal_url: str = Field(
+        default="http://registry:8080",
+        description=(
+            "Internal URL auth_server uses to reach the registry's "
+            "/_internal/egress-token vend endpoint. The registry app binds loopback, "
+            "so this goes through nginx (registry:8080 -> :80 -> 127.0.0.1:7860), "
+            "which fronts the internal-only location."
+        ),
+    )
     aws_secrets_region: str = Field(
         default="",
         description="AWS region for Secrets Manager (secret_store_backend=secrets-manager).",
