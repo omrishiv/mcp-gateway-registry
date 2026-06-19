@@ -22,6 +22,7 @@ import { useRegistryConfig } from '../hooks/useRegistryConfig';
 import DeleteConfirmation from './DeleteConfirmation';
 import Pagination from './Pagination';
 import ProviderBadge from './iam/ProviderBadge';
+import ListStateBoundary from './iam/ListStateBoundary';
 import { extractErrorDetail as extractDetail } from '../utils/apiError';
 
 /**
@@ -427,25 +428,17 @@ const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
         />
       </div>
 
-      {isLoading && (
-        <div className="flex justify-center py-12">
-          <ArrowPathIcon className="h-6 w-6 text-gray-400 animate-spin" />
-        </div>
-      )}
-      {error && !isLoading && (
-        <div className="text-center py-8 text-red-500 dark:text-red-400 text-sm">
-          {error}
-        </div>
-      )}
-      {!isLoading && !error && items.length === 0 && (
-        <div className="text-center py-12 text-gray-500 dark:text-gray-400 text-sm max-w-xl mx-auto">
-          {debouncedSearch
+      <ListStateBoundary
+        isLoading={isLoading}
+        error={error}
+        isEmpty={items.length === 0}
+        emptyClassName="text-sm max-w-xl mx-auto"
+        emptyMessage={
+          debouncedSearch
             ? `No user-to-group mappings match "${debouncedSearch}".`
-            : "No user-to-group mappings yet. These are used for IdPs that don't carry group memberships in JWTs (e.g. PingFederate). Click 'Register User Group' to add one."}
-        </div>
-      )}
-
-      {!isLoading && !error && items.length > 0 && (
+            : "No user-to-group mappings yet. These are used for IdPs that don't carry group memberships in JWTs (e.g. PingFederate). Click 'Register User Group' to add one."
+        }
+      >
         <>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -615,7 +608,7 @@ const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
             />
           </div>
         </>
-      )}
+      </ListStateBoundary>
     </div>
   );
 

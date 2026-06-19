@@ -26,6 +26,7 @@ import { useServerList, useServerTools } from '../hooks/useToolCatalog';
 import { useAgentList } from '../hooks/useAgentList';
 import DeleteConfirmation from './DeleteConfirmation';
 import SearchableSelect from './SearchableSelect';
+import ListStateBoundary from './iam/ListStateBoundary';
 
 interface IAMGroupsProps {
   onShowToast: (message: string, type: 'success' | 'error' | 'info') => void;
@@ -1329,25 +1330,14 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
         />
       </div>
 
-      {/* Loading / Error / Empty states */}
-      {isLoading && (
-        <div className="flex justify-center py-12">
-          <ArrowPathIcon className="h-6 w-6 text-gray-400 animate-spin" />
-        </div>
-      )}
-
-      {error && !isLoading && (
-        <div className="text-center py-8 text-red-500 dark:text-red-400 text-sm">{error}</div>
-      )}
-
-      {!isLoading && !error && filteredGroups.length === 0 && (
-        <div className="text-center py-12 text-gray-500 dark:text-gray-400">
-          {searchQuery ? 'No groups match your search.' : 'No groups yet. Create your first group.'}
-        </div>
-      )}
-
-      {/* Table */}
-      {!isLoading && !error && filteredGroups.length > 0 && (
+      <ListStateBoundary
+        isLoading={isLoading}
+        error={error}
+        isEmpty={filteredGroups.length === 0}
+        emptyMessage={
+          searchQuery ? 'No groups match your search.' : 'No groups yet. Create your first group.'
+        }
+      >
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -1426,7 +1416,7 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
             </tbody>
           </table>
         </div>
-      )}
+      </ListStateBoundary>
     </div>
   );
 };

@@ -14,6 +14,7 @@ import {
 import { useIAMUsers, useIAMGroups, createHumanUser, deleteUser, updateUserGroups, CreateHumanUserPayload } from '../hooks/useIAM';
 import DeleteConfirmation from './DeleteConfirmation';
 import SearchableSelect from './SearchableSelect';
+import ListStateBoundary from './iam/ListStateBoundary';
 
 interface IAMUsersProps {
   onShowToast: (message: string, type: 'success' | 'error' | 'info') => void;
@@ -351,19 +352,14 @@ const IAMUsers: React.FC<IAMUsersProps> = ({ onShowToast }) => {
           className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent" />
       </div>
 
-      {isLoading && (
-        <div className="flex justify-center py-12"><ArrowPathIcon className="h-6 w-6 text-gray-400 animate-spin" /></div>
-      )}
-      {error && !isLoading && (
-        <div className="text-center py-8 text-red-500 dark:text-red-400 text-sm">{error}</div>
-      )}
-      {!isLoading && !error && filteredUsers.length === 0 && (
-        <div className="text-center py-12 text-gray-500 dark:text-gray-400">
-          {searchQuery ? 'No users match your search.' : 'No users yet. Create your first user.'}
-        </div>
-      )}
-
-      {!isLoading && !error && filteredUsers.length > 0 && (
+      <ListStateBoundary
+        isLoading={isLoading}
+        error={error}
+        isEmpty={filteredUsers.length === 0}
+        emptyMessage={
+          searchQuery ? 'No users match your search.' : 'No users yet. Create your first user.'
+        }
+      >
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -493,7 +489,7 @@ const IAMUsers: React.FC<IAMUsersProps> = ({ onShowToast }) => {
             </tbody>
           </table>
         </div>
-      )}
+      </ListStateBoundary>
     </div>
   );
 };
