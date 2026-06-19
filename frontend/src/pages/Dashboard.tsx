@@ -2649,9 +2649,6 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
             </>
           )}
         </div>
-
-        {/* Padding at bottom for scroll */}
-        <div className="pb-12"></div>
       </div>
 
       {/* Register Server Modal */}
