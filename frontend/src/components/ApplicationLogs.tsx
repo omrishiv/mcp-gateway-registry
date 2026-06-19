@@ -411,20 +411,20 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
             <div className="overflow-x-auto">
               <table className="w-full text-sm" aria-label="Application log entries">
                 <thead>
-                  <tr className="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
-                    <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-400 w-40">Timestamp</th>
-                    <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-400 w-24">Level</th>
-                    <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-400 w-28">Service</th>
-                    <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-400 w-36">Source</th>
-                    <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-400">Message</th>
+                  <tr className="border-b border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-gray-900">
+                    <th className="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-200 w-40">Timestamp</th>
+                    <th className="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-200 w-24">Level</th>
+                    <th className="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-200 w-28">Service</th>
+                    <th className="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-200 w-36">Source</th>
+                    <th className="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-200">Message</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 dark:divide-gray-700/50">
                   {entries.map((entry, idx) => (
                     <React.Fragment key={idx}>
                       <tr
-                        className={`hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer transition-colors ${
-                          expandedRow === idx ? 'bg-gray-50 dark:bg-gray-700/50' : ''
+                        className={`hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer transition-colors ${
+                          expandedRow === idx ? 'bg-gray-100 dark:bg-gray-700' : ''
                         }`}
                         role="button"
                         tabIndex={0}
@@ -433,7 +433,7 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
                         onClick={() => setExpandedRow(expandedRow === idx ? null : idx)}
                         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setExpandedRow(expandedRow === idx ? null : idx); } }}
                       >
-                        <td className="px-4 py-2.5 text-gray-600 dark:text-gray-400 font-mono text-xs whitespace-nowrap">
+                        <td className="px-4 py-2.5 text-gray-600 dark:text-gray-300 font-mono text-xs whitespace-nowrap">
                           {_formatTimestamp(entry.timestamp)}
                         </td>
                         <td className="px-4 py-2.5">
@@ -444,7 +444,7 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
                         <td className="px-4 py-2.5 text-gray-700 dark:text-gray-300 font-mono text-xs">
                           {entry.service}
                         </td>
-                        <td className="px-4 py-2.5 text-gray-500 dark:text-gray-500 font-mono text-xs">
+                        <td className="px-4 py-2.5 text-gray-500 dark:text-gray-400 font-mono text-xs">
                           {entry.filename}:{entry.lineno}
                         </td>
                         <td className="px-4 py-2.5 text-gray-800 dark:text-gray-200 text-xs">
@@ -453,7 +453,7 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
                       </tr>
                       {expandedRow === idx && (
                         <tr>
-                          <td colSpan={5} className="px-4 py-3 bg-gray-50 dark:bg-gray-900/30">
+                          <td colSpan={5} className="px-4 py-3 bg-gray-50 dark:bg-gray-900">
                             <div className="space-y-2">
                               <div className="flex gap-6 text-xs text-gray-500 dark:text-gray-400">
                                 <span><strong>Hostname:</strong> {entry.hostname}</span>
@@ -475,7 +475,7 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
 
           {/* Pagination */}
           {entries.length > 0 && (
-            <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30">
+            <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
               <div className="text-xs text-gray-500 dark:text-gray-400">
                 Showing {offset + 1}-{Math.min(offset + entries.length, totalCount)} of {totalCount.toLocaleString()}
               </div>
