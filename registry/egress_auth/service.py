@@ -1,0 +1,383 @@
+"""EgressAuthService -- orchestration for the per-user egress credential vault.
+
+Ties together the provider table, the OAuth engine, the AEAD state codec, and
+the SecretStore. The SecretStore is the only persistence dependency for token
+material; a small ``ReplayGuard`` protocol covers single-use ``state`` nonces.
+
+Phase 2 scope: consent-URL build, callback handling (verify/decrypt state +
+account-swap guard + single-use nonce + code exchange + store), lazy-on-vend
+refresh with an in-process single-flight lock, list, disconnect.
+
+NOT in Phase 2 (Phase 3): the cross-replica Mongo lease lock (B1), the egress
+injection in ``mcp_proxy``, and the HTTP routers. The single-flight here is
+in-process only; the cross-replica double-check/lease wraps it in Phase 3.
+"""
+
+import asyncio
+import logging
+import secrets
+from datetime import UTC, datetime
+from typing import Protocol
+
+from registry.egress_auth import oauth_engine
+from registry.egress_auth.providers import resolve_provider
+from registry.egress_auth.schemas import (
+    EgressConnection,
+    OAuthState,
+    StoredToken,
+)
+from registry.egress_auth.state_codec import InvalidState, decode_state, encode_state
+from registry.secrets.interfaces import SecretStoreBase
+
+logger = logging.getLogger(__name__)
+
+# auth_method values that represent a real per-user identity and may own a vault
+# bucket (canonical values per B2-0; cookie users are "oauth2", not
+# "session_cookie"). The denylist below is authoritative; this set is the
+# positive cross-check for the drift test.
+PER_USER_AUTH_METHODS: frozenset[str] = frozenset(
+    {
+        "oauth2",
+        "self_signed",
+        "jwt",
+        "boto3",
+        "cognito",
+        "keycloak",
+        "okta",
+        "auth0",
+        "entra",
+        "pingfederate",
+    }
+)
+# Non-per-user callers: their sub is a constant or operator-chosen and must
+# never address a per-user vault bucket. Fail-closed for unknown/empty too.
+NON_PER_USER_AUTH_METHODS: frozenset[str] = frozenset({"federation-static", "network-trusted"})
+
+
+class EgressAuthError(Exception):
+    """Base error for egress-auth orchestration failures."""
+
+
+class ConsentRequired(EgressAuthError):
+    """No usable token; the caller must complete consent at ``authorize_url``."""
+
+    def __init__(self, authorize_url: str | None = None) -> None:
+        super().__init__("egress consent required")
+        self.authorize_url = authorize_url
+
+
+class ReplayGuard(Protocol):
+    """Single-use guard for OAuth ``state`` nonces (Phase 3 backs this with Mongo TTL).
+
+    ``check_and_consume`` returns True if the nonce was unused (and records it),
+    False if it has already been consumed (replay).
+    """
+
+    async def check_and_consume(self, nonce: str, ttl_seconds: int) -> bool: ...
+
+
+class _InMemoryReplayGuard:
+    """Default single-process replay guard (Phase 2 / tests).
+
+    Phase 3 swaps in a Mongo-TTL-backed implementation for cross-replica safety.
+    """
+
+    def __init__(self) -> None:
+        self._seen: set[str] = set()
+        self._lock = asyncio.Lock()
+
+    async def check_and_consume(self, nonce: str, ttl_seconds: int) -> bool:
+        async with self._lock:
+            if nonce in self._seen:
+                return False
+            self._seen.add(nonce)
+            return True
+
+
+def canonical_auth_method(validation_result: dict) -> str:
+    """The ONE canonical egress principal method (B2-0).
+
+    The cookie path reports ``method == "session_cookie"`` but carries the real
+    value (``"oauth2"``) at ``data.auth_method``; every other path's ``method``
+    is already canonical. Stamp THIS into the proxy/registry-UI tokens and check
+    it on vend so consent-write and vend-read agree on the same vault bucket.
+    """
+    if validation_result.get("method") == "session_cookie":
+        return (validation_result.get("data") or {}).get("auth_method") or "oauth2"
+    return validation_result.get("method") or ""
+
+
+def is_per_user_auth_method(auth_method: str) -> bool:
+    """Denylist-first (fail-closed): only real per-user methods may vend."""
+    if not auth_method or auth_method in NON_PER_USER_AUTH_METHODS:
+        return False
+    return auth_method in PER_USER_AUTH_METHODS
+
+
+class EgressAuthService:
+    """Orchestrates consent, vend, refresh, and disconnect over a SecretStore."""
+
+    def __init__(
+        self,
+        secret_store: SecretStoreBase,
+        callback_base_url: str,
+        refresh_skew_seconds: int = 300,
+        state_ttl_seconds: int = 600,
+        replay_guard: ReplayGuard | None = None,
+    ) -> None:
+        self._store = secret_store
+        self._callback_url = callback_base_url.rstrip("/") + "/oauth2/egress/callback"
+        self._skew = refresh_skew_seconds
+        self._state_ttl = state_ttl_seconds
+        self._replay = replay_guard or _InMemoryReplayGuard()
+        self._locks: dict[tuple, asyncio.Lock] = {}
+        self._locks_guard = asyncio.Lock()
+
+    # -- helpers -------------------------------------------------------------- #
+
+    @staticmethod
+    def _client_secret(egress_oauth: dict) -> str:
+        from registry.utils.credential_encryption import decrypt_credential
+
+        enc = egress_oauth.get("client_secret_encrypted")
+        if not enc:
+            raise EgressAuthError("egress_oauth.client_secret_encrypted missing")
+        secret = decrypt_credential(enc)
+        if secret is None:
+            raise EgressAuthError("could not decrypt egress client_secret (SECRET_KEY changed?)")
+        return secret
+
+    def _is_near_expiry(self, token: StoredToken) -> bool:
+        if not token.expires_at:
+            return False  # no expiry info -> treat as long-lived; refresh on 401 elsewhere
+        try:
+            exp = datetime.fromisoformat(token.expires_at)
+        except ValueError:
+            return True
+        remaining = (exp - datetime.now(UTC)).total_seconds()
+        return remaining <= self._skew
+
+    async def _lock_for(self, key: tuple) -> asyncio.Lock:
+        async with self._locks_guard:
+            lock = self._locks.get(key)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._locks[key] = lock
+            return lock
+
+    # -- consent -------------------------------------------------------------- #
+
+    def build_consent_url(
+        self,
+        auth_method: str,
+        user_id: str,
+        client_id_audit: str,
+        session_id: str,
+        server_path: str,
+        egress_oauth: dict,
+    ) -> str:
+        """Build the provider authorize URL with an AEAD-encrypted, single-use state."""
+        cfg = resolve_provider(egress_oauth)
+        verifier = oauth_engine.generate_pkce_verifier() if cfg.use_pkce else None
+        challenge = oauth_engine.pkce_challenge_s256(verifier) if verifier else None
+        state = OAuthState(
+            user_id=user_id,
+            auth_method=auth_method,
+            client_id=client_id_audit,
+            provider=egress_oauth["provider"],
+            server_path=server_path,
+            session_id=session_id,
+            pkce_verifier=verifier,
+            nonce=secrets.token_urlsafe(16),
+            issued_at=datetime.now(UTC).isoformat(),
+        )
+        return oauth_engine.build_authorize_url(
+            cfg=cfg,
+            client_id=egress_oauth["client_id"],
+            redirect_uri=self._callback_url,
+            scopes=list(egress_oauth.get("scopes") or []),
+            state=encode_state(state),
+            pkce_challenge=challenge,
+        )
+
+    # -- callback ------------------------------------------------------------- #
+
+    async def handle_callback(
+        self,
+        code: str,
+        state_blob: str,
+        egress_oauth: dict,
+        current_user_id: str | None = None,
+        current_auth_method: str | None = None,
+    ) -> EgressConnection:
+        """Verify state, exchange the code, and store the token.
+
+        Security checks before any token write:
+        - state decrypts/authenticates (AEAD) -- else InvalidState.
+        - state is within TTL.
+        - state nonce is single-use (replay guard).
+        - account-swap guard: the live principal (if provided) matches the
+          principal bound in the signed state -- bind to (user_id, auth_method),
+          NOT session_id (a legit "same user, new session" must still work).
+        """
+        try:
+            state = decode_state(state_blob)
+        except InvalidState as exc:
+            raise EgressAuthError(f"invalid state: {exc}") from exc
+
+        # TTL
+        try:
+            issued = datetime.fromisoformat(state.issued_at)
+        except ValueError as exc:
+            raise EgressAuthError("state issued_at malformed") from exc
+        if (datetime.now(UTC) - issued).total_seconds() > self._state_ttl:
+            raise EgressAuthError("state expired")
+
+        # Single-use
+        if not await self._replay.check_and_consume(state.nonce, self._state_ttl):
+            raise EgressAuthError("state already used (replay)")
+
+        # Account-swap guard (bind to canonical principal, not session_id)
+        if current_user_id is not None and current_user_id != state.user_id:
+            raise EgressAuthError("state user mismatch")
+        if current_auth_method is not None and current_auth_method != state.auth_method:
+            raise EgressAuthError("state auth_method mismatch")
+
+        cfg = resolve_provider(egress_oauth)
+        token = await oauth_engine.exchange_code(
+            cfg=cfg,
+            client_id=egress_oauth["client_id"],
+            client_secret=self._client_secret(egress_oauth),
+            code=code,
+            redirect_uri=self._callback_url,
+            pkce_verifier=state.pkce_verifier,
+        )
+        await self._store.put_token(
+            state.auth_method, state.user_id, state.provider, state.server_path, token
+        )
+        return EgressConnection(
+            provider=state.provider,
+            server_path=state.server_path,
+            scopes=token.scopes,
+            expires_at=token.expires_at,
+            status=token.status,
+            last_refreshed_at=token.last_refreshed_at,
+        )
+
+    # -- vend ----------------------------------------------------------------- #
+
+    async def get_valid_token(
+        self,
+        auth_method: str,
+        user_id: str,
+        server_path: str,
+        egress_oauth: dict,
+    ) -> str | None:
+        """Vend a valid access token, refreshing if near expiry. None on miss.
+
+        Primary refresh mechanism (lazy-on-vend). Returns None when there is no
+        connection, the connection is dead (refresh_failed), the caller is not a
+        per-user principal, or the stored client_id no longer matches (rotated
+        provider app -> force re-consent).
+        """
+        if not is_per_user_auth_method(auth_method):
+            return None
+
+        provider = egress_oauth["provider"]
+        token = await self._store.get_token(auth_method, user_id, provider, server_path)
+        if token is None or token.status == "refresh_failed":
+            return None
+
+        # client-id binding (B2-1 #5): rotated provider app -> re-consent.
+        if token.client_id and token.client_id != egress_oauth.get("client_id"):
+            logger.info(
+                "egress vend: stored client_id != configured client_id for %s/%s; forcing re-consent",
+                provider,
+                server_path,
+            )
+            return None
+
+        if self._is_near_expiry(token):
+            token = await self._refresh_single_flight(
+                auth_method, user_id, server_path, egress_oauth, token
+            )
+        return token.access_token if token else None
+
+    async def _refresh_single_flight(
+        self,
+        auth_method: str,
+        user_id: str,
+        server_path: str,
+        egress_oauth: dict,
+        token: StoredToken,
+    ) -> StoredToken | None:
+        """In-process single-flight refresh with post-acquire double-check.
+
+        The double-check (re-read after acquiring) is the correctness anchor; the
+        lock is the performance optimization. Phase 3 wraps this with the
+        cross-replica Mongo lease.
+        """
+        provider = egress_oauth["provider"]
+        key = (auth_method, user_id, provider, server_path)
+        lock = await self._lock_for(key)
+        async with lock:
+            current = await self._store.get_token(auth_method, user_id, provider, server_path)
+            if current and not self._is_near_expiry(current):
+                return current  # another waiter already refreshed
+            if current is None or not current.refresh_token:
+                return None
+            cfg = resolve_provider(egress_oauth)
+            try:
+                new = await oauth_engine.refresh_token(
+                    cfg=cfg,
+                    client_id=egress_oauth["client_id"],
+                    client_secret=self._client_secret(egress_oauth),
+                    refresh_token_value=current.refresh_token,
+                )
+            except oauth_engine.DeadRefreshTokenError:
+                # Dead refresh token: mark the entry failed so the next vend
+                # returns None -> consent URL, rather than retrying forever.
+                failed = current.model_copy(update={"status": "refresh_failed"})
+                await self._store.put_token(auth_method, user_id, provider, server_path, failed)
+                logger.warning(
+                    "egress refresh failed (dead refresh token) for %s/%s; marked refresh_failed",
+                    provider,
+                    server_path,
+                )
+                return None
+            await self._store.put_token(auth_method, user_id, provider, server_path, new)
+            return new
+
+    # -- list / disconnect ---------------------------------------------------- #
+
+    async def list_connections(
+        self,
+        auth_method: str,
+        user_id: str,
+    ) -> list[EgressConnection]:
+        """List the principal's connections (tokens stripped)."""
+        if not is_per_user_auth_method(auth_method):
+            return []
+        out: list[EgressConnection] = []
+        for provider, server_path, token in await self._store.list_for_user(auth_method, user_id):
+            out.append(
+                EgressConnection(
+                    provider=provider,
+                    server_path=server_path,
+                    scopes=token.scopes,
+                    expires_at=token.expires_at,
+                    status=token.status,
+                    last_refreshed_at=token.last_refreshed_at,
+                )
+            )
+        return out
+
+    async def disconnect(
+        self,
+        auth_method: str,
+        user_id: str,
+        provider: str,
+        server_path: str,
+    ) -> None:
+        """Delete the vault entry (idempotent). Provider-side revoke is Phase 4."""
+        await self._store.delete_token(auth_method, user_id, provider, server_path)
