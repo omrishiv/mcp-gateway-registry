@@ -11,6 +11,7 @@ import {
   FIELD,
   LABEL,
 } from '../../formFields';
+import Button from '../../Button';
 
 /**
  * Shape of the server edit form state. Owned by the Dashboard (kept as state
@@ -273,20 +274,12 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
           </div>
 
           <div className="flex space-x-3 pt-4">
-            <button
-              type="submit"
-              disabled={loading}
-              className="flex-1 px-4 py-2 text-sm font-medium text-white bg-purple-600 hover:bg-purple-700 disabled:opacity-50 rounded-md transition-colors"
-            >
+            <Button variant="primary" type="submit" disabled={loading} fullWidth>
               {loading ? 'Saving...' : 'Save Changes'}
-            </button>
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-800 rounded-md transition-colors"
-            >
+            </Button>
+            <Button variant="secondary" onClick={onClose} fullWidth>
               Cancel
-            </button>
+            </Button>
           </div>
         </form>
       </div>

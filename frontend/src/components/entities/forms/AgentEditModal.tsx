@@ -10,6 +10,8 @@ import {
   LABEL,
 } from '../../formFields';
 
+import Button from '../../Button';
+
 // Agent forms use a cyan focus accent.
 const FIELD = `${FIELD_BASE} ${FIELD_FOCUS.cyan}`;
 
@@ -218,13 +220,9 @@ const AgentEditModal: React.FC<AgentEditModalProps> = ({
             >
               {loading ? 'Saving...' : 'Save Changes'}
             </button>
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-800 rounded-md transition-colors"
-            >
+            <Button variant="secondary" onClick={onClose} fullWidth>
               Cancel
-            </button>
+            </Button>
           </div>
         </form>
       </div>

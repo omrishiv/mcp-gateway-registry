@@ -6,6 +6,7 @@ import {
   FIELD_FOCUS,
   LABEL,
 } from '../../formFields';
+import Button from '../../Button';
 
 // Skill forms use an amber focus accent.
 const FIELD = `${FIELD_BASE} ${FIELD_FOCUS.amber}`;
@@ -376,13 +377,9 @@ const SkillFormModal: React.FC<SkillFormModalProps> = ({
                   ? 'Save Changes'
                   : 'Register Skill'}
             </button>
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-800 rounded-md transition-colors"
-            >
+            <Button variant="secondary" onClick={onClose} fullWidth>
               Cancel
-            </button>
+            </Button>
           </div>
           {!editing && (
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-2 text-center">

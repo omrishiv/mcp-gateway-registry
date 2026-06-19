@@ -1,6 +1,7 @@
 import React from 'react';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import { TagsField, FIELD, LABEL } from '../../formFields';
+import Button from '../../Button';
 
 /**
  * Shape of the new-server registration form, owned by the Dashboard.
@@ -109,20 +110,12 @@ const ServerRegisterModal: React.FC<ServerRegisterModalProps> = ({
           </div>
 
           <div className="flex justify-end space-x-3 mt-6">
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-md transition-colors"
-            >
+            <Button variant="secondary" fullWidth onClick={onClose}>
               Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={loading}
-              className="px-4 py-2 text-sm font-medium text-white bg-purple-600 hover:bg-purple-700 disabled:opacity-50 rounded-md transition-colors"
-            >
+            </Button>
+            <Button variant="primary" type="submit" disabled={loading}>
               {loading ? 'Registering...' : 'Register Server'}
-            </button>
+            </Button>
           </div>
         </form>
       </div>
