@@ -8,6 +8,7 @@
 - [Browser Login: Cookie + Session Flow](./session-flow-cookie-based.md) - End-to-end cookie/session design (post-#1042 server-side store)
 - [JWT / Bearer Token Login Flow](./session-flow-jwt-bearer.md) - End-to-end JWT/Bearer design (programmatic, M2M, federation)
 - [Multi-Provider IdP Support](./idp-provider-support.md) - Architecture for supporting multiple identity providers
+- [Internal Hop Authentication](./internal-hop-authentication.md) - How components authenticate to each other via signed inter-component tokens (#1260 / #1262)
 - [Authentication & Authorization Guide](../auth.md) - Operational guide with setup instructions
 - [Microsoft Entra ID Integration](../entra.md) - Entra ID-specific setup and configuration
 
