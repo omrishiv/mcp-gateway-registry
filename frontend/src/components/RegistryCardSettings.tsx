@@ -7,6 +7,7 @@ import {
   LinkIcon,
   InformationCircleIcon,
 } from '@heroicons/react/24/outline';
+import Button from './Button';
 
 interface RegistryCardData {
   schema_version: string;
@@ -144,12 +145,9 @@ const RegistryCardSettings: React.FC<RegistryCardSettingsProps> = ({ onShowToast
           Error Loading Registry Card
         </h3>
         <p className="text-sm text-red-800 dark:text-red-200 mb-4">{error}</p>
-        <button
-          onClick={fetchRegistryCard}
-          className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
-        >
+        <Button variant="danger" onClick={fetchRegistryCard}>
           Retry
-        </button>
+        </Button>
       </div>
     );
   }
@@ -309,12 +307,11 @@ const RegistryCardSettings: React.FC<RegistryCardSettingsProps> = ({ onShowToast
 
       {/* Save Button */}
       <div className="flex justify-end">
-        <button
+        <Button
+          variant="primary"
           onClick={handleSave}
           disabled={!hasChanges || saving}
-          className="px-6 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg
-                   disabled:opacity-50 disabled:cursor-not-allowed transition-colors
-                   flex items-center gap-2"
+          className="px-6"
         >
           {saving ? (
             <>
@@ -324,7 +321,7 @@ const RegistryCardSettings: React.FC<RegistryCardSettingsProps> = ({ onShowToast
           ) : (
             'Save Changes'
           )}
-        </button>
+        </Button>
       </div>
 
       {/* Capabilities */}

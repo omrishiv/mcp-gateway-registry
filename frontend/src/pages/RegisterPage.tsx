@@ -25,6 +25,7 @@ import { useDuplicateCheck } from '../hooks/useDuplicateCheck';
 import type { ExistingEntity } from '../types/duplicateCheck';
 import { FIELD, LABEL } from '../components/formFields';
 import { pathFromName } from '../utils/slug';
+import Button from '../components/Button';
 
 
 // Toast notification component
@@ -1196,20 +1197,12 @@ const RegisterPage: React.FC = () => {
       </div>
 
       <div className="flex justify-end space-x-3 pt-6 border-t border-gray-200 dark:border-gray-700">
-        <button
-          type="button"
-          onClick={() => navigate('/')}
-          className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-md transition-colors"
-        >
+        <Button variant="secondary" onClick={() => navigate('/')}>
           Cancel
-        </button>
-        <button
-          type="submit"
-          disabled={loading}
-          className="px-6 py-2 text-sm font-medium text-white bg-purple-600 hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-md transition-colors"
-        >
+        </Button>
+        <Button variant="primary" type="submit" disabled={loading} className="px-6">
           {loading ? 'Registering...' : 'Register Server'}
-        </button>
+        </Button>
       </div>
     </form>
   );
@@ -1534,20 +1527,12 @@ const RegisterPage: React.FC = () => {
       </div>
 
       <div className="flex justify-end space-x-3 pt-6 border-t border-gray-200 dark:border-gray-700">
-        <button
-          type="button"
-          onClick={() => navigate('/')}
-          className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-md transition-colors"
-        >
+        <Button variant="secondary" onClick={() => navigate('/')}>
           Cancel
-        </button>
-        <button
-          type="submit"
-          disabled={loading}
-          className="px-6 py-2 text-sm font-medium text-white bg-purple-600 hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-md transition-colors"
-        >
+        </Button>
+        <Button variant="primary" type="submit" disabled={loading} className="px-6">
           {loading ? 'Registering...' : 'Register Agent'}
-        </button>
+        </Button>
       </div>
     </form>
   );
@@ -1636,13 +1621,9 @@ const RegisterPage: React.FC = () => {
       {/* Cancel button when no JSON loaded */}
       {!jsonContent && (
         <div className="flex justify-end pt-6 border-t border-gray-200 dark:border-gray-700">
-          <button
-            type="button"
-            onClick={() => navigate('/')}
-            className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-md transition-colors"
-          >
+          <Button variant="secondary" onClick={() => navigate('/')}>
             Cancel
-          </button>
+          </Button>
         </div>
       )}
     </div>

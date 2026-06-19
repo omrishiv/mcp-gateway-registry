@@ -8,6 +8,7 @@ import {
 import axios from 'axios';
 import JSZip from 'jszip';
 import { triggerBlobDownload } from '../utils/blobDownload';
+import Button from './Button';
 
 
 interface ExportableCollection {
@@ -466,13 +467,11 @@ const DataExport: React.FC<DataExportProps> = ({ onShowToast }) => {
 
       {/* Download All button */}
       <div className="mt-6 flex justify-end">
-        <button
+        <Button
+          variant="primary"
           onClick={handleDownloadAll}
           disabled={isAnyDownloading}
-          className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium rounded-lg
-                     text-white bg-purple-600 hover:bg-purple-700
-                     disabled:opacity-50 disabled:cursor-not-allowed
-                     transition-colors"
+          className="px-5 py-2.5"
         >
           {downloadingAll ? (
             <>
@@ -485,7 +484,7 @@ const DataExport: React.FC<DataExportProps> = ({ onShowToast }) => {
               Download All as ZIP
             </>
           )}
-        </button>
+        </Button>
       </div>
     </div>
   );
