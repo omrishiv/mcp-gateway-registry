@@ -21,6 +21,8 @@ import {
 import { useRegistryConfig } from '../hooks/useRegistryConfig';
 import DeleteConfirmation from './DeleteConfirmation';
 import Pagination from './Pagination';
+import ProviderBadge from './iam/ProviderBadge';
+import { extractErrorDetail as extractDetail } from '../utils/apiError';
 
 /**
  * IAMUserGroups renders the "User Groups" tab of the IAM Settings page.
@@ -52,44 +54,10 @@ const PINGFEDERATE_PASSWORD_MIN_LENGTH = 8;
 // Mirrors the backend regex at registry/schemas/idp_user_group.py:22
 const USERNAME_REGEX = /^[A-Za-z0-9_\-.@]{1,256}$/;
 
-const PROVIDER_STYLES: Record<string, string> = {
-  manual: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300',
-  pingfederate: 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300',
-  okta: 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300',
-  auth0: 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300',
-  keycloak: 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300',
-  entra: 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300',
-};
-
 const PAGE_SIZE = 25;
 
 // Default no-op formatter for missing dates.
 const EM_DASH = '—';
-
-
-const ProviderBadge: React.FC<{ provider: string }> = ({ provider }) => {
-  const style =
-    PROVIDER_STYLES[provider] ??
-    'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300';
-  return (
-    <span
-      className={`inline-block px-2 py-0.5 text-xs rounded-full font-mono ${style}`}
-    >
-      {provider}
-    </span>
-  );
-};
-
-
-const extractDetail = (err: any, fallback: string): string => {
-  const detail = err?.response?.data?.detail;
-  if (Array.isArray(detail)) {
-    return (
-      detail.map((d: any) => d?.msg).filter(Boolean).join(', ') || fallback
-    );
-  }
-  return detail || fallback;
-};
 
 
 const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {

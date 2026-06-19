@@ -25,6 +25,9 @@ import {
   M2MClient,
 } from '../hooks/useIAM';
 import DeleteConfirmation from './DeleteConfirmation';
+import ProviderBadge from './iam/ProviderBadge';
+import ListStateBoundary from './iam/ListStateBoundary';
+import { extractErrorDetail as extractDetail } from '../utils/apiError';
 
 interface IAMM2MProps {
   onShowToast: (message: string, type: 'success' | 'error' | 'info') => void;
@@ -45,35 +48,6 @@ interface RegisterFormErrors {
 
 // Mirrors the backend regex at registry/schemas/idp_m2m_client.py:18.
 const CLIENT_ID_REGEX = /^[A-Za-z0-9_\-.:]{1,256}$/;
-
-const PROVIDER_STYLES: Record<string, string> = {
-  manual: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300',
-  okta: 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300',
-  auth0: 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300',
-  keycloak: 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300',
-  entra: 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300',
-};
-
-const ProviderBadge: React.FC<{ provider: string }> = ({ provider }) => {
-  const style =
-    PROVIDER_STYLES[provider] ??
-    'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300';
-  return (
-    <span
-      className={`inline-block px-2 py-0.5 text-xs rounded-full font-mono ${style}`}
-    >
-      {provider}
-    </span>
-  );
-};
-
-const extractDetail = (err: any, fallback: string): string => {
-  const detail = err?.response?.data?.detail;
-  if (Array.isArray(detail)) {
-    return detail.map((d: any) => d?.msg).filter(Boolean).join(', ') || fallback;
-  }
-  return detail || fallback;
-};
 
 const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
   const { clients, isLoading, error, refetch } = useM2MClients();
@@ -645,19 +619,16 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
           className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent" />
       </div>
 
-      {isLoading && (
-        <div className="flex justify-center py-12"><ArrowPathIcon className="h-6 w-6 text-gray-400 animate-spin" /></div>
-      )}
-      {error && !isLoading && (
-        <div className="text-center py-8 text-red-500 dark:text-red-400 text-sm">{error}</div>
-      )}
-      {!isLoading && !error && filteredClients.length === 0 && (
-        <div className="text-center py-12 text-gray-500 dark:text-gray-400">
-          {searchQuery ? 'No accounts match your search.' : 'No M2M accounts yet. Create your first service account.'}
-        </div>
-      )}
-
-      {!isLoading && !error && filteredClients.length > 0 && (
+      <ListStateBoundary
+        isLoading={isLoading}
+        error={error}
+        isEmpty={filteredClients.length === 0}
+        emptyMessage={
+          searchQuery
+            ? 'No accounts match your search.'
+            : 'No M2M accounts yet. Create your first service account.'
+        }
+      >
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -740,7 +711,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
             </tbody>
           </table>
         </div>
-      )}
+      </ListStateBoundary>
     </div>
   );
 };
