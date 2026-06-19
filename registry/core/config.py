@@ -35,6 +35,18 @@ MONGODB_BACKENDS: frozenset[str] = frozenset(
 )
 
 
+# Accepted values for SECRET_STORE_BACKEND (per-user egress credential vault).
+# Mirrors the ALLOWED_STORAGE_BACKENDS pattern. dev-fernet is gated and refused
+# in production (see _validate_secret_store_backend + the factory).
+ALLOWED_SECRET_STORES: frozenset[str] = frozenset(
+    {
+        "dev-fernet",
+        "secrets-manager",
+        "openbao",
+    }
+)
+
+
 class DeploymentMode(str, Enum):
     """Deployment mode options."""
 
@@ -838,7 +850,7 @@ class Settings(BaseSettings):
         default=5,
         ge=0,
         description=(
-            "Clock-skew leeway (seconds) on the /mcp-proxy internal token " "exp/iat checks."
+            "Clock-skew leeway (seconds) on the /mcp-proxy internal token exp/iat checks."
         ),
     )
 
@@ -912,6 +924,63 @@ class Settings(BaseSettings):
             "fail startup with a clear error listing accepted values."
         ),
     )
+
+    # Per-User Egress Credential Vault (third-party OBO support)
+    egress_auth_enabled: bool = Field(
+        default=False,
+        description="Master switch for the per-user egress credential vault feature.",
+    )
+    secret_store_backend: str = Field(
+        default="dev-fernet",
+        description=(
+            "Secret store for per-user egress tokens. Accepted values: "
+            "dev-fernet, secrets-manager, openbao. dev-fernet is dev-only and "
+            "refused when ENVIRONMENT=production."
+        ),
+    )
+    egress_oauth_callback_base_url: str = Field(
+        default="",
+        description="Public base URL for the egress OAuth callback ({base}/oauth2/egress/callback).",
+    )
+    egress_token_refresh_skew_seconds: int = Field(
+        default=300,
+        description="Refresh an access token when it expires within this window.",
+    )
+    egress_refresh_worker_interval_seconds: int = Field(
+        default=120,
+        description="Background refresh-loop scan interval; 0 disables the proactive sweep.",
+    )
+    egress_state_ttl_seconds: int = Field(
+        default=600,
+        description="Lifetime of the signed+encrypted OAuth consent state.",
+    )
+    egress_secrets_dir: str = Field(
+        default="",
+        description="Directory for dev-fernet egress secret files; blank = <servers_dir>/../egress_secrets.",
+    )
+    aws_secrets_region: str = Field(
+        default="",
+        description="AWS region for Secrets Manager (secret_store_backend=secrets-manager).",
+    )
+    secrets_manager_kms_key_id: str = Field(
+        default="",
+        description="Optional CMK for Secrets Manager envelope encryption.",
+    )
+    secrets_manager_path_prefix: str = Field(
+        default="mcp/egress",
+        description="Secret name prefix for the egress vault in Secrets Manager.",
+    )
+    openbao_addr: str = Field(
+        default="",
+        description="OpenBao server address (secret_store_backend=openbao).",
+    )
+    openbao_namespace: str = Field(default="", description="OpenBao namespace (optional).")
+    openbao_kv_mount: str = Field(default="secret", description="OpenBao KV v2 mount point.")
+    openbao_auth_method: str = Field(
+        default="token",
+        description="OpenBao auth method: token | kubernetes | approle.",
+    )
+    openbao_role: str = Field(default="", description="OpenBao role for kubernetes/approle auth.")
 
     @field_validator("app_log_dir", mode="before")
     @classmethod
@@ -992,6 +1061,31 @@ class Settings(BaseSettings):
         if normalized not in ALLOWED_STORAGE_BACKENDS:
             accepted = ", ".join(sorted(ALLOWED_STORAGE_BACKENDS))
             raise ValueError(f"Invalid STORAGE_BACKEND={v!r}. Accepted values: {accepted}.")
+        return normalized
+
+    @field_validator("secret_store_backend", mode="before")
+    @classmethod
+    def _validate_secret_store_backend(
+        cls,
+        v: str | None,
+    ) -> str:
+        """Reject unknown SECRET_STORE_BACKEND values at startup.
+
+        Empty/None coerce to "dev-fernet" (the default). Other values are
+        normalized and checked against ALLOWED_SECRET_STORES. Non-secret config
+        name, so echoing v in the error is safe. The production-refusal of
+        dev-fernet and the egress-requires-Mongo (L0) cross-field checks live in
+        the model validator below, not here (single-field validators can't see
+        sibling fields).
+        """
+        if v is None or v == "":
+            return "dev-fernet"
+        if not isinstance(v, str):
+            raise ValueError(f"SECRET_STORE_BACKEND must be a string, got {type(v).__name__}")
+        normalized = v.strip().lower()
+        if normalized not in ALLOWED_SECRET_STORES:
+            accepted = ", ".join(sorted(ALLOWED_SECRET_STORES))
+            raise ValueError(f"Invalid SECRET_STORE_BACKEND={v!r}. Accepted values: {accepted}.")
         return normalized
 
     @field_validator("internal_deployment_type", mode="before")
@@ -1119,6 +1213,49 @@ class Settings(BaseSettings):
                 "SECRET_KEY environment variable is required. "
                 "Set it to a value at least 32 bytes long, identical across all auth_server "
                 "and registry replicas (see chart values.yaml: global.secretKey)."
+            )
+        self._validate_egress_auth_config()
+
+    def _validate_egress_auth_config(self) -> None:
+        """Cross-field startup checks for the egress credential vault.
+
+        Single-field validators can't see siblings, so these live here:
+        - L0: the B1 refresh lease lock is Mongo-only, so the vault requires a
+          Mongo-family storage_backend (the default 'file' backend has no lock
+          home -> would silently drop cross-replica single-flight refresh).
+        - dev-fernet must never reach production (keeps per-user refresh tokens
+          in local files).
+        - a public callback base URL is required to build the redirect_uri.
+        """
+        if not self.egress_auth_enabled:
+            return
+
+        if self.storage_backend not in MONGODB_BACKENDS:
+            raise ValueError(
+                f"EGRESS_AUTH_ENABLED=true requires a Mongo-family STORAGE_BACKEND "
+                f"(one of: {', '.join(sorted(MONGODB_BACKENDS))}); got "
+                f"{self.storage_backend!r}. The refresh single-flight lock has no "
+                f"home on the 'file' backend."
+            )
+
+        import os
+
+        is_production = os.environ.get("ENVIRONMENT", "").strip().lower() == "production"
+        if self.secret_store_backend == "dev-fernet":  # nosec B105 - backend name  # pragma: allowlist secret
+            if is_production:
+                raise ValueError(
+                    "SECRET_STORE_BACKEND=dev-fernet is refused when ENVIRONMENT=production. "
+                    "Use 'secrets-manager' (AWS) or 'openbao' for production deployments."
+                )
+            logger.warning(
+                "SECRET_STORE_BACKEND=dev-fernet: per-user egress refresh tokens are stored "
+                "in local Fernet-encrypted files. DEV ONLY -- do not use in production."
+            )
+
+        if not self.egress_oauth_callback_base_url:
+            raise ValueError(
+                "EGRESS_AUTH_ENABLED=true requires EGRESS_OAUTH_CALLBACK_BASE_URL "
+                "(the public base URL for {base}/oauth2/egress/callback)."
             )
 
     @property
