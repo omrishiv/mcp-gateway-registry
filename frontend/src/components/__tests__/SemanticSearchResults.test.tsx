@@ -94,6 +94,37 @@ describe('SemanticSearchResults', () => {
     expect(screen.getByText('login')).toBeInTheDocument();
   });
 
+  it('closes the server details modal on Escape', () => {
+    render(<SemanticSearchResults {...baseProps} servers={[server]} />);
+    fireEvent.click(screen.getByTitle('View server details'));
+    expect(screen.getByText('Match Score')).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByText('Match Score')).not.toBeInTheDocument();
+  });
+
+  it('opens the virtual server details modal with its backend section', () => {
+    render(
+      <SemanticSearchResults
+        {...baseProps}
+        virtualServers={[
+          {
+            server_name: 'VS One',
+            path: '/vs-one',
+            description: 'virtual',
+            relevance_score: 0.6,
+            is_enabled: true,
+            tags: [],
+            matching_tools: [],
+            backend_paths: ['/backend-a'],
+          } as any,
+        ]}
+      />,
+    );
+    fireEvent.click(screen.getByTitle('View virtual server details'));
+    expect(screen.getByText(/Backend Servers/)).toBeInTheDocument();
+    expect(screen.getByText('/backend-a')).toBeInTheDocument();
+  });
+
   it('renders a matching skill with its SKILL badge', () => {
     render(
       <SemanticSearchResults

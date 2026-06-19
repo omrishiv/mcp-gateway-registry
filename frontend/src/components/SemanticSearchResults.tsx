@@ -28,6 +28,7 @@ import useEscapeKey from '../hooks/useEscapeKey';
 import ANSBadge from './ANSBadge';
 import { parseYamlFrontmatter } from '../utils/yamlFrontmatter';
 import SearchResultCard from './search/SearchResultCard';
+import { EntityModal } from './modals';
 
 interface SemanticSearchResultsProps {
   query: string;
@@ -56,42 +57,32 @@ const ToolSchemaModal: React.FC<ToolSchemaModalProps> = ({
   isOpen,
   onClose
 }) => {
-  useEscapeKey(onClose, isOpen);
-  if (!isOpen) return null;
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-2xl w-full max-h-[80vh] flex flex-col">
-        <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
-          <div>
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-              {toolName}
-            </h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400">{serverName}</p>
-          </div>
-          <button
-            onClick={onClose}
-            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-lg transition-colors"
-          >
-            <XMarkIcon className="h-5 w-5" />
-          </button>
+    <EntityModal
+      isOpen={isOpen}
+      onClose={onClose}
+      maxWidth="2xl"
+      layout="flush"
+      title={
+        <div>
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">{toolName}</h3>
+          <p className="text-sm text-gray-500 dark:text-gray-400">{serverName}</p>
         </div>
-        <div className="p-4 overflow-auto flex-1">
-          <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
-            Input Schema
-          </p>
-          {schema && Object.keys(schema).length > 0 ? (
-            <pre className="text-xs bg-gray-100 dark:bg-gray-900 p-3 rounded-lg overflow-auto text-gray-800 dark:text-gray-200">
-              {JSON.stringify(schema, null, 2)}
-            </pre>
-          ) : (
-            <p className="text-sm text-gray-500 dark:text-gray-400 italic">
-              No input schema available for this tool.
-            </p>
-          )}
-        </div>
-      </div>
-    </div>
+      }
+    >
+      <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
+        Input Schema
+      </p>
+      {schema && Object.keys(schema).length > 0 ? (
+        <pre className="text-xs bg-gray-100 dark:bg-gray-900 p-3 rounded-lg overflow-auto text-gray-800 dark:text-gray-200">
+          {JSON.stringify(schema, null, 2)}
+        </pre>
+      ) : (
+        <p className="text-sm text-gray-500 dark:text-gray-400 italic">
+          No input schema available for this tool.
+        </p>
+      )}
+    </EntityModal>
   );
 };
 
@@ -106,39 +97,34 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
   isOpen,
   onClose
 }) => {
-  useEscapeKey(onClose, isOpen);
-  if (!isOpen) return null;
-
   const isFederatedServer = server.sync_metadata?.is_federated === true;
   const peerRegistryId = isFederatedServer && server.sync_metadata?.source_peer_id
     ? server.sync_metadata.source_peer_id.replace('peer-registry-', '').replace('peer-', '').toUpperCase()
     : null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-2xl w-full max-h-[80vh] flex flex-col">
-        <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
-          <div>
-            <div className="flex items-center gap-2">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-                {server.server_name}
-              </h3>
-              {isFederatedServer && peerRegistryId && (
-                <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-200 border border-cyan-200 dark:border-cyan-700">
-                  {peerRegistryId}
-                </span>
-              )}
-            </div>
-            <p className="text-sm text-gray-500 dark:text-gray-400">{server.path}</p>
+    <EntityModal
+      isOpen={isOpen}
+      onClose={onClose}
+      maxWidth="2xl"
+      layout="flush"
+      title={
+        <div>
+          <div className="flex items-center gap-2">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+              {server.server_name}
+            </h3>
+            {isFederatedServer && peerRegistryId && (
+              <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-200 border border-cyan-200 dark:border-cyan-700">
+                {peerRegistryId}
+              </span>
+            )}
           </div>
-          <button
-            onClick={onClose}
-            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-lg transition-colors"
-          >
-            <XMarkIcon className="h-5 w-5" />
-          </button>
+          <p className="text-sm text-gray-500 dark:text-gray-400">{server.path}</p>
         </div>
-        <div className="p-4 overflow-auto flex-1 space-y-4">
+      }
+    >
+        <div className="space-y-4">
           {/* Description */}
           <div>
             <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
@@ -216,8 +202,7 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
             </span>
           </div>
         </div>
-      </div>
-    </div>
+    </EntityModal>
   );
 };
 
@@ -433,9 +418,6 @@ const VirtualServerDetailsModal: React.FC<VirtualServerDetailsModalProps> = ({
   const [copiedEndpoint, setCopiedEndpoint] = useState(false);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
 
-  useEscapeKey(onClose, isOpen);
-  if (!isOpen) return null;
-
   const tools = virtualServer.matching_tools || [];
   const backendPaths = virtualServer.backend_paths || [];
 
@@ -460,28 +442,26 @@ const VirtualServerDetailsModal: React.FC<VirtualServerDetailsModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-2xl w-full max-h-[80vh] flex flex-col">
-        <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
-          <div>
-            <div className="flex items-center gap-2">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-                {virtualServer.server_name}
-              </h3>
-              <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-200 border border-indigo-200 dark:border-indigo-600">
-                VIRTUAL
-              </span>
-            </div>
-            <p className="text-sm text-gray-500 dark:text-gray-400">{virtualServer.path}</p>
+    <EntityModal
+      isOpen={isOpen}
+      onClose={onClose}
+      maxWidth="2xl"
+      layout="flush"
+      title={
+        <div>
+          <div className="flex items-center gap-2">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+              {virtualServer.server_name}
+            </h3>
+            <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-200 border border-indigo-200 dark:border-indigo-600">
+              VIRTUAL
+            </span>
           </div>
-          <button
-            onClick={onClose}
-            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-lg transition-colors"
-          >
-            <XMarkIcon className="h-5 w-5" />
-          </button>
+          <p className="text-sm text-gray-500 dark:text-gray-400">{virtualServer.path}</p>
         </div>
-        <div className="p-4 overflow-auto flex-1 space-y-4">
+      }
+    >
+        <div className="space-y-4">
           {/* Endpoint URL */}
           {virtualServer.endpoint_url && (
             <div>
@@ -637,8 +617,7 @@ const VirtualServerDetailsModal: React.FC<VirtualServerDetailsModalProps> = ({
             </span>
           </div>
         </div>
-      </div>
-    </div>
+    </EntityModal>
   );
 };
 
