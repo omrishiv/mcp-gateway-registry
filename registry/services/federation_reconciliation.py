@@ -313,10 +313,12 @@ async def _reconcile_agentcore_agents(
         if "agentcore" in (a.tags or []) and str(a.path).startswith("/agents/agentcore-")
     ]
 
+    from ..services.agent_service import agent_service
+
     for agent in agentcore_agents:
         if agent.path not in expected_paths:
             try:
-                success = await agent_repo.delete(agent.path)
+                success = await agent_service.remove_agent(agent.path)
                 if success:
                     removed.append(agent.name)
                     logger.info(f"AgentCore reconciliation: removed stale agent '{agent.name}'")
@@ -355,10 +357,14 @@ async def _reconcile_agentcore_skills(
         if "agentcore" in (s.tags or []) and str(s.path).startswith("/skills/agentcore-")
     ]
 
+    from ..services.skill_service import get_skill_service
+
+    skill_service = get_skill_service()
+
     for skill in agentcore_skills:
         if skill.path not in expected_paths:
             try:
-                success = await skill_repo.delete(skill.path)
+                success = await skill_service.delete_skill(skill.path)
                 if success:
                     removed.append(skill.name)
                     logger.info(f"AgentCore reconciliation: removed stale skill '{skill.name}'")
@@ -390,8 +396,8 @@ async def reconcile_agentcore_records(
         config: Current federation configuration
         server_service: ServerService instance for remove_server()
         server_repo: Server repository for list_by_source()
-        agent_repo: Agent repository for list_all() and delete()
-        skill_repo: Skill repository for list_all() and delete()
+        agent_repo: Agent repository for list_all()
+        skill_repo: Skill repository for list_all()
         synced_paths: Dict with "servers", "agents", "skills" keys containing
             paths that were just synced. If None, uses empty sets (removes all).
         dry_run: If True, compute delta but do not delete anything

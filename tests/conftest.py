@@ -383,6 +383,7 @@ def mock_search_repository():
     mock.hybrid_search.return_value = []
     mock.index_server.return_value = None
     mock.index_agent.return_value = None
+    mock.remove_entity.return_value = True
     return mock
 
 

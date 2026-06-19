@@ -556,21 +556,29 @@ class ServerService:
         Deletes the active document and any inactive version documents
         with IDs matching `{path}:{version}` (e.g., /context7:v2.0.0).
 
+        Removes the search embedding before deleting source documents so a
+        failed vector removal does not leave an orphan (issue #1145).
+
         Args:
             path: Server base path (e.g., "/context7")
 
         Returns:
             True if at least one document was deleted
         """
+        from .search_index_cleanup import remove_from_search_index_with_retry
+
+        if not await remove_from_search_index_with_retry(
+            self._search_repo,
+            path,
+            entity_type="mcp_server",
+        ):
+            logger.error(
+                "Aborting server delete for %s: search index removal failed",
+                path,
+            )
+            return False
+
         deleted_count = await self._repo.delete_with_versions(path)
-
-        if deleted_count > 0:
-            # Remove from search backend
-            try:
-                await self._search_repo.remove_entity(path)
-            except Exception as e:
-                logger.error(f"Failed to remove server {path} from search: {e}")
-
         return deleted_count > 0
 
     async def add_server_version(

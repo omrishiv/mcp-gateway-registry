@@ -556,7 +556,7 @@ class FaissService:
     async def remove_entity(
         self,
         entity_path: str,
-    ) -> None:
+    ) -> bool:
         """
         Wrapper method for removing an entity.
 
@@ -564,11 +564,14 @@ class FaissService:
         """
         try:
             await self.remove_agent(entity_path)
+            return True
         except Exception:
             try:
                 await self.remove_service(entity_path)
+                return True
             except Exception as e:
                 logger.warning(f"Could not remove entity {entity_path}: {e}")
+                return False
 
     async def search_entities(
         self,

@@ -317,6 +317,15 @@ _m2m_orphan_cleanups_counter = _meter.create_counter(
 m2m_orphan_cleanups_total = _CounterAdapter(_m2m_orphan_cleanups_counter)
 
 
+# Search index cleanup on entity delete (issue #1145)
+_embedding_removal_failures_counter = _meter.create_counter(
+    name="mcpgw_registry_embedding_removal_failures_total",
+    description="Failed search-index embedding removals during entity delete",
+    unit="1",
+)
+embedding_removal_failures_total = _CounterAdapter(_embedding_removal_failures_counter)
+
+
 # Cloud detection (registry/core/metrics.py:87)
 _cloud_detection_counter = _meter.create_counter(
     name="mcpgw_registry_cloud_detection_total",

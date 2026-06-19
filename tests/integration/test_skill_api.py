@@ -266,6 +266,7 @@ class TestSkillService:
         from registry.services.skill_service import SkillService
 
         mock_skill_repository.delete.return_value = True
+        mock_search_repository.remove_entity.return_value = True
 
         service = SkillService()
         service._repo = mock_skill_repository
@@ -273,6 +274,7 @@ class TestSkillService:
 
         result = await service.delete_skill("/skills/test")
         assert result is True
+        mock_search_repository.remove_entity.assert_called_once()
         mock_skill_repository.delete.assert_called_once()
 
 

@@ -154,7 +154,7 @@ def fake_search_repo() -> AsyncMock:
     """Search repository is an integration boundary we don't exercise here."""
     mock = AsyncMock()
     mock.index_agent.return_value = None
-    mock.remove_entity.return_value = None
+    mock.remove_entity.return_value = True
     mock.index_entity.return_value = None
     return mock
 
@@ -457,6 +457,7 @@ class TestDeleteAgent:
         self,
         agent_service: AgentService,
         fake_repo: InMemoryAgentRepository,
+        fake_search_repo: AsyncMock,
     ):
         await fake_repo.create(AgentCardFactory(path="/test-agent"))
 
@@ -464,6 +465,22 @@ class TestDeleteAgent:
 
         assert result is True
         assert await fake_repo.get("/test-agent") is None
+        fake_search_repo.remove_entity.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_delete_agent_aborts_when_search_removal_fails(
+        self,
+        agent_service: AgentService,
+        fake_repo: InMemoryAgentRepository,
+        fake_search_repo: AsyncMock,
+    ):
+        await fake_repo.create(AgentCardFactory(path="/test-agent"))
+        fake_search_repo.remove_entity.return_value = False
+
+        with pytest.raises(ValueError, match="search index"):
+            await agent_service.delete_agent("/test-agent")
+
+        assert await fake_repo.get("/test-agent") is not None
 
     @pytest.mark.asyncio
     async def test_delete_agent_not_found(self, agent_service: AgentService):

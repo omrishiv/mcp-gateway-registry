@@ -1273,10 +1273,26 @@ class TestRemoveServer:
 
         # Assert
         assert result is True
+        mock_search_repository.remove_entity.assert_called_once_with(sample_server_dict["path"])
         mock_server_repository.delete_with_versions.assert_called_once_with(
             sample_server_dict["path"]
         )
-        mock_search_repository.remove_entity.assert_called_once_with(sample_server_dict["path"])
+
+    @pytest.mark.asyncio
+    async def test_remove_server_aborts_when_search_removal_fails(
+        self,
+        server_service: ServerService,
+        sample_server_dict: dict[str, Any],
+        mock_server_repository,
+        mock_search_repository,
+    ):
+        """Search removal failure aborts delete to avoid orphaned embeddings."""
+        mock_search_repository.remove_entity.return_value = False
+
+        result = await server_service.remove_server(sample_server_dict["path"])
+
+        assert result is False
+        mock_server_repository.delete_with_versions.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_remove_server_deletes_all_versions(
@@ -1343,7 +1359,7 @@ class TestRemoveServer:
         mock_server_repository,
         mock_search_repository,
     ):
-        """Test removing server when repository fails."""
+        """Test removing server when repository deletes nothing."""
         # Arrange - repository returns 0 (nothing deleted)
         mock_server_repository.delete_with_versions.return_value = 0
 
@@ -1352,8 +1368,10 @@ class TestRemoveServer:
 
         # Assert
         assert result is False
-        # Search should not be called if repository deletes nothing
-        mock_search_repository.remove_entity.assert_not_called()
+        mock_search_repository.remove_entity.assert_called_once_with(sample_server_dict["path"])
+        mock_server_repository.delete_with_versions.assert_called_once_with(
+            sample_server_dict["path"]
+        )
 
 
 # =============================================================================

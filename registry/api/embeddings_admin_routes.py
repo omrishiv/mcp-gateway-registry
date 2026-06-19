@@ -1,7 +1,7 @@
 """Admin routes for managing search embeddings.
 
-Provides endpoints to detect documents missing from the search index
-and re-index them on demand.
+Provides endpoints to detect documents missing from the search index,
+orphaned stale embeddings (issue #1145), and re-index on demand.
 """
 
 import logging
@@ -76,6 +76,62 @@ class ReindexResponse(BaseModel):
     details: list[ReindexDetailEntry]
 
 
+class StaleEmbeddingEntry(BaseModel):
+    """An embedding-index document with no matching source registry record."""
+
+    path: str
+    entity_type: str
+    name: str
+    is_enabled: bool = True
+
+
+class StaleEmbeddingsResponse(BaseModel):
+    """Response for the stale embeddings scan."""
+
+    stale: list[StaleEmbeddingEntry]
+    total_stale: int
+    total_indexed: int
+    total_source: int
+
+
+class StaleCleanupRequest(BaseModel):
+    """Request body for removing orphaned embedding documents."""
+
+    paths: list[str] = Field(
+        ...,
+        min_length=1,
+        max_length=MAX_REINDEX_BATCH,
+        description=f"Embedding paths to remove (max {MAX_REINDEX_BATCH})",
+    )
+
+
+class StaleCleanupDetailEntry(BaseModel):
+    """Per-path result of stale embedding removal.
+
+    ``status`` is ``removed`` (a stale embedding existed and was deleted),
+    ``not_found`` (no-op: nothing indexed at this path), or ``failed``.
+    """
+
+    path: str
+    status: str
+    error: str | None = None
+
+
+class StaleCleanupResponse(BaseModel):
+    """Response for the stale embedding cleanup operation.
+
+    Counts are reported separately so admins can tell a real cleanup from a
+    no-op: ``removed`` paths actually had an orphaned embedding deleted, while
+    ``not_found`` paths matched nothing (e.g. a typo or an already-clean path).
+    """
+
+    removed: int
+    not_found: int
+    failed: int
+    total: int
+    details: list[StaleCleanupDetailEntry]
+
+
 def _get_search_repo():
     """Get the search repository instance."""
     return get_search_repository()
@@ -102,6 +158,71 @@ async def get_missing_embeddings(
         "Missing embeddings scan: %d missing out of %d source documents",
         result["total_missing"],
         result["total_source"],
+    )
+
+    return result
+
+
+@router.get(
+    "/stale",
+    response_model=StaleEmbeddingsResponse,
+)
+async def get_stale_embeddings(
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
+) -> dict[str, Any]:
+    """Scan for orphaned embeddings with no source registry document.
+
+    Compares the embeddings collection against source collections
+    (servers, agents, skills, virtual servers) and returns index entries
+    whose source entity was deleted without removing the vector (issue #1145).
+    """
+    _require_admin(user_context)
+
+    search_repo = _get_search_repo()
+    find_stale = getattr(search_repo, "find_stale_embeddings", None)
+    if find_stale is None:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Stale embedding scan is not supported by the current search backend",
+        )
+
+    result = await find_stale()
+
+    logger.info(
+        "Stale embeddings scan: %d stale out of %d indexed documents",
+        result["total_stale"],
+        result["total_indexed"],
+    )
+
+    return result
+
+
+@router.post(
+    "/stale/cleanup",
+    response_model=StaleCleanupResponse,
+)
+async def cleanup_stale_embeddings(
+    request: StaleCleanupRequest,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
+) -> dict[str, Any]:
+    """Remove orphaned embedding documents from the search index."""
+    _require_admin(user_context)
+
+    search_repo = _get_search_repo()
+    remove_stale = getattr(search_repo, "remove_stale_embeddings", None)
+    if remove_stale is None:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Stale embedding cleanup is not supported by the current search backend",
+        )
+
+    result = await remove_stale(request.paths)
+
+    logger.info(
+        "Stale embedding cleanup: %d removed, %d not_found, %d failed",
+        result["removed"],
+        result["not_found"],
+        result["failed"],
     )
 
     return result

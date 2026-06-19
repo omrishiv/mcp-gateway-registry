@@ -40,6 +40,8 @@ from ..schemas.skill_models import (
     SkillInfo,
     SkillMetadata,
     SkillRegistrationRequest,
+    SkillResource,
+    SkillResourceManifest,
     VisibilityEnum,
 )
 from ..utils.path_utils import normalize_skill_path
@@ -1418,6 +1420,7 @@ class SkillService:
                 auth_scheme=s.auth_scheme,
                 auth_header_name=s.auth_header_name,
                 num_stars=s.num_stars,
+                rating_details=s.rating_details,
                 health_status=s.health_status,
                 last_checked_time=s.last_checked_time,
                 status=s.status,
@@ -1526,17 +1529,26 @@ class SkillService:
         path: str,
     ) -> bool:
         """Delete a skill."""
+        from .search_index_cleanup import remove_from_search_index_with_retry
+
         normalized = normalize_skill_path(path)
+        search_repo = self._get_search_repo()
+
+        if not await remove_from_search_index_with_retry(
+            search_repo,
+            normalized,
+            entity_type="skill",
+        ):
+            logger.error(
+                "Aborting skill delete for %s: search index removal failed",
+                normalized,
+            )
+            return False
+
         repo = self._get_repo()
         success = await repo.delete(normalized)
 
         if success:
-            # Remove from search index
-            try:
-                search_repo = self._get_search_repo()
-                await search_repo.remove_entity(normalized)
-            except Exception as e:
-                logger.warning(f"Failed to remove skill from search index: {e}")
             logger.info(f"Deleted skill: {normalized}")
 
         return success

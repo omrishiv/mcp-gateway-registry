@@ -44,6 +44,9 @@ from registry.observability.meters import (
     config_view_requests_total as CONFIG_VIEW_REQUESTS,
 )
 from registry.observability.meters import (
+    embedding_removal_failures_total as EMBEDDING_REMOVAL_FAILURES_TOTAL,
+)
+from registry.observability.meters import (
     m2m_orphan_cleanups_total as M2M_ORPHAN_CLEANUPS_TOTAL,
 )
 from registry.observability.meters import (
@@ -98,6 +101,7 @@ __all__ = [
     "CONFIG_EXPORT_REQUESTS",
     "CONFIG_VIEW_REQUESTS",
     "DEPLOYMENT_MODE_INFO",
+    "EMBEDDING_REMOVAL_FAILURES_TOTAL",
     "M2M_ORPHAN_CLEANUPS_TOTAL",
     "MODE_BLOCKED_REQUESTS",
     "NGINX_CONFIG_WRITES",

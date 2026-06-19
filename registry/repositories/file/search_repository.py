@@ -28,9 +28,14 @@ class FaissSearchRepository(SearchRepositoryBase):
             is_enabled=is_enabled,
         )
 
-    async def remove_entity(self, entity_path: str) -> None:
+    async def remove_entity(self, entity_path: str) -> bool:
         """Remove entity from FAISS index."""
-        await self.faiss_service.remove_entity(entity_path)
+        try:
+            await self.faiss_service.remove_entity(entity_path)
+            return True
+        except Exception as e:
+            logger.error("Failed to remove entity '%s' from FAISS index: %s", entity_path, e)
+            return False
 
     async def search_by_tags(
         self,

@@ -910,6 +910,21 @@ class SecurityScanRepositoryBase(ABC):
         pass
 
     @abstractmethod
+    async def list_latest(self) -> list[dict[str, Any]]:
+        """
+        List the latest security scan result per server path.
+
+        Unlike list_all(), this collapses scan history (the DocumentDB backend
+        stores one document per scan run) to a single most-recent document per
+        path. List endpoints use this to attach a per-item scan summary without
+        loading the entire scan history.
+
+        Returns:
+            List with at most one (the newest) scan result per server path.
+        """
+        pass
+
+    @abstractmethod
     async def create(
         self,
         scan_result: dict[str, Any],
@@ -1002,6 +1017,21 @@ class SkillSecurityScanRepositoryBase(ABC):
         pass
 
     @abstractmethod
+    async def list_latest(self) -> list[dict[str, Any]]:
+        """
+        List the latest skill security scan result per skill path.
+
+        Unlike list_all(), this collapses scan history (the DocumentDB backend
+        stores one document per scan run) to a single most-recent document per
+        path. List endpoints use this to attach a per-item scan summary without
+        loading the entire scan history.
+
+        Returns:
+            List with at most one (the newest) scan result per skill path.
+        """
+        pass
+
+    @abstractmethod
     async def create(
         self,
         scan_result: dict[str, Any],
@@ -1090,8 +1120,13 @@ class SearchRepositoryBase(ABC):
     async def remove_entity(
         self,
         path: str,
-    ) -> None:
-        """Remove entity from search index."""
+    ) -> bool:
+        """Remove entity from search index.
+
+        Returns:
+            True if removal succeeded (including idempotent not-found).
+            False if removal failed.
+        """
         pass
 
     @abstractmethod

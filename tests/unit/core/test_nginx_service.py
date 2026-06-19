@@ -1065,7 +1065,7 @@ def test_backend_url_declared_at_http_scope():
     for conf in conf_files:
         text = conf.read_text()
         assert backend_map.search(text), (
-            f"{conf.name} is missing the http-scope `map ... $backend_url {{ default \"\"; }}` "
+            f'{conf.name} is missing the http-scope `map ... $backend_url {{ default ""; }}` '
             f"declaration. Without it nginx fails to start when no /mcp-proxy/ block renders."
         )
 
@@ -1087,7 +1087,7 @@ def test_registry_api_auth_declared_at_http_scope():
     for conf in conf_files:
         text = conf.read_text()
         assert api_auth_map.search(text), (
-            f"{conf.name} is missing the http-scope `map ... $registry_api_auth {{ default \"\"; }}` "
+            f'{conf.name} is missing the http-scope `map ... $registry_api_auth {{ default ""; }}` '
             f"declaration. Without it nginx fails to start on non-API requests."
         )
 
@@ -1115,7 +1115,7 @@ def test_no_server_scope_registry_api_auth_default_in_conf_templates():
             if directive.match(line) and not line.lstrip().startswith("#")
         ]
         assert not offenders, (
-            f"{conf.name} contains a `set $registry_api_auth \"\"` default outside "
+            f'{conf.name} contains a `set $registry_api_auth ""` default outside '
             f"the protected /api/ blocks: {offenders}. This re-runs in the /validate "
             f"subrequest and breaks registry-UI token minting."
         )
