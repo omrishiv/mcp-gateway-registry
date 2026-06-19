@@ -25,6 +25,7 @@ import {
   ACCENTS,
   ENTITY_ACCENTS,
 } from './cards';
+import Badge from './Badge';
 
 
 /**
@@ -167,9 +168,9 @@ const VirtualServerCard: React.FC<VirtualServerCardProps> = ({
           title={server.server_name}
           path={server.path}
           badges={
-            <span className="px-2 py-0.5 text-xs font-semibold bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-300 rounded-full flex-shrink-0 border border-teal-200 dark:border-teal-600">
+            <Badge tone="teal" bordered>
               VIRTUAL
-            </span>
+            </Badge>
           }
           actions={
             <>
