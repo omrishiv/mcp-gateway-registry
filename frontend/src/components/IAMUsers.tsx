@@ -374,7 +374,7 @@ const IAMUsers: React.FC<IAMUsersProps> = ({ onShowToast }) => {
             <tbody>
               {filteredUsers.map((u) => (
                 <React.Fragment key={u.username}>
-                  <tr className="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800">
+                  <tr className="table-row border-b border-gray-100 dark:border-gray-800">
                     <td className="py-3 px-4 text-gray-900 dark:text-white font-medium">{u.username}</td>
                     <td className="py-3 px-4 text-gray-600 dark:text-gray-400">{u.email || '\u2014'}</td>
                     <td className="py-3 px-4 text-gray-600 dark:text-gray-400">

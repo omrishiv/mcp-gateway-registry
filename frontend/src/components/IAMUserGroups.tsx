@@ -472,7 +472,7 @@ const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
                   const isManual = u.provider === 'manual';
                   return (
                     <React.Fragment key={u.username}>
-                      <tr className="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800">
+                      <tr className="table-row border-b border-gray-100 dark:border-gray-800">
                         <td className="py-3 px-4 text-gray-900 dark:text-white font-medium font-mono">
                           {u.username}
                         </td>

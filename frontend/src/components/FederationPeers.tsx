@@ -468,7 +468,7 @@ const FederationPeers: React.FC<FederationPeersProps> = ({ onShowToast }) => {
                 const isSyncing = syncingPeers.has(peer.peer_id);
 
                 return (
-                  <tr key={peer.peer_id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                  <tr key={peer.peer_id} className="table-row">
                     <td className="px-4 py-4 whitespace-nowrap">
                       <div className="flex flex-col">
                         <span className="text-sm font-medium text-gray-900 dark:text-white">

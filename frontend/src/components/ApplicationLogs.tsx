@@ -411,20 +411,20 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
             <div className="overflow-x-auto">
               <table className="w-full text-sm" aria-label="Application log entries">
                 <thead>
-                  <tr className="border-b border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-gray-900">
-                    <th className="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-200 w-40">Timestamp</th>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-200 w-24">Level</th>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-200 w-28">Service</th>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-200 w-36">Source</th>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-200">Message</th>
+                  <tr className="table-header">
+                    <th className="w-40">Timestamp</th>
+                    <th className="w-24">Level</th>
+                    <th className="w-28">Service</th>
+                    <th className="w-36">Source</th>
+                    <th>Message</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 dark:divide-gray-700/50">
                   {entries.map((entry, idx) => (
                     <React.Fragment key={idx}>
                       <tr
-                        className={`hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer transition-colors ${
-                          expandedRow === idx ? 'bg-gray-100 dark:bg-gray-700' : ''
+                        className={`table-row cursor-pointer ${
+                          expandedRow === idx ? 'table-row-selected' : ''
                         }`}
                         role="button"
                         tabIndex={0}

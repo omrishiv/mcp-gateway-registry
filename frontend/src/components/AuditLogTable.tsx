@@ -316,10 +316,10 @@ const AuditLogTable: React.FC<AuditLogTableProps> = ({
                 <tr
                   key={event.request_id}
                   onClick={() => onEventSelect?.(event)}
-                  className={`cursor-pointer transition-colors ${
+                  className={`table-row cursor-pointer ${
                     selectedEventId === event.request_id
                       ? 'bg-blue-50 dark:bg-blue-900/20'
-                      : 'hover:bg-gray-50 dark:hover:bg-gray-700'
+                      : ''
                   }`}
                 >
                   <td className="px-4 py-3 text-sm text-gray-900 dark:text-gray-100 whitespace-nowrap">

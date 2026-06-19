@@ -1351,7 +1351,7 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
             <tbody>
               {filteredGroups.map((group) => (
                 <React.Fragment key={group.name}>
-                  <tr className="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800">
+                  <tr className="table-row border-b border-gray-100 dark:border-gray-800">
                     <td className="py-3 px-4 text-gray-900 dark:text-white font-medium">
                       <span>{group.name}</span>
                       {group.is_idp_managed === false ? (

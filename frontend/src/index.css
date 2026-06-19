@@ -53,6 +53,11 @@
 
   --btn-ghost-bg-hover: var(--color-gray-100);
   --btn-ghost-text: var(--color-gray-700);
+
+  /* Table interaction surfaces (light-mode defaults). */
+  --table-header-bg: var(--color-gray-100);
+  --table-row-hover-bg: var(--color-gray-100);
+  --table-row-selected-bg: var(--color-gray-100);
 }
 
 /*
@@ -67,6 +72,15 @@ html.dark {
 
   --btn-ghost-bg-hover: var(--color-gray-800);
   --btn-ghost-text: var(--color-gray-300);
+
+  /*
+   * Table surfaces in dark mode use SOLID dark grays (not opacity composites),
+   * so hovered/selected rows stay clearly darker than the light-gray cell text
+   * — the row-hover a11y bug fixed in one place.
+   */
+  --table-header-bg: var(--color-gray-900);
+  --table-row-hover-bg: var(--color-gray-700);
+  --table-row-selected-bg: var(--color-gray-700);
 }
 
 /*
@@ -161,6 +175,29 @@ html.high-contrast {
   
   .card {
     @apply bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700;
+  }
+
+  /*
+   * Table surfaces. Header + row hover/selected states read the table tokens
+   * above, so dark-mode row-hover contrast (the a11y bug) is defined ONCE.
+   * Tables keep their own columns/cells; they just use these classes for chrome.
+   */
+  .table-header {
+    @apply border-b border-gray-200 dark:border-gray-700;
+    background-color: var(--table-header-bg);
+  }
+  .table-header th {
+    @apply px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-200;
+  }
+
+  .table-row {
+    @apply cursor-default transition-colors;
+  }
+  .table-row:hover {
+    background-color: var(--table-row-hover-bg);
+  }
+  .table-row-selected {
+    background-color: var(--table-row-selected-bg);
   }
   
   .input {

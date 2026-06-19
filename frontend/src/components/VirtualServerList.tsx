@@ -300,7 +300,7 @@ const VirtualServerList: React.FC<VirtualServerListProps> = ({ onShowToast }) =>
               {filteredServers.map((server) => (
                 <tr
                   key={server.path}
-                  className="hover:bg-gray-50 dark:hover:bg-gray-700"
+                  className="table-row"
                 >
                   <td className="px-4 py-4 whitespace-nowrap">
                     <div className="flex flex-col">

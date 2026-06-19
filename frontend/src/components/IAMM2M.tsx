@@ -645,7 +645,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
                 const isManual = c.provider === 'manual';
                 return (
                   <React.Fragment key={c.client_id}>
-                    <tr className="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800">
+                    <tr className="table-row border-b border-gray-100 dark:border-gray-800">
                       <td className="py-3 px-4 text-gray-900 dark:text-white font-medium">
                         <div>{c.name}</div>
                         <div className="text-xs text-gray-400 font-mono">{c.client_id}</div>
