@@ -526,7 +526,7 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
             <>
             {canModify && (
               <button
-                className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg transition-all duration-200 flex-shrink-0"
+                className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-lg transition-all duration-200 flex-shrink-0"
                 onClick={() => onEdit?.(server)}
                 title="Edit server"
                 aria-label={`Edit ${server.name}`}
@@ -574,7 +574,7 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
             {/* Security Scan Button */}
             <button
               onClick={handleViewSecurityScan}
-              className={`p-2 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg transition-all duration-200 flex-shrink-0 ${getSecurityIconState().color}`}
+              className={`p-2 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-lg transition-all duration-200 flex-shrink-0 ${getSecurityIconState().color}`}
               title={getSecurityIconState().title}
               aria-label="View security scan results"
             >

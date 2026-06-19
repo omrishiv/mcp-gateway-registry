@@ -546,7 +546,7 @@ const VirtualServerDetailsModal: React.FC<VirtualServerDetailsModalProps> = ({
                       <button
                         type="button"
                         onClick={() => toggleToolExpand(tool.tool_name)}
-                        className="w-full p-3 text-left hover:bg-gray-100 dark:hover:bg-gray-800/50 transition-colors"
+                        className="w-full p-3 text-left hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
                       >
                         <div className="flex items-center justify-between">
                           <span className="font-medium text-gray-900 dark:text-white">{tool.tool_name}</span>

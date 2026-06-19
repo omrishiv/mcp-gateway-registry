@@ -176,7 +176,7 @@ const VirtualServerCard: React.FC<VirtualServerCardProps> = ({
             <>
               {canModify && (
                 <button
-                  className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg transition-all duration-200"
+                  className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-lg transition-all duration-200"
                   onClick={() => onEdit(server)}
                   title="Edit virtual server"
                 >
@@ -341,7 +341,7 @@ const VirtualServerCard: React.FC<VirtualServerCardProps> = ({
                                 {/* Tool header - clickable to expand */}
                                 <button
                                   onClick={() => hasDetails && toggleTool(tool.name)}
-                                  className={`w-full px-4 py-3 text-left ${hasDetails ? 'cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50' : 'cursor-default'}`}
+                                  className={`w-full px-4 py-3 text-left ${hasDetails ? 'cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700' : 'cursor-default'}`}
                                   disabled={!hasDetails}
                                 >
                                   <div className="flex items-start justify-between gap-2">

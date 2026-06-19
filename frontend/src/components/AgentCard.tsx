@@ -402,7 +402,7 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                 <>
                   {canModify && (
                     <button
-                      className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg transition-all duration-200 flex-shrink-0"
+                      className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-lg transition-all duration-200 flex-shrink-0"
                       onClick={() => onEdit?.(agent)}
                       title="Edit agent"
                     >
@@ -413,7 +413,7 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                   {/* Security Scan Button */}
                   <button
                     onClick={handleViewSecurityScan}
-                    className={`p-2 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg transition-all duration-200 flex-shrink-0 ${getSecurityIconState().color}`}
+                    className={`p-2 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-lg transition-all duration-200 flex-shrink-0 ${getSecurityIconState().color}`}
                     title={getSecurityIconState().title}
                     aria-label="View security scan results"
                   >
