@@ -6,10 +6,34 @@ const wrapper = ({ children }: { children: React.ReactNode }) => (
   <ThemeProvider>{children}</ThemeProvider>
 );
 
+/** Install a matchMedia stub reporting the given system dark-mode preference. */
+function _mockMatchMedia(prefersDark: boolean) {
+  const listeners: Array<(e: MediaQueryListEvent) => void> = [];
+  const mql = {
+    matches: prefersDark,
+    media: '(prefers-color-scheme: dark)',
+    addEventListener: (_: string, cb: (e: MediaQueryListEvent) => void) =>
+      listeners.push(cb),
+    removeEventListener: (_: string, cb: (e: MediaQueryListEvent) => void) => {
+      const i = listeners.indexOf(cb);
+      if (i >= 0) listeners.splice(i, 1);
+    },
+  };
+  (window as any).matchMedia = jest.fn().mockReturnValue(mql);
+  // Allow tests to drive a live OS change.
+  return (nextPrefersDark: boolean) => {
+    mql.matches = nextPrefersDark;
+    listeners.forEach((cb) =>
+      cb({ matches: nextPrefersDark } as MediaQueryListEvent),
+    );
+  };
+}
+
 describe('ThemeContext', () => {
   beforeEach(() => {
     localStorage.clear();
     document.documentElement.className = '';
+    delete (window as any).matchMedia;
   });
 
   it('defaults to dark mode and the default palette', () => {
@@ -17,6 +41,37 @@ describe('ThemeContext', () => {
     expect(result.current.theme).toBe('dark');
     expect(result.current.themeName).toBe('default');
     expect(document.documentElement.classList.contains('dark')).toBe(true);
+  });
+
+  it('follows the system preference when no choice is saved', () => {
+    _mockMatchMedia(false); // OS prefers light
+    const { result } = renderHook(() => useTheme(), { wrapper });
+    expect(result.current.theme).toBe('light');
+    expect(document.documentElement.classList.contains('dark')).toBe(false);
+    // Following the OS is not a saved choice.
+    expect(localStorage.getItem('theme')).toBeNull();
+  });
+
+  it('mirrors live OS changes until the user picks a mode', () => {
+    const emit = _mockMatchMedia(false); // start light
+    const { result } = renderHook(() => useTheme(), { wrapper });
+    expect(result.current.theme).toBe('light');
+
+    act(() => emit(true)); // OS switches to dark
+    expect(result.current.theme).toBe('dark');
+
+    // Once chosen, OS changes no longer override.
+    act(() => result.current.toggleTheme()); // -> light, explicit
+    expect(result.current.theme).toBe('light');
+    act(() => emit(true));
+    expect(result.current.theme).toBe('light');
+  });
+
+  it('prefers a saved choice over the system preference', () => {
+    _mockMatchMedia(false); // OS prefers light
+    localStorage.setItem('theme', 'dark');
+    const { result } = renderHook(() => useTheme(), { wrapper });
+    expect(result.current.theme).toBe('dark');
   });
 
   it('toggles light/dark mode and persists it', () => {
