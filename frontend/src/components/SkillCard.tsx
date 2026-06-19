@@ -29,6 +29,7 @@ import ResourceBoundTokenButton from './ResourceBoundTokenButton';
 import SkillResources from './SkillResources';
 import { formatTimeSince } from '../utils/dateUtils';
 import { toScanSummary } from '../utils/securityScan';
+import { parseYamlFrontmatter } from '../utils/yamlFrontmatter';
 import {
   CardShell,
   CardHeader,
@@ -61,36 +62,6 @@ interface SkillCardProps {
   onSkillUpdate?: (path: string, updates: Partial<Skill>) => void;
   authToken?: string | null;
 }
-
-// Helper function to parse YAML frontmatter from markdown
-const parseYamlFrontmatter = (content: string): { frontmatter: Record<string, string> | null; body: string } => {
-  // Check if content starts with --- (YAML frontmatter delimiter)
-  const frontmatterRegex = /^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/;
-  const match = content.match(frontmatterRegex);
-
-  if (match) {
-    const yamlContent = match[1];
-    const body = match[2];
-
-    // Simple YAML parsing for key: value pairs
-    const frontmatter: Record<string, string> = {};
-    const lines = yamlContent.split('\n');
-    for (const line of lines) {
-      const colonIndex = line.indexOf(':');
-      if (colonIndex > 0) {
-        const key = line.substring(0, colonIndex).trim();
-        const value = line.substring(colonIndex + 1).trim();
-        if (key && value) {
-          frontmatter[key] = value;
-        }
-      }
-    }
-
-    return { frontmatter: Object.keys(frontmatter).length > 0 ? frontmatter : null, body };
-  }
-
-  return { frontmatter: null, body: content };
-};
 
 
 /** Map a skill health status to a StatusDot tone + label. */

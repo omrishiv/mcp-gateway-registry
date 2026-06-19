@@ -26,6 +26,8 @@ import type { Server } from './ServerCard';
 import type { Agent as AgentType } from './AgentCard';
 import useEscapeKey from '../hooks/useEscapeKey';
 import ANSBadge from './ANSBadge';
+import { parseYamlFrontmatter } from '../utils/yamlFrontmatter';
+import SearchResultCard from './search/SearchResultCard';
 
 interface SemanticSearchResultsProps {
   query: string;
@@ -92,32 +94,6 @@ const ToolSchemaModal: React.FC<ToolSchemaModalProps> = ({
     </div>
   );
 };
-
-// Helper function to parse YAML frontmatter from markdown
-const parseYamlFrontmatter = (content: string): { frontmatter: Record<string, string> | null; body: string } => {
-  const frontmatterRegex = /^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/;
-  const match = content.match(frontmatterRegex);
-
-  if (match) {
-    const yamlContent = match[1];
-    const body = match[2];
-    const frontmatter: Record<string, string> = {};
-    const lines = yamlContent.split('\n');
-    for (const line of lines) {
-      const colonIndex = line.indexOf(':');
-      if (colonIndex > 0) {
-        const key = line.substring(0, colonIndex).trim();
-        const value = line.substring(colonIndex + 1).trim();
-        if (key && value) {
-          frontmatter[key] = value;
-        }
-      }
-    }
-    return { frontmatter: Object.keys(frontmatter).length > 0 ? frontmatter : null, body };
-  }
-  return { frontmatter: null, body: content };
-};
-
 
 interface ServerDetailsModalProps {
   server: SemanticServerHit;
@@ -918,32 +894,30 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
               const isOrphanedServer = server.sync_metadata?.is_orphaned === true;
 
               return (
-              <div
+              <SearchResultCard
                 key={server.path}
-                className="rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-5 shadow-sm hover:shadow-md transition-shadow"
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <p className="text-base font-semibold text-gray-900 dark:text-white">
-                        {server.server_name}
-                      </p>
-                      {/* Registry source badge - only show for federated (peer registry) items */}
-                      {isFederatedServer && (
-                        <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-200 border border-cyan-200 dark:border-cyan-700">
-                          {peerRegistryId}
-                        </span>
-                      )}
-                      {/* Orphaned badge */}
-                      {isOrphanedServer && (
-                        <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-200 border border-red-200 dark:border-red-700" title="No longer exists on peer registry">
-                          ORPHANED
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-sm text-gray-500 dark:text-gray-300">{server.path}</p>
-                  </div>
-                  <div className="flex items-center gap-2">
+                accent="server"
+                title={server.server_name}
+                subtitle={server.path}
+                relevanceScore={server.relevance_score}
+                description={server.description || server.match_context}
+                tags={server.tags}
+                badges={
+                  <>
+                    {isFederatedServer && (
+                      <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-200 border border-cyan-200 dark:border-cyan-700">
+                        {peerRegistryId}
+                      </span>
+                    )}
+                    {isOrphanedServer && (
+                      <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-200 border border-red-200 dark:border-red-700" title="No longer exists on peer registry">
+                        ORPHANED
+                      </span>
+                    )}
+                  </>
+                }
+                actions={
+                  <>
                     <button
                       type="button"
                       onClick={() => setDetailsServer(server)}
@@ -960,28 +934,9 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
                     >
                       <CogIcon className="h-4 w-4" />
                     </button>
-                    <span className="inline-flex items-center rounded-full bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-200 px-3 py-1 text-xs font-semibold">
-                      {formatPercent(server.relevance_score)} match
-                    </span>
-                  </div>
-                </div>
-                <p className="mt-3 text-sm text-gray-600 dark:text-gray-300 line-clamp-3">
-                  {server.description || server.match_context || 'No description available.'}
-                </p>
-
-                {server.tags?.length > 0 && (
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    {server.tags.slice(0, 6).map((tag) => (
-                      <span
-                        key={tag}
-                        className="px-2.5 py-1 text-xs rounded-full bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-200"
-                      >
-                        {tag}
-                      </span>
-                    ))}
-                  </div>
-                )}
-
+                  </>
+                }
+              >
                 {server.matching_tools?.length > 0 ? (
                   <div className="mt-4 border-t border-dashed border-gray-200 dark:border-gray-700 pt-3">
                     <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
@@ -1016,7 +971,7 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
                     </p>
                   </div>
                 ) : null}
-              </div>
+              </SearchResultCard>
             );
             })}
           </div>
@@ -1110,52 +1065,55 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
               const isOrphanedAgent = syncMetadata?.is_orphaned === true;
 
               return (
-              <div
+              <SearchResultCard
                 key={agent.path}
-                className="rounded-2xl border border-cyan-200 dark:border-cyan-900/40 bg-white dark:bg-gray-800 p-5 shadow-sm hover:shadow-md transition-shadow"
+                accent="agent"
+                title={agentName}
+                subtitle={
+                  <span className="text-xs uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                    {agentVisibility}
+                  </span>
+                }
+                relevanceScore={agent.relevance_score}
+                description={agentDescription || agent.match_context}
+                tags={agentTags}
+                badges={
+                  <>
+                    {isFederatedAgent && (
+                      <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-200 border border-violet-200 dark:border-violet-700">
+                        {peerRegistryId}
+                      </span>
+                    )}
+                    {isOrphanedAgent && (
+                      <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-200 border border-red-200 dark:border-red-700" title="No longer exists on peer registry">
+                        ORPHANED
+                      </span>
+                    )}
+                  </>
+                }
+                actions={
+                  <button
+                    type="button"
+                    onClick={() => openAgentDetails(agent)}
+                    className="p-2 text-gray-400 hover:text-cyan-600 dark:hover:text-cyan-300 hover:bg-cyan-50 dark:hover:bg-cyan-700/30 rounded-lg transition-colors"
+                    title="View full agent details"
+                  >
+                    <InformationCircleIcon className="h-4 w-4" />
+                  </button>
+                }
+                footer={
+                  <>
+                    {(card.ans_metadata || card.ansMetadata) ? (
+                      <ANSBadge ansMetadata={card.ans_metadata || card.ansMetadata} compact />
+                    ) : (
+                      <span className="font-semibold text-cyan-700 dark:text-cyan-200">
+                        {agentTrustLevel}
+                      </span>
+                    )}
+                    <span>{agentIsEnabled ? 'Enabled' : 'Disabled'}</span>
+                  </>
+                }
               >
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <p className="text-base font-semibold text-gray-900 dark:text-white">
-                        {agentName}
-                      </p>
-                      {/* Registry source badge - only show for federated (peer registry) items */}
-                      {isFederatedAgent && (
-                        <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-200 border border-violet-200 dark:border-violet-700">
-                          {peerRegistryId}
-                        </span>
-                      )}
-                      {/* Orphaned badge */}
-                      {isOrphanedAgent && (
-                        <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-200 border border-red-200 dark:border-red-700" title="No longer exists on peer registry">
-                          ORPHANED
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-xs uppercase tracking-wide text-gray-400 dark:text-gray-500">
-                      {agentVisibility}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => openAgentDetails(agent)}
-                      className="p-2 text-gray-400 hover:text-cyan-600 dark:hover:text-cyan-300 hover:bg-cyan-50 dark:hover:bg-cyan-700/30 rounded-lg transition-colors"
-                      title="View full agent details"
-                    >
-                      <InformationCircleIcon className="h-4 w-4" />
-                    </button>
-                    <span className="inline-flex items-center rounded-full bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-200 px-3 py-1 text-xs font-semibold">
-                      {formatPercent(agent.relevance_score)} match
-                    </span>
-                  </div>
-                </div>
-
-                <p className="mt-3 text-sm text-gray-600 dark:text-gray-300 line-clamp-3">
-                  {agentDescription || agent.match_context || 'No description available.'}
-                </p>
-
                 {skillNames.length > 0 && (
                   <div className="mt-4">
                     <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">
@@ -1167,31 +1125,7 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
                     </p>
                   </div>
                 )}
-
-                {agentTags.length > 0 && (
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    {agentTags.slice(0, 6).map((tag: string) => (
-                      <span
-                        key={tag}
-                        className="px-2.5 py-1 text-[11px] rounded-full bg-cyan-50 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-200"
-                      >
-                        {tag}
-                      </span>
-                    ))}
-                  </div>
-                )}
-
-                <div className="mt-4 flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
-                  {(card.ans_metadata || card.ansMetadata) ? (
-                    <ANSBadge ansMetadata={card.ans_metadata || card.ansMetadata} compact />
-                  ) : (
-                    <span className="font-semibold text-cyan-700 dark:text-cyan-200">
-                      {agentTrustLevel}
-                    </span>
-                  )}
-                  <span>{agentIsEnabled ? 'Enabled' : 'Disabled'}</span>
-                </div>
-              </div>
+              </SearchResultCard>
             );
             })}
           </div>
@@ -1210,68 +1144,41 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
             style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.25rem' }}
           >
             {skills.map((skill) => (
-              <div
+              <SearchResultCard
                 key={skill.path}
-                className="rounded-2xl border-2 border-amber-200 dark:border-amber-700 bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-900/20 dark:to-orange-900/20 p-5 shadow-sm hover:shadow-md transition-shadow"
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div>
+                accent="skill"
+                title={skill.skill_name}
+                subtitle={skill.visibility || 'public'}
+                relevanceScore={skill.relevance_score}
+                description={skill.description || skill.match_context}
+                tags={skill.tags}
+                badges={
+                  <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-200 border border-amber-200 dark:border-amber-600">
+                    SKILL
+                  </span>
+                }
+                actions={
+                  <button
+                    type="button"
+                    onClick={() => setDetailsSkill(skill)}
+                    className="p-2 text-gray-400 hover:text-amber-600 dark:hover:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-700/30 rounded-lg transition-colors"
+                    title="View SKILL.md content"
+                  >
+                    <InformationCircleIcon className="h-4 w-4" />
+                  </button>
+                }
+                footer={
+                  <>
                     <div className="flex items-center gap-2">
-                      <p className="text-base font-semibold text-gray-900 dark:text-white">
-                        {skill.skill_name}
-                      </p>
-                      <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-200 border border-amber-200 dark:border-amber-600">
-                        SKILL
-                      </span>
+                      {skill.author && <span>by {skill.author}</span>}
+                      {skill.version && (
+                        <span className="text-amber-600 dark:text-amber-400">v{skill.version}</span>
+                      )}
                     </div>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      {skill.visibility || 'public'}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setDetailsSkill(skill)}
-                      className="p-2 text-gray-400 hover:text-amber-600 dark:hover:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-700/30 rounded-lg transition-colors"
-                      title="View SKILL.md content"
-                    >
-                      <InformationCircleIcon className="h-4 w-4" />
-                    </button>
-                    <span className="inline-flex items-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-200 px-3 py-1 text-xs font-semibold">
-                      {formatPercent(skill.relevance_score)} match
-                    </span>
-                  </div>
-                </div>
-
-                <p className="mt-3 text-sm text-gray-600 dark:text-gray-300 line-clamp-3">
-                  {skill.description || skill.match_context || 'No description available.'}
-                </p>
-
-                {skill.tags && skill.tags.length > 0 && (
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    {skill.tags.slice(0, 6).map((tag) => (
-                      <span
-                        key={tag}
-                        className="px-2.5 py-1 text-[11px] rounded-full bg-amber-50 text-amber-700 dark:bg-amber-900/40 dark:text-amber-200"
-                      >
-                        {tag}
-                      </span>
-                    ))}
-                  </div>
-                )}
-
-                <div className="mt-4 flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
-                  <div className="flex items-center gap-2">
-                    {skill.author && (
-                      <span>by {skill.author}</span>
-                    )}
-                    {skill.version && (
-                      <span className="text-amber-600 dark:text-amber-400">v{skill.version}</span>
-                    )}
-                  </div>
-                  <span>{skill.is_enabled ? 'Enabled' : 'Disabled'}</span>
-                </div>
-              </div>
+                    <span>{skill.is_enabled ? 'Enabled' : 'Disabled'}</span>
+                  </>
+                }
+              />
             ))}
           </div>
         </section>
@@ -1311,51 +1218,26 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
             style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.25rem' }}
           >
             {custom.map((record) => (
-              <div
+              <SearchResultCard
                 key={record.path}
-                className="rounded-2xl border-2 border-teal-200 dark:border-teal-700 bg-gradient-to-br from-teal-50 to-emerald-50 dark:from-teal-900/20 dark:to-emerald-900/20 p-5 shadow-sm hover:shadow-md transition-shadow"
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <p className="text-base font-semibold text-gray-900 dark:text-white">
-                        {record.name}
-                      </p>
-                      <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-200 border border-teal-200 dark:border-teal-600 uppercase">
-                        {humanize(record.entity_type)}
-                      </span>
-                    </div>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      {record.visibility || 'public'}
-                    </p>
-                  </div>
-                  <span className="inline-flex items-center rounded-full bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-200 px-3 py-1 text-xs font-semibold">
-                    {formatPercent(record.relevance_score)} match
+                accent="custom"
+                title={record.name}
+                subtitle={record.visibility || 'public'}
+                relevanceScore={record.relevance_score}
+                description={record.description || record.match_context}
+                tags={record.tags}
+                badges={
+                  <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-200 border border-teal-200 dark:border-teal-600 uppercase">
+                    {humanize(record.entity_type)}
                   </span>
-                </div>
-
-                <p className="mt-3 text-sm text-gray-600 dark:text-gray-300 line-clamp-3">
-                  {record.description || record.match_context || 'No description available.'}
-                </p>
-
-                {record.tags && record.tags.length > 0 && (
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    {record.tags.slice(0, 6).map((tag) => (
-                      <span
-                        key={tag}
-                        className="px-2.5 py-1 text-[11px] rounded-full bg-teal-50 text-teal-700 dark:bg-teal-900/40 dark:text-teal-200"
-                      >
-                        {tag}
-                      </span>
-                    ))}
-                  </div>
-                )}
-
-                <div className="mt-4 flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
-                  {record.owner && <span>by {record.owner}</span>}
-                  <span className="ml-auto">{record.is_enabled === false ? 'Disabled' : 'Enabled'}</span>
-                </div>
-              </div>
+                }
+                footer={
+                  <>
+                    {record.owner && <span>by {record.owner}</span>}
+                    <span className="ml-auto">{record.is_enabled === false ? 'Disabled' : 'Enabled'}</span>
+                  </>
+                }
+              />
             ))}
           </div>
         </section>
