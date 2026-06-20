@@ -409,15 +409,14 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
           },
         };
       case 'kiro':
+        // Kiro supports Dynamic Client Registration (DCR): it discovers and
+        // registers its own OAuth client against the gateway, so the config
+        // only needs the server URL. No static bearer token, and no
+        // disabled/autoApprove blocks.
         return {
           mcpServers: {
             [serverName]: {
               url,
-              ...(includeAuthHeaders && {
-                headers: buildHeaders(),
-              }),
-              disabled: false,
-              autoApprove: [],
             },
           },
         };
