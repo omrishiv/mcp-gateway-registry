@@ -134,7 +134,13 @@ async def vend_egress_token(
         logger.info("egress vend: non-per-user auth_method %r -> consent", auth_method)
         return EgressTokenResponse(consent_required=True)
 
-    server = await get_server_repository().get(body.server_path)
+    # Normalize the server path: mcp_proxy passes the first path segment without a
+    # leading slash ("github"), but server entries, the vault key, and the consent
+    # state all use the slash-prefixed path ("/github"). Without this, the lookup
+    # misses and consent loops forever. Use the canonical form everywhere below.
+    server_path = body.server_path if body.server_path.startswith("/") else "/" + body.server_path
+
+    server = await get_server_repository().get(server_path)
     if server is None:
         return EgressTokenResponse(consent_required=True)
 
@@ -151,7 +157,7 @@ async def vend_egress_token(
             "egress vend REFUSED: upstream %r not in registered set %r for %s",
             _base_url(token_upstream),
             legal,
-            body.server_path,
+            server_path,
         )
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, detail="upstream not registered for this server"
@@ -162,7 +168,7 @@ async def vend_egress_token(
     access_token = await svc.get_valid_token(
         auth_method=auth_method,
         user_id=sub,
-        server_path=body.server_path,
+        server_path=server_path,
         egress_oauth=egress_oauth,
     )
     if access_token is not None:
@@ -177,7 +183,7 @@ async def vend_egress_token(
             user_id=sub,
             client_id_audit=claims.get("client_id") or "",
             session_id="",
-            server_path=body.server_path,
+            server_path=server_path,
             egress_oauth=egress_oauth,
         )
     except Exception as exc:  # bad provider config etc. -- still a clean miss

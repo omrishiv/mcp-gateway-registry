@@ -17,8 +17,10 @@ import registry.api.egress_auth_routes as routes
 class _StubRepo:
     def __init__(self, server):
         self._server = server
+        self.queried_paths: list[str] = []
 
     async def get(self, path):
+        self.queried_paths.append(path)
         return self._server
 
 
@@ -53,7 +55,8 @@ def make_client(monkeypatch):
     def _build(claims, server, vended_token="at_vended", enabled=True):
         monkeypatch.setattr(routes.settings, "egress_auth_enabled", enabled)
         monkeypatch.setattr(routes, "verify_mcp_proxy_token", lambda tok: claims)
-        monkeypatch.setattr(routes, "get_server_repository", lambda: _StubRepo(server))
+        repo = _StubRepo(server)
+        monkeypatch.setattr(routes, "get_server_repository", lambda: repo)
         svc = _StubService(vended_token)
         monkeypatch.setattr(routes, "get_egress_auth_service", lambda: svc)
 
@@ -62,6 +65,7 @@ def make_client(monkeypatch):
         app.dependency_overrides[routes.validate_internal_auth] = lambda: "auth-server"
         client = TestClient(app)
         client._svc = svc  # expose for assertions
+        client._repo = repo
         return client
 
     return _build
@@ -77,10 +81,10 @@ def _claims(**over):
     return base
 
 
-def _post(client, token="proxy-token"):
+def _post(client, token="proxy-token", server_path="/github-mcp"):
     return client.post(
         "/internal/egress-token",
-        json={"server_path": "/github-mcp"},
+        json={"server_path": server_path},
         headers={"X-Internal-Token": token},
     )
 
@@ -93,6 +97,15 @@ class TestInternalEgressTokenRoute:
         assert r.status_code == 200
         assert r.json()["access_token"] == "at_vended"
         assert client._svc.called
+
+    def test_no_leading_slash_is_normalized(self, make_client):
+        # mcp_proxy sends the bare first path segment ("github"); the endpoint must
+        # normalize to "/github" so the server lookup + vault key + consent agree.
+        client = make_client(_claims(), _server())
+        r = _post(client, server_path="github-mcp")  # no leading slash
+        assert r.status_code == 200
+        assert r.json()["access_token"] == "at_vended"
+        assert client._repo.queried_paths == ["/github-mcp"]  # normalized before lookup
 
     def test_feature_disabled_404(self, make_client):
         client = make_client(_claims(), _server(), enabled=False)
