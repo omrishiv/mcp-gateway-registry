@@ -31,6 +31,9 @@ class _StubService:
         self.called = True
         return self._token
 
+    def build_consent_url(self, **kwargs):
+        return "https://github.com/login/oauth/authorize?from=miss"
+
 
 def _server(**over):
     base = {
@@ -137,8 +140,19 @@ class TestInternalEgressTokenRoute:
         assert r.status_code == 200
         assert client._svc.called
 
-    def test_vend_miss_consent(self, make_client):
+    def test_vend_miss_returns_consent_url(self, make_client):
+        # On a miss for an egress-configured server, the vend builds + returns the
+        # authorize_url so mcp_proxy can hand it to the user (auto-consent trigger).
         client = make_client(_claims(), _server(), vended_token=None)
         r = _post(client)
-        assert r.json()["consent_required"] is True
-        assert r.json()["access_token"] is None
+        body = r.json()
+        assert body["consent_required"] is True
+        assert body["access_token"] is None
+        assert body["authorize_url"] == "https://github.com/login/oauth/authorize?from=miss"
+
+    def test_non_per_user_miss_has_no_authorize_url(self, make_client):
+        # A non-per-user caller has nothing to connect -> no authorize_url.
+        client = make_client(_claims(auth_method="network-trusted"), _server())
+        body = _post(client).json()
+        assert body["consent_required"] is True
+        assert body.get("authorize_url") is None

@@ -4464,6 +4464,7 @@ async def mcp_proxy(
     # Determine the JSON-RPC method (best-effort; non-JSON bodies pass
     # through as-is).
     incoming_method: str | None = None
+    incoming_payload: object = None
     try:
         if request_body:
             incoming_payload = json.loads(request_body.decode("utf-8"))
@@ -4482,9 +4483,11 @@ async def mcp_proxy(
     # Per-user egress credential vault (Phase 3). When the feature is on, ask the
     # registry to vend this user's third-party token for the resolved server. The
     # registry re-verifies the signed proxy token, enforces per-user/upstream
-    # authz (B2-1/B2-4), and returns consent_required for non-oauth_user servers
-    # -- so we only mutate headers on a real vend. On a vend we strip the user's
-    # own gateway credentials/identity (B2-2) before injecting the vaulted token.
+    # authz (B2-1/B2-4), and returns consent_required for non-oauth_user servers.
+    # On a real vend we strip the user's own gateway credentials/identity (B2-2)
+    # before injecting the vaulted token. On a consent-required miss for an
+    # egress-configured server we DO NOT forward unauthenticated -- we return a
+    # JSON-RPC error carrying the authorize URL so the user can connect.
     if settings.egress_auth_enabled:
         internal_proxy_token = request.headers.get("X-Internal-Token", "")
         if internal_proxy_token:
@@ -4497,6 +4500,33 @@ async def mcp_proxy(
                     if k.lower() not in _EGRESS_STRIP_HEADERS
                 }
                 forward_headers["Authorization"] = f"Bearer {vend['access_token']}"
+            elif vend and vend.get("authorize_url"):
+                # Egress is configured for this server but the user has no usable
+                # token. Halt and hand back the consent URL instead of forwarding
+                # an unauthenticated request to the upstream.
+                req_id = incoming_payload.get("id") if isinstance(incoming_payload, dict) else None
+                authorize_url = vend["authorize_url"]
+                logger.info(
+                    "mcp_proxy: egress consent required for server=%s; returning authorize URL",
+                    server_name,
+                )
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "error": {
+                            "code": -32001,
+                            "message": (
+                                "Connect your account to use this server: " + authorize_url
+                            ),
+                            "data": {
+                                "authorize_url": authorize_url,
+                                "reason": "egress_consent_required",
+                            },
+                        },
+                    },
+                )
 
     logger.info(
         f"mcp_proxy: server={server_name} method={incoming_method} filter_enabled={filter_enabled}"

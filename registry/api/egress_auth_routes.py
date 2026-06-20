@@ -65,10 +65,17 @@ class EgressTokenRequest(BaseModel):
 
 
 class EgressTokenResponse(BaseModel):
-    """Vend result. ``access_token`` is None on a clean miss (consent required)."""
+    """Vend result. ``access_token`` is None on a clean miss (consent required).
+
+    On a consent-required miss for a properly egress-configured server, the
+    registry builds the provider ``authorize_url`` so mcp_proxy can return it to
+    the caller (the user clicks it to connect). ``authorize_url`` is None when
+    the server isn't egress-configured / the caller isn't a per-user principal
+    (nothing to connect)."""
 
     access_token: str | None = None
     consent_required: bool = False
+    authorize_url: str | None = None
 
 
 def _base_url(url: str) -> str:
@@ -151,15 +158,32 @@ async def vend_egress_token(
         )
 
     egress_oauth = server["egress_oauth"]
-    access_token = await get_egress_auth_service().get_valid_token(
+    svc = get_egress_auth_service()
+    access_token = await svc.get_valid_token(
         auth_method=auth_method,
         user_id=sub,
         server_path=body.server_path,
         egress_oauth=egress_oauth,
     )
-    if access_token is None:
-        return EgressTokenResponse(consent_required=True)
-    return EgressTokenResponse(access_token=access_token)
+    if access_token is not None:
+        return EgressTokenResponse(access_token=access_token)
+
+    # Miss: no usable token (never connected, or refresh dead). Build the consent
+    # URL so mcp_proxy can hand it back to the user to self-serve (the gateway
+    # triggers consent automatically rather than forwarding unauthenticated).
+    try:
+        authorize_url = svc.build_consent_url(
+            auth_method=auth_method,
+            user_id=sub,
+            client_id_audit=claims.get("client_id") or "",
+            session_id="",
+            server_path=body.server_path,
+            egress_oauth=egress_oauth,
+        )
+    except Exception as exc:  # bad provider config etc. -- still a clean miss
+        logger.warning("egress vend: could not build consent URL: %s", exc)
+        authorize_url = None
+    return EgressTokenResponse(consent_required=True, authorize_url=authorize_url)
 
 
 # ---------------------------------------------------------------------------- #
