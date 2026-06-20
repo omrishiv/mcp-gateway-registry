@@ -1,8 +1,10 @@
 """Cross-replica operational state for the egress credential vault.
 
 Holds NO secret/token material -- only:
-  - single-use OAuth ``state`` nonces (replay guard), and
-  - per-(auth_method,user,provider,server) refresh leases (single-flight).
+  - single-use OAuth ``state`` nonces (replay guard),
+  - per-(auth_method,user,provider,server) refresh leases (single-flight), and
+  - OAuth AS-facade pending-authorize + auth-code correlation state (the
+    IDE-driven egress consent spans replicas; see the facade methods below).
 
 Storing operational state (not credentials) in the app DB is the defensible B1
 property: the vault remains the single source of truth for tokens; this
@@ -27,6 +29,20 @@ from pymongo.errors import DuplicateKeyError
 from .client import get_collection_name, get_documentdb_client
 
 logger = logging.getLogger(__name__)
+
+
+def _is_expired(expires_at_dt) -> bool:
+    """True if a stored expiry is in the past.
+
+    BSON datetimes round-trip from Mongo/DocumentDB as timezone-NAIVE (UTC) even
+    though we store tz-aware values, so a direct ``< datetime.now(UTC)`` compare
+    raises ``TypeError: can't compare offset-naive and offset-aware datetimes``.
+    Normalize a naive value to UTC-aware before comparing. None -> not expired."""
+    if expires_at_dt is None:
+        return False
+    if expires_at_dt.tzinfo is None:
+        expires_at_dt = expires_at_dt.replace(tzinfo=UTC)
+    return expires_at_dt < datetime.now(UTC)
 
 
 class EgressOperationalRepository:
@@ -123,3 +139,71 @@ class EgressOperationalRepository:
         guard prevents deleting a lease another replica reclaimed after ours lapsed."""
         col = await self._get_collection()
         await col.delete_one({"_id": f"lease:{key}", "holder": holder})
+
+    # -- OAuth AS-facade pending-authorize + auth-code (cross-replica) --------- #
+    #
+    # The IDE-driven egress consent (OAuth AS facade) spans multiple requests
+    # that may land on different registry replicas: /authorize (store pending),
+    # the provider callback (resume -> issue code), and /token (redeem code).
+    # In-process maps cannot span replicas, so the short-lived correlation state
+    # lives here. NEITHER kind holds a third-party token -- only OAuth
+    # correlation/PKCE metadata, consistent with this collection's "operational
+    # state, not credentials" property. Both kinds are TTL-reaped via
+    # ``expires_at_dt`` and are single-use (atomic find-and-delete on take).
+    #
+    #   pending:<corr_id> {kind, payload(JSON str), expires_at_dt}  -- leg-1 ctx + identity
+    #   facadecode:<code> {kind, payload(JSON str), expires_at_dt}  -- redeemable auth code
+
+    async def put_pending(self, correlation_id: str, payload: str, ttl_seconds: int) -> None:
+        """Store leg-1 pending-authorize state under a correlation id (overwrite-safe)."""
+        col = await self._get_collection()
+        expires = datetime.now(UTC) + timedelta(seconds=ttl_seconds)
+        await col.find_one_and_update(
+            {"_id": f"pending:{correlation_id}"},
+            {"$set": {"kind": "pending", "payload": payload, "expires_at_dt": expires}},
+            upsert=True,
+            return_document=ReturnDocument.AFTER,
+        )
+
+    async def take_pending(self, correlation_id: str) -> str | None:
+        """Atomically fetch+delete the pending state (single-use). Returns the
+        stored payload JSON, or None if absent or expired."""
+        col = await self._get_collection()
+        doc = await col.find_one_and_delete({"_id": f"pending:{correlation_id}"})
+        if not doc:
+            return None
+        if _is_expired(doc.get("expires_at_dt")):
+            return None  # expired between put and take
+        return doc.get("payload")
+
+    async def store_code(self, code: str, payload: str, ttl_seconds: int) -> None:
+        """Store a redeemable auth-code record under its code value.
+
+        Raises ``DuplicateKeyError`` if the code already exists. Codes are
+        ``token_urlsafe(32)`` so a collision is astronomically unlikely, but we
+        surface it rather than silently overwrite a live code (the caller treats
+        it as a transient failure and the user simply retries consent)."""
+        col = await self._get_collection()
+        expires = datetime.now(UTC) + timedelta(seconds=ttl_seconds)
+        await col.insert_one(
+            {
+                "_id": f"facadecode:{code}",
+                "kind": "facadecode",
+                "payload": payload,
+                "expires_at_dt": expires,
+            }
+        )
+
+    async def consume_code(self, code: str) -> str | None:
+        """Atomically fetch+delete an auth-code record (single-use). Returns the
+        stored payload JSON, or None if unknown/already-used or expired.
+
+        The pop-regardless semantics mean a failed downstream check (PKCE,
+        redirect_uri) still burns the code -- no retry with a guessed verifier."""
+        col = await self._get_collection()
+        doc = await col.find_one_and_delete({"_id": f"facadecode:{code}"})
+        if not doc:
+            return None
+        if _is_expired(doc.get("expires_at_dt")):
+            return None
+        return doc.get("payload")

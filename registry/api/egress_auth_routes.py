@@ -25,7 +25,7 @@ from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from registry.auth.csrf import verify_csrf_token_flexible
 from registry.auth.dependencies import nginx_proxied_auth
@@ -76,6 +76,12 @@ class EgressTokenResponse(BaseModel):
     access_token: str | None = None
     consent_required: bool = False
     authorize_url: str | None = None
+    resource_metadata_url: str | None = Field(
+        default=None,
+        description="Per-server RFC 9728 PRM URL for the WWW-Authenticate challenge "
+        "(set on a consent-required miss for an egress-configured server). Lets the "
+        "mcp_proxy hop emit a 401 the MCP client can act on via OAuth discovery.",
+    )
 
 
 def _base_url(url: str) -> str:
@@ -189,7 +195,24 @@ async def vend_egress_token(
     except Exception as exc:  # bad provider config etc. -- still a clean miss
         logger.warning("egress vend: could not build consent URL: %s", exc)
         authorize_url = None
-    return EgressTokenResponse(consent_required=True, authorize_url=authorize_url)
+
+    # Per-server PRM URL for the IDE-discovery challenge. The mcp_proxy hop emits
+    # a 401 WWW-Authenticate pointing here so the MCP client runs OAuth discovery
+    # against the gateway egress AS facade (vs an opaque -32001 it ignores).
+    from registry.egress_auth.as_facade import build_resource_metadata_url
+
+    try:
+        resource_metadata_url = build_resource_metadata_url(
+            registry_url=settings.registry_url, server_path=server_path
+        )
+    except Exception as exc:
+        logger.warning("egress vend: could not build PRM URL: %s", exc)
+        resource_metadata_url = None
+    return EgressTokenResponse(
+        consent_required=True,
+        authorize_url=authorize_url,
+        resource_metadata_url=resource_metadata_url,
+    )
 
 
 # ---------------------------------------------------------------------------- #
@@ -389,9 +412,14 @@ async def egress_callback(
     # still enforces TTL + replay + the state-bound (user, auth_method)).
     current_user = None
     current_method = None
-    if request.cookies.get(settings.session_cookie_name):
+    session_cookie = request.cookies.get(settings.session_cookie_name)
+    if session_cookie:
         try:
-            ctx = await nginx_proxied_auth(request)
+            # Pass the cookie explicitly: nginx_proxied_auth's `session` is a
+            # FastAPI Cookie(...) param only populated by dependency injection, so
+            # a direct call without it always sees session=None (the account-swap
+            # guard would silently never engage).
+            ctx = await nginx_proxied_auth(request, session=session_cookie)
             current_user = ctx.get("username")
             current_method = ctx.get("auth_method")
         except Exception:
@@ -409,9 +437,42 @@ async def egress_callback(
         logger.warning("egress callback failed: %s", exc)
         return HTMLResponse(f"<h3>Connection failed: {exc}.</h3>", status_code=400)
 
+    # IDE-driven facade flow: if the consent was initiated by the OAuth AS facade
+    # (the provider-leg state's session_id is marked), resume leg 1 -- mint the
+    # client's single-use code and 302 back to the IDE's loopback redirect_uri so
+    # the client can fetch its gateway bearer at /oauth2/egress/token. Otherwise
+    # this is the web Connected-Accounts flow: show the close-tab page.
+    facade_redirect = await _maybe_resume_facade_flow(st, current_user, current_method)
+    if facade_redirect is not None:
+        return facade_redirect
+
     return HTMLResponse(
         f"<h3>Connected {conn.provider} for {conn.server_path}.</h3>"
         "<p>You can close this tab and retry your request.</p>"
+    )
+
+
+async def _maybe_resume_facade_flow(state, current_user, current_method):
+    """Bridge the provider callback to the AS-facade flow when applicable.
+
+    ``state`` is the decoded provider-leg OAuthState. Returns a RedirectResponse
+    to the IDE client when the consent came from the facade, else None (web
+    flow). The captured identity (groups/scopes) lives in the facade's pending
+    record keyed by the state's correlation id -- not in this state blob, so it
+    never round-trips through the provider. ``current_user``/``current_method``
+    are forwarded as an account-swap cross-check.
+    """
+    from registry.api.egress_oauth_facade_routes import (
+        is_facade_session,
+        issue_facade_code_redirect,
+    )
+
+    if not is_facade_session(getattr(state, "session_id", None)):
+        return None
+    return await issue_facade_code_redirect(
+        state_session_id=state.session_id,
+        callback_user_id=current_user,
+        callback_auth_method=current_method,
     )
 
 

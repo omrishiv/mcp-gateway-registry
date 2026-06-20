@@ -602,6 +602,36 @@ def test_create_location_block_external_service(nginx_service):
 
 
 @pytest.mark.unit
+def test_create_location_block_egress_sets_facade_resource_metadata(nginx_service, monkeypatch):
+    """An egress-configured server emits a per-server $mcp_resource_metadata set so
+    its ingress 401 advertises the gateway facade PRM (not Keycloak)."""
+    import registry.core.nginx_service as nginx_mod
+
+    monkeypatch.setattr(nginx_mod.settings, "registry_url", "https://gw.example.com")
+    server_info = {
+        "egress_auth_mode": "oauth_user",
+        "egress_oauth": {"provider": "github", "client_id": "x"},
+    }
+    block = nginx_service._create_location_block(
+        "/github", "https://api.githubcopilot.com/mcp", "streamable-http", server_info
+    )
+    assert (
+        'set $mcp_resource_metadata '
+        '"https://gw.example.com/.well-known/oauth-protected-resource/github"' in block
+    )
+
+
+@pytest.mark.unit
+def test_create_location_block_non_egress_omits_resource_metadata_set(nginx_service):
+    """A non-egress server does NOT set $mcp_resource_metadata -> it falls through
+    to the http-scope map default (the global ingress/Keycloak PRM)."""
+    block = nginx_service._create_location_block(
+        "/plain", "https://api.example.com/mcp", "streamable-http", {"egress_auth_mode": "none"}
+    )
+    assert "set $mcp_resource_metadata" not in block
+
+
+@pytest.mark.unit
 def test_create_location_block_internal_service(nginx_service):
     """Test creating location block for internal service."""
     block = nginx_service._create_location_block(

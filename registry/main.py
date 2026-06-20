@@ -32,6 +32,7 @@ from registry.api.config_routes import router as config_router
 from registry.api.custom_entity_routes import router as custom_entity_router
 from registry.api.custom_type_routes import router as custom_type_router
 from registry.api.egress_auth_routes import router as egress_auth_router
+from registry.api.egress_oauth_facade_routes import router as egress_oauth_facade_router
 from registry.api.embeddings_admin_routes import router as embeddings_admin_router
 from registry.api.export_routes import router as export_router
 from registry.api.federation_export_routes import router as federation_export_router
@@ -1132,6 +1133,13 @@ app.include_router(internal_router, prefix="/api")
 # Egress credential vault: /api/internal/egress-token (internal vend path, Phase 3).
 # Public operator/end-user egress routers are added in Phase 4.
 app.include_router(egress_auth_router, prefix="/api")
+# OAuth AS facade for IDE-driven egress consent. Mounted at ROOT (no /api
+# prefix) so the discovery URLs (/.well-known/oauth-protected-resource/...,
+# /oauth2/egress/{authorize,token,register}) match the WWW-Authenticate
+# challenge the client receives on a vend miss. Gated by egress_auth_enabled.
+if settings.egress_auth_enabled:
+    app.include_router(egress_oauth_facade_router, tags=["Egress OAuth Facade"])
+    logger.info("Egress OAuth AS facade enabled; registered /oauth2/egress/* routes")
 app.include_router(health_router, prefix="/api/health", tags=["Health Monitoring"])
 app.include_router(federation_export_router)
 app.include_router(peer_management_router)

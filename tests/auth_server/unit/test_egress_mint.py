@@ -49,6 +49,19 @@ class TestCanonicalAuthMethod:
     def test_network_trusted_passthrough(self):
         assert server._canonical_auth_method({"method": "network-trusted"}) == "network-trusted"
 
+    def test_self_signed_maps_to_inner_auth_method_claim(self):
+        # A self-signed JWT (UI 'generate token', or the egress OAuth-facade
+        # /token mint) reports method='self_signed' (the FORMAT) but carries the
+        # principal's auth_method as an inner claim. The vault keys on the
+        # principal method, so this MUST canonicalize to the claim -- else a user
+        # who consents via a cookie session (bucket 'oauth2') and vends with a
+        # minted token (would-be bucket 'self_signed') loops on consent forever.
+        vr = {"method": "self_signed", "data": {"auth_method": "oauth2"}}
+        assert server._canonical_auth_method(vr) == "oauth2"
+
+    def test_self_signed_defaults_oauth2_when_claim_absent(self):
+        assert server._canonical_auth_method({"method": "self_signed", "data": {}}) == "oauth2"
+
 
 def _decode(token: str) -> dict:
     return pyjwt.decode(

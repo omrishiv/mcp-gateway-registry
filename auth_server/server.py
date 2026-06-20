@@ -162,17 +162,29 @@ def _read_mcp_filter_enabled() -> bool:
 def _canonical_auth_method(validation_result: dict) -> str:
     """The ONE canonical egress principal method, stamped into both internal tokens.
 
-    The cookie path reports ``method == "session_cookie"`` but the real value
-    (``"oauth2"``) lives at ``data.auth_method`` in the session record; every
-    other path's ``method`` is already canonical. The per-user egress vault keys
-    on this value, so consent-write (registry side, resolves ``oauth2`` for cookie
-    users) and vend-read (this token's claim) MUST agree -- otherwise a web-UI
-    user loops on consent forever (B2-0). Mirrors
-    ``registry.egress_auth.service.canonical_auth_method``.
+    The per-user egress vault keys on this value, so consent-write and vend-read
+    MUST agree on the same bucket for one human identity -- otherwise the user
+    loops on consent forever (B2-0). Two token *formats* represent the SAME
+    principal and must therefore canonicalize to the principal's identity method,
+    NOT the format string:
+
+    - ``session_cookie``: the real value (e.g. ``oauth2``) lives at
+      ``data.auth_method`` in the session record.
+    - ``self_signed``: a JWT this gateway minted (UI "generate token", or the
+      egress OAuth-facade ``/token`` mint) carries the principal's
+      ``auth_method`` as an inner claim (set at mint time, e.g. ``oauth2``). The
+      validator reports ``method == "self_signed"`` (the format), so without this
+      branch a user who consents via a cookie session (bucket ``oauth2``) and
+      later vends with a minted token (bucket ``self_signed``) would miss the
+      vault and re-loop on consent. This is the IDE-facade flow's failure mode.
+
+    Every other path's ``method`` is already the canonical principal method.
+    Mirrors ``registry.egress_auth.service.canonical_auth_method``.
     """
-    if validation_result.get("method") == "session_cookie":
+    method = validation_result.get("method")
+    if method in ("session_cookie", AUTH_METHOD_SELF_SIGNED):
         return (validation_result.get("data") or {}).get("auth_method") or "oauth2"
-    return validation_result.get("method") or ""
+    return method or ""
 
 
 def _attach_mcp_proxy_token(
@@ -4500,18 +4512,32 @@ async def mcp_proxy(
                     if k.lower() not in _EGRESS_STRIP_HEADERS
                 }
                 forward_headers["Authorization"] = f"Bearer {vend['access_token']}"
-            elif vend and vend.get("authorize_url"):
+            elif vend and (vend.get("authorize_url") or vend.get("resource_metadata_url")):
                 # Egress is configured for this server but the user has no usable
-                # token. Halt and hand back the consent URL instead of forwarding
-                # an unauthenticated request to the upstream.
+                # token. Emit an RFC 9728 401 + WWW-Authenticate pointing at the
+                # gateway's per-server egress Protected Resource Metadata, so the
+                # MCP client runs OAuth discovery against the gateway egress AS
+                # facade and opens the provider consent in a browser -- the same
+                # mechanism that makes the ingress Keycloak login pop. The
+                # JSON-RPC -32001 body is retained as a fallback for clients that
+                # do not act on the header (they still surface the authorize URL).
                 req_id = incoming_payload.get("id") if isinstance(incoming_payload, dict) else None
-                authorize_url = vend["authorize_url"]
+                authorize_url = vend.get("authorize_url") or ""
+                resource_metadata_url = vend.get("resource_metadata_url") or ""
                 logger.info(
-                    "mcp_proxy: egress consent required for server=%s; returning authorize URL",
+                    "mcp_proxy: egress consent required for server=%s; "
+                    "returning 401 WWW-Authenticate (prm=%s)",
                     server_name,
+                    resource_metadata_url,
                 )
+                headers = {}
+                if resource_metadata_url:
+                    headers["WWW-Authenticate"] = (
+                        f'Bearer realm="mcp", resource_metadata="{resource_metadata_url}"'
+                    )
                 return JSONResponse(
-                    status_code=200,
+                    status_code=401,
+                    headers=headers,
                     content={
                         "jsonrpc": "2.0",
                         "id": req_id,
@@ -4519,9 +4545,12 @@ async def mcp_proxy(
                             "code": -32001,
                             "message": (
                                 "Connect your account to use this server: " + authorize_url
+                                if authorize_url
+                                else "Connect your account to use this server."
                             ),
                             "data": {
                                 "authorize_url": authorize_url,
+                                "resource_metadata_url": resource_metadata_url,
                                 "reason": "egress_consent_required",
                             },
                         },
