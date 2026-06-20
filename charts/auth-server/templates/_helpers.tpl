@@ -20,6 +20,8 @@ Sections (in order below):
   4. keycloak-client-secret (runtime-created by keycloak-configure Job)
   5. mongo-credentials secret
   6. shared-secret (stack-level)
+  7. auth-server-egress-config configmap (egress vault, when egressAuth.enabled)
+     + AUTH_SERVER_NGINX_MARKER_SECRET (env/shared secret)
 
 Over-rejection is preferred to under-rejection: a user attempting to
 inject one of these via extraEnv gets a clear template-render error.
