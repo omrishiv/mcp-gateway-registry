@@ -678,6 +678,44 @@ User-supplied environment variables passed to the registry, auth-server, and mcp
 
 ---
 
+## Group 31 — Egress Credential Vault (third-party OBO)
+
+Per-user egress OAuth: MCP servers act on a user's behalf with the user's own
+third-party token (e.g. GitHub), brokered by the gateway's OAuth AS facade and
+stored in a per-user vault. The registry owns the full set (secret store + OAuth
+engine); the auth-server needs only the feature flag, the internal vend URL, and
+the nginx marker secret. Backend: `secrets-manager` is the natural ECS choice;
+`openbao` is the EKS/Helm choice (Kubernetes auth, no static token); `dev-fernet`
+is local-only. Helm reads non-secret vars from a discrete `registry-egress-config`
+/ `auth-server-egress-config` ConfigMap; the marker secret is auto-generated and
+shared in the stack `shared-secret`.
+
+| Parameter | Docker (`.env`) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose |
+|-----------|-----------------|-----------------------|----------------------|---------|
+| Enable vault | `EGRESS_AUTH_ENABLED` | `egress_auth_enabled` | `registry.egressAuth.enabled` / `auth-server.egressAuth.enabled` | Master switch for the per-user egress credential vault. |
+| Secret store backend | `SECRET_STORE_BACKEND` | `egress_secret_store_backend` | `registry.egressAuth.secretStoreBackend` | `secrets-manager` \| `openbao` \| `dev-fernet`. |
+| OAuth callback base URL | `EGRESS_OAUTH_CALLBACK_BASE_URL` | `egress_oauth_callback_base_url` | `registry.egressAuth.oauthCallbackBaseUrl` | Public base for `{base}/oauth2/egress/callback`. |
+| Token refresh skew (s) | `EGRESS_TOKEN_REFRESH_SKEW_SECONDS` | `egress_token_refresh_skew_seconds` | `registry.egressAuth.tokenRefreshSkewSeconds` | Refresh a vaulted token this many seconds before expiry. |
+| Refresh worker interval (s) | `EGRESS_REFRESH_WORKER_INTERVAL_SECONDS` | — | `registry.egressAuth.refreshWorkerIntervalSeconds` | Background refresh sweep interval. |
+| OAuth state TTL (s) | `EGRESS_STATE_TTL_SECONDS` | `egress_state_ttl_seconds` | `registry.egressAuth.stateTtlSeconds` | TTL for the AEAD-encrypted OAuth `state` blob. |
+| Dev-fernet secrets dir | `EGRESS_SECRETS_DIR` | — | `registry.egressAuth.secretsDir` | On-disk dir for the dev-fernet backend only. |
+| Registry internal vend URL | `EGRESS_REGISTRY_INTERNAL_URL` | `egress_registry_internal_url` | `auth-server.egressAuth.registryInternalUrl` | Auth-server → registry internal vend endpoint. |
+| nginx marker secret **(secret)** | `AUTH_SERVER_NGINX_MARKER_SECRET` | `egress_nginx_marker_secret` | auto-generated in stack `shared-secret`; `*.egressAuth.markerSecret` (standalone) | B2-4b marker shared by registry + auth-server; empty disables it. |
+| Secrets Manager KMS key **(secret)** | `SECRETS_MANAGER_KMS_KEY_ID` | `egress_secrets_manager_kms_key_id` | `registry.egressAuth.secretsManager.kmsKeyId` | Optional CMK for the vault secrets (secrets-manager backend). |
+| Secrets Manager path prefix | `SECRETS_MANAGER_PATH_PREFIX` | `egress_secrets_manager_path_prefix` | `registry.egressAuth.secretsManager.pathPrefix` | Secret name prefix; also scopes the ECS task IAM grant. |
+| OpenBao address | `OPENBAO_ADDR` | — | `registry.egressAuth.openbao.addr` | OpenBao server URL (openbao backend). |
+| OpenBao namespace | `OPENBAO_NAMESPACE` | — | `registry.egressAuth.openbao.namespace` | Enterprise namespaces only. |
+| OpenBao KV mount | `OPENBAO_KV_MOUNT` | — | `registry.egressAuth.openbao.kvMount` | KV v2 mount point (default `secret`). |
+| OpenBao auth method | `OPENBAO_AUTH_METHOD` | — | `registry.egressAuth.openbao.authMethod` | `token` \| `kubernetes`. EKS uses `kubernetes` (no static token). |
+| OpenBao role | `OPENBAO_ROLE` | — | `registry.egressAuth.openbao.role` | Kubernetes-auth role bound to the registry ServiceAccount. |
+
+**Backend by surface:** ECS wires only the `secrets-manager` knobs (`OPENBAO_*`
+omitted); EKS/Helm defaults to `openbao` with `authMethod: kubernetes` and a
+self-bootstrapping standalone OpenBao (init/unseal/bootstrap Job + unseal
+sidecar, entirely Kubernetes-driven — no KMS, no Secrets Manager).
+
+---
+
 ## Group 30 — Infrastructure-Only (Terraform and Helm) Parameters
 
 These have no `.env` equivalent because they describe the infrastructure, not the running registry.
