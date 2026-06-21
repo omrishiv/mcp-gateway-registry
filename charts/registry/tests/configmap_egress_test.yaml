@@ -45,6 +45,22 @@ tests:
       - notExists:
           path: data.AUTH_SERVER_NGINX_MARKER_SECRET
 
+  - it: derives the callback base URL from global.domain + routing mode
+    set:
+      global:
+        domain: agents-path.arcadeai.site
+        ingress:
+          routingMode: path
+          tls: true
+      egressAuth:
+        enabled: true
+    asserts:
+      # No explicit oauthCallbackBaseUrl: must fall back to the public host so
+      # registry.core.config startup validation passes (path mode => bare host).
+      - equal:
+          path: data.EGRESS_OAUTH_CALLBACK_BASE_URL
+          value: "https://agents-path.arcadeai.site"
+
   - it: defaults timeouts + path prefix when only enabled
     set:
       egressAuth:

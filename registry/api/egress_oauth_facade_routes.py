@@ -64,6 +64,28 @@ def _registry_base_url() -> str:
     return settings.registry_url.rstrip("/")
 
 
+def _gateway_origin(request: Request) -> str:
+    """Return the public gateway ORIGIN (scheme://host, no ROOT_PATH path).
+
+    The browser-facing auth routes (``/oauth2/login/*``, ``/oauth2/callback/*``)
+    are served by nginx at the ORIGIN ROOT in BOTH routing modes -- they are
+    NOT mounted under the registry's ROOT_PATH. So a login bounce must target
+    ``{origin}/oauth2/login/keycloak``, NOT ``{registry_url}/oauth2/login/...``
+    (in path mode registry_url carries ``/registry`` and the prefixed login path
+    falls through nginx to the SPA -> HTML -> the login never happens, which is
+    the path-mode-only egress consent failure; subdomain mode worked because
+    registry_url has no path so the two coincide).
+
+    Derive the origin from settings.registry_url (authoritative public URL,
+    HTTPS-correct behind the ALB) rather than the request Host, stripping any
+    path component.
+    """
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(settings.registry_url)
+    return f"{parts.scheme}://{parts.netloc}"
+
+
 def _feature_on() -> bool:
     return bool(settings.egress_auth_enabled)
 
@@ -76,9 +98,18 @@ def _feature_on() -> bool:
 @router.get("/.well-known/oauth-protected-resource/{server_path:path}")
 async def egress_protected_resource_metadata(server_path: str) -> JSONResponse:
     """Per-server RFC 9728 PRM. Advertises the gateway egress AS as the
-    authorization server for this server's third-party resource."""
+    authorization server for this server's third-party resource.
+
+    ``server_path`` is captured from the request URL. In path-routing mode a
+    client doing origin-root discovery includes the ROOT_PATH prefix
+    (``registry/github``); strip it so the ``resource`` we build is the single
+    canonical ``{registry_url}/github`` in BOTH routing modes (otherwise the
+    prefix doubles to ``…/registry/registry/github`` and the client rejects it
+    as a resource mismatch).
+    """
     if not _feature_on():
         return JSONResponse({"error": "not_found"}, status_code=404)
+    server_path = as_facade.strip_registry_path_prefix(server_path, _registry_base_url())
     server = await server_service.get_server_info(
         as_facade._normalize_server_path(server_path), include_credentials=False
     )
@@ -91,10 +122,30 @@ async def egress_protected_resource_metadata(server_path: str) -> JSONResponse:
     return JSONResponse(doc, headers={"Cache-Control": "public, max-age=3600"})
 
 
-@router.get("/.well-known/oauth-authorization-server/oauth2/egress")
-async def egress_authorization_server_metadata() -> JSONResponse:
-    """RFC 8414 AS metadata for the egress facade (server-independent)."""
+@router.get("/.well-known/oauth-authorization-server/{issuer_path:path}")
+async def egress_authorization_server_metadata(issuer_path: str) -> JSONResponse:
+    """RFC 8414 AS metadata for the egress facade (server-independent).
+
+    A spec-compliant client locates this document by taking the issuer it found
+    in the PRM (``authorization_servers``) and inserting the well-known segment
+    after the origin (RFC 8414 §3.1). The issuer is ``{registry_url}/oauth2/egress``,
+    so the path component the client appends depends on the deployment's routing
+    mode / ROOT_PATH:
+
+      subdomain mode: issuer ``https://mcpregistry.gw/oauth2/egress``
+        -> GET /.well-known/oauth-authorization-server/oauth2/egress
+      path mode:      issuer ``https://gw/registry/oauth2/egress``
+        -> GET /.well-known/oauth-authorization-server/registry/oauth2/egress
+
+    We therefore match any trailing path that ends in the facade issuer suffix
+    (``/oauth2/egress``), tolerating an arbitrary ROOT_PATH prefix, instead of a
+    single hardcoded suffix that only matched subdomain mode. Any other suffix
+    404s (it is not this facade's issuer), leaving the gateway's own
+    ``/.well-known/oauth-authorization-server`` route untouched.
+    """
     if not _feature_on():
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    if not as_facade.is_facade_issuer_path(issuer_path):
         return JSONResponse({"error": "not_found"}, status_code=404)
     doc = as_facade.build_authorization_server_metadata(_registry_base_url())
     return JSONResponse(doc, headers={"Cache-Control": "public, max-age=3600"})
@@ -166,9 +217,10 @@ def _login_bootstrap_redirect(request: Request) -> RedirectResponse:
     return_to = request.url.path
     if request.url.query:
         return_to = f"{return_to}?{request.url.query}"
-    login = (
-        f"{_registry_base_url()}/oauth2/login/keycloak?"
-        + urlencode({"redirect_uri": return_to})
+    # /oauth2/login/* is served at the ORIGIN root in both routing modes, so the
+    # login URL must NOT carry the registry ROOT_PATH (see _gateway_origin).
+    login = f"{_gateway_origin(request)}/oauth2/login/keycloak?" + urlencode(
+        {"redirect_uri": return_to}
     )
     logger.info("egress facade /authorize: no session -> bounce to gateway login")
     return RedirectResponse(login, status_code=302)
@@ -312,9 +364,7 @@ async def egress_token(request: Request) -> JSONResponse:
     client_id = form.get("client_id", "")
 
     if grant_type != "authorization_code":
-        return JSONResponse(
-            {"error": "unsupported_grant_type"}, status_code=400
-        )
+        return JSONResponse({"error": "unsupported_grant_type"}, status_code=400)
 
     # Atomically consume the code (single-use + TTL enforced by the repo). A
     # missing/expired/already-used code yields None -> invalid_grant.

@@ -153,8 +153,20 @@ cognito:
 # registry subchart.
 egressAuth:
   enabled: false
-  # URL of the registry's internal vend endpoint (loopback/cluster-internal).
-  registryInternalUrl: "http://registry:8080"
+  # URL of the registry's internal vend endpoint (cluster-internal). MUST match
+  # the registry Service name + port (charts/registry: service.port=8000, which
+  # targets the in-pod nginx). The old default of :8080 is the registry pod's
+  # INTERNAL nginx listen port, NOT the Service port -- it is unreachable
+  # cross-pod, so the egress token vend silently fails and the gateway forwards
+  # to the upstream without the user's vaulted token (upstream 400/401). Keep
+  # this aligned with mcpgw.registryUrl (also http://registry:8000).
+  registryInternalUrl: "http://registry:8000"
+  # Public base URL for the egress OAuth callback ({base}/oauth2/egress/callback).
+  # The auth-server imports registry.core.config, whose startup validation
+  # REQUIRES this when egressAuth.enabled. Leave empty to derive it from
+  # global.domain + the ingress routing mode (see templates/configmap-egress.yaml);
+  # set it only to point at a custom public front door.
+  oauthCallbackBaseUrl: ""
   # B2-4b nginx marker secret. Optional (empty = marker disabled). When set it
   # MUST match the registry. In the stack it is auto-generated + shared, so
   # leave empty there.

@@ -64,13 +64,29 @@ class TestDiscoveryDocuments:
         doc = as_facade.build_authorization_server_metadata(REGISTRY_URL + "/")
         assert doc["issuer"] == f"{REGISTRY_URL}/oauth2/egress"
 
+    def test_is_facade_issuer_path_matches_both_routing_modes(self):
+        # Subdomain mode: client appends the bare issuer suffix.
+        assert as_facade.is_facade_issuer_path("oauth2/egress")
+        assert as_facade.is_facade_issuer_path("/oauth2/egress")
+        # Path mode: the issuer carries the ROOT_PATH prefix (e.g. /registry),
+        # so the client appends it after the well-known segment.
+        assert as_facade.is_facade_issuer_path("registry/oauth2/egress")
+        assert as_facade.is_facade_issuer_path("/registry/oauth2/egress")
+        # An arbitrary deeper prefix still resolves (suffix match is the anchor).
+        assert as_facade.is_facade_issuer_path("a/b/oauth2/egress")
+
+    def test_is_facade_issuer_path_rejects_foreign_suffix(self):
+        assert as_facade.is_facade_issuer_path("oauth2/ingress") is None
+        assert as_facade.is_facade_issuer_path("some/other/issuer") is None
+        assert as_facade.is_facade_issuer_path("") is None
+        # Must end in the full suffix, not merely contain the last segment.
+        assert as_facade.is_facade_issuer_path("egress") is None
+
 
 @pytest.mark.unit
 class TestDynamicClientRegistration:
     def test_loopback_ipv4_redirect_accepted(self):
-        info = as_facade.register_client(
-            {"redirect_uris": ["http://127.0.0.1:53217/callback"]}
-        )
+        info = as_facade.register_client({"redirect_uris": ["http://127.0.0.1:53217/callback"]})
         assert info["client_id"].startswith("egress-")
         assert info["token_endpoint_auth_method"] == "none"
         assert info["redirect_uris"] == ["http://127.0.0.1:53217/callback"]
@@ -108,7 +124,9 @@ class TestDynamicClientRegistration:
         assert a["client_id"] != b["client_id"]
 
 
-def _ctx(challenge: str, redirect_uri: str = "http://127.0.0.1:5000/cb") -> as_facade.ClientAuthzContext:
+def _ctx(
+    challenge: str, redirect_uri: str = "http://127.0.0.1:5000/cb"
+) -> as_facade.ClientAuthzContext:
     return as_facade.ClientAuthzContext(
         client_id="egress-abc",
         redirect_uri=redirect_uri,
@@ -223,9 +241,7 @@ class TestServerConfigHelpers:
         assert as_facade.is_server_egress_configured(None) is False
 
     def test_mode_none_not_configured(self):
-        assert (
-            as_facade.is_server_egress_configured(self._server(egress_auth_mode="none")) is False
-        )
+        assert as_facade.is_server_egress_configured(self._server(egress_auth_mode="none")) is False
 
     def test_missing_egress_oauth_not_configured(self):
         assert as_facade.is_server_egress_configured(self._server(egress_oauth=None)) is False

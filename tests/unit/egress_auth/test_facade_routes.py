@@ -75,9 +75,10 @@ def client(monkeypatch, repo):
         server=None,
         consent_url="https://github.com/login/oauth/authorize?x=1",
         enabled=True,
+        registry_url=REGISTRY_URL,
     ):
         monkeypatch.setattr(facade.settings, "egress_auth_enabled", enabled)
-        monkeypatch.setattr(facade.settings, "registry_url", REGISTRY_URL)
+        monkeypatch.setattr(facade.settings, "registry_url", registry_url)
 
         async def _get_server_info(path, include_credentials=False):
             return server
@@ -187,11 +188,54 @@ class TestDiscoveryEndpoints:
         assert body["authorization_servers"] == [f"{REGISTRY_URL}/oauth2/egress"]
         assert body["scopes_supported"] == ["repo"]
 
+    def test_prm_endpoint_path_mode_origin_root_no_double_prefix(self, client):
+        # Path mode: registry_url carries a ROOT_PATH (/registry). A client doing
+        # ORIGIN-ROOT RFC 9728 discovery requests the doc WITH that prefix
+        # (`/.well-known/oauth-protected-resource/registry/github`), so the route
+        # captures `registry/github`. The `resource` MUST be the single canonical
+        # `.../registry/github`, NOT the doubled `.../registry/registry/github`
+        # (the live bug: Claude Code rejected the doubled resource as a mismatch).
+        path_url = "https://gw.example.com/registry"
+        c = client(server=_server(), registry_url=path_url)
+        r = c.get("/.well-known/oauth-protected-resource/registry/github")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["resource"] == f"{path_url}/github"
+        assert body["resource"].count("/registry/registry") == 0
+
+    def test_prm_endpoint_path_mode_pointer_form_matches_origin_root(self, client):
+        # The WWW-Authenticate pointer form (prefix already consumed by the
+        # ingress, so the route captures the bare `github`) must yield the SAME
+        # canonical resource as the origin-root form above.
+        path_url = "https://gw.example.com/registry"
+        c = client(server=_server(), registry_url=path_url)
+        r = c.get("/.well-known/oauth-protected-resource/github")
+        assert r.status_code == 200
+        assert r.json()["resource"] == f"{path_url}/github"
+
     def test_as_metadata_endpoint(self, client):
+        # Subdomain-mode discovery form (issuer has no path prefix): a client
+        # inserts the well-known segment and appends the bare issuer suffix.
         c = client()
         r = c.get("/.well-known/oauth-authorization-server/oauth2/egress")
         assert r.status_code == 200
         assert r.json()["token_endpoint"] == f"{REGISTRY_URL}/oauth2/egress/token"
+
+    def test_as_metadata_endpoint_path_mode_prefix(self, client):
+        # Path-mode discovery form: the issuer is `{host}/registry/oauth2/egress`,
+        # so a spec-compliant client requests the AS metadata with the ROOT_PATH
+        # prefix inserted after the well-known segment. The route must resolve
+        # this to the SAME document (the subdomain-only hardcoded suffix used to
+        # 404 here, which broke path-mode IDE discovery).
+        c = client()
+        r = c.get("/.well-known/oauth-authorization-server/registry/oauth2/egress")
+        assert r.status_code == 200
+        assert r.json()["token_endpoint"] == f"{REGISTRY_URL}/oauth2/egress/token"
+
+    def test_as_metadata_foreign_suffix_404(self, client):
+        # A path that does not end in this facade's issuer suffix is not ours.
+        c = client()
+        assert c.get("/.well-known/oauth-authorization-server/some/other/issuer").status_code == 404
 
     def test_discovery_404_when_disabled(self, client):
         c = client(enabled=False)
@@ -247,11 +291,33 @@ class TestAuthorize:
         r = c.get("/oauth2/egress/authorize", params=_authorize_params(challenge))
         assert r.status_code == 302
         loc = r.headers["location"]
+        # Subdomain mode: origin == registry_url (no path), so both coincide.
         assert loc.startswith(f"{REGISTRY_URL}/oauth2/login/keycloak")
         # returns to /authorize with its params preserved (urlencoded)
         assert "oauth2%2Fegress%2Fauthorize" in loc
         # no pending stored when we bounce to login
         assert c._repo.pending == {}
+
+    def test_authorize_login_bounce_targets_origin_not_root_path(self, client):
+        # Path-mode regression: when registry_url carries a ROOT_PATH (/registry),
+        # the login bounce MUST target the ORIGIN ("https://gw.example.com/oauth2/
+        # login/keycloak"), NOT "https://gw.example.com/registry/oauth2/login/...".
+        # nginx serves /oauth2/login/* at the origin root in both modes; the
+        # prefixed form falls through to the SPA (HTML) and the login never
+        # happens -- the path-mode-only egress consent failure. Subdomain mode
+        # masked this because registry_url has no path.
+        c = client(
+            user_context=None,
+            server=_server(),
+            registry_url="https://gw.example.com/registry",
+        )
+        challenge = pkce_challenge_s256(generate_pkce_verifier())
+        r = c.get("/oauth2/egress/authorize", params=_authorize_params(challenge))
+        assert r.status_code == 302
+        loc = r.headers["location"]
+        assert loc.startswith("https://gw.example.com/oauth2/login/keycloak")
+        # The prefixed login path must NOT appear (that was the bug).
+        assert "/registry/oauth2/login/keycloak" not in loc
 
     def test_authorize_non_loopback_redirect_400(self, client):
         c = client(server=_server())
@@ -358,9 +424,7 @@ class TestTokenAndResume:
         c = client(server=_server())
         verifier = generate_pkce_verifier()
         c.get("/oauth2/egress/authorize", params=_authorize_params(pkce_challenge_s256(verifier)))
-        redirect = await facade.issue_facade_code_redirect(
-            state_session_id=c._svc.last_session_id
-        )
+        redirect = await facade.issue_facade_code_redirect(state_session_id=c._svc.last_session_id)
         code = redirect.headers["location"].split("code=")[1].split("&")[0]
         r = c.post(
             "/oauth2/egress/token",
@@ -414,9 +478,7 @@ class TestTokenAndResume:
             await real_store(code, payload, ttl)
 
         monkeypatch.setattr(c._repo, "store_code", _flaky_store)
-        redirect = await facade.issue_facade_code_redirect(
-            state_session_id=c._svc.last_session_id
-        )
+        redirect = await facade.issue_facade_code_redirect(state_session_id=c._svc.last_session_id)
         assert redirect is not None
         assert calls["n"] == 2  # retried once
         code = redirect.headers["location"].split("code=")[1].split("&")[0]

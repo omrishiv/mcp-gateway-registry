@@ -90,6 +90,68 @@ def _normalize_server_path(server_path: str) -> str:
     return server_path if server_path.startswith("/") else "/" + server_path
 
 
+def strip_registry_path_prefix(
+    server_path: str,
+    registry_url: str,
+) -> str:
+    """Strip the registry's ROOT_PATH prefix from a captured ``server_path``.
+
+    The PRM route captures ``{server_path:path}`` from the request URL. A client
+    doing ORIGIN-ROOT RFC 9728 discovery requests
+    ``/.well-known/oauth-protected-resource/<root_path>/<server>`` (path mode,
+    e.g. ``registry/github``), so the captured value carries the ROOT_PATH
+    prefix. Building ``resource = {registry_url}{server_path}`` would then DOUBLE
+    the prefix (``…/registry`` + ``/registry/github`` ->
+    ``…/registry/registry/github``), which the MCP client rejects as a resource
+    mismatch.
+
+    The registry's ROOT_PATH equals the path component of ``registry_url``
+    (``/registry`` in path mode, empty in subdomain mode). Strip exactly one
+    leading copy of it so both discovery forms (origin-root and the
+    ``/registry``-prefixed WWW-Authenticate pointer form) yield the SAME
+    canonical ``<root_path>/<server>`` resource.
+    """
+    from urllib.parse import urlparse
+
+    root_path = urlparse(registry_url).path.strip("/")
+    if not root_path:
+        return server_path
+    candidate = server_path.strip("/")
+    prefix = root_path + "/"
+    if candidate == root_path:
+        return ""
+    if candidate.startswith(prefix):
+        return candidate[len(prefix) :]
+    return server_path
+
+
+def is_facade_issuer_path(issuer_path: str) -> str | None:
+    """True-ish if ``issuer_path`` is the trailing portion of THIS facade's
+    RFC 8414 issuer URL, regardless of any ROOT_PATH prefix (routing mode).
+
+    The PRM advertises the AS issuer as ``{registry_url}/oauth2/egress``. A
+    client locating the AS metadata inserts the well-known segment after the
+    origin and appends the issuer's path, which is:
+
+      - subdomain mode: ``oauth2/egress``           (registry_url has no path)
+      - path mode:      ``registry/oauth2/egress``  (ROOT_PATH=/registry)
+
+    Both must resolve to the same single AS-metadata document. We accept any
+    path that ENDS in the facade issuer suffix (``/oauth2/egress``), tolerating
+    surrounding slashes, so the route works in either mode without hardcoding
+    the deployment's prefix. Returns the matched suffix (truthy) or None.
+
+    Matching the *suffix* (not an exact string) is safe: the suffix
+    ``/oauth2/egress`` is specific to this facade, and a non-matching path falls
+    through to 404 rather than leaking the document under an arbitrary URL.
+    """
+    normalized = "/" + issuer_path.strip("/")
+    suffix = FACADE_ISSUER_SUFFIX  # "/oauth2/egress"
+    if normalized == suffix or normalized.endswith(suffix):
+        return normalized
+    return None
+
+
 def build_resource_metadata_url(
     registry_url: str,
     server_path: str,

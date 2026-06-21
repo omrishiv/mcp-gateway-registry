@@ -3614,7 +3614,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                     gateway injects the user&apos;s token on egress. Leave provider blank to disable.
                     Register this callback URL in your OAuth app:{' '}
                     <code className="text-purple-600 dark:text-purple-400">
-                      /oauth2/egress/callback
+                      {`${window.location.origin}/oauth2/egress/callback`}
                     </code>
                   </p>
                   <div className="space-y-3">

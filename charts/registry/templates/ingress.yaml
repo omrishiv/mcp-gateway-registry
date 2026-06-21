@@ -11,6 +11,18 @@ Keycloak ingresses are disabled by default, so the ALB must forward
 their browser-facing paths to the registry Service — nginx handles the
 final hop to the auth-server / Keycloak ClusterIP Services.
 
+/.well-known must be forwarded too: spec-compliant MCP clients do RFC
+9728 / RFC 8414 OAuth discovery at the ORIGIN ROOT
+(https://<domain>/.well-known/oauth-protected-resource[/<server>],
+.../oauth-authorization-server), NOT under the /registry path prefix.
+The registry app serves these at root (its FastAPI mounts the
+well-known router at "/.well-known" and the nginx catch-all forwards
+it), but without this ingress rule the ALB never routes origin-root
+/.well-known to the registry and discovery 404s — the client then
+reports "the server does not advertise OAuth endpoints." The 401
+WWW-Authenticate resource_metadata pointer (.../registry/.well-known/...)
+still works, but strict clients use the origin-root form.
+
 Subdomain mode does not need these extra rules: `/` on
 mcpregistry.<domain> already catches every browser-facing path and
 nginx does the internal routing.
@@ -41,6 +53,16 @@ spec:
       http:
         paths:
           - path: {{ $pathPrefix }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Values.app.name }}
+                port:
+                  name: http
+          # Origin-root OAuth discovery (RFC 9728 / RFC 8414). Strict MCP
+          # clients probe https://<domain>/.well-known/... directly; route it
+          # to the registry, whose nginx + FastAPI serve the discovery docs.
+          - path: /.well-known
             pathType: Prefix
             backend:
               service:

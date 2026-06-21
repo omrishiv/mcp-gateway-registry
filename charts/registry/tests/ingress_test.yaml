@@ -1,0 +1,59 @@
+suite: registry ingress routing
+templates:
+  - templates/ingress.yaml
+tests:
+  - it: path mode forwards origin-root /.well-known to the registry (RFC 9728/8414 discovery)
+    set:
+      global.secretKey: test-key-32-bytes-aaaaaaaaaaaaaaaaaa
+      ingress.enabled: true
+      global.domain: agents-path.arcadeai.site
+      global.ingress.routingMode: path
+    asserts:
+      # Strict MCP clients probe https://<domain>/.well-known/... at the origin
+      # root; without this rule the ALB never routes it to the registry and
+      # OAuth discovery 404s.
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /.well-known
+            pathType: Prefix
+            backend:
+              service:
+                name: registry
+                port:
+                  name: http
+
+  - it: path mode keeps the registry + browser-facing roots
+    set:
+      global.secretKey: test-key-32-bytes-aaaaaaaaaaaaaaaaaa
+      ingress.enabled: true
+      global.domain: agents-path.arcadeai.site
+      global.ingress.routingMode: path
+    asserts:
+      - equal:
+          path: spec.rules[0].host
+          value: agents-path.arcadeai.site
+      - equal:
+          path: spec.rules[0].http.paths[0].path
+          value: /registry
+      # /.well-known must sit immediately after /registry (before the auth roots).
+      - equal:
+          path: spec.rules[0].http.paths[1].path
+          value: /.well-known
+
+  - it: subdomain mode does NOT add the /.well-known rule (root catch-all covers it)
+    set:
+      global.secretKey: test-key-32-bytes-aaaaaaaaaaaaaaaaaa
+      ingress.enabled: true
+      global.domain: arcadeai.site
+      global.ingress.routingMode: subdomain
+    asserts:
+      - equal:
+          path: spec.rules[0].host
+          value: mcpregistry.arcadeai.site
+      - equal:
+          path: spec.rules[0].http.paths[0].path
+          value: /
+      - lengthEqual:
+          path: spec.rules[0].http.paths
+          count: 1
