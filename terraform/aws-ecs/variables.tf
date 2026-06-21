@@ -16,10 +16,58 @@ variable "vpc_cidr" {
   default     = "10.0.0.0/16"
 }
 
+variable "use_existing_vpc" {
+  description = "Use an existing VPC and subnet IDs instead of creating a new VPC for this deployment."
+  type        = bool
+  default     = false
+}
+
+variable "existing_vpc_id" {
+  description = "Existing VPC ID to use when use_existing_vpc is true."
+  type        = string
+  default     = ""
+}
+
+variable "existing_public_subnet_ids" {
+  description = "Existing public subnet IDs for internet-facing ALBs when use_existing_vpc is true."
+  type        = list(string)
+  default     = []
+}
+
+variable "existing_private_subnet_ids" {
+  description = "Existing private subnet IDs for ECS tasks, databases, Lambda functions, and EFS when use_existing_vpc is true."
+  type        = list(string)
+  default     = []
+}
+
+variable "existing_private_route_table_ids" {
+  description = "Existing private route table IDs used for VPC gateway endpoints when use_existing_vpc is true and create_vpc_endpoints is true."
+  type        = list(string)
+  default     = []
+}
+
+variable "existing_nat_public_ips" {
+  description = "Optional public NAT or firewall egress IPs for existing-VPC deployments, used to allow private tasks to reach the Keycloak ALB via its public URL."
+  type        = list(string)
+  default     = []
+}
+
+variable "create_vpc_endpoints" {
+  description = "Create STS and S3 VPC endpoints. Set false when using an existing VPC that already provides endpoint, firewall, or internet egress routing."
+  type        = bool
+  default     = true
+}
+
 variable "ingress_cidr_blocks" {
   description = "List of CIDR blocks allowed to access the ALB (main ALB + auth server + registry)"
   type        = list(string)
   default     = ["0.0.0.0/0"]
+}
+
+variable "auth_server_url" {
+  description = "Internal URL the registry/nginx use to reach the auth-server. Set to a Cloud Map / Service Connect FQDN (e.g. http://auth-server.<namespace>.local:8888) for deployments where only FQDNs resolve. Defaults to the Compose-style service name for backward compatibility."
+  type        = string
+  default     = "http://auth-server:8888"
 }
 
 variable "enable_monitoring" {
@@ -127,19 +175,19 @@ variable "keycloak_log_level" {
 variable "registry_image_uri" {
   description = "Container image URI for registry service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/registry:1.24.6"
+  default     = "public.ecr.aws/p3v1o3c6/registry:1.24.7"
 }
 
 variable "auth_server_image_uri" {
   description = "Container image URI for auth server service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/auth-server:1.24.6"
+  default     = "public.ecr.aws/p3v1o3c6/auth-server:1.24.7"
 }
 
 variable "mcpgw_image_uri" {
   description = "Container image URI for mcpgw service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/mcpgw:1.24.6"
+  default     = "public.ecr.aws/p3v1o3c6/mcpgw:1.24.7"
 }
 
 variable "keycloak_image_uri" {
@@ -554,6 +602,12 @@ variable "entra_graph_base_url" {
 
 variable "idp_group_filter_prefix" {
   description = "Comma-separated list of prefixes to filter IdP groups in IAM > Groups page (e.g., 'mcp-,registry-'). Applies to all identity providers."
+  type        = string
+  default     = ""
+}
+
+variable "allowed_idp_groups" {
+  description = "Comma-separated EXACT IdP group names/IDs to keep in a user's session at login. Empty means auto-derive from scope mappings (recommended). Applies to all identity providers."
   type        = string
   default     = ""
 }

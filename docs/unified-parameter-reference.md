@@ -253,6 +253,7 @@ Single URL; disables itself when unset.
 | IDE OAuth client id | `IDE_OAUTH_CLIENT_ID` | `ide_oauth_client_id` | `registry.ideOauthClientId` | Registry-wide **default** pre-registered **public** OAuth client_id that IDEs (Cursor, Claude Code, Codex) use to start the gateway login flow. When set, a server's Connect config advertises this client_id and omits the static gateway token, so the IDE shows a login button and runs the OAuth/PKCE flow. A per-server `oauth_client_id` (see below) overrides this default. Use when anonymous Dynamic Client Registration is disabled and a fixed public client is registered instead. Empty (default) keeps the static-token Connect config. Not a secret. |
 | IDE OAuth callback port | `IDE_OAUTH_CALLBACK_PORT` | `ide_oauth_callback_port` | `registry.ideOauthCallbackPort` | Fixed loopback callback port the IDE uses for the OAuth login redirect (`http://localhost:<port>/callback`). Needed for IdPs that match the redirect_uri literally including the port (Okta, Entra, Cognito): register that exact URI on the public client and set the same port here so the Connect dialog emits `--callback-port` (Claude Code). `0` (default) lets the IDE pick a port, which is correct for Keycloak (wildcard loopback redirect). Note: Codex/Cursor cannot pin the port, so this only fully helps Claude Code. |
 | IdP group filter prefixes | `IDP_GROUP_FILTER_PREFIX` | `idp_group_filter_prefix` | `registry.idpGroupFilterPrefix` | Comma-separated prefixes for IAM > Groups. |
+| Login-time IdP group allowlist | `ALLOWED_IDP_GROUPS` | `allowed_idp_groups` | `registry.allowedIdpGroups` / `auth-server.allowedIdpGroups` | Comma-separated EXACT IdP group names/IDs stored in a user's session at login. Empty (default) auto-derives the allowlist from scope mappings. Fixes session bloat and per-request slowness for users with very large IdP group memberships (e.g. Entra ID with hundreds of AD groups). Read by both registry and auth-server. |
 | IdP user-to-group fallback providers | `IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS` | `idp_user_group_fallback_enabled_providers` | `registry.idpUserGroupFallbackEnabledProviders` / `auth-server.idpUserGroupFallbackEnabledProviders` | Issue #1127. Comma-separated IdP providers (e.g. `pingfederate`) for which the registry's local `idp_user_groups` collection is consulted to populate empty JWT groups claims. Empty disables fallback for all providers. Default: `pingfederate`. Read by both registry and auth-server. |
 | PingFederate admin URL | `PF_ADMIN_URL` | `pf_admin_url` | `registry.pingfederateAdmin.url` | Issue #1127. Admin API URL used by the registry to create OAuth clients and Simple PCV users. Default: dev-only `https://pingfederate:9999`; override for BYO PingFederate. Read by registry only. |
 | PingFederate admin user | `PF_ADMIN_USER` | `pf_admin_user` | `registry.pingfederateAdmin.user` | Issue #1127. Basic-auth user for the PF admin API. Default: dev-only `administrator`; override in production. Read by registry only. |
@@ -725,6 +726,7 @@ These have no `.env` equivalent because they describe the infrastructure, not th
 | Terraform variable | Purpose |
 |--------------------|---------|
 | `ingress_cidr_blocks` | CIDRs allowed to reach the main ALB. |
+| `auth_server_url` | Internal URL the registry/nginx use to reach the auth-server. Defaults to `http://auth-server:8888`; set to a Cloud Map / Service Connect FQDN for FQDN-only deployments. (Docker: `AUTH_SERVER_URL`; Helm: derived from the cluster service FQDN.) |
 | `use_regional_domains` | Regional subdomain pattern. |
 | `base_domain` | Root domain for regional pattern. |
 | `keycloak_domain` | Custom Keycloak hostname. |
@@ -739,6 +741,13 @@ These have no `.env` equivalent because they describe the infrastructure, not th
 | `aws_region` | Deploy region. |
 | `name` | Deployment name prefix. |
 | `vpc_cidr` | VPC CIDR. |
+| `use_existing_vpc` | Deploy into an existing VPC/subnets instead of creating a new VPC. Defaults to `false`. |
+| `existing_vpc_id` | Existing VPC ID to use when `use_existing_vpc` is true. |
+| `existing_public_subnet_ids` | Existing public subnet IDs for internet-facing ALBs (existing-VPC mode). |
+| `existing_private_subnet_ids` | Existing private subnet IDs for ECS tasks, databases, Lambda, and EFS (existing-VPC mode). |
+| `existing_private_route_table_ids` | Existing private route table IDs for VPC gateway endpoints, required when `use_existing_vpc` and `create_vpc_endpoints` are both true. |
+| `existing_nat_public_ips` | Optional public egress IPs that private tasks use to reach the Keycloak public ALB (existing-VPC mode). |
+| `create_vpc_endpoints` | Create STS and S3 VPC endpoints. Set false when the existing VPC already provides endpoint/egress routing. Defaults to `true`. |
 | `enable_monitoring` | CloudWatch dashboards. |
 | `alarm_email` | SNS destination. |
 | `currenttime_replicas`, `mcpgw_replicas`, `realserverfaketools_replicas`, `flight_booking_agent_replicas`, `travel_assistant_agent_replicas` | ECS service desired counts. |

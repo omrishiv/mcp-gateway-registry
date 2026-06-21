@@ -287,7 +287,21 @@ def mock_scopes_config(sample_scopes_config: dict[str, Any], monkeypatch):
                 out[name] = scopes
         return out
 
+    # get_group_mappings_bulk returns the de-duplicated union of scopes across
+    # the given groups (mirrors the base-class default that loops the single
+    # getter). Production map_groups_to_scopes now calls this instead of looping.
+    async def mock_get_group_mappings_bulk(groups: list[str]):
+        seen: set[str] = set()
+        out: list[str] = []
+        for group in groups:
+            for scope in await mock_get_group_mappings(group):
+                if scope not in seen:
+                    seen.add(scope)
+                    out.append(scope)
+        return out
+
     mock_repo.get_group_mappings.side_effect = mock_get_group_mappings
+    mock_repo.get_group_mappings_bulk.side_effect = mock_get_group_mappings_bulk
     mock_repo.get_all_group_mappings.side_effect = mock_get_all_group_mappings
     mock_repo.get_ui_scopes.side_effect = mock_get_ui_scopes
     mock_repo.get_server_scopes.side_effect = mock_get_server_scopes
@@ -682,6 +696,57 @@ class TestGetUIPermissionsForUser:
 
         # Assert
         assert permissions == {}
+
+    @pytest.mark.asyncio
+    async def test_admin_ui_permissions_with_mixed_scopes(
+        self, mock_scopes_config: dict[str, Any]
+    ):
+        """Test admin gets permissions when scopes include non-UI server scopes (#930).
+
+        In production, the admin group maps to both UI scopes (with permissions)
+        and server-access scopes (without permissions). The function must still
+        return the admin UI permissions, not an empty dict.
+        """
+        # Arrange — realistic scope list produced by map_cognito_groups_to_scopes
+        user_scopes = [
+            "mcp-registry-admin",
+            "mcp-servers-unrestricted/read",
+            "mcp-servers-unrestricted/execute",
+        ]
+
+        # Act
+        permissions = await get_ui_permissions_for_user(user_scopes)
+
+        # Assert — admin UI permissions must be present
+        assert "list_agents" in permissions
+        assert "all" in permissions["list_agents"]
+        assert "list_service" in permissions
+        assert "all" in permissions["list_service"]
+        assert "register_service" in permissions
+        assert "all" in permissions["register_service"]
+
+
+class TestMapAndResolveEndToEnd:
+    """End-to-end test: group → scopes → ui_permissions (#930).
+
+    Verifies the full chain that was broken on the file backend
+    because get_all_group_mappings returned the wrong dict shape.
+    """
+
+    @pytest.mark.asyncio
+    async def test_admin_group_to_ui_permissions(
+        self, mock_scopes_config: dict[str, Any]
+    ):
+        """Admin group must produce non-empty ui_permissions."""
+        # Step 1: map groups → scopes
+        scopes = await map_cognito_groups_to_scopes(["mcp-registry-admin"])
+        assert len(scopes) > 0, "Admin group should map to at least one scope"
+
+        # Step 2: scopes → ui_permissions
+        permissions = await get_ui_permissions_for_user(scopes)
+        assert permissions, "Admin scopes must produce non-empty ui_permissions"
+        assert "list_service" in permissions
+        assert "all" in permissions["list_service"]
 
 
 # =============================================================================

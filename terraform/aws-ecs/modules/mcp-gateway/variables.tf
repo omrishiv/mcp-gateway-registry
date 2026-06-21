@@ -41,19 +41,19 @@ variable "task_execution_role_arn" {
 variable "registry_image_uri" {
   description = "Container image URI for registry service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/registry:1.24.6"
+  default     = "public.ecr.aws/p3v1o3c6/registry:1.24.7"
 }
 
 variable "auth_server_image_uri" {
   description = "Container image URI for auth server service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/auth-server:1.24.6"
+  default     = "public.ecr.aws/p3v1o3c6/auth-server:1.24.7"
 }
 
 variable "mcpgw_image_uri" {
   description = "Container image URI for mcpgw service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/mcpgw:1.24.6"
+  default     = "public.ecr.aws/p3v1o3c6/mcpgw:1.24.7"
 }
 
 variable "enable_demo_servers" {
@@ -285,6 +285,12 @@ variable "domain_name" {
   description = "Domain name for the MCP Gateway Registry (optional)"
   type        = string
   default     = ""
+}
+
+variable "auth_server_url" {
+  description = "Internal URL the registry/nginx use to reach the auth-server. Set to a Cloud Map / Service Connect FQDN (e.g. http://auth-server.<namespace>.local:8888) for deployments where only FQDNs resolve. Defaults to the Compose-style service name for backward compatibility."
+  type        = string
+  default     = "http://auth-server:8888"
 }
 
 variable "create_route53_record" {
@@ -587,6 +593,12 @@ variable "entra_graph_base_url" {
 
 variable "idp_group_filter_prefix" {
   description = "Comma-separated list of prefixes to filter IdP groups in IAM > Groups page (e.g., 'mcp-,registry-'). Applies to all identity providers."
+  type        = string
+  default     = ""
+}
+
+variable "allowed_idp_groups" {
+  description = "Comma-separated EXACT IdP group names/IDs to keep in a user's session at login. Empty means auto-derive from scope mappings (recommended). Applies to all identity providers."
   type        = string
   default     = ""
 }

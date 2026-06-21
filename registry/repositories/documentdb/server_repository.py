@@ -484,8 +484,17 @@ class DocumentDBServerRepository(ServerRepositoryBase):
             logger.error(f"Failed to update server state in DocumentDB: {e}", exc_info=True)
             return False
 
-    async def count(self) -> int:
+    async def count(
+        self,
+        exclude_versions: bool = False,
+    ) -> int:
         """Get total count of servers.
+
+        Args:
+            exclude_versions: When True, exclude version documents (``_id``
+                containing ":") so the count reflects distinct servers only,
+                matching the basis used by ``count_tools()``. Defaults to False
+                to preserve the historical count of all documents.
 
         Returns:
             Total number of servers in the repository.
@@ -493,12 +502,43 @@ class DocumentDBServerRepository(ServerRepositoryBase):
         logger.debug(f"DocumentDB COUNT: Counting servers in collection '{self._collection_name}'")
         collection = await self._get_collection()
 
+        query: dict[str, Any] = {"_id": {"$not": {"$regex": ":"}}} if exclude_versions else {}
+
         try:
-            count = await collection.count_documents({})
+            count = await collection.count_documents(query)
             logger.debug(f"DocumentDB COUNT: Found {count} servers")
             return count
         except Exception as e:
             logger.error(f"Error counting servers in DocumentDB: {e}", exc_info=True)
+            return 0
+
+    async def count_tools(self) -> int:
+        """Get the total number of tools exposed across all servers.
+
+        Tools are embedded in each server document under ``tool_list``; there is
+        no separate tools collection. This sums the list sizes in a single
+        aggregation (no N+1 loads). Version documents (``_id`` containing ":")
+        are excluded so tools are not double-counted across versions.
+
+        Returns:
+            Total number of tools across all current servers.
+        """
+        logger.debug(f"DocumentDB COUNT: Counting tools in collection '{self._collection_name}'")
+        collection = await self._get_collection()
+
+        pipeline = [
+            {"$match": {"_id": {"$not": {"$regex": ":"}}}},
+            {"$group": {"_id": None, "total": {"$sum": {"$size": {"$ifNull": ["$tool_list", []]}}}}},
+        ]
+
+        try:
+            cursor = collection.aggregate(pipeline)
+            docs = await cursor.to_list(length=1)
+            total = docs[0]["total"] if docs else 0
+            logger.debug(f"DocumentDB COUNT: Found {total} tools")
+            return total
+        except Exception as e:
+            logger.error(f"Error counting tools in DocumentDB: {e}", exc_info=True)
             return 0
 
     async def update_field(

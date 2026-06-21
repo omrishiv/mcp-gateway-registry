@@ -187,3 +187,104 @@ class TestFileBackendBulkDefault:
     async def test_ui_scopes_bulk_loops_singles(self, file_repo):
         result = await file_repo.get_ui_scopes_bulk(["admin", "noperm", "missing"])
         assert result == {"admin": {"list_service": ["all"]}}
+
+
+class TestGetGroupMappingsBulk:
+    """DocumentDB overrides get_group_mappings_bulk with a single $in query
+    returning the de-duplicated union of scope names across the groups."""
+
+    async def test_empty_input_skips_query(self, repo, mock_collection):
+        assert await repo.get_group_mappings_bulk([]) == []
+        mock_collection.find.assert_not_called()
+
+    async def test_only_falsy_input_skips_query(self, repo, mock_collection):
+        assert await repo.get_group_mappings_bulk(["", None]) == []
+        mock_collection.find.assert_not_called()
+
+    async def test_uses_in_query_with_deduped_sorted_groups(self, repo, mock_collection):
+        mock_collection.find.return_value = _make_cursor([])
+        await repo.get_group_mappings_bulk(["g-b", "g-a", "g-b", ""])
+        mock_collection.find.assert_called_once_with({"group_mappings": {"$in": ["g-a", "g-b"]}})
+
+    async def test_returns_deduped_union_of_scope_ids(self, repo, mock_collection):
+        # Two groups map to overlapping scopes; the scope _id appears once each.
+        mock_collection.find.return_value = _make_cursor(
+            [{"_id": "registry-admins"}, {"_id": "public-mcp-users"}]
+        )
+        result = await repo.get_group_mappings_bulk(["g-a", "g-b"])
+        assert result == ["registry-admins", "public-mcp-users"]
+
+    async def test_error_returns_empty(self, repo, mock_collection):
+        mock_collection.find.side_effect = Exception("db error")
+        assert await repo.get_group_mappings_bulk(["g-a"]) == []
+
+
+class TestFileBackendGroupMappingsBulkDefault:
+    """File backend inherits the base-class default: loops the single getter
+    and unions the results, de-duplicated and order-stable."""
+
+    @pytest.fixture
+    def file_repo(self):
+        r = FileScopeRepository.__new__(FileScopeRepository)
+        r._scopes_data = {
+            "group_mappings": {
+                "g-a": ["read:servers", "read:tools"],
+                "g-b": ["read:servers", "write:servers"],
+            },
+        }
+        return r
+
+    async def test_unions_and_dedupes(self, file_repo):
+        result = await file_repo.get_group_mappings_bulk(["g-a", "g-b", "missing"])
+        assert result == ["read:servers", "read:tools", "write:servers"]
+
+    async def test_empty_returns_empty(self, file_repo):
+        assert await file_repo.get_group_mappings_bulk([]) == []
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+class TestFileGetAllGroupMappingsInversion:
+    """The file backend must invert the YAML ``{group: [scopes]}`` structure
+    into the canonical ``{scope: [groups]}`` shape that
+    ``map_cognito_groups_to_scopes`` expects (#930).
+    """
+
+    @pytest.fixture
+    def file_repo(self):
+        r = FileScopeRepository.__new__(FileScopeRepository)
+        r._scopes_data = {
+            "group_mappings": {
+                "mcp-registry-admin": [
+                    "registry-admins",
+                    "mcp-servers-unrestricted/read",
+                    "mcp-servers-unrestricted/execute",
+                ],
+                "registry-admins": ["registry-admins"],
+                "registry-users-lob1": ["registry-users-lob1"],
+            },
+        }
+        return r
+
+    async def test_inverts_yaml_to_canonical_shape(self, file_repo):
+        result = await file_repo.get_all_group_mappings()
+
+        # Keys must be scope names, values must be Keycloak groups
+        assert "registry-admins" in result
+        assert "mcp-registry-admin" in result["registry-admins"]
+        # registry-admins appears in two group entries
+        assert "registry-admins" in result["registry-admins"]
+
+        assert "mcp-servers-unrestricted/read" in result
+        assert result["mcp-servers-unrestricted/read"] == ["mcp-registry-admin"]
+
+        assert "mcp-servers-unrestricted/execute" in result
+        assert result["mcp-servers-unrestricted/execute"] == ["mcp-registry-admin"]
+
+        assert "registry-users-lob1" in result
+        assert result["registry-users-lob1"] == ["registry-users-lob1"]
+
+    async def test_empty_group_mappings(self, file_repo):
+        file_repo._scopes_data = {}
+        result = await file_repo.get_all_group_mappings()
+        assert result == {}

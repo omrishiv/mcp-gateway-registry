@@ -3,9 +3,11 @@ release:
   name: test
   namespace: default
 tests:
-  # Registry ingress in path mode exposes /oauth2, /keycloak, /realms,
-  # /resources — required because auth-server and Keycloak have no
+  # Registry ingress in path mode exposes /.well-known, /oauth2, /keycloak,
+  # /realms, /resources — required because auth-server and Keycloak have no
   # ingress of their own and the registry's nginx proxies them internally.
+  # /.well-known carries origin-root OAuth discovery (RFC 9728/8414) to the
+  # registry; without it strict MCP clients 404 on discovery.
   - it: registry ingress in path mode exposes auth and Keycloak sibling paths
     templates:
       - charts/registry/templates/ingress.yaml
@@ -23,19 +25,22 @@ tests:
           value: /registry
       - equal:
           path: spec.rules[0].http.paths[1].path
-          value: /oauth2
+          value: /.well-known
       - equal:
           path: spec.rules[0].http.paths[2].path
-          value: /keycloak
+          value: /oauth2
       - equal:
           path: spec.rules[0].http.paths[3].path
-          value: /realms
+          value: /keycloak
       - equal:
           path: spec.rules[0].http.paths[4].path
+          value: /realms
+      - equal:
+          path: spec.rules[0].http.paths[5].path
           value: /resources
       - lengthEqual:
           path: spec.rules[0].http.paths
-          count: 5
+          count: 6
 
   - it: registry ingress in subdomain mode keeps the single wildcard
     templates:

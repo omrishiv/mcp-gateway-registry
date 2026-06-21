@@ -109,7 +109,7 @@ module "ecs_service_auth" {
         },
         {
           name  = "AUTH_SERVER_URL"
-          value = "http://auth-server:8888"
+          value = var.auth_server_url
         },
         {
           name  = "AUTH_SERVER_EXTERNAL_URL"
@@ -189,6 +189,10 @@ module "ecs_service_auth" {
         {
           name  = "IDP_GROUP_FILTER_PREFIX"
           value = var.idp_group_filter_prefix
+        },
+        {
+          name  = "ALLOWED_IDP_GROUPS"
+          value = var.allowed_idp_groups
         },
         {
           name  = "IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS"
@@ -808,7 +812,7 @@ module "ecs_service_registry" {
         },
         {
           name  = "AUTH_SERVER_URL"
-          value = "http://auth-server:8888"
+          value = var.auth_server_url
         },
         {
           name  = "AUTH_SERVER_EXTERNAL_URL"
@@ -874,6 +878,10 @@ module "ecs_service_registry" {
         {
           name  = "IDP_GROUP_FILTER_PREFIX"
           value = var.idp_group_filter_prefix
+        },
+        {
+          name  = "ALLOWED_IDP_GROUPS"
+          value = var.allowed_idp_groups
         },
         {
           name  = "IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS"

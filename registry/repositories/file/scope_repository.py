@@ -103,6 +103,11 @@ class FileScopeRepository(ScopeRepositoryBase):
         group_mappings = self._scopes_data.get("group_mappings", {})
         return group_mappings.get(keycloak_group, [])
 
+    async def get_all_mapped_group_names(self) -> set[str]:
+        """Keys of the in-memory group_mappings dict (every mapped group)."""
+        group_mappings = self._scopes_data.get("group_mappings", {})
+        return set(group_mappings.keys())
+
     async def get_server_scopes(
         self,
         scope_name: str,
@@ -514,9 +519,22 @@ class FileScopeRepository(ScopeRepositoryBase):
     async def get_all_group_mappings(
         self,
     ) -> dict[str, list[str]]:
-        """Get all group mappings."""
+        """Get all group mappings.
+
+        The YAML stores ``{keycloak_group: [scope_names]}``, but the
+        canonical return shape (matching the DocumentDB backend) is
+        ``{scope_name: [keycloak_groups]}``.  We invert in-memory so
+        ``map_cognito_groups_to_scopes`` gets a consistent format
+        regardless of backend (#930).
+        """
         try:
-            return self._scopes_data.get("group_mappings", {})
+            raw = self._scopes_data.get("group_mappings", {})
+            # Invert: {keycloak_group: [scope_names]} → {scope_name: [keycloak_groups]}
+            inverted: dict[str, list[str]] = {}
+            for group, scope_names in raw.items():
+                for scope_name in scope_names:
+                    inverted.setdefault(scope_name, []).append(group)
+            return inverted
         except Exception as e:
             logger.error(f"Failed to get group mappings: {e}", exc_info=True)
             return {}

@@ -835,18 +835,14 @@ async def map_groups_to_scopes(groups: list[str]) -> list[str]:
     """
     scopes = []
 
-    # Query DocumentDB directly for group mappings
+    # Resolve all groups to scopes in a single query. Issuing one query per
+    # group serialized a DB round-trip per group on every authenticated
+    # request, which dominated latency for users with many groups on a remote
+    # cluster. get_group_mappings_bulk collapses that into one $in query.
     try:
         scope_repo = get_scope_repository()
-
-        for group in groups:
-            # Query DocumentDB for this group's scope mappings
-            group_scopes = await scope_repo.get_group_mappings(group)
-            if group_scopes:
-                scopes.extend(group_scopes)
-                logger.debug(f"Mapped group '{group}' to scopes: {group_scopes}")
-            else:
-                logger.debug(f"No scope mapping found for group: {group}")
+        scopes = await scope_repo.get_group_mappings_bulk(groups)
+        logger.debug(f"Mapped {len(groups)} groups to scopes: {scopes}")
     except Exception as e:
         logger.error(f"Error querying group mappings from DocumentDB: {e}", exc_info=True)
         # Fall back to in-memory config if DocumentDB query fails
@@ -3049,7 +3045,20 @@ async def generate_user_token(
             )
 
             current_time = int(time.time())
-            expires_in = DEFAULT_TOKEN_LIFETIME_HOURS * 3600  # 8 hours default
+            # Honour the caller's requested lifetime, clamped to the
+            # server-wide maximum (#889).  Values <= 0 or above the cap
+            # are silently clamped; omitted values fall back to the
+            # default (8 h).
+            effective_hours = min(
+                max(request.expires_in_hours, 1),
+                MAX_TOKEN_LIFETIME_HOURS,
+            )
+            expires_in = effective_hours * 3600
+            if request.expires_in_hours != DEFAULT_TOKEN_LIFETIME_HOURS:
+                logger.info(
+                    f"Token lifetime: requested={request.expires_in_hours}h, "
+                    f"effective={effective_hours}h (max={MAX_TOKEN_LIFETIME_HOURS}h)"
+                )
 
             # Build JWT claims
             jwt_claims = {
@@ -3916,6 +3925,20 @@ async def oauth2_callback(
                 f"Session-time group enrichment failed for "
                 f"{mapped_user['username']} (provider={provider}): {e}"
             )
+
+        # Filter the (possibly enriched) group list down to the scope-relevant
+        # subset BEFORE persisting it. IdPs such as Entra ID can return hundreds
+        # or thousands of groups; storing them all bloats the X-Groups header
+        # (nginx buffer overflow -> 500s) and makes the per-request groups->scopes
+        # lookup do one DB query per group. Filtering here is lossless for
+        # authorization because unmapped groups never produce scopes. Runs after
+        # enrichment so the final set is filtered.
+        from group_filter import filter_session_groups
+
+        session_groups = await filter_session_groups(
+            session_groups,
+            username_hash=hash_username(mapped_user["username"]),
+        )
 
         # Persist the full session record server-side and put only an opaque
         # session_id in the browser cookie. This prevents cookie-size failures
