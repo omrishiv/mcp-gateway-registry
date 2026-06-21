@@ -349,6 +349,18 @@ module "mcp_gateway" {
   auth_server_extra_env = var.auth_server_extra_env
   mcpgw_extra_env       = var.mcpgw_extra_env
 
+  # Per-user egress credential vault (third-party OBO). secrets-manager backend
+  # on ECS; IAM grants are added in the module when enabled.
+  egress_auth_enabled                = var.egress_auth_enabled
+  egress_secret_store_backend        = var.egress_secret_store_backend
+  egress_oauth_callback_base_url     = var.egress_oauth_callback_base_url
+  egress_token_refresh_skew_seconds  = var.egress_token_refresh_skew_seconds
+  egress_state_ttl_seconds           = var.egress_state_ttl_seconds
+  egress_registry_internal_url       = var.egress_registry_internal_url
+  egress_nginx_marker_secret         = var.egress_nginx_marker_secret
+  egress_secrets_manager_kms_key_id  = var.egress_secrets_manager_kms_key_id
+  egress_secrets_manager_path_prefix = var.egress_secrets_manager_path_prefix
+
   # Wait for S3 bucket policy to propagate (30s delay)
   # This prevents "Access Denied" errors when ALB tests write permissions
   depends_on = [time_sleep.wait_for_bucket_policy]
