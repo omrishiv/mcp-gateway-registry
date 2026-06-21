@@ -87,10 +87,15 @@ global:
 
 openbao:
   enabled: true
-  # Stable name so the in-cluster service DNS is predictable
-  # (openbao.<ns>.svc:8200) regardless of the Helm release name — the egress
-  # config, the init/unseal Job, and the unseal sidecar all rely on it.
-  fullnameOverride: openbao
+  # NOTE: deliberately NO fullnameOverride here. The subchart's server-binding is
+  # a CLUSTER-scoped ClusterRoleBinding (system:auth-delegator, for kubernetes-auth
+  # TokenReview) named "<fullname>-server-binding" — a fixed name collides across
+  # releases/namespaces. Leaving fullnameOverride unset makes the subchart derive
+  # "<release>-openbao", so the binding + Service are unique per release. The
+  # egress OPENBAO_ADDR + init/unseal Job derive the service DNS from the same
+  # logic via the stack "openbaoServiceHost" helper. Set fullnameOverride only if
+  # you deliberately want a shared/pinned name (and accept the cross-release CRB
+  # collision that implies).
   # The agent injector is not needed for this integration (the registry talks to
   # OpenBao directly via the k8s-auth role); leave it off to reduce surface.
   injector:
@@ -119,6 +124,17 @@ openbao:
         storage "file" {
           path = "/openbao/data"
         }
+    # Readiness via the HTTP health endpoint that reports READY even when the
+    # vault is sealed/uninitialized (sealedcode/uninitcode=204). The DEFAULT
+    # probe runs `bao status`, which exits non-zero while sealed — so the pod
+    # would never go Ready, the Service would drop it, and the init Job (which
+    # connects through the Service) could never reach OpenBao to initialize +
+    # unseal it: a boot deadlock. This path lets the pod become Ready as soon as
+    # the API is listening; the init Job + unseal sidecar then unseal it.
+    readinessProbe:
+      enabled: true
+      path: "/v1/sys/health?standbyok=true&sealedcode=204&uninitcode=204&drsecondarycode=204&performancestandbycode=204"
+      port: 8200
     dataStorage:
       enabled: true
       size: 1Gi
@@ -131,7 +147,9 @@ openbao:
     shareProcessNamespace: false
     extraContainers:
       - name: unseal
-        image: openbao/openbao:2.5.4
+        # Match the server image (same layer already pulled in the pod) so the
+        # `bao` CLI version + registry agree with the OpenBao server container.
+        image: quay.io/openbao/openbao:2.5.5
         command:
           - /bin/sh
           - -c
@@ -202,6 +220,8 @@ keycloak:
       existingSecret: '{{ .Release.Name }}-keycloak-postgresql'
     image:
       registry: public.ecr.aws
+      repository: docker/library/postgres
+      tag: 17.6
 
   # Keycloak always serves from its own root (httpRelativePath defaults
   # to "/" in the Bitnami chart). The registry pod's nginx rewrites

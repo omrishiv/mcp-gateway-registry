@@ -115,10 +115,17 @@ spec:
       serviceAccountName: openbao-init
       containers:
         - name: init
-          image: openbao/openbao:2.5.4
+          # AWS-mirrored Docker library image (no Bitnami, no Docker Hub rate
+          # limits) -- matches the keycloak-configure / mongodb-configure house
+          # pattern. We apt-install curl + jq + kubectl at runtime: curl drives
+          # OpenBao's plain-HTTP REST API (tls_disable=1, no TLS to fight); jq
+          # parses the init JSON robustly; kubectl writes the keys Secret with
+          # proper k8s TLS (busybox wget in the openbao image cannot verify the
+          # API cert -- the original failure mode).
+          image: public.ecr.aws/docker/library/python:3.13-slim
           env:
             - name: BAO_ADDR
-              value: "http://openbao.{{ $ns }}.svc:8200"
+              value: "http://{{ include "mcp-gateway-registry-stack.openbaoServiceHost" . }}:8200"
             - name: KEYS_SECRET
               value: "openbao-keys"
             - name: NAMESPACE
@@ -132,93 +139,95 @@ spec:
             - name: REGISTRY_SA
               value: {{ $registrySa | quote }}
           command:
-            - /bin/sh
+            - /bin/bash
             - -c
             - |
-              set -eu
-              API=https://kubernetes.default.svc
-              SA=/var/run/secrets/kubernetes.io/serviceaccount
-              KTOKEN=$(cat $SA/token)
-              CACERT=$SA/ca.crt
+              set -euo pipefail
+              apt-get update -qq && apt-get install -y -qq curl jq kubectl >/dev/null
+
+              # All OpenBao calls go over plain HTTP (tls_disable=1) to the REST
+              # API; helper wraps curl with the (optional) root token header.
+              bao_api() { # method path [json-body]
+                local m="$1" p="$2" body="${3:-}"
+                if [ -n "$body" ]; then
+                  curl -sS -X "$m" ${BAO_TOKEN:+-H "X-Vault-Token: $BAO_TOKEN"} \
+                    -H 'Content-Type: application/json' -d "$body" "$BAO_ADDR/v1/$p"
+                else
+                  curl -sS -X "$m" ${BAO_TOKEN:+-H "X-Vault-Token: $BAO_TOKEN"} "$BAO_ADDR/v1/$p"
+                fi
+              }
 
               echo "waiting for openbao to answer..."
-              for i in $(seq 1 60); do
-                bao status >/dev/null 2>&1 && break || true
-                # `bao status` exits 2 when sealed/uninited but the API is up;
-                # treat a reachable-but-sealed server as ready to proceed.
-                code=$(bao status 2>/dev/null; echo $?)
-                [ "$code" = "2" ] && break
+              for _ in $(seq 1 60); do
+                curl -sf "$BAO_ADDR/v1/sys/health?uninitcode=200&sealedcode=200" >/dev/null 2>&1 && break || true
                 sleep 2
               done
 
               # --- 1. init if needed -------------------------------------------------
-              if bao status -format=json 2>/dev/null | grep -q '"initialized": true'; then
+              INITED=$(bao_api GET sys/init | jq -r '.initialized')
+              if [ "$INITED" = "true" ]; then
                 echo "already initialized"
+                # Keys must already be in the Secret from the first run; read them.
+                UNSEAL_KEY=$(kubectl -n "$NAMESPACE" get secret "$KEYS_SECRET" \
+                  -o jsonpath='{.data.unseal_key}' 2>/dev/null | base64 -d || true)
+                ROOT_TOKEN=$(kubectl -n "$NAMESPACE" get secret "$KEYS_SECRET" \
+                  -o jsonpath='{.data.root_token}' 2>/dev/null | base64 -d || true)
+                if [ -z "$UNSEAL_KEY" ] || [ -z "$ROOT_TOKEN" ]; then
+                  echo "FATAL: vault is initialized but $KEYS_SECRET has no keys;" >&2
+                  echo "the unseal key/root token are unrecoverable. Delete the" >&2
+                  echo "OpenBao PVC to re-init from scratch." >&2
+                  exit 1
+                fi
               else
                 echo "initializing (Shamir 1-of-1)..."
-                INIT_JSON=$(bao operator init -key-shares=1 -key-threshold=1 -format=json)
-                UNSEAL_KEY=$(echo "$INIT_JSON" | grep -o '"unseal_keys_b64":[^]]*]' | grep -o '"[A-Za-z0-9+/=]\{20,\}"' | head -1 | tr -d '"')
-                ROOT_TOKEN=$(echo "$INIT_JSON" | grep -o '"root_token": *"[^"]*"' | sed 's/.*: *"//;s/"//')
-                # Persist keys to the k8s Secret via the API (idempotent upsert).
-                B64UK=$(printf '%s' "$UNSEAL_KEY" | base64 | tr -d '\n')
-                B64RT=$(printf '%s' "$ROOT_TOKEN" | base64 | tr -d '\n')
-                BODY=$(printf '{"apiVersion":"v1","kind":"Secret","metadata":{"name":"%s"},"data":{"unseal_key":"%s","root_token":"%s"}}' "$KEYS_SECRET" "$B64UK" "$B64RT")
-                # Try create; if it exists, replace.
-                HTTP=$(curl -s -o /tmp/resp -w '%{http_code}' --cacert $CACERT \
-                  -H "Authorization: Bearer $KTOKEN" -H 'Content-Type: application/json' \
-                  -X POST "$API/api/v1/namespaces/$NAMESPACE/secrets" -d "$BODY") || true
-                if [ "$HTTP" = "409" ]; then
-                  curl -s -o /tmp/resp --cacert $CACERT \
-                    -H "Authorization: Bearer $KTOKEN" -H 'Content-Type: application/json' \
-                    -X PUT "$API/api/v1/namespaces/$NAMESPACE/secrets/$KEYS_SECRET" -d "$BODY"
-                fi
+                INIT_JSON=$(bao_api PUT sys/init '{"secret_shares":1,"secret_threshold":1}')
+                UNSEAL_KEY=$(echo "$INIT_JSON" | jq -r '.keys_base64[0]')
+                ROOT_TOKEN=$(echo "$INIT_JSON" | jq -r '.root_token')
+                [ -n "$UNSEAL_KEY" ] && [ "$UNSEAL_KEY" != "null" ] || { echo "init produced no unseal key" >&2; exit 1; }
+                # Persist BEFORE anything else so a crash can't lose the keys.
+                kubectl -n "$NAMESPACE" create secret generic "$KEYS_SECRET" \
+                  --from-literal=unseal_key="$UNSEAL_KEY" \
+                  --from-literal=root_token="$ROOT_TOKEN" \
+                  --dry-run=client -o yaml | kubectl apply -f -
                 echo "keys stored in Secret/$KEYS_SECRET"
               fi
 
               # --- 2. unseal (no-op if already unsealed) ----------------------------
-              UNSEAL_KEY=$(curl -s --cacert $CACERT -H "Authorization: Bearer $KTOKEN" \
-                "$API/api/v1/namespaces/$NAMESPACE/secrets/$KEYS_SECRET" \
-                | grep -o '"unseal_key": *"[^"]*"' | sed 's/.*: *"//;s/"//' | base64 -d)
-              ROOT_TOKEN=$(curl -s --cacert $CACERT -H "Authorization: Bearer $KTOKEN" \
-                "$API/api/v1/namespaces/$NAMESPACE/secrets/$KEYS_SECRET" \
-                | grep -o '"root_token": *"[^"]*"' | sed 's/.*: *"//;s/"//' | base64 -d)
-              if bao status 2>/dev/null | grep -q 'Sealed.*true'; then
+              SEALED=$(bao_api GET sys/seal-status | jq -r '.sealed')
+              if [ "$SEALED" = "true" ]; then
                 echo "unsealing..."
-                bao operator unseal "$UNSEAL_KEY" >/dev/null
+                bao_api PUT sys/unseal "$(jq -nc --arg k "$UNSEAL_KEY" '{key:$k}')" >/dev/null
               fi
 
               export BAO_TOKEN="$ROOT_TOKEN"
 
               # --- 3. bootstrap KV mount + policy + kubernetes auth + role ----------
               echo "ensuring KV v2 mount '$KV_MOUNT'..."
-              bao secrets list -format=json 2>/dev/null | grep -q "\"$KV_MOUNT/\"" \
-                || bao secrets enable -path="$KV_MOUNT" -version=2 kv
+              if ! bao_api GET sys/mounts | jq -e --arg m "$KV_MOUNT/" '.data[$m] // .[$m]' >/dev/null 2>&1; then
+                bao_api POST "sys/mounts/$KV_MOUNT" '{"type":"kv","options":{"version":"2"}}' >/dev/null
+              fi
 
               echo "writing policy mcp-egress..."
-              cat > /tmp/p.hcl <<HCL
-              path "$KV_MOUNT/data/$EGRESS_PREFIX/*"     { capabilities = ["create","read","update","delete"] }
-              path "$KV_MOUNT/metadata/$EGRESS_PREFIX/*" { capabilities = ["read","delete","list"] }
-              path "$KV_MOUNT/metadata/$EGRESS_PREFIX"   { capabilities = ["list"] }
-              HCL
-              bao policy write mcp-egress /tmp/p.hcl
+              POLICY="path \"$KV_MOUNT/data/$EGRESS_PREFIX/*\" { capabilities = [\"create\",\"read\",\"update\",\"delete\"] }
+              path \"$KV_MOUNT/metadata/$EGRESS_PREFIX/*\" { capabilities = [\"read\",\"delete\",\"list\"] }
+              path \"$KV_MOUNT/metadata/$EGRESS_PREFIX\" { capabilities = [\"list\"] }"
+              bao_api PUT sys/policies/acl/mcp-egress "$(jq -nc --arg p "$POLICY" '{policy:$p}')" >/dev/null
 
               echo "enabling kubernetes auth..."
-              bao auth list -format=json 2>/dev/null | grep -q '"kubernetes/"' \
-                || bao auth enable kubernetes
+              if ! bao_api GET sys/auth | jq -e '."kubernetes/"' >/dev/null 2>&1; then
+                bao_api POST sys/auth/kubernetes '{"type":"kubernetes"}' >/dev/null
+              fi
               # Omit token_reviewer_jwt: OpenBao uses its OWN continuously-refreshed
               # pod SA token as the TokenReview reviewer (recommended; no static JWT
               # that rotates and breaks login).
-              bao write auth/kubernetes/config \
-                kubernetes_host="https://kubernetes.default.svc" \
-                kubernetes_ca_cert=@$CACERT \
-                disable_iss_validation=true
+              CACERT=$(cat /var/run/secrets/kubernetes.io/serviceaccount/ca.crt)
+              bao_api POST auth/kubernetes/config \
+                "$(jq -nc --arg ca "$CACERT" '{kubernetes_host:"https://kubernetes.default.svc",kubernetes_ca_cert:$ca,disable_iss_validation:true}')" >/dev/null
 
               echo "creating role $ROLE (sa=$REGISTRY_SA ns=$NAMESPACE)..."
-              bao write auth/kubernetes/role/$ROLE \
-                bound_service_account_names="$REGISTRY_SA" \
-                bound_service_account_namespaces="$NAMESPACE" \
-                policies=mcp-egress \
-                ttl=1h
+              bao_api POST "auth/kubernetes/role/$ROLE" \
+                "$(jq -nc --arg sa "$REGISTRY_SA" --arg ns "$NAMESPACE" \
+                  '{bound_service_account_names:$sa,bound_service_account_namespaces:$ns,policies:"mcp-egress",ttl:"1h"}')" >/dev/null
 
               echo "DONE"
 {{- end }}

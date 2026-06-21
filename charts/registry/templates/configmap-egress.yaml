@@ -34,8 +34,14 @@ data:
   SECRETS_MANAGER_PATH_PREFIX: {{ .Values.egressAuth.secretsManager.pathPrefix | default "mcp/egress" | quote }}
   {{- end }}
   {{- if .Values.egressAuth.openbao }}
+  # OPENBAO_ADDR: explicit addr wins; otherwise default to the release-scoped
+  # OpenBao Service the stack deploys ("<release>-openbao.<ns>.svc"). Subcharts
+  # share the parent release name, matching the stack's openbaoServiceHost
+  # helper. If openbao.fullnameOverride is set at the stack level, set addr too.
   {{- if .Values.egressAuth.openbao.addr }}
   OPENBAO_ADDR: {{ .Values.egressAuth.openbao.addr | quote }}
+  {{- else }}
+  OPENBAO_ADDR: {{ printf "http://%s-openbao.%s.svc:8200" .Release.Name .Release.Namespace | quote }}
   {{- end }}
   {{- if .Values.egressAuth.openbao.namespace }}
   OPENBAO_NAMESPACE: {{ .Values.egressAuth.openbao.namespace | quote }}
