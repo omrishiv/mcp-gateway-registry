@@ -27,9 +27,9 @@ module "mcp_gateway" {
   name = "${var.name}-v2"
 
   # Network configuration
-  vpc_id              = module.vpc.vpc_id
-  private_subnet_ids  = module.vpc.private_subnets
-  public_subnet_ids   = module.vpc.public_subnets
+  vpc_id              = local.selected_vpc_id
+  private_subnet_ids  = local.selected_private_subnet_ids
+  public_subnet_ids   = local.selected_public_subnet_ids
   ingress_cidr_blocks = var.ingress_cidr_blocks
 
   # ALB logging
