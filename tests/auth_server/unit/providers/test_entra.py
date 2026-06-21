@@ -205,7 +205,7 @@ class TestEntraAuthorizationServerMetadata:
     """Tests for RFC 8414 metadata exposure via authorization_server_metadata()."""
 
     def test_emits_v2_metadata(self, monkeypatch):
-        """Phase 1 emits Entra v2 metadata only; v1 verbatim handling waits on #990."""
+        """We emit Entra v2 metadata only; v1 verbatim handling waits on #990."""
         monkeypatch.delenv("ENTRA_LOGIN_BASE_URL", raising=False)
         monkeypatch.delenv("ENTRA_GRAPH_BASE_URL", raising=False)
 

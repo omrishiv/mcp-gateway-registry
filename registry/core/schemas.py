@@ -56,8 +56,8 @@ class EgressOAuthConfig(BaseModel):
     """Per-server egress OAuth config for the per-user credential vault.
 
     None on ServerInfo == no per-user egress auth. The operator supplies
-    client_id/client_secret/scopes at registration time (write path is Phase 4);
-    custom_* fields apply only when provider == 'custom'.
+    client_id/client_secret/scopes at registration time (write path not yet
+    implemented); custom_* fields apply only when provider == 'custom'.
     """
 
     provider: str = Field(..., description="Provider key: 'github', 'google', 'custom', ...")
@@ -360,7 +360,7 @@ class ServerInfo(BaseModel):
     )
 
     # Per-user egress credential vault (third-party OBO). Default 'none' keeps
-    # today's behavior; the registration write path is added in Phase 4.
+    # today's behavior; the registration write path is not yet implemented.
     egress_auth_mode: str = Field(
         default="none",
         description="Egress auth to the upstream: 'none' or 'oauth_user'.",

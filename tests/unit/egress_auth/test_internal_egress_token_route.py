@@ -1,8 +1,8 @@
-"""Authz tests for POST /internal/egress-token (B2-1/B2-3/B2-4a).
+"""Authz tests for POST /internal/egress-token.
 
 Drives each security branch with the dependencies stubbed:
 - validate_internal_auth overridden (caller already authenticated).
-- verify_mcp_proxy_token monkeypatched to return controlled claims (B2-3 is
+- verify_mcp_proxy_token monkeypatched to return controlled claims (this is
   covered separately in test_verify_mcp_proxy_token.py).
 - get_server_repository / get_egress_auth_service stubbed.
 """
@@ -117,7 +117,7 @@ class TestInternalEgressTokenRoute:
         assert r.status_code == 401
 
     def test_non_per_user_auth_method_consent_no_vend(self, make_client):
-        # B2-1: network-trusted/federation callers never vend.
+        # Network-trusted/federation callers never vend.
         client = make_client(_claims(auth_method="network-trusted"), _server())
         r = _post(client)
         assert r.status_code == 200
@@ -136,14 +136,14 @@ class TestInternalEgressTokenRoute:
         assert _post(client).json()["consent_required"] is True
 
     def test_upstream_mismatch_403(self, make_client):
-        # B2-4a: forged upstream not in the registered set -> refuse.
+        # Forged upstream not in the registered set -> refuse.
         client = make_client(_claims(upstream_url="https://attacker.example/mcp"), _server())
         r = _post(client)
         assert r.status_code == 403
         assert not client._svc.called
 
     def test_multi_version_upstream_accepted(self, make_client):
-        # B2-4a union: a versioned upstream (not the base proxy_pass_url) is legal.
+        # Union: a versioned upstream (not the base proxy_pass_url) is legal.
         srv = _server(
             versions=[{"version": "v2", "proxy_pass_url": "https://v2.githubcopilot.com/mcp"}]
         )

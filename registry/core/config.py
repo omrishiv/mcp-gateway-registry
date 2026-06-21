@@ -981,11 +981,11 @@ class Settings(BaseSettings):
     auth_server_nginx_marker_secret: str = Field(
         default="",
         description=(
-            "Shared secret (B2-4b): nginx force-sets it as X-Validate-Source-Secret on "
+            "Shared secret: nginx force-sets it as X-Validate-Source-Secret on "
             "the /validate subrequest; auth_server only mints the egress-capable mcp-proxy "
             "token when it matches, so a direct :8888 /validate call with a forged "
             "X-Resolved-Upstream cannot obtain one. Empty = marker disabled (mints "
-            "unconditionally, pre-B2-4b behavior). Treat as a secret."
+            "unconditionally, earlier behavior). Treat as a secret."
         ),
     )
     aws_secrets_region: str = Field(
@@ -1250,7 +1250,7 @@ class Settings(BaseSettings):
         """Cross-field startup checks for the egress credential vault.
 
         Single-field validators can't see siblings, so these live here:
-        - L0: the B1 refresh lease lock is Mongo-only, so the vault requires a
+        - L0: the refresh lease lock is Mongo-only, so the vault requires a
           Mongo-family storage_backend (the default 'file' backend has no lock
           home -> would silently drop cross-replica single-flight refresh).
         - dev-fernet must never reach production (keeps per-user refresh tokens

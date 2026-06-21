@@ -137,7 +137,7 @@ _MCP_PROXY_TOKEN_USE: str = "mcp-proxy"
 
 
 def verify_mcp_proxy_token(token: str) -> dict:
-    """Decode and validate the /mcp-proxy internal token, registry-side (B2-3).
+    """Decode and validate the /mcp-proxy internal token, registry-side.
 
     The registry deliberately does NOT import auth_server's verifier (see the
     module docstring); this mirrors ``verify_registry_ui_token`` with the
@@ -198,7 +198,7 @@ def verify_mcp_proxy_token(token: str) -> dict:
         )
 
     # The token MUST carry an upstream binding -- without it the vend endpoint
-    # cannot run the B2-4 upstream cross-check; fail closed.
+    # cannot run the upstream cross-check; fail closed.
     if not claims.get("upstream_url"):
         logger.warning("mcp-proxy token missing upstream binding")
         raise HTTPException(

@@ -409,7 +409,7 @@ egressAuth:
   stateTtlSeconds: "600"
   # dev-fernet only: on-disk secret dir. Leave empty for the default.
   secretsDir: ""
-  # B2-4b nginx marker secret. Optional (empty = marker disabled). When set it
+  # nginx marker secret. Optional (empty = marker disabled). When set it
   # MUST match auth-server. In the stack it is auto-generated + shared, so leave
   # empty there. Only used by the standalone subchart secret.
   markerSecret: ""

@@ -1,4 +1,4 @@
-"""Phase 4 public egress-auth endpoint tests.
+"""Public egress-auth endpoint tests.
 
 TestClient over the router with dependencies stubbed: nginx_proxied_auth (user
 context), CSRF (no-op), server_service (async-mocked), and the EgressAuthService.

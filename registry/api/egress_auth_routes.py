@@ -1,21 +1,21 @@
 """Egress credential vault API routes.
 
 - POST /internal/egress-token: internal vend endpoint for auth_server's
-  mcp_proxy hop (Phase 3).
-- POST/GET /servers/{path}/egress-auth: operator config (admin-only, Phase 4).
+  mcp_proxy hop.
+- POST/GET /servers/{path}/egress-auth: operator config (admin-only).
 - POST /egress-auth/initiate, GET /oauth2/egress/callback,
-  GET/DELETE /egress-auth/connections/...: end-user consent + management (Phase 4).
+  GET/DELETE /egress-auth/connections/...: end-user consent + management.
 
-Security model for POST /internal/egress-token (B2-1/B2-3/B2-4):
+Security model for POST /internal/egress-token:
 - validate_internal_auth gates the caller (auth_server presents a fresh
   mcp-registry-audience service token) -- bound to the internal network.
 - The forwarded X-Internal-Token (the mcp-proxy token /validate minted) is
-  RE-VERIFIED here (B2-3); sub + auth_method are taken from the verified claims,
+  RE-VERIFIED here; sub + auth_method are taken from the verified claims,
   never from the request body.
-- Non-per-user auth_method is rejected (B2-1) so a static-key/federation caller
+- Non-per-user auth_method is rejected so a static-key/federation caller
   can never address a per-user vault bucket.
 - claims["upstream_url"] is cross-checked against the server's registered
-  proxy_pass_url union (B2-4a) so a forged X-Resolved-Upstream (minted via a
+  proxy_pass_url union so a forged X-Resolved-Upstream (minted via a
   direct /validate call) cannot vend a token to an attacker-controlled host.
 """
 
@@ -58,7 +58,7 @@ class EgressTokenRequest(BaseModel):
 
     server_path identifies the registered server whose egress config + upstream
     allowlist the vend is checked against. Identity (sub/auth_method) is NOT in
-    the body -- it is re-derived from the forwarded mcp-proxy token (B2-3).
+    the body -- it is re-derived from the forwarded mcp-proxy token.
     """
 
     server_path: str
@@ -85,7 +85,7 @@ class EgressTokenResponse(BaseModel):
 
 
 def _base_url(url: str) -> str:
-    """scheme://host[:port] of a URL, lowercased -- the comparison surface for B2-4.
+    """scheme://host[:port] of a URL, lowercased -- the comparison surface for the upstream cross-check.
 
     The mcp_proxy sub-path append is confined to the bound host, so the cross-check
     compares the BASE (scheme+host+port), not the full post-append path.
@@ -128,14 +128,14 @@ async def vend_egress_token(
     if not x_internal_token:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="missing X-Internal-Token")
 
-    # B2-3: independently re-verify the mcp-proxy token; identity is the verified
+    # Independently re-verify the mcp-proxy token; identity is the verified
     # claim, never an asserted body field.
     claims = verify_mcp_proxy_token(x_internal_token)
     sub = claims.get("sub") or ""
     auth_method = claims.get("auth_method") or ""
     token_upstream = claims.get("upstream_url") or ""
 
-    # B2-1: only real per-user principals may vend.
+    # Only real per-user principals may vend.
     if not is_per_user_auth_method(auth_method):
         logger.info("egress vend: non-per-user auth_method %r -> consent", auth_method)
         return EgressTokenResponse(consent_required=True)
@@ -154,7 +154,7 @@ async def vend_egress_token(
     if server.get("egress_auth_mode") != "oauth_user" or not server.get("egress_oauth"):
         return EgressTokenResponse(consent_required=True)
 
-    # B2-4a: the bound upstream MUST match a registered upstream for this server.
+    # The bound upstream MUST match a registered upstream for this server.
     # Closes the forged-X-Resolved-Upstream exfil (a direct /validate caller can
     # otherwise mint a signed token pointing at an attacker host).
     legal = _registered_upstreams(server)
@@ -216,7 +216,7 @@ async def vend_egress_token(
 
 
 # ---------------------------------------------------------------------------- #
-# Public endpoints (Phase 4). Operator config + end-user consent/connections.
+# Public endpoints. Operator config + end-user consent/connections.
 # ---------------------------------------------------------------------------- #
 
 

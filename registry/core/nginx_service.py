@@ -650,7 +650,7 @@ class NginxConfigService:
                 "{{ADDITIONAL_SERVER_NAMES}}", additional_server_names
             )
             config_content = config_content.replace("{{ANTHROPIC_API_VERSION}}", api_version)
-            # B2-4b egress marker: force-set on the /validate subrequest so a direct
+            # egress marker: force-set on the /validate subrequest so a direct
             # :8888 caller cannot supply it. Empty default leaves the header empty
             # (marker disabled), matching auth_server's empty-secret pass-through.
             config_content = config_content.replace(

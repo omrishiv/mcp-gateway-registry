@@ -178,7 +178,7 @@ class RegistryApiAccessRecord(BaseModel):
     """
     Complete audit record for a Registry API access event.
 
-    This is the primary audit log record type for Phase 1,
+    This is the primary audit log record type for Registry API access,
     capturing all relevant information about an API request
     for compliance and security review.
     """
@@ -200,7 +200,7 @@ class RegistryApiAccessRecord(BaseModel):
 
 
 # =============================================================================
-# MCP Server Access Log Models (Phase 4)
+# MCP Server Access Log Models
 # =============================================================================
 
 
@@ -262,7 +262,7 @@ class MCPServerAccessRecord(BaseModel):
     """
     Complete audit record for an MCP server access event.
 
-    This is the audit log record type for Phase 4,
+    This is the audit log record type for MCP server access,
     capturing all relevant information about an MCP protocol
     request proxied through the gateway for compliance and
     security review.

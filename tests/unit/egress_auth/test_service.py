@@ -2,7 +2,7 @@
 
 Uses a real FernetFileStore (works in-process under tmp_path) and stubs the
 OAuth engine's token calls. Covers the full consent->store->vend->refresh->
-disconnect cycle plus the B2-0 canonical auth_method and the callback security
+disconnect cycle plus the canonical auth_method and the callback security
 guards (TTL, single-use replay, account-swap).
 """
 
@@ -122,7 +122,7 @@ class TestConsentAndCallback:
         )
         assert conn.provider == "github" and conn.server_path == "/github-mcp"
 
-        # vend hits (same canonical key the consent wrote under -- B2-0)
+        # vend hits (same canonical key the consent wrote under)
         token = await svc.get_valid_token("oauth2", "alice", "/github-mcp", egress_oauth)
         assert token == "at_new"
 

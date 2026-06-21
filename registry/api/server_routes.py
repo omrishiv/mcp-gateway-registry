@@ -3482,10 +3482,9 @@ async def generate_user_token(
 # - User context from JWT is passed through for audit logging
 #
 # Migration Path:
-# Phase 1 (Now): Both endpoints work identically with same business logic
-# Phase 2 (Future): Clients migrate to /api/servers/*
-# Phase 3 (Future): /api/internal/* deprecated with sunset headers
-# Phase 4 (Future): /api/internal/* removed in major version
+# Now: both endpoints work identically with the same business logic.
+# Future: clients migrate to /api/servers/*; /api/internal/* gets deprecation
+#   sunset headers, then is removed in a major version.
 
 
 @router.post("/servers/register")

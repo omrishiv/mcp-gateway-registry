@@ -164,7 +164,7 @@ def _canonical_auth_method(validation_result: dict) -> str:
 
     The per-user egress vault keys on this value, so consent-write and vend-read
     MUST agree on the same bucket for one human identity -- otherwise the user
-    loops on consent forever (B2-0). Two token *formats* represent the SAME
+    loops on consent forever. Two token *formats* represent the SAME
     principal and must therefore canonicalize to the principal's identity method,
     NOT the format string:
 
@@ -204,16 +204,16 @@ def _attach_mcp_proxy_token(
     empty subject), no token is attached: mcp_proxy then rejects (fail-closed)
     rather than trusting unsigned headers.
 
-    ``auth_method`` is the canonical egress principal method (B2-0/B2-1); pass
+    ``auth_method`` is the canonical egress principal method; pass
     ``_canonical_auth_method(validation_result)`` at the call sites, NOT the raw
     ``validation_result["method"]``.
 
-    B2-4b: when ``AUTH_SERVER_NGINX_MARKER_SECRET`` is configured, the token is
+    When ``AUTH_SERVER_NGINX_MARKER_SECRET`` is configured, the token is
     minted ONLY if nginx force-set the matching ``X-Validate-Source-Secret`` on
     this subrequest. This closes the direct-:8888 forge: a caller hitting
     /validate directly (bypassing nginx) cannot supply the marker, so they get no
     egress-capable token even with a forged X-Resolved-Upstream. Empty marker =
-    disabled (mints unconditionally; B2-4a upstream cross-check still applies).
+    disabled (mints unconditionally; the upstream cross-check still applies).
     """
     resolved_upstream = request.headers.get("X-Resolved-Upstream", "")
     if not resolved_upstream:
@@ -2755,7 +2755,7 @@ async def validate_request(request: Request):
         response.headers["X-Tool-Name"] = tool_name or ""
         response.headers["X-Groups"] = " ".join(validation_result.get("groups", []))
 
-        # Canonical egress principal method (B2-0): cookie callers resolve to
+        # Canonical egress principal method: cookie callers resolve to
         # "oauth2" (the session record's value), not the literal "session_cookie".
         # Both internal tokens stamp THIS so consent-write and vend-read agree.
         _canon_auth_method = _canonical_auth_method(validation_result)
@@ -2782,7 +2782,7 @@ async def validate_request(request: Request):
             subject=validation_result.get("username") or "",
             session_id=_registry_session_id,
             groups=validation_result.get("groups", []),
-            # Canonical (B2-0): was validation_result["method"] (== "session_cookie"
+            # Canonical: was validation_result["method"] (== "session_cookie"
             # for cookie users) while the registry overrides to "oauth2" -- the two
             # disagreed. Stamp the canonical value so they match.
             auth_method=_canon_auth_method,
@@ -4348,7 +4348,7 @@ def _forward_headers(
     return forwarded
 
 
-# Headers that MUST be stripped before injecting a vaulted egress token (B2-2):
+# Headers that MUST be stripped before injecting a vaulted egress token:
 # the user's gateway IdP JWT / session cookie / X-Authorization are full gateway
 # credentials and must never reach a third-party SaaS upstream; the X-User*/
 # X-Internal-Token/X-Scopes family is gateway-internal identity/routing. Only
@@ -4379,11 +4379,11 @@ async def _vend_egress_token(
     internal_proxy_token: str,
     server_first_segment: str,
 ) -> dict | None:
-    """Call the registry's internal egress-token vend endpoint (B2-3).
+    """Call the registry's internal egress-token vend endpoint.
 
     Forwards the verified X-Internal-Token; the registry re-verifies it,
-    re-derives sub/auth_method from the signed claims, runs the B2-1 allowlist
-    and B2-4 upstream cross-check, and vends. Returns the JSON response dict, or
+    re-derives sub/auth_method from the signed claims, runs the allowlist
+    and upstream cross-check, and vends. Returns the JSON response dict, or
     None on transport failure (treated as a clean miss -> consent).
     """
     from registry.auth.internal import generate_internal_token
@@ -4515,11 +4515,11 @@ async def mcp_proxy(
     max_body_bytes = _read_mcp_proxy_max_body_bytes()
     forward_headers = _forward_headers(dict(request.headers))
 
-    # Per-user egress credential vault (Phase 3). When the feature is on, ask the
+    # Per-user egress credential vault. When the feature is on, ask the
     # registry to vend this user's third-party token for the resolved server. The
     # registry re-verifies the signed proxy token, enforces per-user/upstream
-    # authz (B2-1/B2-4), and returns consent_required for non-oauth_user servers.
-    # On a real vend we strip the user's own gateway credentials/identity (B2-2)
+    # authz, and returns consent_required for non-oauth_user servers.
+    # On a real vend we strip the user's own gateway credentials/identity
     # before injecting the vaulted token. On a consent-required miss for an
     # egress-configured server we DO NOT forward unauthenticated -- we return a
     # JSON-RPC error carrying the authorize URL so the user can connect.

@@ -1299,7 +1299,7 @@ def test_no_server_scope_registry_api_auth_default_in_conf_templates():
 def test_registry_api_locations_forward_internal_token():
     """Every protected registry-API location in the static confs sets the marker
     and forwards the registry-UI token; the shared /validate block forwards the
-    marker. Guards Phase 4 against a partial wiring that would 401 /api/ calls.
+    marker. Guards against a partial wiring that would 401 /api/ calls.
     """
     from pathlib import Path
 

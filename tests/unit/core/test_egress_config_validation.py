@@ -1,4 +1,4 @@
-"""Validation tests for the egress credential vault config (Phase 1).
+"""Validation tests for the egress credential vault config.
 
 Covers _validate_secret_store_backend (@field_validator) and the cross-field
 _validate_egress_auth_config checks run in Settings.__init__:

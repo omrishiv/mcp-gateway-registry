@@ -1,6 +1,6 @@
 """Deterministic, collision-free vault-key canonicalization.
 
-The vault key is ``(auth_method, user_id, provider, server_path)`` (LLD B2-1).
+The vault key is ``(auth_method, user_id, provider, server_path)``.
 The raw values are NOT safe to use verbatim as path/map segments:
 
 - ``user_id`` varies by IdP. Cognito/Okta ``sub`` are UUID/alphanumeric (safe),

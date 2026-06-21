@@ -156,7 +156,7 @@ def mint_mcp_proxy_token(
     ``EgressAuthService.canonical_auth_method``): the per-user egress vault keys
     on it, so it MUST match what the consent/list paths resolve for the same
     user (cookie users are ``oauth2``, never ``session_cookie``). It also lets
-    the registry vend endpoint reject non-per-user callers (B2-1).
+    the registry vend endpoint reject non-per-user callers.
     """
     return _mint_internal_token(
         audience=MCP_PROXY_AUDIENCE,

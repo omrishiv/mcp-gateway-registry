@@ -117,7 +117,7 @@ class TestOpenBaoStoreIntegration:
         assert all(t.access_token != "c-gh" for _, _, t in conns)
 
     async def test_auth_method_namespacing_isolates_static_key_from_real_user(self, store):
-        # B2-1 on a REAL store: an operator-named static key "dave" must not read
+        # On a REAL store: an operator-named static key "dave" must not read
         # the oauth2 user "dave"'s token.
         await store.put_token("oauth2", "dave", "github", "/github-mcp", _token("real"))
         await store.put_token(

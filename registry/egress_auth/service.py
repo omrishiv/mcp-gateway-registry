@@ -4,13 +4,14 @@ Ties together the provider table, the OAuth engine, the AEAD state codec, and
 the SecretStore. The SecretStore is the only persistence dependency for token
 material; a small ``ReplayGuard`` protocol covers single-use ``state`` nonces.
 
-Phase 2 scope: consent-URL build, callback handling (verify/decrypt state +
+Handles here: consent-URL build, callback handling (verify/decrypt state +
 account-swap guard + single-use nonce + code exchange + store), lazy-on-vend
 refresh with an in-process single-flight lock, list, disconnect.
 
-NOT in Phase 2 (Phase 3): the cross-replica Mongo lease lock (B1), the egress
-injection in ``mcp_proxy``, and the HTTP routers. The single-flight here is
-in-process only; the cross-replica double-check/lease wraps it in Phase 3.
+Not handled here: the cross-replica Mongo lease lock, the egress injection in
+``mcp_proxy``, and the HTTP routers, which are layered on separately. The
+single-flight here is in-process only; the cross-replica double-check/lease
+wraps it.
 """
 
 import asyncio
@@ -32,7 +33,7 @@ from registry.secrets.interfaces import SecretStoreBase
 logger = logging.getLogger(__name__)
 
 # auth_method values that represent a real per-user identity and may own a vault
-# bucket (canonical values per B2-0; cookie users are "oauth2", not
+# bucket (canonical values; cookie users are "oauth2", not
 # "session_cookie"). The denylist below is authoritative; this set is the
 # positive cross-check for the drift test.
 PER_USER_AUTH_METHODS: frozenset[str] = frozenset(
@@ -67,7 +68,7 @@ class ConsentRequired(EgressAuthError):
 
 
 class ReplayGuard(Protocol):
-    """Single-use guard for OAuth ``state`` nonces (Phase 3 backs this with Mongo TTL).
+    """Single-use guard for OAuth ``state`` nonces (a Mongo-TTL-backed implementation backs this).
 
     ``check_and_consume`` returns True if the nonce was unused (and records it),
     False if it has already been consumed (replay).
@@ -77,9 +78,9 @@ class ReplayGuard(Protocol):
 
 
 class _InMemoryReplayGuard:
-    """Default single-process replay guard (Phase 2 / tests).
+    """Default single-process replay guard (used in single-process runs / tests).
 
-    Phase 3 swaps in a Mongo-TTL-backed implementation for cross-replica safety.
+    A Mongo-TTL-backed implementation is swapped in for cross-replica safety.
     """
 
     def __init__(self) -> None:
@@ -95,7 +96,7 @@ class _InMemoryReplayGuard:
 
 
 class LeaseManager(Protocol):
-    """Cross-replica single-flight lease for refresh (Phase 3 backs with Mongo).
+    """Cross-replica single-flight lease for refresh (a Mongo-backed implementation backs this).
 
     ``acquire`` returns True if this caller now holds the lease for ``key``;
     ``release`` drops it iff still held. The post-acquire double-check in the
@@ -107,7 +108,7 @@ class LeaseManager(Protocol):
 
 
 class _InProcessLeaseManager:
-    """Default single-process lease (Phase 2 / tests). Per-key asyncio.Lock."""
+    """Default single-process lease (used in single-process runs / tests). Per-key asyncio.Lock."""
 
     def __init__(self) -> None:
         self._locks: dict[str, asyncio.Lock] = {}
@@ -129,7 +130,7 @@ class _InProcessLeaseManager:
 
 
 def canonical_auth_method(validation_result: dict) -> str:
-    """The ONE canonical egress principal method (B2-0).
+    """The ONE canonical egress principal method.
 
     The cookie path reports ``method == "session_cookie"`` but carries the real
     value (``"oauth2"``) at ``data.auth_method``; every other path's ``method``
@@ -318,7 +319,7 @@ class EgressAuthService:
         if token is None or token.status == "refresh_failed":
             return None
 
-        # client-id binding (B2-1 #5): rotated provider app -> re-consent.
+        # client-id binding: rotated provider app -> re-consent.
         if token.client_id and token.client_id != egress_oauth.get("client_id"):
             logger.info(
                 "egress vend: stored client_id != configured client_id for %s/%s; forcing re-consent",
@@ -420,5 +421,5 @@ class EgressAuthService:
         provider: str,
         server_path: str,
     ) -> None:
-        """Delete the vault entry (idempotent). Provider-side revoke is Phase 4."""
+        """Delete the vault entry (idempotent). Provider-side revoke is a future follow-on."""
         await self._store.delete_token(auth_method, user_id, provider, server_path)

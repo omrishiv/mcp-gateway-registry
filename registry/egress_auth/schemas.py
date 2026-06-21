@@ -1,13 +1,13 @@
 """Pydantic models for the per-user egress credential vault.
 
-These models are the data contract for the SecretStore (Phase 1), the OAuth
-engine (Phase 2), and the egress vend path (Phase 3). The vault is the single
-source of truth for token state; there is no companion app-DB metadata table.
+These models are the data contract for the SecretStore, the OAuth engine, and
+the egress vend path. The vault is the single source of truth for token state;
+there is no companion app-DB metadata table.
 
 Security notes:
 - ``StoredToken`` is the secret payload held by the SecretStore. It is NEVER
   returned to API consumers; the non-secret view is ``EgressConnection``.
-- The vault key is ``(auth_method, user_id, provider, server_path)`` (B2-1):
+- The vault key is ``(auth_method, user_id, provider, server_path)``:
   ``auth_method`` discriminates per-user identities (e.g. ``oauth2``) from
   non-per-user callers (``network-trusted``/``federation-static``) so an
   operator-chosen static-key name cannot collide with a real IdP username.
@@ -117,7 +117,7 @@ class OAuthState(BaseModel):
     ``state`` exposes the PKCE verifier in the URL/Referer/logs and defeats PKCE.
 
     ``client_id`` is bound for audit/iss-checks only; it is NOT a vault-key
-    segment (interactive users have an unstable client_id -- see LLD B2-1 #3).
+    segment (interactive users have an unstable client_id).
     """
 
     user_id: str

@@ -1,4 +1,4 @@
-"""Tests for registry-side verify_mcp_proxy_token (B2-3).
+"""Tests for registry-side verify_mcp_proxy_token.
 
 Mints mcp-proxy tokens with the shared SECRET_KEY (HS256, the same contract
 auth_server uses) and asserts the registry verifier accepts valid ones and

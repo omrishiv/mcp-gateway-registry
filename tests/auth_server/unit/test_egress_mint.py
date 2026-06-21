@@ -1,9 +1,9 @@
-"""Auth-server egress mint-path tests: B2-0 canonical auth_method + B2-4b marker.
+"""Auth-server egress mint-path tests: canonical auth_method + nginx marker.
 
-These exercise the two auth_server-side guards added in Phase 3:
+These exercise the two auth_server-side guards:
 - _canonical_auth_method: cookie path 'session_cookie' -> session record 'oauth2'.
-- _attach_mcp_proxy_token: only mints the egress-capable token when the B2-4b
-  nginx marker matches (when configured); the auth_method claim is stamped.
+- _attach_mcp_proxy_token: only mints the egress-capable token when the nginx
+  marker matches (when configured); the auth_method claim is stamped.
 """
 
 import jwt as pyjwt
@@ -114,7 +114,7 @@ class TestAttachMcpProxyTokenMarker:
         assert "X-Internal-Token" in resp.headers
 
     def test_marker_enabled_and_missing_does_not_mint(self, monkeypatch):
-        # B2-4b: direct :8888 caller (no nginx marker) gets no egress-capable token
+        # Direct :8888 caller (no nginx marker) gets no egress-capable token
         # even with a forged X-Resolved-Upstream.
         monkeypatch.setattr(server.settings, "auth_server_nginx_marker_secret", "s3cret")
         resp = _FakeResponse()

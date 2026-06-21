@@ -1130,8 +1130,7 @@ if settings.custom_entity_types_enabled:
     app.include_router(custom_entity_router, prefix="/api", tags=["custom-entities"])
     logger.info("Custom entity types feature enabled; registered custom-type/custom routes")
 app.include_router(internal_router, prefix="/api")
-# Egress credential vault: /api/internal/egress-token (internal vend path, Phase 3).
-# Public operator/end-user egress routers are added in Phase 4.
+# Egress credential vault: /api/internal/egress-token (internal vend path).
 app.include_router(egress_auth_router, prefix="/api")
 # OAuth AS facade for IDE-driven egress consent. Mounted at ROOT (no /api
 # prefix) so the discovery URLs (/.well-known/oauth-protected-resource/...,

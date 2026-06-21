@@ -167,7 +167,7 @@ egressAuth:
   # global.domain + the ingress routing mode (see templates/configmap-egress.yaml);
   # set it only to point at a custom public front door.
   oauthCallbackBaseUrl: ""
-  # B2-4b nginx marker secret. Optional (empty = marker disabled). When set it
+  # nginx marker secret. Optional (empty = marker disabled). When set it
   # MUST match the registry. In the stack it is auto-generated + shared, so
   # leave empty there.
   markerSecret: ""

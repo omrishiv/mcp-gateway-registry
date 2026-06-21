@@ -799,7 +799,7 @@ class EntraIdProvider(AuthProvider):
     def authorization_server_metadata(self) -> dict[str, Any]:
         """Return Entra ID's RFC 8414 metadata for the v2.0 endpoint.
 
-        Phase 1 emits the Entra v2 OIDC metadata only. The v1 issuer
+        We emit the Entra v2 OIDC metadata only. The v1 issuer
         (`https://sts.windows.net/{tenant}/`) is a valid token source
         recognized in validate_token but is not advertised here. The
         `api://<app-id>/<scope>` verbatim scope-format support required

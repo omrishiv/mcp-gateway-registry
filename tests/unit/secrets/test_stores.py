@@ -162,7 +162,7 @@ class TestSecretStoreContract:
         assert all(s_tok.access_token != "b1" for _, _, s_tok in conns)
 
     async def test_auth_method_namespacing_prevents_cross_vend(self, store):
-        # B2-1: a network-trusted static-key caller named "alice" must NOT read
+        # A network-trusted static-key caller named "alice" must NOT read
         # the real oauth2 user alice's token.
         await store.put_token("oauth2", "alice", "github", "/github-mcp", _token("real"))
         await store.put_token(
