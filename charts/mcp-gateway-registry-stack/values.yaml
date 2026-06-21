@@ -85,6 +85,81 @@ global:
     paths:
       registry: /registry
 
+openbao:
+  enabled: true
+  # Stable name so the in-cluster service DNS is predictable
+  # (openbao.<ns>.svc:8200) regardless of the Helm release name — the egress
+  # config, the init/unseal Job, and the unseal sidecar all rely on it.
+  fullnameOverride: openbao
+  # The agent injector is not needed for this integration (the registry talks to
+  # OpenBao directly via the k8s-auth role); leave it off to reduce surface.
+  injector:
+    enabled: false
+  server:
+    # Standalone (NOT dev): file storage on a PVC so vaulted tokens survive pod
+    # restarts. Entirely Kubernetes-driven — NO KMS, NO Secrets Manager. The
+    # vault starts SEALED on every boot; the openbaoInit Job (stack template)
+    # does one-time `operator init` (Shamir 1-of-1) storing the unseal key +
+    # root token in a k8s Secret, then enables kubernetes auth + the mcp-egress
+    # policy + registry-egress role. The unseal sidecar below re-unseals from
+    # that Secret on every restart so the vault is available hands-off.
+    dev:
+      enabled: false
+    ha:
+      enabled: false
+    standalone:
+      enabled: true
+      config: |
+        ui = true
+        listener "tcp" {
+          tls_disable = 1
+          address = "[::]:8200"
+          cluster_address = "[::]:8201"
+        }
+        storage "file" {
+          path = "/openbao/data"
+        }
+    dataStorage:
+      enabled: true
+      size: 1Gi
+      mountPath: /openbao/data
+      accessMode: ReadWriteOnce
+    # Unseal sidecar: standalone OpenBao boots SEALED. This sidecar polls seal
+    # status and unseals using the key in the openbao-keys Secret (written by the
+    # init Job). Shares the pod network so it reaches the server on localhost.
+    # Idempotent: a no-op once the server is unsealed.
+    shareProcessNamespace: false
+    extraContainers:
+      - name: unseal
+        image: openbao/openbao:2.5.4
+        command:
+          - /bin/sh
+          - -c
+          - |
+            export BAO_ADDR=http://127.0.0.1:8200
+            while true; do
+              if bao status 2>/dev/null | grep -q 'Sealed.*false'; then
+                sleep 15; continue
+              fi
+              if [ -f /openbao/keys/unseal_key ]; then
+                bao operator unseal "$(cat /openbao/keys/unseal_key)" >/dev/null 2>&1 || true
+              fi
+              sleep 5
+            done
+        volumeMounts:
+          - name: openbao-keys
+            mountPath: /openbao/keys
+            readOnly: true
+    volumes:
+      - name: openbao-keys
+        secret:
+          secretName: openbao-keys
+          optional: true
+    volumeMounts:
+      - name: openbao-keys
+        mountPath: /openbao/keys
+        readOnly: true
+
 mongodb-kubernetes:
   operator:
     enableClusterMongoDBRoles: false

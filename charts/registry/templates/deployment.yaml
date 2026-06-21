@@ -25,6 +25,9 @@ spec:
         app.kubernetes.io/name: {{ .Values.app.name }}
         app.kubernetes.io/component: {{ .Values.app.name }}
     spec:
+      # Run as the chart's ServiceAccount so attached roles apply (e.g. OpenBao
+      # kubernetes-auth for the egress vault).
+      serviceAccountName: {{ include "registry.serviceAccountName" . }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

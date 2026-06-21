@@ -34,6 +34,20 @@ inject one of these via extraEnv gets a clear template-render error.
 {{- end -}}
 
 {{/*
+Name of the ServiceAccount the registry pod runs as. Explicit
+serviceAccount.name wins; otherwise defaults to the app name ("registry").
+OpenBao's kubernetes-auth `registry` role is bound to this SA, and other
+roles (RBAC, IRSA, etc.) can be attached to the same SA over time.
+*/}}
+{{- define "registry.serviceAccountName" -}}
+{{- if .Values.serviceAccount.name -}}
+{{- .Values.serviceAccount.name -}}
+{{- else -}}
+{{- .Values.app.name -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Validate .Values.extraEnv for the registry chart.
 
 Fails helm template render if any entry:

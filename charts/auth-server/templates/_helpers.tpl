@@ -32,6 +32,19 @@ inject one of these via extraEnv gets a clear template-render error.
 {{- end -}}
 
 {{/*
+Name of the ServiceAccount the auth-server pod runs as. Explicit
+serviceAccount.name wins; otherwise defaults to the app name ("auth-server").
+Provides a stable identity to attach roles to (RBAC, IRSA, etc.).
+*/}}
+{{- define "auth-server.serviceAccountName" -}}
+{{- if .Values.serviceAccount.name -}}
+{{- .Values.serviceAccount.name -}}
+{{- else -}}
+{{- .Values.app.name -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Validate .Values.extraEnv for the auth-server chart.
 
 Fails helm template render if any entry:

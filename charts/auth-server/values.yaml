@@ -15,6 +15,13 @@ image:
   pullPolicy: ""    # Overrides global.image.pullPolicy when set
 
 # Application configuration
+# ServiceAccount the auth-server pod runs as. Created by default so roles can be
+# attached to a stable identity. Set create=false + name to bring your own.
+serviceAccount:
+  create: true
+  name: ""  # defaults to app.name ("auth-server") when empty
+  annotations: {}
+
 app:
   name: auth-server
   replicas: 1

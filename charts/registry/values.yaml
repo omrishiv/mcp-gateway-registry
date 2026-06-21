@@ -41,6 +41,15 @@ image:
   pullPolicy: ""    # Overrides global.image.pullPolicy when set
 
 # Application configuration
+# ServiceAccount the registry pod runs as. Created by default so roles can be
+# attached to a stable identity (OpenBao kubernetes-auth `registry` role for the
+# egress vault binds here; future RBAC/IRSA can too). Set create=false + name to
+# bring your own.
+serviceAccount:
+  create: true
+  name: ""  # defaults to app.name ("registry") when empty
+  annotations: {}
+
 app:
   name: registry
   replicas: 2
@@ -404,7 +413,10 @@ egressAuth:
     namespace: ""  # Enterprise namespaces only.
     kvMount: "secret"
     authMethod: "token"  # token | kubernetes
-    role: ""  # OpenBao role for kubernetes/approle auth.
+    # OpenBao kubernetes-auth role, bound to the registry ServiceAccount by the
+    # stack's openbao-init Job. Named "registry" (not egress-specific) so more
+    # policies can attach to the same role/SA over time.
+    role: "registry"
 
 # PingFederate integration (used when authProvider.type = "pingfederate")
 pingfederate:
