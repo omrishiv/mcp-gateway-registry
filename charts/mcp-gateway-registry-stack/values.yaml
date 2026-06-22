@@ -532,7 +532,7 @@ auth-server:
 
   metrics:
     # Standard OTel SDK var. Setting this activates the OTLP push exporter.
-    otlpEndpoint: ""  # OTLP endpoint URL (e.g., http://otel-collector:4317)
+    otelExporterOtlpEndpoint: ""  # OTLP endpoint URL (e.g., http://otel-collector:4317)
 
   keycloak:
     enabled: true

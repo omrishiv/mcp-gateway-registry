@@ -248,7 +248,7 @@ metrics:
   # Standard OTel SDK var. Setting this activates the OTLP push exporter (the
   # entrypoint wraps uvicorn with opentelemetry-instrument) and is read by
   # auth_server/server.py. Default empty: pull-only via the prometheus listener.
-  otlpEndpoint: ""  # OTLP endpoint URL (e.g., http://otel-collector:4317)
+  otelExporterOtlpEndpoint: ""  # OTLP endpoint URL (e.g., http://otel-collector:4317)
 
 # Metrics scrape configuration (Issue #1122)
 # Controls the NetworkPolicy that gates the OTel exporter-prometheus port.

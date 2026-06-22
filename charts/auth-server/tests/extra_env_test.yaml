@@ -40,7 +40,7 @@ tests:
       # Order: chart-managed env vars come first, then user extraEnv entries.
       # NOTE: positions assume entra.clientSecretExistingSecret is set (above),
       # that no other conditional secrets (okta/auth0) are configured, and that
-      # metrics.otlpEndpoint is empty (its OTEL_EXPORTER_OTLP_ENDPOINT block does
+      # metrics.otelExporterOtlpEndpoint is empty (its OTEL_EXPORTER_OTLP_ENDPOINT block does
       # not render, so it does not shift the extraEnv indices).
       # Index map:
       #   env[0] = ENTRA_CLIENT_SECRET (conditional valueFrom)

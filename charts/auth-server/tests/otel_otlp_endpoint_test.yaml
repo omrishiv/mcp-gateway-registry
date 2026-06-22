@@ -5,7 +5,7 @@ release:
   name: test
   namespace: default
 tests:
-  - it: omits OTEL_EXPORTER_OTLP_ENDPOINT when metrics.otlpEndpoint is empty
+  - it: omits OTEL_EXPORTER_OTLP_ENDPOINT when metrics.otelExporterOtlpEndpoint is empty
     asserts:
       # Default empty: the OTLP push exporter is not activated, so the
       # standard SDK var must not be rendered at all (presence alone, even
@@ -15,10 +15,10 @@ tests:
           content:
             name: OTEL_EXPORTER_OTLP_ENDPOINT
 
-  - it: emits OTEL_EXPORTER_OTLP_ENDPOINT when metrics.otlpEndpoint is set
+  - it: emits OTEL_EXPORTER_OTLP_ENDPOINT when metrics.otelExporterOtlpEndpoint is set
     set:
       metrics:
-        otlpEndpoint: "http://otel-collector:4317"
+        otelExporterOtlpEndpoint: "http://otel-collector:4317"
     asserts:
       - contains:
           path: spec.template.spec.containers[0].env

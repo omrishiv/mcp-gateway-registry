@@ -170,10 +170,10 @@ spec:
               value: {{ .Values.metrics.exporterPrometheusHost | default "0.0.0.0" | quote }}
             - name: OTEL_EXPORTER_PROMETHEUS_PORT
               value: {{ .Values.metrics.exporterPrometheusPort | default "9464" | quote }}
-            {{- if .Values.metrics.otlpEndpoint }}
+            {{- if .Values.metrics.otelExporterOtlpEndpoint }}
             # Standard OTel SDK var: activates the OTLP push exporter when set.
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: {{ .Values.metrics.otlpEndpoint | quote }}
+              value: {{ .Values.metrics.otelExporterOtlpEndpoint | quote }}
             {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
