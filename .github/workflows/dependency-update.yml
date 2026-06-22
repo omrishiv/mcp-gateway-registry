@@ -58,15 +58,35 @@ jobs:
             cp "$lock" "$dest"
           done
 
-      - name: Update uv lockfiles (7-day quarantine)
+      - name: Update lockfiles (7-day quarantine, uv + npm in parallel)
         env:
           UV_EXCLUDE_NEWER: ${{ steps.cutoff.outputs.timestamp }}
-        run: make uv-update-locks
-
-      - name: Update npm lockfiles (7-day quarantine)
-        env:
           CUTOFF_EPOCH: ${{ steps.cutoff.outputs.timestamp }}
-        run: make npm-update-locks
+        run: |
+          # Run the uv and npm refreshes concurrently. They touch disjoint
+          # lockfiles, so they are independent; a failure in one must not
+          # abort the other. We capture each exit code and report both, but
+          # do NOT fail this step -- the changelog step opens a PR only if
+          # real diffs exist, so a partial refresh still produces a useful PR.
+          make uv-update-locks > /tmp/uv-update.log 2>&1 &
+          uv_pid=$!
+          make npm-update-locks > /tmp/npm-update.log 2>&1 &
+          npm_pid=$!
+
+          uv_rc=0; wait "$uv_pid" || uv_rc=$?
+          npm_rc=0; wait "$npm_pid" || npm_rc=$?
+
+          echo "===== uv-update-locks (exit $uv_rc) ====="
+          cat /tmp/uv-update.log
+          echo "===== npm-update-locks (exit $npm_rc) ====="
+          cat /tmp/npm-update.log
+
+          if [ "$uv_rc" -ne 0 ]; then
+            echo "WARNING: uv-update-locks exited $uv_rc; continuing with whatever it refreshed."
+          fi
+          if [ "$npm_rc" -ne 0 ]; then
+            echo "WARNING: npm-update-locks exited $npm_rc; continuing with whatever it refreshed."
+          fi
 
       - name: Generate changelog
         id: changelog
@@ -243,6 +263,11 @@ jobs:
           BRANCH="chore/dependency-update-$(date +%Y-%m-%d)"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Checkout uses persist-credentials: false, so the origin remote has no
+          # auth. Re-point origin at a token-authenticated URL so both git push
+          # and the gh CLI (which infers the head branch from origin) work.
+          git remote set-url origin \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git checkout -b "$BRANCH"
           git add -A '*.lock' '**/package-lock.json'
           git commit -m "chore(deps): weekly lockfile update ($(date +%Y-%m-%d))"

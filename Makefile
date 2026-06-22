@@ -313,14 +313,25 @@ uv-update-locks:
 	fi; \
 	export UV_EXCLUDE_NEWER=$$CUTOFF; \
 	echo "UV_EXCLUDE_NEWER=$$UV_EXCLUDE_NEWER ($(UV_EXCLUDE_NEWER_DAYS)-day quarantine)"; \
-	for lock in $$(find . -name uv.lock -not -path '*/.venv/*' -not -path '*/node_modules/*' | sort); do \
+	skipped=""; \
+	for lock in $$(find . -name uv.lock -not -path '*/.venv/*' -not -path '*/node_modules/*' -not -path '*/.claude/*' | sort); do \
 		dir=$$(dirname $$lock); \
 		echo ""; \
 		echo "==> Updating $$dir"; \
-		(cd $$dir && uv lock --upgrade); \
+		if ! (cd $$dir && uv lock --upgrade); then \
+			echo "WARNING: could not resolve $$dir under the $(UV_EXCLUDE_NEWER_DAYS)-day quarantine"; \
+			echo "         (a pinned floor likely requires a version newer than the cutoff);"; \
+			echo "         keeping its existing lockfile and continuing."; \
+			skipped="$$skipped $$dir"; \
+		fi; \
 	done; \
 	echo ""; \
-	echo "All uv.lock files refreshed with cutoff $$UV_EXCLUDE_NEWER"
+	if [ -n "$$skipped" ]; then \
+		echo "Refreshed all resolvable uv.lock files with cutoff $$UV_EXCLUDE_NEWER."; \
+		echo "Skipped (unchanged) due to quarantine conflicts:$$skipped"; \
+	else \
+		echo "All uv.lock files refreshed with cutoff $$UV_EXCLUDE_NEWER"; \
+	fi
 
 npm-update-locks:
 	@set -e; \
@@ -331,7 +342,7 @@ npm-update-locks:
 	fi; \
 	export CUTOFF_EPOCH=$$CUTOFF; \
 	echo "CUTOFF_EPOCH=$$CUTOFF_EPOCH"; \
-	for lock in $$(find . -name package-lock.json  | sort); do \
+	for lock in $$(find . -name package-lock.json -not -path '*/.claude/*' | sort); do \
 	  	dir=$$(dirname $$lock); \
 		echo ""; \
 		echo "==> Updating $$dir"; \
