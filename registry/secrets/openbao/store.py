@@ -14,7 +14,6 @@ factory (token / kubernetes / approle) before the client reaches this class.
 
 import asyncio
 import logging
-from urllib.parse import unquote
 
 from registry.egress_auth.schemas import StoredToken
 from registry.secrets import keys
@@ -159,7 +158,13 @@ class OpenBaoStore(SecretStoreBase):
                     )
                     raw = (resp or {}).get("data", {}).get("data")
                     if raw:
-                        out.append((unquote(provider_enc), unquote(server_enc), StoredToken(**raw)))
+                        out.append(
+                            (
+                                keys.decode_segment(provider_enc),
+                                keys.decode_segment(server_enc),
+                                StoredToken(**raw),
+                            )
+                        )
             return out
 
         try:

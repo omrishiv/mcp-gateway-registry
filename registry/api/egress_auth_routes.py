@@ -20,8 +20,9 @@ Security model for POST /internal/egress-token:
 """
 
 import logging
+import secrets
 from typing import Annotated
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import HTMLResponse
@@ -53,6 +54,58 @@ def _callback_url() -> str:
     return settings.egress_oauth_callback_base_url.rstrip("/") + "/oauth2/egress/callback"
 
 
+def _build_connect_url(server_path: str) -> str:
+    """Build the session-verified elicitation front-door URL for a server.
+
+    This is the ``url`` the MCP client opens for URL-mode elicitation. It points
+    at the gateway's own ``/oauth2/egress/connect`` (mounted at the registry
+    root, with ROOT_PATH), which verifies the opener's session before starting
+    the provider consent -- so the client itself performs NO OAuth/DCR.
+    """
+    base = settings.registry_url.rstrip("/")
+    path = server_path if server_path.startswith("/") else "/" + server_path
+    return f"{base}/oauth2/egress/connect?{urlencode({'server': path})}"
+
+
+def _build_request_state(
+    user_id: str,
+    auth_method: str,
+    provider: str,
+    server_path: str,
+    client_id_audit: str,
+) -> str | None:
+    """Build the MRTR ``requestState`` blob the client echoes on retry.
+
+    Reuses the egress AEAD ``OAuthState`` codec: the blob is integrity-protected
+    and carries the principal + server + issue time, satisfying the MRTR
+    requirement to reject tampered, replayed, or cross-user retries. It carries
+    no ``pkce_verifier`` (this is the client<->gateway retry binding, not a
+    provider-leg state). Returns None if state cannot be built (non-fatal: the
+    elicitation still works via the unchanged bearer + vault re-check on retry).
+    """
+    from datetime import UTC, datetime
+
+    from registry.egress_auth.schemas import OAuthState
+    from registry.egress_auth.state_codec import encode_state
+
+    try:
+        state = OAuthState(
+            user_id=user_id,
+            auth_method=auth_method,
+            client_id=client_id_audit,
+            provider=provider,
+            server_path=server_path,
+            session_id="",
+            pkce_verifier=None,
+            nonce=secrets.token_urlsafe(16),
+            issued_at=datetime.now(UTC).isoformat(),
+        )
+        return encode_state(state)
+    except Exception as exc:
+        logger.warning("egress vend: could not build request_state: %s", exc)
+        return None
+
+
 class EgressTokenRequest(BaseModel):
     """Body for POST /internal/egress-token.
 
@@ -76,11 +129,27 @@ class EgressTokenResponse(BaseModel):
     access_token: str | None = None
     consent_required: bool = False
     authorize_url: str | None = None
-    resource_metadata_url: str | None = Field(
+    connect_url: str | None = Field(
         default=None,
-        description="Per-server RFC 9728 PRM URL for the WWW-Authenticate challenge "
-        "(set on a consent-required miss for an egress-configured server). Lets the "
-        "mcp_proxy hop emit a 401 the MCP client can act on via OAuth discovery.",
+        description="Session-verified gateway front door for MCP URL-mode "
+        "elicitation (``GET /oauth2/egress/connect?server=<path>``). The mcp_proxy "
+        "hop puts this in the ``elicitation/create`` ``url`` field. Unlike "
+        "``authorize_url`` (the provider-direct URL), this route re-verifies the "
+        "opener's gateway session against the elicited principal (anti-phishing) "
+        "and needs NO client-side OAuth/DCR -- so it works with providers like "
+        "Entra that do not support RFC 7591 DCR.",
+    )
+    request_state: str | None = Field(
+        default=None,
+        description="Opaque AEAD blob the MCP client echoes back on retry "
+        "(MRTR ``requestState``). Binds the principal + server + issue time so a "
+        "tampered/replayed/cross-user retry is rejected. Built with the egress "
+        "OAuth state codec.",
+    )
+    provider: str | None = Field(
+        default=None,
+        description="Provider key (github/google/entra/...) for the human-readable "
+        "elicitation message.",
     )
 
 
@@ -196,22 +265,27 @@ async def vend_egress_token(
         logger.warning("egress vend: could not build consent URL: %s", exc)
         authorize_url = None
 
-    # Per-server PRM URL for the IDE-discovery challenge. The mcp_proxy hop emits
-    # a 401 WWW-Authenticate pointing here so the MCP client runs OAuth discovery
-    # against the gateway egress AS facade (vs an opaque -32001 it ignores).
-    from registry.egress_auth.as_facade import build_resource_metadata_url
+    # MCP URL-mode elicitation: a session-verified gateway front door the client
+    # opens verbatim (no client-side OAuth/DCR -- works with Entra). The matching
+    # ``request_state`` is an AEAD blob the client echoes back on retry; it binds
+    # the principal + server + issue time so a tampered/replayed/cross-user retry
+    # is rejected (MRTR requestState integrity requirement).
+    provider = egress_oauth.get("provider")
+    connect_url = _build_connect_url(server_path)
+    request_state = _build_request_state(
+        user_id=sub,
+        auth_method=auth_method,
+        provider=provider or "",
+        server_path=server_path,
+        client_id_audit=claims.get("client_id") or "",
+    )
 
-    try:
-        resource_metadata_url = build_resource_metadata_url(
-            registry_url=settings.registry_url, server_path=server_path
-        )
-    except Exception as exc:
-        logger.warning("egress vend: could not build PRM URL: %s", exc)
-        resource_metadata_url = None
     return EgressTokenResponse(
         consent_required=True,
         authorize_url=authorize_url,
-        resource_metadata_url=resource_metadata_url,
+        connect_url=connect_url,
+        request_state=request_state,
+        provider=provider,
     )
 
 
@@ -437,42 +511,12 @@ async def egress_callback(
         logger.warning("egress callback failed: %s", exc)
         return HTMLResponse(f"<h3>Connection failed: {exc}.</h3>", status_code=400)
 
-    # IDE-driven facade flow: if the consent was initiated by the OAuth AS facade
-    # (the provider-leg state's session_id is marked), resume leg 1 -- mint the
-    # client's single-use code and 302 back to the IDE's loopback redirect_uri so
-    # the client can fetch its gateway bearer at /oauth2/egress/token. Otherwise
-    # this is the web Connected-Accounts flow: show the close-tab page.
-    facade_redirect = await _maybe_resume_facade_flow(st, current_user, current_method)
-    if facade_redirect is not None:
-        return facade_redirect
-
+    # The egress consent is the web Connected-Accounts / MCP URL-mode elicitation
+    # flow: the token is now vaulted, so show the close-tab page and let the user
+    # retry their original request.
     return HTMLResponse(
         f"<h3>Connected {conn.provider} for {conn.server_path}.</h3>"
         "<p>You can close this tab and retry your request.</p>"
-    )
-
-
-async def _maybe_resume_facade_flow(state, current_user, current_method):
-    """Bridge the provider callback to the AS-facade flow when applicable.
-
-    ``state`` is the decoded provider-leg OAuthState. Returns a RedirectResponse
-    to the IDE client when the consent came from the facade, else None (web
-    flow). The captured identity (groups/scopes) lives in the facade's pending
-    record keyed by the state's correlation id -- not in this state blob, so it
-    never round-trips through the provider. ``current_user``/``current_method``
-    are forwarded as an account-swap cross-check.
-    """
-    from registry.api.egress_oauth_facade_routes import (
-        is_facade_session,
-        issue_facade_code_redirect,
-    )
-
-    if not is_facade_session(getattr(state, "session_id", None)):
-        return None
-    return await issue_facade_code_redirect(
-        state_session_id=state.session_id,
-        callback_user_id=current_user,
-        callback_auth_method=current_method,
     )
 
 

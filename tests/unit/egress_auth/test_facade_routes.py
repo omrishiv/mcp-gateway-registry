@@ -1,10 +1,9 @@
-"""Route-level tests for the OAuth AS-facade (egress_oauth_facade_routes.py).
+"""Route-level tests for the egress consent route (egress_oauth_facade_routes.py).
 
-TestClient over the router with the session read, server_service, the
-EgressAuthService, the auth-server mint HTTP call, and the Mongo operational
-repo (pending/code state) all stubbed. Verifies the discovery docs, DCR, the
-session-gated /authorize (including the no-session -> Keycloak login bounce),
-and the /token redemption -> mint delegation, plus the callback-resume bridge.
+TestClient over the router with the session read, server_service, and the
+EgressAuthService stubbed. Verifies the param-free /oauth2/egress/connect front
+door (session-gated, including the no-session -> Keycloak login bounce), the
+session-cookie forwarding regression, and the resource-param parsing.
 """
 
 import pytest
@@ -12,7 +11,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import registry.api.egress_oauth_facade_routes as facade
-from registry.egress_auth.oauth_engine import generate_pkce_verifier, pkce_challenge_s256
 
 REGISTRY_URL = "https://gw.example.com"
 USER = {
@@ -40,35 +38,8 @@ def _server(**over) -> dict:
     return base
 
 
-class _FakeRepo:
-    """In-memory stand-in for EgressOperationalRepository's facade methods."""
-
-    def __init__(self):
-        self.pending: dict[str, str] = {}
-        self.codes: dict[str, str] = {}
-
-    async def put_pending(self, correlation_id, payload, ttl_seconds):
-        self.pending[correlation_id] = payload
-
-    async def take_pending(self, correlation_id):
-        return self.pending.pop(correlation_id, None)  # single-use
-
-    async def store_code(self, code, payload, ttl_seconds):
-        self.codes[code] = payload
-
-    async def consume_code(self, code):
-        return self.codes.pop(code, None)  # single-use
-
-
 @pytest.fixture
-def repo(monkeypatch):
-    r = _FakeRepo()
-    monkeypatch.setattr(facade, "get_facade_operational_repo", lambda: r)
-    return r
-
-
-@pytest.fixture
-def client(monkeypatch, repo):
+def client(monkeypatch):
     def _build(
         user_context=USER,
         *,
@@ -85,7 +56,7 @@ def client(monkeypatch, repo):
 
         monkeypatch.setattr(facade.server_service, "get_server_info", _get_server_info)
 
-        # /authorize reads the session via _optional_session -> nginx_proxied_auth
+        # /connect reads the session via _optional_session -> nginx_proxied_auth
         # (called with session=<cookie>). None user_context simulates no gateway
         # session (login bounce).
         async def _session(request, session=None):
@@ -106,7 +77,6 @@ def client(monkeypatch, repo):
         app.include_router(facade.router)
         c = TestClient(app, follow_redirects=False)
         c._svc = _Svc
-        c._repo = repo
         return c
 
     return _build
@@ -151,8 +121,8 @@ class TestOptionalSession:
 
 @pytest.mark.unit
 class TestResourceParam:
-    """RFC 8707 resource-param parsing (regression: the client echoes the PRM
-    `resource` field, which is the server identifier, NOT the PRM doc URL)."""
+    """resource-param parsing: a client may pass the canonical server identifier
+    or the PRM document URL form; recover the server path from either."""
 
     def test_parses_canonical_resource_identifier(self, monkeypatch):
         monkeypatch.setattr(facade.settings, "registry_url", REGISTRY_URL)
@@ -177,309 +147,57 @@ class TestResourceParam:
 
 
 @pytest.mark.unit
-class TestDiscoveryEndpoints:
-    def test_prm_endpoint(self, client):
+class TestConnectRoute:
+    """The param-free /oauth2/egress/connect front door for MCP URL-mode
+    elicitation. It takes NO client OAuth params (no redirect_uri/PKCE/DCR), so it
+    works with providers (Entra) that lack DCR. It session-verifies the opener
+    (anti-phishing) then 302s to provider consent using the user's real
+    session_id (web Connected-Accounts callback path)."""
+
+    def test_connect_redirects_to_provider(self, client):
         c = client(server=_server())
-        r = c.get("/.well-known/oauth-protected-resource/github")
-        assert r.status_code == 200
-        body = r.json()
-        # `resource` is the MCP server URL the client accesses, NOT the PRM doc URL.
-        assert body["resource"] == f"{REGISTRY_URL}/github"
-        assert body["authorization_servers"] == [f"{REGISTRY_URL}/oauth2/egress"]
-        assert body["scopes_supported"] == ["repo"]
-
-    def test_prm_endpoint_path_mode_origin_root_no_double_prefix(self, client):
-        # Path mode: registry_url carries a ROOT_PATH (/registry). A client doing
-        # ORIGIN-ROOT RFC 9728 discovery requests the doc WITH that prefix
-        # (`/.well-known/oauth-protected-resource/registry/github`), so the route
-        # captures `registry/github`. The `resource` MUST be the single canonical
-        # `.../registry/github`, NOT the doubled `.../registry/registry/github`
-        # (the live bug: Claude Code rejected the doubled resource as a mismatch).
-        path_url = "https://gw.example.com/registry"
-        c = client(server=_server(), registry_url=path_url)
-        r = c.get("/.well-known/oauth-protected-resource/registry/github")
-        assert r.status_code == 200
-        body = r.json()
-        assert body["resource"] == f"{path_url}/github"
-        assert body["resource"].count("/registry/registry") == 0
-
-    def test_prm_endpoint_path_mode_pointer_form_matches_origin_root(self, client):
-        # The WWW-Authenticate pointer form (prefix already consumed by the
-        # ingress, so the route captures the bare `github`) must yield the SAME
-        # canonical resource as the origin-root form above.
-        path_url = "https://gw.example.com/registry"
-        c = client(server=_server(), registry_url=path_url)
-        r = c.get("/.well-known/oauth-protected-resource/github")
-        assert r.status_code == 200
-        assert r.json()["resource"] == f"{path_url}/github"
-
-    def test_as_metadata_endpoint(self, client):
-        # Subdomain-mode discovery form (issuer has no path prefix): a client
-        # inserts the well-known segment and appends the bare issuer suffix.
-        c = client()
-        r = c.get("/.well-known/oauth-authorization-server/oauth2/egress")
-        assert r.status_code == 200
-        assert r.json()["token_endpoint"] == f"{REGISTRY_URL}/oauth2/egress/token"
-
-    def test_as_metadata_endpoint_path_mode_prefix(self, client):
-        # Path-mode discovery form: the issuer is `{host}/registry/oauth2/egress`,
-        # so a spec-compliant client requests the AS metadata with the ROOT_PATH
-        # prefix inserted after the well-known segment. The route must resolve
-        # this to the SAME document (the subdomain-only hardcoded suffix used to
-        # 404 here, which broke path-mode IDE discovery).
-        c = client()
-        r = c.get("/.well-known/oauth-authorization-server/registry/oauth2/egress")
-        assert r.status_code == 200
-        assert r.json()["token_endpoint"] == f"{REGISTRY_URL}/oauth2/egress/token"
-
-    def test_as_metadata_foreign_suffix_404(self, client):
-        # A path that does not end in this facade's issuer suffix is not ours.
-        c = client()
-        assert c.get("/.well-known/oauth-authorization-server/some/other/issuer").status_code == 404
-
-    def test_discovery_404_when_disabled(self, client):
-        c = client(enabled=False)
-        assert c.get("/.well-known/oauth-authorization-server/oauth2/egress").status_code == 404
-
-
-@pytest.mark.unit
-class TestRegister:
-    def test_register_loopback_ok(self, client):
-        c = client()
-        r = c.post("/oauth2/egress/register", json={"redirect_uris": ["http://127.0.0.1:5000/cb"]})
-        assert r.status_code == 201
-        assert r.json()["client_id"].startswith("egress-")
-
-    def test_register_non_loopback_400(self, client):
-        c = client()
-        r = c.post("/oauth2/egress/register", json={"redirect_uris": ["https://evil.com/cb"]})
-        assert r.status_code == 400
-        assert r.json()["error"] == "invalid_redirect_uri"
-
-
-def _authorize_params(challenge: str, **over) -> dict:
-    p = {
-        "response_type": "code",
-        "client_id": "egress-abc",
-        "redirect_uri": "http://127.0.0.1:5000/cb",
-        "state": "cli-state",
-        "code_challenge": challenge,
-        "code_challenge_method": "S256",
-        "resource": f"{REGISTRY_URL}/.well-known/oauth-protected-resource/github",
-    }
-    p.update(over)
-    return p
-
-
-@pytest.mark.unit
-class TestAuthorize:
-    def test_authorize_redirects_to_provider(self, client):
-        c = client(server=_server())
-        challenge = pkce_challenge_s256(generate_pkce_verifier())
-        r = c.get("/oauth2/egress/authorize", params=_authorize_params(challenge))
+        r = c.get("/oauth2/egress/connect", params={"server": "/github"})
         assert r.status_code == 302
         assert r.headers["location"].startswith("https://github.com/login/oauth/authorize")
-        # the facade threaded a facade-marked session_id into the provider leg
-        assert c._svc.last_session_id.startswith(facade._FACADE_SESSION_PREFIX)
-        # and persisted the pending record under the correlation id
-        corr = c._svc.last_session_id[len(facade._FACADE_SESSION_PREFIX) :]
-        assert corr in c._repo.pending
+        # Uses the real session_id, never a facade-marked one (no leg-1 resume).
+        assert not (c._svc.last_session_id or "").startswith("facade:")
 
-    def test_authorize_no_session_bounces_to_keycloak_login(self, client):
+    def test_connect_no_session_bounces_to_keycloak_login(self, client):
         c = client(user_context=None, server=_server())
-        challenge = pkce_challenge_s256(generate_pkce_verifier())
-        r = c.get("/oauth2/egress/authorize", params=_authorize_params(challenge))
+        r = c.get("/oauth2/egress/connect", params={"server": "/github"})
         assert r.status_code == 302
         loc = r.headers["location"]
-        # Subdomain mode: origin == registry_url (no path), so both coincide.
         assert loc.startswith(f"{REGISTRY_URL}/oauth2/login/keycloak")
-        # returns to /authorize with its params preserved (urlencoded)
-        assert "oauth2%2Fegress%2Fauthorize" in loc
-        # no pending stored when we bounce to login
-        assert c._repo.pending == {}
+        # returns to /connect with its query preserved (anti-phishing: the opener
+        # must authenticate before consent starts)
+        assert "oauth2%2Fegress%2Fconnect" in loc
 
-    def test_authorize_login_bounce_targets_origin_not_root_path(self, client):
-        # Path-mode regression: when registry_url carries a ROOT_PATH (/registry),
-        # the login bounce MUST target the ORIGIN ("https://gw.example.com/oauth2/
-        # login/keycloak"), NOT "https://gw.example.com/registry/oauth2/login/...".
-        # nginx serves /oauth2/login/* at the origin root in both modes; the
-        # prefixed form falls through to the SPA (HTML) and the login never
-        # happens -- the path-mode-only egress consent failure. Subdomain mode
-        # masked this because registry_url has no path.
-        c = client(
-            user_context=None,
-            server=_server(),
-            registry_url="https://gw.example.com/registry",
-        )
-        challenge = pkce_challenge_s256(generate_pkce_verifier())
-        r = c.get("/oauth2/egress/authorize", params=_authorize_params(challenge))
-        assert r.status_code == 302
-        loc = r.headers["location"]
-        assert loc.startswith("https://gw.example.com/oauth2/login/keycloak")
-        # The prefixed login path must NOT appear (that was the bug).
-        assert "/registry/oauth2/login/keycloak" not in loc
-
-    def test_authorize_non_loopback_redirect_400(self, client):
-        c = client(server=_server())
-        challenge = pkce_challenge_s256(generate_pkce_verifier())
-        r = c.get(
-            "/oauth2/egress/authorize",
-            params=_authorize_params(challenge, redirect_uri="https://evil.com/cb"),
-        )
-        assert r.status_code == 400
-
-    def test_authorize_requires_s256(self, client):
-        c = client(server=_server())
-        r = c.get(
-            "/oauth2/egress/authorize",
-            params=_authorize_params("", code_challenge_method="plain"),
-        )
-        assert r.status_code == 302
-        assert "error=invalid_request" in r.headers["location"]
-
-    def test_authorize_non_per_user_denied(self, client):
+    def test_connect_non_per_user_denied(self, client):
         c = client(user_context=STATIC, server=_server())
-        challenge = pkce_challenge_s256(generate_pkce_verifier())
-        r = c.get("/oauth2/egress/authorize", params=_authorize_params(challenge))
-        assert r.status_code == 302
-        assert "error=access_denied" in r.headers["location"]
+        r = c.get("/oauth2/egress/connect", params={"server": "/github"})
+        assert r.status_code == 403
 
-    def test_authorize_unconfigured_server_errors(self, client):
+    def test_connect_missing_server_400(self, client):
+        c = client(server=_server())
+        r = c.get("/oauth2/egress/connect")
+        assert r.status_code == 400
+
+    def test_connect_unconfigured_server_400(self, client):
         c = client(server=_server(egress_auth_mode="none", egress_oauth=None))
-        challenge = pkce_challenge_s256(generate_pkce_verifier())
-        r = c.get("/oauth2/egress/authorize", params=_authorize_params(challenge))
+        r = c.get("/oauth2/egress/connect", params={"server": "/github"})
+        assert r.status_code == 400
+
+    def test_connect_feature_disabled_404(self, client):
+        c = client(server=_server(), enabled=False)
+        r = c.get("/oauth2/egress/connect", params={"server": "/github"})
+        assert r.status_code == 404
+
+    def test_connect_accepts_resource_param_form(self, client):
+        # A client may pass the resource identifier instead of ?server.
+        c = client(server=_server())
+        r = c.get(
+            "/oauth2/egress/connect",
+            params={"resource": f"{REGISTRY_URL}/github"},
+        )
         assert r.status_code == 302
-        assert "error=invalid_request" in r.headers["location"]
-
-
-@pytest.mark.unit
-class TestTokenAndResume:
-    async def test_full_authorize_resume_token_flow(self, client, monkeypatch):
-        # 1) authorize -> persists pending under correlation id
-        c = client(server=_server())
-        verifier = generate_pkce_verifier()
-        challenge = pkce_challenge_s256(verifier)
-        c.get("/oauth2/egress/authorize", params=_authorize_params(challenge))
-        session_id = c._svc.last_session_id
-        assert facade.is_facade_session(session_id)
-
-        # 2) provider callback completes -> resume issues client code+redirect
-        redirect = await facade.issue_facade_code_redirect(
-            state_session_id=session_id,
-            callback_user_id="alice",
-            callback_auth_method="oauth2",
-        )
-        assert redirect is not None
-        loc = redirect.headers["location"]
-        assert loc.startswith("http://127.0.0.1:5000/cb")
-        assert "state=cli-state" in loc
-        code = loc.split("code=")[1].split("&")[0]
-        assert code in c._repo.codes  # persisted in the repo
-
-        # 3) token: redeem code (PKCE) -> mint delegated to auth-server (mocked)
-        async def _fake_mint(identity):
-            assert identity.user_id == "alice"
-            assert identity.scopes == ["openid", "email"]
-            return "minted.jwt.token", 28800
-
-        monkeypatch.setattr(facade, "_mint_user_token", _fake_mint)
-        r = c.post(
-            "/oauth2/egress/token",
-            data={
-                "grant_type": "authorization_code",
-                "code": code,
-                "redirect_uri": "http://127.0.0.1:5000/cb",
-                "code_verifier": verifier,
-                "client_id": "egress-abc",
-            },
-        )
-        assert r.status_code == 200
-        body = r.json()
-        assert body["access_token"] == "minted.jwt.token"
-        assert body["expires_in"] == 28800
-        assert code not in c._repo.codes  # single-use consumed
-
-    def test_token_bad_code_invalid_grant(self, client):
-        c = client(server=_server())
-        r = c.post(
-            "/oauth2/egress/token",
-            data={
-                "grant_type": "authorization_code",
-                "code": "nope",
-                "redirect_uri": "http://127.0.0.1:5000/cb",
-                "code_verifier": "v",
-            },
-        )
-        assert r.status_code == 400
-        assert r.json()["error"] == "invalid_grant"
-
-    def test_token_unsupported_grant(self, client):
-        c = client(server=_server())
-        r = c.post("/oauth2/egress/token", data={"grant_type": "password"})
-        assert r.status_code == 400
-        assert r.json()["error"] == "unsupported_grant_type"
-
-    async def test_token_wrong_pkce_rejected(self, client, monkeypatch):
-        # full happy authorize+resume, then redeem with the WRONG verifier
-        c = client(server=_server())
-        verifier = generate_pkce_verifier()
-        c.get("/oauth2/egress/authorize", params=_authorize_params(pkce_challenge_s256(verifier)))
-        redirect = await facade.issue_facade_code_redirect(state_session_id=c._svc.last_session_id)
-        code = redirect.headers["location"].split("code=")[1].split("&")[0]
-        r = c.post(
-            "/oauth2/egress/token",
-            data={
-                "grant_type": "authorization_code",
-                "code": code,
-                "redirect_uri": "http://127.0.0.1:5000/cb",
-                "code_verifier": generate_pkce_verifier(),  # wrong
-            },
-        )
-        assert r.status_code == 400
-        assert r.json()["error"] == "invalid_grant"
-
-    async def test_resume_account_swap_refused(self, client):
-        # identity captured as alice; a callback observing bob must NOT resume.
-        c = client(server=_server())
-        verifier = generate_pkce_verifier()
-        c.get("/oauth2/egress/authorize", params=_authorize_params(pkce_challenge_s256(verifier)))
-        redirect = await facade.issue_facade_code_redirect(
-            state_session_id=c._svc.last_session_id,
-            callback_user_id="bob",
-            callback_auth_method="oauth2",
-        )
-        assert redirect is None
-
-    async def test_resume_unknown_correlation_returns_none(self, client):
-        client(server=_server())
-        assert (
-            await facade.issue_facade_code_redirect(
-                state_session_id=facade._FACADE_SESSION_PREFIX + "unknown"
-            )
-            is None
-        )
-
-    async def test_resume_retries_on_duplicate_code(self, client, monkeypatch):
-        # An astronomically-rare auth-code collision must retry with a fresh code,
-        # never 500 the callback (kiro cold-review nit).
-        from pymongo.errors import DuplicateKeyError
-
-        c = client(server=_server())
-        verifier = generate_pkce_verifier()
-        c.get("/oauth2/egress/authorize", params=_authorize_params(pkce_challenge_s256(verifier)))
-
-        calls = {"n": 0}
-        real_store = c._repo.store_code
-
-        async def _flaky_store(code, payload, ttl):
-            calls["n"] += 1
-            if calls["n"] == 1:
-                raise DuplicateKeyError("dup")  # first code collides
-            await real_store(code, payload, ttl)
-
-        monkeypatch.setattr(c._repo, "store_code", _flaky_store)
-        redirect = await facade.issue_facade_code_redirect(state_session_id=c._svc.last_session_id)
-        assert redirect is not None
-        assert calls["n"] == 2  # retried once
-        code = redirect.headers["location"].split("code=")[1].split("&")[0]
-        assert code in c._repo.codes
+        assert r.headers["location"].startswith("https://github.com/login/oauth/authorize")

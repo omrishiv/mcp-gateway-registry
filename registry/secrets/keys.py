@@ -10,21 +10,25 @@ The raw values are NOT safe to use verbatim as path/map segments:
 - ``server_path`` contains ``/`` -- the OpenBao KV path separator.
 
 The fix is ONE canonical encoding applied uniformly in every backend:
-**Unicode-NFC-normalize, then percent-encode** each segment so no segment can
-contain a separator (``/`` or ``|``) or a Unicode look-alike. NFC first
-prevents NFC-vs-NFD silent collisions on non-ASCII usernames.
+**Unicode-NFC-normalize, then base64url-encode (unpadded)** each segment so no
+segment can contain a separator (``/`` or ``|``) or a Unicode look-alike. NFC
+first prevents NFC-vs-NFD silent collisions on non-ASCII usernames.
+
+base64url (RFC 4648 §5, unpadded) is used deliberately instead of
+percent-encoding: its alphabet is ``[A-Za-z0-9_-]`` only, so an encoded segment
+contains **no** ``/``, ``|``, ``%``, or ``=``. Percent-encoding is unsafe here
+because the OpenBao HTTP client (hvac) re-quotes the path it is given, turning a
+percent-encoded ``/`` (``%2F``) into ``%252F`` on the wire -- a path OpenBao
+will not match (encoded slashes defeat its ACL/path routing), which broke every
+vault read. base64url has no such reserved characters, so it survives hvac
+re-quoting and OpenBao path routing unchanged.
 
 All three SecretStore backends MUST build keys through these helpers so they
 agree byte-for-byte (asserted by the cross-store round-trip test).
 """
 
+import base64
 import unicodedata
-from urllib.parse import quote
-
-# Percent-encode EVERYTHING except unreserved RFC 3986 chars. In particular do
-# NOT treat "/" or "|" as safe -- they are our segment/map separators and must
-# be escaped inside a segment so they cannot be confused with a separator.
-_SAFE_SEGMENT_CHARS = ""
 
 # The map delimiter used by the one-secret-per-principal backends (Secrets
 # Manager, dev-fernet) to join (provider, server_path) into a single JSON key.
@@ -34,14 +38,24 @@ MAP_KEY_DELIMITER = "|"
 
 
 def encode_segment(value: str) -> str:
-    """NFC-normalize then percent-encode a single key segment.
+    """NFC-normalize then base64url-encode (unpadded) a single key segment.
 
-    The result contains only RFC 3986 unreserved characters plus percent
-    escapes -- never ``/`` or ``|`` -- so it is safe as an OpenBao path segment,
-    a Secrets Manager name component, and a JSON map-key component.
+    The result contains only ``[A-Za-z0-9_-]`` -- never ``/``, ``|``, ``%``, or
+    ``=`` -- so it is safe as an OpenBao path segment (and survives hvac's URL
+    re-quoting), a Secrets Manager name component, and a JSON map-key component.
     """
     normalized = unicodedata.normalize("NFC", value or "")
-    return quote(normalized, safe=_SAFE_SEGMENT_CHARS)
+    return base64.urlsafe_b64encode(normalized.encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def decode_segment(encoded: str) -> str:
+    """Inverse of ``encode_segment``: base64url-decode back to the raw value.
+
+    Re-pads the (unpadded) input before decoding. Used when enumerating stored
+    connections to recover the original provider/server_path values.
+    """
+    padded = encoded + "=" * (-len(encoded) % 4)
+    return base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
 
 
 def user_principal(auth_method: str, user_id: str) -> str:

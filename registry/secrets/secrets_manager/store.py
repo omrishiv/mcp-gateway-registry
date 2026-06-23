@@ -151,12 +151,16 @@ class SecretsManagerStore(SecretStoreBase):
         auth_method: str,
         user_id: str,
     ) -> list[tuple[str, str, StoredToken]]:
-        from urllib.parse import unquote
-
         name = self._secret_name(auth_method, user_id)
         data = await asyncio.to_thread(self._get_map, name)
         out: list[tuple[str, str, StoredToken]] = []
         for key, raw in data.items():
             provider_enc, _, server_enc = key.partition(keys.MAP_KEY_DELIMITER)
-            out.append((unquote(provider_enc), unquote(server_enc), StoredToken(**raw)))
+            out.append(
+                (
+                    keys.decode_segment(provider_enc),
+                    keys.decode_segment(server_enc),
+                    StoredToken(**raw),
+                )
+            )
         return out

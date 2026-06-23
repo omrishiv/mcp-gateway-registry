@@ -4419,6 +4419,200 @@ async def _vend_egress_token(
         return None
 
 
+# JSON-RPC client requests on which MCP permits an InputRequiredResult (MRTR
+# spec: only tools/call, prompts/get, resources/read). Emitting it on any other
+# method (e.g. initialize, tools/list) would be a protocol violation, so those
+# get a plain JSON-RPC error instead.
+_ELICITATION_PERMITTED_METHODS: frozenset[str] = frozenset(
+    {"tools/call", "prompts/get", "resources/read"}
+)
+
+# Name of the synthetic "connect" tool the gateway advertises for an egress
+# server whose per-user token is not yet vaulted. The real upstream tool list
+# requires the third-party token (the upstream is an OAuth RS), so the gateway
+# cannot enumerate it for an unconnected user. Per the tools spec, tools/list
+# MUST return a result (it MAY be empty / MAY vary by authorization) -- it must
+# NOT error. So we surface a single tool the model can invoke to start consent;
+# calling it returns the url-mode elicitation. After the user connects, the
+# vend HITs and the real upstream tools are proxied (and the gateway can emit
+# notifications/tools/list_changed so the client re-fetches).
+_EGRESS_CONNECT_TOOL_NAME: str = "connect_account"
+
+
+def _egress_connect_tool(provider: str) -> dict:
+    """The synthetic connect tool advertised in tools/list before consent."""
+    return {
+        "name": _EGRESS_CONNECT_TOOL_NAME,
+        "title": f"Connect your {provider} account",
+        "description": (
+            f"Connect your {provider} account to use this server's tools. "
+            "Run this tool to start the one-time account connection; once "
+            "connected, this server's real tools become available."
+        ),
+        "inputSchema": {"type": "object", "additionalProperties": False},
+    }
+
+
+def _local_tools_list_response(req_id: object, provider: str):
+    """Answer tools/list LOCALLY with just the synthetic connect tool.
+
+    For an egress server with no vaulted token, the upstream tool list is not
+    reachable (it needs the token). Returning an error here dead-ends clients
+    (they mark the server failed and never call a tool). The tools spec requires
+    tools/list to return a result that MAY be empty / MAY vary by authorization,
+    so we return a single connect tool: a concrete affordance the model/user can
+    invoke to trigger the url-mode consent elicitation.
+    """
+    return JSONResponse(
+        status_code=200,
+        content={
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {"tools": [_egress_connect_tool(provider)]},
+        },
+    )
+
+# Protocol version the gateway advertises when it answers `initialize` locally
+# (the fallback used if the client did not state one). The handshake is a
+# capability negotiation between the client and THIS server (the gateway); per
+# the MCP lifecycle spec it does not require contacting the upstream, so the
+# gateway answers it itself for an egress server whose token is not yet vaulted.
+_DEFAULT_PROTOCOL_VERSION: str = "2025-11-25"
+
+
+def _local_initialize_response(req_id: object, incoming_payload: object):
+    """Answer an MCP ``initialize`` locally, without proxying to the upstream.
+
+    For an egress-configured server whose per-user token is NOT yet vaulted, the
+    upstream (e.g. GitHub) is itself an OAuth resource server that 401s every
+    call -- including ``initialize``. But ``initialize`` is capability
+    negotiation between the client and the gateway; the MCP lifecycle spec does
+    not require it to reach the upstream. Answering it here lets the (legacy,
+    handshake-based) client complete the handshake so it can proceed to the
+    token-requiring methods, where the egress consent elicitation is surfaced.
+
+    The protocol version echoes the client's requested version when present so
+    the client does not see a version it did not ask for.
+    """
+    requested_version = _DEFAULT_PROTOCOL_VERSION
+    if isinstance(incoming_payload, dict):
+        params = incoming_payload.get("params")
+        if isinstance(params, dict) and params.get("protocolVersion"):
+            requested_version = params["protocolVersion"]
+    return JSONResponse(
+        status_code=200,
+        content={
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {
+                "protocolVersion": requested_version,
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "mcp-gateway-registry", "version": "1.0.0"},
+            },
+        },
+    )
+
+
+def _egress_consent_response(
+    server_name: str,
+    incoming_method: str | None,
+    req_id: object,
+    vend: dict,
+):
+    """Build the consent-required response for an egress server with no token.
+
+    Implements the ``2025-11-25`` URL-mode elicitation OAuth pattern: on a
+    ``tools/call`` (etc.) that needs a third-party token the user has not yet
+    granted, the server returns a ``URLElicitationRequiredError`` (JSON-RPC error
+    code ``-32042``) whose ``data.elicitations[]`` carries a ``mode: "url"``
+    elicitation with a unique ``elicitationId`` and the gateway connect URL. The
+    client gets user consent, opens the URL (third-party OAuth happens out of
+    band, token vaulted by the gateway), then retries the original ``tools/call``.
+
+    Spec: https://modelcontextprotocol.io/specification/2025-11-25/client/elicitation
+    (URL Elicitation Required Error). ``-32042`` is the documented signal and is a
+    JSON-RPC *error*, so a client that does not understand it still does not
+    mistake it for success.
+
+    NOTE: the ``2026-07-28``/draft MRTR ``InputRequiredResult`` (a *result* with
+    ``resultType: "input_required"``) is a DIFFERENT, later mechanism that
+    replaced server-initiated requests; current clients negotiate ``2025-11-25``
+    and do not understand it, so we emit ``-32042`` here.
+    """
+    connect_url = vend.get("connect_url") or vend.get("authorize_url") or ""
+    provider = vend.get("provider") or "the provider"
+    message = f"Connect your {provider} account to use this server."
+    # A unique id for this elicitation. The connect route can echo it back via
+    # notifications/elicitation/complete so the client may auto-retry. We derive
+    # it from the request_state when present (already principal+TTL-bound) so it
+    # is stable for this attempt, else a fresh random id.
+    elicitation_id = vend.get("request_state") or secrets.token_urlsafe(18)
+
+    if incoming_method in _ELICITATION_PERMITTED_METHODS and connect_url:
+        logger.info(
+            "mcp_proxy: egress consent required for server=%s method=%s; "
+            "returning URLElicitationRequiredError (-32042, url-mode)",
+            server_name,
+            incoming_method,
+        )
+        # Thread the elicitationId into the connect URL so the connect route can
+        # correlate completion (and per spec, the connect URL is what enforces
+        # the same-user anti-phishing check, not the third-party endpoint).
+        sep = "&" if "?" in connect_url else "?"
+        url_with_id = (
+            f"{connect_url}{sep}{urllib.parse.urlencode({'elicitationId': elicitation_id})}"
+        )
+        return JSONResponse(
+            status_code=200,
+            content={
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "error": {
+                    "code": -32042,
+                    "message": message,
+                    "data": {
+                        "elicitations": [
+                            {
+                                "mode": "url",
+                                "elicitationId": elicitation_id,
+                                "url": url_with_id,
+                                "message": message,
+                            }
+                        ]
+                    },
+                },
+            },
+        )
+
+    # Method is not one the URLElicitationRequiredError pattern applies to, or we
+    # have no connect URL: return a generic JSON-RPC error that still carries the
+    # connect URL so a human can self-serve. (In practice the dispatch routes
+    # tools/list and notifications elsewhere, so this is a defensive fallback.)
+    logger.info(
+        "mcp_proxy: egress consent required for server=%s method=%s; "
+        "returning generic JSON-RPC error (no url-elicitation for this method)",
+        server_name,
+        incoming_method,
+    )
+    return JSONResponse(
+        status_code=200,
+        content={
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "error": {
+                "code": -32001,
+                "message": (
+                    f"{message} Visit: {connect_url}" if connect_url else message
+                ),
+                "data": {
+                    "connect_url": connect_url,
+                    "reason": "egress_consent_required",
+                },
+            },
+        },
+    )
+
+
 def _select_forwarded_response_headers(
     upstream_headers: Mapping[str, str],
 ) -> dict[str, str]:
@@ -4521,8 +4715,8 @@ async def mcp_proxy(
     # authz, and returns consent_required for non-oauth_user servers.
     # On a real vend we strip the user's own gateway credentials/identity
     # before injecting the vaulted token. On a consent-required miss for an
-    # egress-configured server we DO NOT forward unauthenticated -- we return a
-    # JSON-RPC error carrying the authorize URL so the user can connect.
+    # egress-configured server we DO NOT forward unauthenticated -- we ask the
+    # user to connect via MCP URL-mode elicitation (see _egress_consent_response).
     if settings.egress_auth_enabled:
         internal_proxy_token = request.headers.get("X-Internal-Token", "")
         if internal_proxy_token:
@@ -4535,49 +4729,55 @@ async def mcp_proxy(
                     if k.lower() not in _EGRESS_STRIP_HEADERS
                 }
                 forward_headers["Authorization"] = f"Bearer {vend['access_token']}"
-            elif vend and (vend.get("authorize_url") or vend.get("resource_metadata_url")):
+            elif vend and (vend.get("connect_url") or vend.get("authorize_url")):
                 # Egress is configured for this server but the user has no usable
-                # token. Emit an RFC 9728 401 + WWW-Authenticate pointing at the
-                # gateway's per-server egress Protected Resource Metadata, so the
-                # MCP client runs OAuth discovery against the gateway egress AS
-                # facade and opens the provider consent in a browser -- the same
-                # mechanism that makes the ingress Keycloak login pop. The
-                # JSON-RPC -32001 body is retained as a fallback for clients that
-                # do not act on the header (they still surface the authorize URL).
-                req_id = incoming_payload.get("id") if isinstance(incoming_payload, dict) else None
-                authorize_url = vend.get("authorize_url") or ""
-                resource_metadata_url = vend.get("resource_metadata_url") or ""
-                logger.info(
-                    "mcp_proxy: egress consent required for server=%s; "
-                    "returning 401 WWW-Authenticate (prm=%s)",
-                    server_name,
-                    resource_metadata_url,
+                # token, and the upstream is itself an OAuth resource server that
+                # 401s every call (including initialize). Break the handshake
+                # deadlock by handling the non-upstream methods at the gateway:
+                #
+                #   - initialize: answered LOCALLY (capability negotiation with the
+                #     client; the lifecycle spec does not require reaching the
+                #     upstream). Lets a legacy handshake-based client complete the
+                #     handshake instead of seeing the upstream's 401.
+                #   - notifications/*: acked locally (no response body expected).
+                #   - tools/list: answered LOCALLY with a single synthetic
+                #     "connect" tool. The real upstream list needs the token, and
+                #     erroring here dead-ends clients; the tools spec lets
+                #     tools/list return an auth-dependent (here: connect-only) set.
+                #   - tools/call (and prompts/get, resources/read): need the
+                #     third-party token, so we ask the user to connect via MCP
+                #     URL-mode elicitation. The gateway is the MCP server's OAuth
+                #     client to the provider; the token never transits the MCP
+                #     client, which performs no OAuth itself (it opens the connect
+                #     URL and retries). Spec:
+                #     https://modelcontextprotocol.io/specification/draft/client/elicitation
+                req_id = (
+                    incoming_payload.get("id") if isinstance(incoming_payload, dict) else None
                 )
-                headers = {}
-                if resource_metadata_url:
-                    headers["WWW-Authenticate"] = (
-                        f'Bearer realm="mcp", resource_metadata="{resource_metadata_url}"'
+                if incoming_method == "initialize":
+                    logger.info(
+                        "mcp_proxy: egress server=%s has no token; answering "
+                        "initialize locally to complete the handshake",
+                        server_name,
                     )
-                return JSONResponse(
-                    status_code=401,
-                    headers=headers,
-                    content={
-                        "jsonrpc": "2.0",
-                        "id": req_id,
-                        "error": {
-                            "code": -32001,
-                            "message": (
-                                "Connect your account to use this server: " + authorize_url
-                                if authorize_url
-                                else "Connect your account to use this server."
-                            ),
-                            "data": {
-                                "authorize_url": authorize_url,
-                                "resource_metadata_url": resource_metadata_url,
-                                "reason": "egress_consent_required",
-                            },
-                        },
-                    },
+                    return _local_initialize_response(req_id, incoming_payload)
+                if incoming_method and incoming_method.startswith("notifications/"):
+                    # Notifications have no result; ack with 202 and no body.
+                    return Response(status_code=202)
+                if incoming_method == "tools/list":
+                    logger.info(
+                        "mcp_proxy: egress server=%s has no token; advertising the "
+                        "synthetic connect tool in tools/list",
+                        server_name,
+                    )
+                    return _local_tools_list_response(
+                        req_id, vend.get("provider") or "the provider"
+                    )
+                return _egress_consent_response(
+                    server_name=server_name,
+                    incoming_method=incoming_method,
+                    req_id=req_id,
+                    vend=vend,
                 )
 
     logger.info(

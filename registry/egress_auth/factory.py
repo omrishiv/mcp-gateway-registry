@@ -85,26 +85,3 @@ def reset_egress_auth_service() -> None:
     """Reset the singleton. USE ONLY IN TESTS."""
     global _egress_service
     _egress_service = None
-
-
-_facade_repo = None
-
-
-def get_facade_operational_repo():
-    """Get the operational repo used by the OAuth AS facade for cross-replica
-    pending-authorize + auth-code state. Same Mongo collection as the replay
-    guard/lease (operational state only, no credentials). Singleton."""
-    global _facade_repo
-    if _facade_repo is None:
-        from registry.repositories.documentdb.egress_operational_repository import (
-            EgressOperationalRepository,
-        )
-
-        _facade_repo = EgressOperationalRepository()
-    return _facade_repo
-
-
-def reset_facade_operational_repo() -> None:
-    """Reset the facade repo singleton. USE ONLY IN TESTS."""
-    global _facade_repo
-    _facade_repo = None

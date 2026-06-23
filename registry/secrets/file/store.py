@@ -161,7 +161,11 @@ class FernetFileStore(SecretStoreBase):
         for key, raw in data.items():
             provider_enc, _, server_enc = key.partition(keys.MAP_KEY_DELIMITER)
             # The map key holds ENCODED segments; decode for the caller-facing view.
-            from urllib.parse import unquote
-
-            out.append((unquote(provider_enc), unquote(server_enc), StoredToken(**raw)))
+            out.append(
+                (
+                    keys.decode_segment(provider_enc),
+                    keys.decode_segment(server_enc),
+                    StoredToken(**raw),
+                )
+            )
         return out

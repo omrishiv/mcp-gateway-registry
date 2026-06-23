@@ -31,6 +31,44 @@ class TestEncodeSegment:
         assert "/" not in enc, f"{raw!r} encoded to {enc!r} containing '/'"
         assert "|" not in enc, f"{raw!r} encoded to {enc!r} containing '|'"
 
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "auth0|abc123",
+            "alice smith",
+            "café",
+            "user@example.com",
+            "a+b",
+            "/github-mcp/mcp",
+            "/github",
+            "plain",
+        ],
+    )
+    def test_encoded_segment_is_hvac_and_vault_safe(self, raw: str) -> None:
+        # Regression: percent-encoding emitted "%", which the OpenBao HTTP client
+        # (hvac) re-quoted ("%2F" -> "%252F"), producing a path OpenBao would not
+        # match -> every vault read failed. base64url has none of the reserved
+        # characters, so an encoded segment must contain no "%", "=", "/", or "|".
+        enc = keys.encode_segment(raw)
+        for bad in ("%", "=", "/", "|"):
+            assert bad not in enc, f"{raw!r} encoded to {enc!r} containing {bad!r}"
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "auth0|abc123",
+            "alice smith",
+            "café",
+            "user@example.com",
+            "/github-mcp/mcp",
+            "/github",
+            "plain",
+            "",
+        ],
+    )
+    def test_encode_decode_roundtrip(self, raw: str) -> None:
+        assert keys.decode_segment(keys.encode_segment(raw)) == raw
+
     def test_nfc_normalization_collapses_equivalent_forms(self) -> None:
         # NFC and NFD representations of "é" must encode identically, else a
         # Keycloak user logging in from two clients could silently get two vaults.

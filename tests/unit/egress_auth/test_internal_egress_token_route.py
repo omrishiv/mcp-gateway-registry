@@ -163,9 +163,35 @@ class TestInternalEgressTokenRoute:
         assert body["access_token"] is None
         assert body["authorize_url"] == "https://github.com/login/oauth/authorize?from=miss"
 
+    def test_vend_miss_returns_connect_url_and_request_state(self, make_client):
+        # The URL-mode elicitation switch adds a session-verified connect_url
+        # (the gateway front door the MCP client opens, no DCR), an AEAD
+        # request_state blob for the MRTR retry, and the provider key.
+        client = make_client(_claims(), _server(), vended_token=None)
+        body = _post(client, server_path="/github-mcp").json()
+        assert body["consent_required"] is True
+        # connect_url points at the gateway's own /oauth2/egress/connect with the
+        # server path, NOT the provider-direct authorize_url.
+        assert "/oauth2/egress/connect" in body["connect_url"]
+        assert "server=" in body["connect_url"]
+        assert "github" in body["connect_url"]
+        # request_state is an opaque, non-empty AEAD blob (decodable by the codec).
+        assert body["request_state"]
+        from registry.egress_auth.state_codec import decode_state
+
+        st = decode_state(body["request_state"])
+        assert st.user_id == "alice"
+        assert st.auth_method == "oauth2"
+        assert st.provider == "github"
+        assert st.server_path == "/github-mcp"
+        assert body["provider"] == "github"
+
     def test_non_per_user_miss_has_no_authorize_url(self, make_client):
-        # A non-per-user caller has nothing to connect -> no authorize_url.
+        # A non-per-user caller has nothing to connect -> no authorize_url and no
+        # connect_url (mcp_proxy then falls through to normal forwarding).
         client = make_client(_claims(auth_method="network-trusted"), _server())
         body = _post(client).json()
         assert body["consent_required"] is True
         assert body.get("authorize_url") is None
+        assert body.get("connect_url") is None
+        assert body.get("request_state") is None

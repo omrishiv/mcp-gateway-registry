@@ -1389,37 +1389,6 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
 
         return blocks
 
-    def _egress_resource_metadata_set(
-        self,
-        path: str,
-        server_info: dict[str, Any] | None,
-    ) -> str:
-        """Return the nginx `set $mcp_resource_metadata ...;` line for an
-        egress-configured server, or "" otherwise.
-
-        When the server uses per-user egress OAuth, its auth-failure 401 must
-        advertise the gateway's per-server facade PRM (so the IDE discovers the
-        egress AS, not Keycloak). Returns the rewrite-phase `set` directive bound
-        to that server's PRM URL; empty string for non-egress servers (they use
-        the http-scope map default). The URL is sanitized for safe interpolation
-        into the nginx `set` value (no newlines/quotes)."""
-        if not server_info or server_info.get("egress_auth_mode") != "oauth_user":
-            return ""
-        if not server_info.get("egress_oauth"):
-            return ""
-        try:
-            from registry.egress_auth.as_facade import build_resource_metadata_url
-
-            url = build_resource_metadata_url(settings.registry_url, path)
-        except Exception as exc:  # bad registry_url etc. -- fall back to the default
-            logger.warning("Could not build egress PRM URL for %s: %s", path, exc)
-            return ""
-        safe_url = self._sanitize_for_nginx_set(url)
-        return (
-            f'\n        # Egress server: advertise the gateway facade PRM on 401.\n'
-            f'        set $mcp_resource_metadata "{safe_url}";\n'
-        )
-
     def _create_location_block(
         self,
         path: str,
@@ -1506,17 +1475,8 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         proxy_pass {mcp_proxy_target};"""
             version_headers = ""
 
-        # Egress OAuth AS facade: when this server uses per-user egress auth, point
-        # its auth-failure 401 at the gateway's OWN per-server Protected Resource
-        # Metadata (the facade), NOT the global ingress PRM (Keycloak). This is set
-        # in the rewrite phase so it flows into @auth_error (same mechanism as
-        # $backend_url), making the IDE discover the egress AS from the FIRST
-        # unauthenticated 401 and bind /<server> to the facade. Non-egress servers
-        # omit this and fall through to the http-scope map default (Keycloak).
-        egress_metadata_set = self._egress_resource_metadata_set(path, server_info)
-
         # Common proxy settings
-        common_settings = f"""{egress_metadata_set}
+        common_settings = f"""
         # DNS resolver for dynamic proxy_pass upstreams.
         # Default: 8.8.8.8 8.8.4.4 (public DNS).
         # Override with NGINX_DNS_RESOLVER env var for environments where
