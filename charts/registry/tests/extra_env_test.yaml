@@ -291,6 +291,15 @@ tests:
       - failedTemplate:
           errorPattern: "\"BATCH_WORKER_ENABLED\" is a reserved variable"
 
+  - it: fails when extraEnv contains the otel-config name (OTEL_EXPORTER_OTLP_ENDPOINT)
+    set:
+      extraEnv:
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://oops:4317"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"OTEL_EXPORTER_OTLP_ENDPOINT\" is a reserved variable"
+
   - it: fails when extraEnv contains UI_TITLE
     set:
       extraEnv:

@@ -426,7 +426,9 @@ registry:
       maxSuggestions: "3"            # Cap on advisory suggestions per request.
 
     # OpenTelemetry direct OTLP push export configuration
-    otelOtlpEndpoint: ""  # OTLP endpoint URL (e.g., https://otlp.datadoghq.com)
+    # Standard OTel SDK var. Setting this activates the OTLP push exporter.
+    otelExporterOtlpEndpoint: ""  # OTLP endpoint URL (e.g., http://otel-collector:4317)
+    otelOtlpEndpoint: ""  # metrics-service OTLP endpoint (legacy; metrics-service removed in 1.26.0)
     otelExporterOtlpHeaders: ""  # OTLP headers (e.g., dd-api-key=YOUR_KEY)
     otelOtlpExportIntervalMs: "30000"  # Export interval in milliseconds
     otelExporterOtlpMetricsTemporalityPreference: "cumulative"  # cumulative or delta
@@ -620,6 +622,10 @@ auth-server:
 
     internalTokenTtlSeconds: "30"        # Token lifetime (seconds); the replay-window cap (min 5)
     internalTokenLeewaySeconds: "5"      # Clock-skew leeway (seconds) on token exp/iat
+
+  metrics:
+    # Standard OTel SDK var. Setting this activates the OTLP push exporter.
+    otelExporterOtlpEndpoint: ""  # OTLP endpoint URL (e.g., http://otel-collector:4317)
 
   keycloak:
     enabled: true

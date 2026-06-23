@@ -245,6 +245,10 @@ metrics:
   otelExportIntervalMs: "15000"
   exporterPrometheusHost: "0.0.0.0"
   exporterPrometheusPort: "9464"
+  # Standard OTel SDK var. Setting this activates the OTLP push exporter (the
+  # entrypoint wraps uvicorn with opentelemetry-instrument) and is read by
+  # auth_server/server.py. Default empty: pull-only via the prometheus listener.
+  otelExporterOtlpEndpoint: ""  # OTLP endpoint URL (e.g., http://otel-collector:4317)
 
 # Metrics scrape configuration (Issue #1122)
 # Controls the NetworkPolicy that gates the OTel exporter-prometheus port.
