@@ -2791,6 +2791,241 @@ class TestMcpProxyEndpointHeaderPassthrough:
 
         assert response.status_code == 401
 
+    def test_egress_consent_emits_url_elicitation_required_error(self):
+        """When egress is on and the user has no token, a tools/call gets the
+        2025-11-25 URLElicitationRequiredError (-32042) whose data.elicitations[]
+        carries a mode:url elicitation with an elicitationId and the connect URL.
+        """
+        import auth_server.server as server_module
+
+        vend = {
+            "consent_required": True,
+            "connect_url": "https://gw.example.com/oauth2/egress/connect?server=%2Fgithub",
+            "request_state": "AEAD-blob",
+            "provider": "github",
+        }
+
+        async def _consent_vend(token, server):
+            return vend
+
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", _consent_vend),
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/github",
+                json={"jsonrpc": "2.0", "id": 7, "method": "tools/call"},
+                headers=_mcp_proxy_token_headers(server_name="github"),
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["id"] == 7
+        assert "result" not in body
+        err = body["error"]
+        assert err["code"] == -32042
+        elicitations = err["data"]["elicitations"]
+        assert len(elicitations) == 1
+        e = elicitations[0]
+        assert e["mode"] == "url"
+        assert e["elicitationId"]  # present and non-empty
+        # connect URL is preserved and carries the elicitationId for correlation
+        assert e["url"].startswith(vend["connect_url"])
+        assert "elicitationId=" in e["url"]
+        assert "github" in e["message"]
+
+    def test_egress_consent_answers_initialize_locally(self):
+        """For an egress server with no vaulted token, the gateway must answer
+        initialize LOCALLY (not proxy it). The upstream (e.g. GitHub) is itself an
+        OAuth RS that 401s every call including initialize; proxying it tokenless
+        would 401 the handshake and a legacy client could never reach tools/call.
+        initialize is capability negotiation with the gateway, so it is answered
+        here -- the handshake completes and the client proceeds to the
+        token-requiring methods where consent is surfaced.
+        """
+        import auth_server.server as server_module
+
+        vend = {
+            "consent_required": True,
+            "connect_url": "https://gw.example.com/oauth2/egress/connect?server=%2Fgithub",
+            "provider": "github",
+        }
+
+        async def _consent_vend(token, server):
+            return vend
+
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", _consent_vend),
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/github",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {"protocolVersion": "2025-11-25"},
+                },
+                headers=_mcp_proxy_token_headers(server_name="github"),
+            )
+
+        # Local initialize result -- no upstream proxied, no consent error.
+        assert response.status_code == 200
+        body = response.json()
+        assert body["id"] == 1
+        assert "error" not in body
+        result = body["result"]
+        assert result["protocolVersion"] == "2025-11-25"
+        assert "capabilities" in result
+        assert result["serverInfo"]["name"] == "mcp-gateway-registry"
+
+    def test_egress_consent_acks_notifications_locally(self):
+        """notifications/* carry no result; for a tokenless egress server the
+        gateway acks them locally (202) rather than proxying to the 401-ing
+        upstream."""
+        import auth_server.server as server_module
+
+        vend = {
+            "consent_required": True,
+            "connect_url": "https://gw.example.com/oauth2/egress/connect?server=%2Fgithub",
+            "provider": "github",
+        }
+
+        async def _consent_vend(token, server):
+            return vend
+
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", _consent_vend),
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/github",
+                json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+                headers=_mcp_proxy_token_headers(server_name="github"),
+            )
+
+        assert response.status_code == 202
+
+    def test_egress_consent_tools_list_returns_synthetic_connect_tool(self):
+        """tools/list cannot carry an InputRequiredResult and must NOT error
+        (erroring dead-ends clients -- they mark the server failed and never call
+        a tool). The tools spec lets tools/list return an auth-dependent set, so
+        for a tokenless egress server the gateway answers LOCALLY with a single
+        synthetic connect tool the model can invoke to start consent.
+        """
+        import auth_server.server as server_module
+
+        vend = {
+            "consent_required": True,
+            "connect_url": "https://gw.example.com/oauth2/egress/connect?server=%2Fgithub",
+            "provider": "github",
+        }
+
+        async def _consent_vend(token, server):
+            return vend
+
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", _consent_vend),
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/github",
+                json={"jsonrpc": "2.0", "id": 9, "method": "tools/list"},
+                headers=_mcp_proxy_token_headers(server_name="github"),
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert "error" not in body
+        tools = body["result"]["tools"]
+        assert len(tools) == 1
+        assert tools[0]["name"] == server_module._EGRESS_CONNECT_TOOL_NAME
+        assert "github" in tools[0]["title"]
+        # input schema must be a valid empty-object schema (spec requirement)
+        assert tools[0]["inputSchema"]["type"] == "object"
+
+    def test_egress_consent_tools_call_on_connect_tool_elicits(self):
+        """Calling the synthetic connect tool returns the -32042
+        URLElicitationRequiredError, which is the whole point of advertising it."""
+        import auth_server.server as server_module
+
+        vend = {
+            "consent_required": True,
+            "connect_url": "https://gw.example.com/oauth2/egress/connect?server=%2Fgithub",
+            "request_state": "AEAD-blob",
+            "provider": "github",
+        }
+
+        async def _consent_vend(token, server):
+            return vend
+
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", _consent_vend),
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/github",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 5,
+                    "method": "tools/call",
+                    "params": {"name": server_module._EGRESS_CONNECT_TOOL_NAME, "arguments": {}},
+                },
+                headers=_mcp_proxy_token_headers(server_name="github"),
+            )
+
+        assert response.status_code == 200
+        err = response.json()["error"]
+        assert err["code"] == -32042
+        e = err["data"]["elicitations"][0]
+        assert e["mode"] == "url"
+        assert e["url"].startswith(vend["connect_url"])
+
+    def test_egress_connect_tool_short_circuits_after_token_vaulted(self):
+        """After consent (vend HITs), a client that loops on the synthetic
+        connect_account tool must NOT have that name proxied upstream (the upstream
+        404s it -> -32602 -> loop). The gateway returns a success tool result so
+        the model lists tools again and uses the real, now-available ones.
+        """
+        import auth_server.server as server_module
+
+        # vend HIT: token present
+        vend = {"access_token": "gho_real_token", "provider": "github"}
+
+        async def _hit_vend(token, server):
+            return vend
+
+        # If this proxied upstream, the test would need a mocked httpx; it must NOT
+        # reach there. No _patch_httpx_async_client -> any upstream call would error.
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", _hit_vend),
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/github",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 11,
+                    "method": "tools/call",
+                    "params": {"name": server_module._EGRESS_CONNECT_TOOL_NAME, "arguments": {}},
+                },
+                headers=_mcp_proxy_token_headers(server_name="github"),
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["id"] == 11
+        assert "error" not in body
+        result = body["result"]
+        assert result["isError"] is False
+        assert "connected" in result["content"][0]["text"].lower()
+
     def test_set_cookie_and_location_dropped_end_to_end(self):
         """End-to-end regression: even if an upstream MCP server emits
         Set-Cookie and Location, the Starlette response the gateway

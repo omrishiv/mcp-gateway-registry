@@ -159,12 +159,78 @@ def _read_mcp_filter_enabled() -> bool:
     return raw in ("true", "1", "yes")
 
 
+# The ONE canonical per-user egress bucket. The browser consent path keys the
+# vault on this value (the registry's nginx_proxied_auth enforces the cookie
+# session's auth_method == "oauth2"), so vend-read MUST resolve to the SAME value
+# for one human identity or the user loops on consent forever.
+_EGRESS_CANONICAL_PER_USER_METHOD: str = "oauth2"
+
+# Validator ``method`` values that all denote "a real human authenticated via the
+# per-user IdP" -- they are different TOKEN FORMATS / provider names for the same
+# kind of principal. A user may consent via a cookie session (reported as
+# ``session_cookie`` -> inner ``oauth2``) and later vend with a Keycloak-issued
+# bearer obtained via Dynamic Client Registration (reported as ``keycloak``), or
+# a gateway-minted JWT (``self_signed``). All must canonicalize to the SAME vault
+# bucket. NON-per-user methods (``federation-static``, ``network-trusted``) are
+# deliberately absent so they pass through raw and are rejected by the vend's
+# is_per_user_auth_method() check.
+_PER_USER_IDP_METHODS: frozenset[str] = frozenset(
+    {
+        "oauth2",
+        "session_cookie",
+        "self_signed",
+        "jwt",
+        "boto3",
+        "keycloak",
+        "entra",
+        "cognito",
+        "okta",
+        "auth0",
+        "pingfederate",
+    }
+)
+
+
+def _canonical_auth_method(validation_result: dict) -> str:
+    """The ONE canonical egress principal method, stamped into both internal tokens.
+
+    The per-user egress vault keys on this value, so consent-write and vend-read
+    MUST agree on the same bucket for one human identity -- otherwise the user
+    loops on consent forever. Different token *formats* / IdP provider names
+    represent the SAME kind of per-user principal and must therefore all
+    canonicalize to the single per-user bucket (``oauth2``), NOT the raw method
+    string:
+
+    - ``session_cookie``: the browser cookie session; the registry enforces its
+      inner ``auth_method == "oauth2"``. This is the CONSENT-WRITE side, so it
+      defines the canonical bucket value.
+    - ``self_signed``: a JWT this gateway minted (UI "generate token", or the
+      egress OAuth-facade ``/token`` mint).
+    - ``keycloak``/``entra``/``cognito``/``okta``/``auth0``/``pingfederate``: a
+      bearer issued directly by the per-user IdP -- notably what a Dynamic Client
+      Registration (DCR) client (Claude Code, Codex) presents. Without folding
+      these into ``oauth2`` the DCR vend keys on bucket ``keycloak`` while consent
+      wrote to ``oauth2`` -> permanent miss -> the DCR consent loop. (This was the
+      live DCR failure.)
+    - ``jwt``/``boto3``: other per-user token formats.
+
+    NON-per-user methods (``federation-static``, ``network-trusted``) and unknown
+    methods pass through unchanged so the vend's per-user check still rejects them.
+    Mirrors ``registry.egress_auth.service.canonical_auth_method``.
+    """
+    method = validation_result.get("method") or ""
+    if method in _PER_USER_IDP_METHODS:
+        return _EGRESS_CANONICAL_PER_USER_METHOD
+    return method
+
+
 def _attach_mcp_proxy_token(
     request: "Request",
     response: "JSONResponse",
     subject: str,
     scopes: list[str],
     server_name: str,
+    auth_method: str = "",
 ) -> None:
     """Mint and attach the X-Internal-Token for the /mcp-proxy hop.
 
@@ -174,9 +240,28 @@ def _attach_mcp_proxy_token(
     mcp_proxy can ignore the forgeable inbound headers. If minting fails (e.g.
     empty subject), no token is attached: mcp_proxy then rejects (fail-closed)
     rather than trusting unsigned headers.
+
+    ``auth_method`` is the canonical egress principal method; pass
+    ``_canonical_auth_method(validation_result)`` at the call sites, NOT the raw
+    ``validation_result["method"]``.
+
+    When ``AUTH_SERVER_NGINX_MARKER_SECRET`` is configured, the token is
+    minted ONLY if nginx force-set the matching ``X-Validate-Source-Secret`` on
+    this subrequest. Empty marker = disabled (mints unconditionally; the
+    upstream cross-check still applies).
     """
     resolved_upstream = request.headers.get("X-Resolved-Upstream", "")
     if not resolved_upstream:
+        return
+
+    marker = settings.auth_server_nginx_marker_secret
+    if marker and not secrets.compare_digest(
+        request.headers.get("X-Validate-Source-Secret", ""), marker
+    ):
+        logger.warning(
+            "/validate: X-Resolved-Upstream present but nginx marker missing/mismatched; "
+            "refusing to mint mcp-proxy token (possible direct-:8888 bypass)"
+        )
         return
     try:
         response.headers["X-Internal-Token"] = mint_mcp_proxy_token(
@@ -184,6 +269,7 @@ def _attach_mcp_proxy_token(
             scopes=scopes,
             server_name=server_name,
             upstream_url=resolved_upstream,
+            auth_method=auth_method,
         )
     except ValueError as exc:
         logger.error(f"/validate: could not mint mcp-proxy token: {exc}")
@@ -2034,6 +2120,7 @@ async def validate_request(request: Request):
                     subject="federation-peer",
                     scopes=federation_scopes,
                     server_name="",
+                    auth_method="federation-static",
                 )
                 # Federation peers have no session row; the registry resolves
                 # nothing server-side (no groups), and _derive_user_context
@@ -2104,6 +2191,7 @@ async def validate_request(request: Request):
                         subject=identity["username"],
                         scopes=identity["scopes"],
                         server_name="",
+                        auth_method="network-trusted",
                     )
                     # Network-trusted static-token callers have no session row;
                     # the registry uses the claim's groups directly. Minting here
@@ -2702,12 +2790,18 @@ async def validate_request(request: Request):
         response.headers["X-Tool-Name"] = tool_name or ""
         response.headers["X-Groups"] = " ".join(validation_result.get("groups", []))
 
+        # Canonical egress principal method: cookie callers resolve to
+        # "oauth2" (the session record's value), not the literal "session_cookie".
+        # Both internal tokens stamp THIS so consent-write and vend-read agree.
+        _canon_auth_method = _canonical_auth_method(validation_result)
+
         _attach_mcp_proxy_token(
             request,
             response,
             subject=validation_result.get("username") or "",
             scopes=user_scopes,
             server_name=server_name or "",
+            auth_method=_canon_auth_method,
         )
 
         # Registry /api/ hop token. Discriminate cookie vs JWT-bearer: the cookie
@@ -2723,7 +2817,10 @@ async def validate_request(request: Request):
             subject=validation_result.get("username") or "",
             session_id=_registry_session_id,
             groups=validation_result.get("groups", []),
-            auth_method=validation_result.get("method") or "",
+            # Canonical: was validation_result["method"] (== "session_cookie"
+            # for cookie users) while the registry overrides to "oauth2" -- the two
+            # disagreed. Stamp the canonical value so they match.
+            auth_method=_canon_auth_method,
             client_id=validation_result.get("client_id") or "",
         )
 
@@ -4286,6 +4383,310 @@ def _forward_headers(
     return forwarded
 
 
+# Headers that MUST be stripped before injecting a vaulted egress token:
+# the user's gateway IdP JWT / session cookie / X-Authorization are full gateway
+# credentials and must never reach a third-party SaaS upstream; the X-User*/
+# X-Internal-Token/X-Scopes family is gateway-internal identity/routing. Only
+# applied on the oauth_user egress path (other servers keep existing behavior).
+_EGRESS_STRIP_HEADERS: frozenset[str] = frozenset(
+    {
+        "authorization",
+        "x-authorization",
+        "proxy-authorization",
+        "cookie",
+        "x-user",
+        "x-username",
+        "x-client-id",
+        "x-scopes",
+        "x-auth-method",
+        "x-server-name",
+        "x-tool-name",
+        "x-groups",
+        "x-internal-token",
+        "x-user-pool-id",
+        "x-region",
+        "x-original-url",
+    }
+)
+
+
+async def _vend_egress_token(
+    internal_proxy_token: str,
+    server_first_segment: str,
+) -> dict | None:
+    """Call the registry's internal egress-token vend endpoint.
+
+    Forwards the verified X-Internal-Token; the registry re-verifies it,
+    re-derives sub/auth_method from the signed claims, runs the allowlist
+    and upstream cross-check, and vends. Returns the JSON response dict, or
+    None on transport failure (treated as a clean miss -> consent).
+    """
+    from registry.auth.internal import generate_internal_token
+
+    base = settings.egress_registry_internal_url.rstrip("/")
+    try:
+        service_token = generate_internal_token(subject="auth-server", purpose="egress-token-vend")
+    except ValueError as exc:
+        logger.error(f"egress vend: cannot mint internal service token: {exc}")
+        return None
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{base}/_egress_internal/egress-token",
+                json={"server_path": server_first_segment},
+                headers={
+                    "Authorization": f"Bearer {service_token}",
+                    "X-Internal-Token": internal_proxy_token,
+                    "Content-Type": "application/json",
+                },
+            )
+    except httpx.HTTPError as exc:
+        logger.error(f"egress vend: registry unreachable: {exc}")
+        return None
+
+    if resp.status_code != 200:
+        logger.warning(f"egress vend: registry returned {resp.status_code}")
+        return None
+    try:
+        return resp.json()
+    except ValueError:
+        return None
+
+
+# JSON-RPC client requests on which MCP permits an InputRequiredResult (MRTR
+# spec: only tools/call, prompts/get, resources/read). Emitting it on any other
+# method (e.g. initialize, tools/list) would be a protocol violation, so those
+# get a plain JSON-RPC error instead.
+_ELICITATION_PERMITTED_METHODS: frozenset[str] = frozenset(
+    {"tools/call", "prompts/get", "resources/read"}
+)
+
+# Name of the synthetic "connect" tool the gateway advertises for an egress
+# server whose per-user token is not yet vaulted. The real upstream tool list
+# requires the third-party token (the upstream is an OAuth RS), so the gateway
+# cannot enumerate it for an unconnected user. Per the tools spec, tools/list
+# MUST return a result (it MAY be empty / MAY vary by authorization) -- it must
+# NOT error. So we surface a single tool the model can invoke to start consent;
+# calling it returns the url-mode elicitation. After the user connects, the
+# vend HITs and the real upstream tools are proxied (and the gateway can emit
+# notifications/tools/list_changed so the client re-fetches).
+_EGRESS_CONNECT_TOOL_NAME: str = "connect_account"
+
+
+def _egress_connect_tool(provider: str) -> dict:
+    """The synthetic connect tool advertised in tools/list before consent."""
+    return {
+        "name": _EGRESS_CONNECT_TOOL_NAME,
+        "title": f"Connect your {provider} account",
+        "description": (
+            f"Connect your {provider} account to use this server's tools. "
+            "Run this tool to start the one-time account connection; once "
+            "connected, this server's real tools become available."
+        ),
+        "inputSchema": {"type": "object", "additionalProperties": False},
+    }
+
+
+def _local_tools_list_response(req_id: object, provider: str):
+    """Answer tools/list LOCALLY with just the synthetic connect tool.
+
+    For an egress server with no vaulted token, the upstream tool list is not
+    reachable (it needs the token). Returning an error here dead-ends clients
+    (they mark the server failed and never call a tool). The tools spec requires
+    tools/list to return a result that MAY be empty / MAY vary by authorization,
+    so we return a single connect tool: a concrete affordance the model/user can
+    invoke to trigger the url-mode consent elicitation.
+    """
+    return JSONResponse(
+        status_code=200,
+        content={
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {"tools": [_egress_connect_tool(provider)]},
+        },
+    )
+
+
+def _connect_tool_success_response(req_id: object, provider: str):
+    """Answer a ``tools/call`` for the synthetic connect tool AFTER the token is
+    vaulted, without proxying to the upstream.
+
+    The synthetic ``connect_account`` tool only exists pre-consent (to give the
+    model something to invoke). Once the token is vaulted the vend HITs, but a
+    client that loops on ``connect_account`` (e.g. codex) would otherwise have the
+    gateway forward that synthetic name to the upstream, which rejects it with
+    ``-32602 unknown tool`` -- an infinite loop. Instead, return a success tool
+    result telling the model the account is connected and to use the real tools.
+    The ``tools/list`` it issues next now HITs and proxies the upstream's real
+    tools (the synthetic tool is gone), so the model can proceed.
+    """
+    return JSONResponse(
+        status_code=200,
+        content={
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            f"Your {provider} account is connected. This server's "
+                            "tools are now available -- list tools again and call the "
+                            "one you need."
+                        ),
+                    }
+                ],
+                "isError": False,
+            },
+        },
+    )
+
+
+# Protocol version the gateway advertises when it answers `initialize` locally
+# (the fallback used if the client did not state one). The handshake is a
+# capability negotiation between the client and THIS server (the gateway); per
+# the MCP lifecycle spec it does not require contacting the upstream, so the
+# gateway answers it itself for an egress server whose token is not yet vaulted.
+_DEFAULT_PROTOCOL_VERSION: str = "2025-11-25"
+
+
+def _local_initialize_response(req_id: object, incoming_payload: object):
+    """Answer an MCP ``initialize`` locally, without proxying to the upstream.
+
+    For an egress-configured server whose per-user token is NOT yet vaulted, the
+    upstream (e.g. GitHub) is itself an OAuth resource server that 401s every
+    call -- including ``initialize``. But ``initialize`` is capability
+    negotiation between the client and the gateway; the MCP lifecycle spec does
+    not require it to reach the upstream. Answering it here lets the (legacy,
+    handshake-based) client complete the handshake so it can proceed to the
+    token-requiring methods, where the egress consent elicitation is surfaced.
+
+    The protocol version echoes the client's requested version when present so
+    the client does not see a version it did not ask for.
+    """
+    requested_version = _DEFAULT_PROTOCOL_VERSION
+    if isinstance(incoming_payload, dict):
+        params = incoming_payload.get("params")
+        if isinstance(params, dict) and params.get("protocolVersion"):
+            requested_version = params["protocolVersion"]
+    return JSONResponse(
+        status_code=200,
+        content={
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {
+                "protocolVersion": requested_version,
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "mcp-gateway-registry", "version": "1.0.0"},
+            },
+        },
+    )
+
+
+def _egress_consent_response(
+    server_name: str,
+    incoming_method: str | None,
+    req_id: object,
+    vend: dict,
+):
+    """Build the consent-required response for an egress server with no token.
+
+    Implements the ``2025-11-25`` URL-mode elicitation OAuth pattern: on a
+    ``tools/call`` (etc.) that needs a third-party token the user has not yet
+    granted, the server returns a ``URLElicitationRequiredError`` (JSON-RPC error
+    code ``-32042``) whose ``data.elicitations[]`` carries a ``mode: "url"``
+    elicitation with a unique ``elicitationId`` and the gateway connect URL. The
+    client gets user consent, opens the URL (third-party OAuth happens out of
+    band, token vaulted by the gateway), then retries the original ``tools/call``.
+
+    Spec: https://modelcontextprotocol.io/specification/2025-11-25/client/elicitation
+    (URL Elicitation Required Error). ``-32042`` is the documented signal and is a
+    JSON-RPC *error*, so a client that does not understand it still does not
+    mistake it for success.
+
+    NOTE: the ``2026-07-28``/draft MRTR ``InputRequiredResult`` (a *result* with
+    ``resultType: "input_required"``) is a DIFFERENT, later mechanism that
+    replaced server-initiated requests; current clients negotiate ``2025-11-25``
+    and do not understand it, so we emit ``-32042`` here.
+    """
+    connect_url = vend.get("connect_url") or vend.get("authorize_url") or ""
+    provider = vend.get("provider") or "the provider"
+    message = f"Connect your {provider} account to use this server."
+    # A short, unique correlation handle for this elicitation. It is only an
+    # identifier the connect route can echo back via
+    # notifications/elicitation/complete -- it carries NO state and needs no
+    # integrity (the real principal/TTL binding lives in the session-verified
+    # connect route + the vend's request_state). Must stay short: it is appended
+    # to the connect URL, and using the ~700-char AEAD request_state blob here
+    # blew the elicitation URL past client length limits (kiro rejected it).
+    elicitation_id = secrets.token_urlsafe(12)
+
+    if incoming_method in _ELICITATION_PERMITTED_METHODS and connect_url:
+        logger.info(
+            "mcp_proxy: egress consent required for server=%s method=%s; "
+            "returning URLElicitationRequiredError (-32042, url-mode)",
+            server_name,
+            incoming_method,
+        )
+        # Thread the elicitationId into the connect URL so the connect route can
+        # correlate completion (and per spec, the connect URL is what enforces
+        # the same-user anti-phishing check, not the third-party endpoint).
+        sep = "&" if "?" in connect_url else "?"
+        url_with_id = (
+            f"{connect_url}{sep}{urllib.parse.urlencode({'elicitationId': elicitation_id})}"
+        )
+        return JSONResponse(
+            status_code=200,
+            content={
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "error": {
+                    "code": -32042,
+                    "message": message,
+                    "data": {
+                        "elicitations": [
+                            {
+                                "mode": "url",
+                                "elicitationId": elicitation_id,
+                                "url": url_with_id,
+                                "message": message,
+                            }
+                        ]
+                    },
+                },
+            },
+        )
+
+    # Method is not one the URLElicitationRequiredError pattern applies to, or we
+    # have no connect URL: return a generic JSON-RPC error that still carries the
+    # connect URL so a human can self-serve. (In practice the dispatch routes
+    # tools/list and notifications elsewhere, so this is a defensive fallback.)
+    logger.info(
+        "mcp_proxy: egress consent required for server=%s method=%s; "
+        "returning generic JSON-RPC error (no url-elicitation for this method)",
+        server_name,
+        incoming_method,
+    )
+    return JSONResponse(
+        status_code=200,
+        content={
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "error": {
+                "code": -32001,
+                "message": (
+                    f"{message} Visit: {connect_url}" if connect_url else message
+                ),
+                "data": {
+                    "connect_url": connect_url,
+                    "reason": "egress_consent_required",
+                },
+            },
+        },
+    )
+
+
 def _select_forwarded_response_headers(
     upstream_headers: Mapping[str, str],
 ) -> dict[str, str]:
@@ -4366,6 +4767,7 @@ async def mcp_proxy(
     # Determine the JSON-RPC method (best-effort; non-JSON bodies pass
     # through as-is).
     incoming_method: str | None = None
+    incoming_payload: object = None
     try:
         if request_body:
             incoming_payload = json.loads(request_body.decode("utf-8"))
@@ -4380,6 +4782,101 @@ async def mcp_proxy(
     filter_enabled = _read_mcp_filter_enabled()
     max_body_bytes = _read_mcp_proxy_max_body_bytes()
     forward_headers = _forward_headers(dict(request.headers))
+
+    # Per-user egress credential vault. When the feature is on, ask the
+    # registry to vend this user's third-party token for the resolved server. The
+    # registry re-verifies the signed proxy token, enforces per-user/upstream
+    # authz, and returns consent_required for non-oauth_user servers.
+    # On a real vend we strip the user's own gateway credentials/identity
+    # before injecting the vaulted token. On a consent-required miss for an
+    # egress-configured server we DO NOT forward unauthenticated -- we ask the
+    # user to connect via MCP URL-mode elicitation (see _egress_consent_response).
+    if settings.egress_auth_enabled:
+        internal_proxy_token = request.headers.get("X-Internal-Token", "")
+        if internal_proxy_token:
+            server_first_segment = (server_name or "").split("/", 1)[0]
+            vend = await _vend_egress_token(internal_proxy_token, server_first_segment)
+            if vend and vend.get("access_token"):
+                # Token is vaulted (consent done). If the client is calling the
+                # SYNTHETIC connect tool (it only existed pre-consent), do NOT
+                # forward that name upstream -- the upstream would reject it with
+                # -32602 unknown tool, looping a client (codex) that keeps calling
+                # connect_account. Answer locally with a success result so the
+                # model lists tools again and gets the real, now-available set.
+                if incoming_method == "tools/call":
+                    _called_tool = ""
+                    if isinstance(incoming_payload, dict):
+                        _params = incoming_payload.get("params")
+                        if isinstance(_params, dict):
+                            _called_tool = _params.get("name") or ""
+                    if _called_tool == _EGRESS_CONNECT_TOOL_NAME:
+                        _req_id = incoming_payload.get("id") if isinstance(
+                            incoming_payload, dict
+                        ) else None
+                        logger.info(
+                            "mcp_proxy: egress server=%s connected; short-circuiting "
+                            "synthetic connect_account call with success (token vaulted)",
+                            server_name,
+                        )
+                        return _connect_tool_success_response(
+                            _req_id, vend.get("provider") or "the provider"
+                        )
+                forward_headers = {
+                    k: v
+                    for k, v in forward_headers.items()
+                    if k.lower() not in _EGRESS_STRIP_HEADERS
+                }
+                forward_headers["Authorization"] = f"Bearer {vend['access_token']}"
+            elif vend and (vend.get("connect_url") or vend.get("authorize_url")):
+                # Egress is configured for this server but the user has no usable
+                # token, and the upstream is itself an OAuth resource server that
+                # 401s every call (including initialize). Break the handshake
+                # deadlock by handling the non-upstream methods at the gateway:
+                #
+                #   - initialize: answered LOCALLY (capability negotiation with the
+                #     client; the lifecycle spec does not require reaching the
+                #     upstream). Lets a legacy handshake-based client complete the
+                #     handshake instead of seeing the upstream's 401.
+                #   - notifications/*: acked locally (no response body expected).
+                #   - tools/list: answered LOCALLY with a single synthetic
+                #     "connect" tool. The real upstream list needs the token, and
+                #     erroring here dead-ends clients; the tools spec lets
+                #     tools/list return an auth-dependent (here: connect-only) set.
+                #   - tools/call (and prompts/get, resources/read): need the
+                #     third-party token, so we ask the user to connect via MCP
+                #     URL-mode elicitation. The gateway is the MCP server's OAuth
+                #     client to the provider; the token never transits the MCP
+                #     client, which performs no OAuth itself (it opens the connect
+                #     URL and retries). Spec:
+                #     https://modelcontextprotocol.io/specification/draft/client/elicitation
+                req_id = (
+                    incoming_payload.get("id") if isinstance(incoming_payload, dict) else None
+                )
+                if incoming_method == "initialize":
+                    logger.info(
+                        "mcp_proxy: egress server=%s has no token; answering "
+                        "initialize locally to complete the handshake",
+                        server_name,
+                    )
+                    return _local_initialize_response(req_id, incoming_payload)
+                if incoming_method and incoming_method.startswith("notifications/"):
+                    # Notifications have no result; ack with 202 and no body.
+                    return Response(status_code=202)
+                if incoming_method == "tools/list":
+                    logger.info(
+                        "mcp_proxy: egress server=%s has no token; advertising the "
+                        "synthetic connect tool in tools/list",
+                        server_name,
+                    )
+                    return _local_tools_list_response(
+                        req_id, vend.get("provider") or "the provider"
+                    )
+                return _egress_consent_response(
+                    server_name=server_name,
+                    incoming_method=incoming_method,
+                    req_id=req_id,
+                    vend=vend,
+                )
 
     logger.info(
         f"mcp_proxy: server={server_name} method={incoming_method} filter_enabled={filter_enabled}"

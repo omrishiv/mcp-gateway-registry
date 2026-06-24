@@ -386,6 +386,28 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("update_check_interval_hours", "Poll Interval (hours)", False),
         ],
     },
+    "egress_credential_vault": {
+        "title": "Egress Credential Vault",
+        "order": 25,
+        "fields": [
+            ("egress_auth_enabled", "Enabled", False),
+            ("secret_store_backend", "Secret Store Backend", False),
+            ("egress_oauth_callback_base_url", "OAuth Callback Base URL", False),
+            ("egress_token_refresh_skew_seconds", "Token Refresh Skew (s)", False),
+            ("egress_refresh_worker_interval_seconds", "Refresh Worker Interval (s)", False),
+            ("egress_state_ttl_seconds", "OAuth State TTL (s)", False),
+            ("egress_registry_internal_url", "Registry Internal Vend URL", False),
+            # secrets-manager backend
+            ("secrets_manager_kms_key_id", "Secrets Manager KMS Key ID", True),
+            ("secrets_manager_path_prefix", "Secrets Manager Path Prefix", False),
+            # openbao backend
+            ("openbao_addr", "OpenBao Address", False),
+            ("openbao_namespace", "OpenBao Namespace", False),
+            ("openbao_kv_mount", "OpenBao KV Mount", False),
+            ("openbao_auth_method", "OpenBao Auth Method", False),
+            ("openbao_role", "OpenBao Role", False),
+        ],
+    },
 }
 
 

@@ -383,8 +383,7 @@ class NginxConfigService:
             _atomic_write_text(settings.nginx_config_path, config_content)
 
             logger.info(
-                f"Generated Nginx configuration with location blocks "
-                f"and additional server names"
+                "Generated Nginx configuration with location blocks and additional server names"
             )
 
             await asyncio.to_thread(self.reload_nginx, force_base_config)
@@ -651,6 +650,13 @@ class NginxConfigService:
                 "{{ADDITIONAL_SERVER_NAMES}}", additional_server_names
             )
             config_content = config_content.replace("{{ANTHROPIC_API_VERSION}}", api_version)
+            # egress marker: force-set on the /validate subrequest so a direct
+            # :8888 caller cannot supply it. Empty default leaves the header empty
+            # (marker disabled), matching auth_server's empty-secret pass-through.
+            config_content = config_content.replace(
+                "{{NGINX_MARKER_SECRET}}",
+                os.environ.get("AUTH_SERVER_NGINX_MARKER_SECRET", ""),
+            )
             config_content = config_content.replace("{{KEYCLOAK_SCHEME}}", keycloak_scheme)
             config_content = config_content.replace("{{KEYCLOAK_HOST}}", keycloak_host)
             config_content = config_content.replace("{{KEYCLOAK_PORT}}", keycloak_port)
@@ -825,7 +831,9 @@ class NginxConfigService:
                 logger.info("Skipping Nginx reload due to configuration errors")
                 return False
 
-            result = subprocess.run(["nginx", "-s", "reload"], capture_output=True, text=True, timeout=5)  # nosec B603 B607 - hardcoded command
+            result = subprocess.run(
+                ["nginx", "-s", "reload"], capture_output=True, text=True, timeout=5
+            )  # nosec B603 B607 - hardcoded command
             if result.returncode == 0:
                 self._last_reload_time = _time.monotonic()
                 logger.info("Nginx configuration reloaded successfully")
@@ -842,12 +850,12 @@ class NginxConfigService:
             # never come for auto-registered demo servers).
             stderr = result.stderr or ""
             if "invalid PID number" in stderr or ("open()" in stderr and "nginx.pid" in stderr):
-                logger.warning(
-                    "Nginx not yet started (pid file empty); will retry reload"
-                )
+                logger.warning("Nginx not yet started (pid file empty); will retry reload")
                 for attempt in range(10):
                     _time.sleep(1.0)
-                    retry = subprocess.run(["nginx", "-s", "reload"], capture_output=True, text=True, timeout=5)  # nosec B603 B607 - hardcoded command
+                    retry = subprocess.run(
+                        ["nginx", "-s", "reload"], capture_output=True, text=True, timeout=5
+                    )  # nosec B603 B607 - hardcoded command
                     if retry.returncode == 0:
                         self._last_reload_time = _time.monotonic()
                         logger.info(
@@ -855,9 +863,7 @@ class NginxConfigService:
                             attempt + 1,
                         )
                         return True
-                logger.error(
-                    "Nginx still not running after 10 retries; reload abandoned"
-                )
+                logger.error("Nginx still not running after 10 retries; reload abandoned")
                 return False
             logger.error(f"Failed to reload Nginx: {stderr}")
             return False
