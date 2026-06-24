@@ -1536,3 +1536,66 @@ variable "mcpgw_extra_env" {
   default     = []
   sensitive   = true
 }
+
+# ---------------------------------------------------------------------------
+# Per-user egress credential vault (third-party OBO support).
+# On ECS the natural secret store is AWS Secrets Manager (OpenBao is the EKS
+# path), so only the secrets-manager vars are wired here. iam.tf grants the
+# task role secretsmanager + kms access (scoped to the path prefix) when
+# egress_auth_enabled.
+# ---------------------------------------------------------------------------
+
+variable "egress_auth_enabled" {
+  description = "Enable the per-user egress credential vault. Default: false."
+  type        = bool
+  default     = false
+}
+
+variable "egress_secret_store_backend" {
+  description = "Egress secret store backend: secrets-manager (openbao is the EKS/Helm path)."
+  type        = string
+  default     = "secrets-manager"
+}
+
+variable "egress_oauth_callback_base_url" {
+  description = "Public base URL for the egress OAuth callback ({base}/oauth2/egress/callback)."
+  type        = string
+  default     = ""
+}
+
+variable "egress_token_refresh_skew_seconds" {
+  description = "Refresh a vaulted token this many seconds before expiry."
+  type        = number
+  default     = 300
+}
+
+variable "egress_state_ttl_seconds" {
+  description = "TTL for the AEAD-encrypted egress OAuth state blob."
+  type        = number
+  default     = 600
+}
+
+variable "egress_registry_internal_url" {
+  description = "URL the auth-server uses to reach the registry internal vend endpoint."
+  type        = string
+  default     = "http://registry:8080"
+}
+
+variable "egress_nginx_marker_secret" {
+  description = "Optional override for the nginx marker secret shared by registry + auth-server. Empty auto-generates a strong value (stored in Secrets Manager). The marker is required unconditionally -- both services refuse to start without it."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "egress_secrets_manager_kms_key_id" {
+  description = "Optional KMS CMK id/ARN for the egress Secrets Manager secrets. Empty uses the AWS-managed key."
+  type        = string
+  default     = ""
+}
+
+variable "egress_secrets_manager_path_prefix" {
+  description = "Secrets Manager name prefix for the egress vault (also scopes the task IAM grant)."
+  type        = string
+  default     = "mcp/egress"
+}
