@@ -53,14 +53,17 @@ class TestSecretStoreBackendAllowlist:
 class TestEgressCrossFieldValidation:
     def test_disabled_skips_all_checks(self, monkeypatch):
         monkeypatch.delenv("ENVIRONMENT", raising=False)
-        # egress off + file backend + no callback url: all fine
-        s = Settings(egress_auth_enabled=False, storage_backend="file")
+        # egress off + no callback url: cross-field checks are skipped entirely
+        s = Settings(egress_auth_enabled=False, egress_oauth_callback_base_url="")
         assert s.egress_auth_enabled is False
 
-    def test_l0_file_backend_rejected_when_enabled(self, monkeypatch):
+    def test_non_mongo_backend_rejected_when_enabled(self, monkeypatch):
         monkeypatch.delenv("ENVIRONMENT", raising=False)
-        with pytest.raises(ValueError, match="Mongo-family STORAGE_BACKEND"):
-            Settings(**_valid_egress_kwargs(storage_backend="file"))
+        # "documentdb" is Mongo-family and accepted; an unknown backend is
+        # rejected by the storage_backend field validator before the egress
+        # cross-field check runs. ("file" was removed in v1.24.8.)
+        with pytest.raises(ValueError, match="Invalid STORAGE_BACKEND"):
+            Settings(**_valid_egress_kwargs(storage_backend="sqlite"))
 
     @pytest.mark.parametrize("backend", ["documentdb", "mongodb-ce", "mongodb", "mongodb-atlas"])
     def test_mongo_family_backends_accepted_when_enabled(self, monkeypatch, backend):
