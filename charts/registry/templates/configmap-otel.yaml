@@ -7,6 +7,9 @@ metadata:
     app.kubernetes.io/name: {{ .Values.app.name }}
     app.kubernetes.io/component: {{ .Values.app.name }}
 data:
+  {{- if .Values.app.otelExporterOtlpEndpoint }}
+  OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.app.otelExporterOtlpEndpoint | quote }}
+  {{- end }}
   {{- if .Values.app.otelOtlpEndpoint }}
   OTEL_OTLP_ENDPOINT: {{ .Values.app.otelOtlpEndpoint | quote }}
   {{- end }}
@@ -51,4 +54,3 @@ data:
   {{- if .Values.app.disableAiRegistryToolsServer }}
   DISABLE_AI_REGISTRY_TOOLS_SERVER: {{ .Values.app.disableAiRegistryToolsServer | quote }}
   {{- end }}
-

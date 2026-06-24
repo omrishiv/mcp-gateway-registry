@@ -6,7 +6,7 @@ including credential masking validators to ensure sensitive data
 is never logged in plain text.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
@@ -281,4 +281,96 @@ class MCPServerAccessRecord(BaseModel):
     mcp_response: MCPResponse = Field(description="MCP protocol response details")
     request: Request | None = Field(
         default=None, description="HTTP request details (client_ip, forwarded_for, user_agent)"
+    )
+
+
+# =============================================================================
+# Token Mint Audit Record
+# =============================================================================
+
+
+class TokenMintAuditRecord(BaseModel):
+    """Audit record emitted at the token-signing point in the auth server.
+
+    Captures every mint (self-signed and M2M, success and failure) so reviewers
+    can answer "which servers were scoped to a token, for whom, and did it succeed".
+    No raw token material is ever stored; the username is pre-hashed by the caller.
+
+    Note on ``username_hash``: the caller hashes with SHA-256 and keeps only the
+    first 8 hex chars (32 bits, ``user_<8hex>``). This is deliberate for privacy,
+    but it is a low-entropy hash: distinct usernames can collide once the audit
+    population grows into the tens of thousands (birthday bound ~2^16). Treat the
+    hash as a privacy-preserving grouping key for analytics, not a unique user id.
+    """
+
+    timestamp: datetime = Field(
+        default_factory=lambda: datetime.now(UTC),
+        description="UTC time the mint was attempted",
+    )
+    log_type: str = Field(
+        default="token_mint",
+        description="Discriminator for the audit store",
+    )
+    version: str = Field(default="1.0", description="Schema version")
+    request_id: str = Field(
+        ...,
+        description="Fresh UUID for this mint; part of the (request_id, log_type) key",
+    )
+    correlation_id: str | None = Field(
+        default=None,
+        description="Cross-service trace id propagated from the registry",
+    )
+
+    # Who
+    username_hash: str = Field(
+        ...,
+        description="SHA-256 (8 hex) hash of the requesting user; never the raw name",
+    )
+    auth_method: str = Field(
+        ...,
+        description="oauth2, network-trusted, etc.",
+    )
+    provider: str | None = Field(
+        default=None,
+        description="cognito, keycloak, entra, etc.",
+    )
+    internal_caller: str = Field(
+        ...,
+        description="Identity of the internal service that called /internal/tokens",
+    )
+
+    # What was minted
+    token_kind: str = Field(
+        ...,
+        description="'user' (unrestricted within scopes) or 'resource' (bound)",
+    )
+    resource_type: str | None = Field(
+        default=None,
+        description="For resource-bound tokens: server, agent, peer-registry, etc.",
+    )
+    resource_id: str | None = Field(
+        default=None,
+        description="For resource-bound tokens: the resource id, e.g. 'fininfo'",
+    )
+    token_path: str = Field(
+        ...,
+        description="'self_signed' or 'm2m' (which signing path produced the token)",
+    )
+    requested_scopes: list[str] = Field(
+        default_factory=list,
+        description="Scopes requested for the token",
+    )
+    expires_in_seconds: int | None = Field(
+        default=None,
+        description="Token lifetime in seconds (None on failure before computed)",
+    )
+
+    # Outcome
+    outcome: str = Field(
+        ...,
+        description="'success' or 'failure'",
+    )
+    failure_reason: str | None = Field(
+        default=None,
+        description="Short reason when outcome='failure' (rate_limited, provider_error, ...)",
     )

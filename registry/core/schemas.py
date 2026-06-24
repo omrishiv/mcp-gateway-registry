@@ -555,9 +555,4 @@ class OAuth2Provider(BaseModel):
     icon: str | None = None
 
 
-class FaissMetadata(BaseModel):
-    """FAISS metadata model."""
 
-    id: int
-    text_for_embedding: str
-    full_server_info: ServerInfo

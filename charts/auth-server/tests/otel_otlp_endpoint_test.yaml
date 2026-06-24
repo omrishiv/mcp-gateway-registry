@@ -1,0 +1,27 @@
+suite: otel otlp push endpoint
+templates:
+  - deployment.yaml
+release:
+  name: test
+  namespace: default
+tests:
+  - it: omits OTEL_EXPORTER_OTLP_ENDPOINT when metrics.otelExporterOtlpEndpoint is empty
+    asserts:
+      # Default empty: the OTLP push exporter is not activated, so the
+      # standard SDK var must not be rendered at all (presence alone, even
+      # empty, would trip the entrypoint's opentelemetry-instrument wrap).
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OTEL_EXPORTER_OTLP_ENDPOINT
+
+  - it: emits OTEL_EXPORTER_OTLP_ENDPOINT when metrics.otelExporterOtlpEndpoint is set
+    set:
+      metrics:
+        otelExporterOtlpEndpoint: "http://otel-collector:4317"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OTEL_EXPORTER_OTLP_ENDPOINT
+            value: "http://otel-collector:4317"

@@ -1,0 +1,41 @@
+suite: otel config configmap
+templates:
+  - templates/configmap-otel.yaml
+tests:
+  - it: omits OTEL_EXPORTER_OTLP_ENDPOINT when otelExporterOtlpEndpoint is empty
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: metadata.name
+          value: registry-otel-config
+      # Default empty: the OTLP push exporter is not activated, so the
+      # standard SDK var must not be rendered at all (presence alone, even
+      # empty, would trip the entrypoint's opentelemetry-instrument wrap).
+      - notExists:
+          path: data.OTEL_EXPORTER_OTLP_ENDPOINT
+
+  - it: renders OTEL_EXPORTER_OTLP_ENDPOINT when otelExporterOtlpEndpoint is set
+    set:
+      app:
+        otelExporterOtlpEndpoint: "http://otel-collector:4317"
+    asserts:
+      - equal:
+          path: data.OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://otel-collector:4317"
+
+  - it: keeps the legacy metrics-service OTEL_OTLP_ENDPOINT distinct from the SDK var
+    set:
+      app:
+        otelExporterOtlpEndpoint: "http://otel-collector:4317"
+        otelOtlpEndpoint: "http://metrics-service:4318"
+    asserts:
+      # Both keys must render independently — conflating them is the bug
+      # this guards against (the SDK reads OTEL_EXPORTER_OTLP_ENDPOINT, the
+      # metrics-service reads OTEL_OTLP_ENDPOINT).
+      - equal:
+          path: data.OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://otel-collector:4317"
+      - equal:
+          path: data.OTEL_OTLP_ENDPOINT
+          value: "http://metrics-service:4318"
