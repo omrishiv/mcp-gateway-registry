@@ -1,0 +1,78 @@
+suite: standalone openbao init + bootstrap (egress vault)
+release:
+  name: test
+  namespace: default
+templates:
+  - templates/openbao-init.yaml
+tests:
+  - it: emits nothing when egress is disabled (default)
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: emits nothing when egress enabled but openbao subchart disabled
+    set:
+      registry:
+        egressAuth:
+          enabled: true
+      openbao:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders SA + RBAC + Job (4 docs) when egress + openbao enabled
+    set:
+      registry:
+        egressAuth:
+          enabled: true
+      openbao:
+        enabled: true
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: doc 0 is the init ServiceAccount
+    documentIndex: 0
+    set:
+      registry: {egressAuth: {enabled: true}}
+      openbao: {enabled: true}
+    asserts:
+      - isKind:
+          of: ServiceAccount
+      - equal:
+          path: metadata.name
+          value: openbao-init
+
+  - it: doc 1 is a least-privilege Role (secrets only, no delete)
+    documentIndex: 1
+    set:
+      registry: {egressAuth: {enabled: true}}
+      openbao: {enabled: true}
+    asserts:
+      - isKind:
+          of: Role
+      - equal:
+          path: rules[0].resources[0]
+          value: secrets
+      - notContains:
+          path: rules[0].verbs
+          content: delete
+
+  - it: doc 3 is the init Job, a helm hook running as the init SA
+    documentIndex: 3
+    set:
+      registry: {egressAuth: {enabled: true}}
+      openbao: {enabled: true}
+    asserts:
+      - isKind:
+          of: Job
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-install,post-upgrade
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: openbao-init
+      - equal:
+          path: spec.template.spec.restartPolicy
+          value: Never
