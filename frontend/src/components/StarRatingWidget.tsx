@@ -305,7 +305,7 @@ const StarRatingWidget: React.FC<StarRatingWidgetProps> = ({
               <div className="flex gap-2 mt-4">
                 <button
                   onClick={handleCancel}
-                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors duration-200"
+                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-800 rounded-lg transition-colors duration-200"
                 >
                   Cancel
                 </button>

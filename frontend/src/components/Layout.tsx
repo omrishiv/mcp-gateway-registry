@@ -12,6 +12,7 @@ import {
 import CloudProviderBanner from './CloudProviderBanner';
 import UpdateBanner from './UpdateBanner';
 import Sidebar from './Sidebar';
+import ThemeToggle from './ThemeToggle';
 import UptimeDisplay from './UptimeDisplay';
 import { useServerStats } from '../hooks/useServerStats';
 import { useUiTitle } from '../hooks/useUiTitle';
@@ -107,6 +108,9 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
 
             {/* Right side */}
             <div className="flex items-center space-x-4">
+              {/* Light/dark mode toggle */}
+              <ThemeToggle />
+
               {/* GitHub link */}
               <a
                 href="https://github.com/agentic-community/mcp-gateway-registry"

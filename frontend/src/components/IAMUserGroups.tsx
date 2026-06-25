@@ -21,6 +21,9 @@ import {
 import { useRegistryConfig } from '../hooks/useRegistryConfig';
 import DeleteConfirmation from './DeleteConfirmation';
 import Pagination from './Pagination';
+import ProviderBadge from './iam/ProviderBadge';
+import ListStateBoundary from './iam/ListStateBoundary';
+import { extractErrorDetail as extractDetail } from '../utils/apiError';
 
 /**
  * IAMUserGroups renders the "User Groups" tab of the IAM Settings page.
@@ -52,44 +55,10 @@ const PINGFEDERATE_PASSWORD_MIN_LENGTH = 8;
 // Mirrors the backend regex at registry/schemas/idp_user_group.py:22
 const USERNAME_REGEX = /^[A-Za-z0-9_\-.@]{1,256}$/;
 
-const PROVIDER_STYLES: Record<string, string> = {
-  manual: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300',
-  pingfederate: 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300',
-  okta: 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300',
-  auth0: 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300',
-  keycloak: 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300',
-  entra: 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300',
-};
-
 const PAGE_SIZE = 25;
 
 // Default no-op formatter for missing dates.
 const EM_DASH = '—';
-
-
-const ProviderBadge: React.FC<{ provider: string }> = ({ provider }) => {
-  const style =
-    PROVIDER_STYLES[provider] ??
-    'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300';
-  return (
-    <span
-      className={`inline-block px-2 py-0.5 text-xs rounded-full font-mono ${style}`}
-    >
-      {provider}
-    </span>
-  );
-};
-
-
-const extractDetail = (err: any, fallback: string): string => {
-  const detail = err?.response?.data?.detail;
-  if (Array.isArray(detail)) {
-    return (
-      detail.map((d: any) => d?.msg).filter(Boolean).join(', ') || fallback
-    );
-  }
-  return detail || fallback;
-};
 
 
 const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
@@ -459,25 +428,17 @@ const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
         />
       </div>
 
-      {isLoading && (
-        <div className="flex justify-center py-12">
-          <ArrowPathIcon className="h-6 w-6 text-gray-400 animate-spin" />
-        </div>
-      )}
-      {error && !isLoading && (
-        <div className="text-center py-8 text-red-500 dark:text-red-400 text-sm">
-          {error}
-        </div>
-      )}
-      {!isLoading && !error && items.length === 0 && (
-        <div className="text-center py-12 text-gray-500 dark:text-gray-400 text-sm max-w-xl mx-auto">
-          {debouncedSearch
+      <ListStateBoundary
+        isLoading={isLoading}
+        error={error}
+        isEmpty={items.length === 0}
+        emptyClassName="text-sm max-w-xl mx-auto"
+        emptyMessage={
+          debouncedSearch
             ? `No user-to-group mappings match "${debouncedSearch}".`
-            : "No user-to-group mappings yet. These are used for IdPs that don't carry group memberships in JWTs (e.g. PingFederate). Click 'Register User Group' to add one."}
-        </div>
-      )}
-
-      {!isLoading && !error && items.length > 0 && (
+            : "No user-to-group mappings yet. These are used for IdPs that don't carry group memberships in JWTs (e.g. PingFederate). Click 'Register User Group' to add one."
+        }
+      >
         <>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -511,7 +472,7 @@ const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
                   const isManual = u.provider === 'manual';
                   return (
                     <React.Fragment key={u.username}>
-                      <tr className="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50">
+                      <tr className="table-row border-b border-gray-100 dark:border-gray-800">
                         <td className="py-3 px-4 text-gray-900 dark:text-white font-medium font-mono">
                           {u.username}
                         </td>
@@ -647,7 +608,7 @@ const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
             />
           </div>
         </>
-      )}
+      </ListStateBoundary>
     </div>
   );
 
@@ -866,7 +827,7 @@ const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
         <div className="flex justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
           <button
             onClick={opts.onCancel}
-            className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600"
+            className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-800"
           >
             Cancel
           </button>

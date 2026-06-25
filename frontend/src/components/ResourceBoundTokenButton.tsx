@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { KeyIcon, ClipboardIcon, CheckIcon } from '@heroicons/react/24/outline';
 import axios from 'axios';
+import Button from './Button';
 
 export type ResourceType = 'server' | 'virtual_server' | 'agent' | 'skill';
 
@@ -92,10 +93,12 @@ const ResourceBoundTokenButton: React.FC<ResourceBoundTokenButtonProps> = ({
             be used to reach any other resource.
           </p>
         </div>
-        <button
+        <Button
+          variant="primary"
+          size="sm"
           onClick={handleGenerate}
           disabled={loading}
-          className="flex items-center gap-2 px-3 py-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm transition-colors whitespace-nowrap"
+          className="whitespace-nowrap"
         >
           {loading ? (
             <>
@@ -108,7 +111,7 @@ const ResourceBoundTokenButton: React.FC<ResourceBoundTokenButtonProps> = ({
               <span>Get bound token</span>
             </>
           )}
-        </button>
+        </Button>
       </div>
 
       {error && (

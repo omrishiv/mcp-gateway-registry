@@ -5,6 +5,7 @@ import {
   InformationCircleIcon,
 } from '@heroicons/react/24/outline';
 import DetailsModal from './DetailsModal';
+import Button from './Button';
 import type { ExistingEntity, EntityType } from '../types/duplicateCheck';
 
 
@@ -237,22 +238,12 @@ const DuplicateCheckModal: React.FC<DuplicateCheckModalProps> = ({
         )}
 
         <div className="flex justify-end gap-3 pt-2">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={isLoading}
-            className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
-          >
+          <Button variant="secondary" onClick={onClose} disabled={isLoading}>
             Edit my entry
-          </button>
-          <button
-            type="button"
-            onClick={onProceed}
-            disabled={isLoading}
-            className="px-4 py-2 text-sm font-medium text-white bg-purple-600 hover:bg-purple-700 rounded-lg disabled:opacity-50"
-          >
+          </Button>
+          <Button variant="primary" onClick={onProceed} disabled={isLoading}>
             {isLoading ? 'Registering...' : 'Register anyway'}
-          </button>
+          </Button>
         </div>
       </div>
     </DetailsModal>
