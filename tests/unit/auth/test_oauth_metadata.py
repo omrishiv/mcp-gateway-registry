@@ -190,3 +190,65 @@ class TestBuildResourceDocumentationUrl:
             url = build_resource_documentation_url()
 
         assert url == "https://docs.example.com/mcp/oauth"
+
+
+class TestBuildPerServerResourceUrl:
+    """Per-server OBO resource URL = the client connection URL (RFC 8707)."""
+
+    def test_appends_mcp_by_default(self):
+        from registry.auth.oauth_metadata import build_per_server_resource_url
+
+        assert (
+            build_per_server_resource_url("https://gw.example.com", "/obo-echo")
+            == "https://gw.example.com/obo-echo/mcp"
+        )
+
+    def test_no_double_mcp(self):
+        from registry.auth.oauth_metadata import build_per_server_resource_url
+
+        assert (
+            build_per_server_resource_url("https://gw.example.com", "/obo-echo/mcp")
+            == "https://gw.example.com/obo-echo/mcp"
+        )
+
+    def test_append_mcp_false_omits_suffix(self):
+        from registry.auth.oauth_metadata import build_per_server_resource_url
+
+        assert (
+            build_per_server_resource_url("https://gw.example.com/", "aws-knowledge", append_mcp=False)
+            == "https://gw.example.com/aws-knowledge"
+        )
+
+    def test_no_trailing_slash(self):
+        from registry.auth.oauth_metadata import build_per_server_resource_url
+
+        url = build_per_server_resource_url("https://gw.example.com", "/x")
+        assert not url.endswith("/")
+
+
+class TestBuildPerServerPrmUrl:
+    """RFC 9728 §3.1 path-aware PRM URL: well-known inserted between origin+path."""
+
+    def test_path_aware_form(self):
+        from registry.auth.oauth_metadata import build_per_server_prm_url
+
+        assert (
+            build_per_server_prm_url("https://gw.example.com", "/obo-echo")
+            == "https://gw.example.com/.well-known/oauth-protected-resource/obo-echo/mcp"
+        )
+
+    def test_no_double_mcp(self):
+        from registry.auth.oauth_metadata import build_per_server_prm_url
+
+        assert (
+            build_per_server_prm_url("https://gw.example.com", "/obo-echo/mcp")
+            == "https://gw.example.com/.well-known/oauth-protected-resource/obo-echo/mcp"
+        )
+
+    def test_append_mcp_false(self):
+        from registry.auth.oauth_metadata import build_per_server_prm_url
+
+        assert (
+            build_per_server_prm_url("https://gw.example.com", "/aws", append_mcp=False)
+            == "https://gw.example.com/.well-known/oauth-protected-resource/aws"
+        )

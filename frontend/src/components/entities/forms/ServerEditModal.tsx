@@ -34,13 +34,17 @@ export interface ServerEditForm {
   deployment: 'remote' | 'local';
   local_runtime: LocalRuntimeFormData;
   custom_headers: Array<{ name: string; value: string }>;
-  // Per-user egress credential vault (admin config). egress_provider empty == off.
+  // Egress auth to the upstream (admin config). 'none' | 'oauth_user' | 'obo_exchange'.
+  egress_auth_mode: 'none' | 'oauth_user' | 'obo_exchange';
+  // oauth_user (3LO vault) fields:
   egress_provider: string;
   egress_client_id: string;
   egress_client_secret: string; // write-only; blank on edit keeps the stored one
   egress_scopes: string; // comma/space separated
   egress_custom_authorize_url: string;
   egress_custom_token_url: string;
+  // obo_exchange (same-IdP OBO hop 1) field:
+  egress_target_audience: string;
 }
 
 interface ServerEditModalProps {
@@ -216,36 +220,80 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
           {egressEnabled && form.deployment !== 'local' && (
             <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
               <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-2">
-                Per-User Egress Auth (OAuth)
+                Egress Auth
               </h4>
               <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
-                Let each user connect their own third-party account (GitHub, Slack, …). The
-                gateway injects the user&apos;s token on egress. Leave provider blank to disable.
-                Register this callback URL in your OAuth app:{' '}
-                <code className="text-purple-600 dark:text-purple-400">
-                  {`${window.location.origin}/oauth2/egress/callback`}
-                </code>
+                How the gateway authenticates to this upstream on the user&apos;s behalf.
+                <strong> Per-user OAuth (3LO)</strong> has each user connect a third-party
+                account (GitHub, Slack, …) whose token the gateway injects.
+                <strong> OBO exchange</strong> re-audiences the user&apos;s gateway token to an
+                internal server&apos;s app via the same IdP (no per-user login).
               </p>
               <div className="space-y-3">
                 <div>
-                  <label className={LABEL}>Provider</label>
+                  <label className={LABEL}>Mode</label>
                   <select
-                    value={form.egress_provider}
+                    value={form.egress_auth_mode}
                     onChange={(e) =>
-                      setForm((prev) => ({ ...prev, egress_provider: e.target.value }))
+                      setForm((prev) => ({
+                        ...prev,
+                        egress_auth_mode: e.target.value as ServerEditForm['egress_auth_mode'],
+                      }))
                     }
                     className={FIELD}
                   >
-                    <option value="">Disabled</option>
-                    <option value="github">GitHub</option>
-                    <option value="google">Google</option>
-                    <option value="atlassian">Atlassian</option>
-                    <option value="microsoft">Microsoft</option>
-                    <option value="slack">Slack</option>
-                    <option value="custom">Custom OIDC</option>
+                    <option value="none">Disabled</option>
+                    <option value="oauth_user">Per-user OAuth (3LO)</option>
+                    <option value="obo_exchange">OBO exchange (same IdP)</option>
                   </select>
                 </div>
-                {form.egress_provider && (
+                {form.egress_auth_mode === 'obo_exchange' && (
+                  <div>
+                    <label className={LABEL}>Target Audience</label>
+                    <input
+                      type="text"
+                      value={form.egress_target_audience}
+                      onChange={(e) =>
+                        setForm((prev) => ({ ...prev, egress_target_audience: e.target.value }))
+                      }
+                      placeholder="api://your-mcp-server-app"
+                      className={FIELD}
+                    />
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                      The internal MCP server&apos;s App ID URI (Entra) or client id (Keycloak).
+                      Must differ from the gateway&apos;s own IdP client id.
+                    </p>
+                  </div>
+                )}
+                {form.egress_auth_mode === 'oauth_user' && (
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    Register this callback URL in your OAuth app:{' '}
+                    <code className="text-purple-600 dark:text-purple-400">
+                      {`${window.location.origin}/oauth2/egress/callback`}
+                    </code>
+                  </p>
+                )}
+                {form.egress_auth_mode === 'oauth_user' && (
+                  <div>
+                    <label className={LABEL}>Provider</label>
+                    <select
+                      value={form.egress_provider}
+                      onChange={(e) =>
+                        setForm((prev) => ({ ...prev, egress_provider: e.target.value }))
+                      }
+                      className={FIELD}
+                    >
+                      <option value="">Select…</option>
+                      <option value="github">GitHub</option>
+                      <option value="google">Google</option>
+                      <option value="atlassian">Atlassian</option>
+                      <option value="microsoft">Microsoft</option>
+                      <option value="slack">Slack</option>
+                      <option value="custom">Custom OIDC</option>
+                    </select>
+                  </div>
+                )}
+                {form.egress_auth_mode === 'oauth_user' && form.egress_provider && (
                   <>
                     <div>
                       <label className={LABEL}>Client ID</label>

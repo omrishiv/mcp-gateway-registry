@@ -26,12 +26,14 @@ const baseForm: ServerEditForm = {
     envRows: [],
   },
   custom_headers: [],
+  egress_auth_mode: 'none',
   egress_provider: '',
   egress_client_id: '',
   egress_client_secret: '',
   egress_scopes: '',
   egress_custom_authorize_url: '',
   egress_custom_token_url: '',
+  egress_target_audience: '',
 };
 
 // Harness that owns the form state so controlled-input edits are observable.
@@ -120,16 +122,36 @@ describe('ServerEditModal', () => {
 
   it('hides the egress section when the feature is disabled', () => {
     render(<Harness egressEnabled={false} />);
-    expect(screen.queryByText('Per-User Egress Auth (OAuth)')).not.toBeInTheDocument();
+    expect(screen.queryByText('Egress Auth')).not.toBeInTheDocument();
   });
 
   it('shows the egress section for remote servers when the feature is enabled', () => {
     render(<Harness egressEnabled />);
-    expect(screen.getByText('Per-User Egress Auth (OAuth)')).toBeInTheDocument();
+    expect(screen.getByText('Egress Auth')).toBeInTheDocument();
   });
 
   it('hides the egress section for local deployments even when enabled', () => {
     render(<Harness initial={{ ...baseForm, deployment: 'local' }} egressEnabled />);
-    expect(screen.queryByText('Per-User Egress Auth (OAuth)')).not.toBeInTheDocument();
+    expect(screen.queryByText('Egress Auth')).not.toBeInTheDocument();
+  });
+
+  it('shows the target audience field only in obo_exchange mode', () => {
+    render(<Harness initial={{ ...baseForm, egress_auth_mode: 'obo_exchange' }} egressEnabled />);
+    expect(screen.getByText('Target Audience')).toBeInTheDocument();
+    // 3LO provider picker is hidden in obo_exchange mode.
+    expect(screen.queryByText('Provider')).not.toBeInTheDocument();
+  });
+
+  it('shows the provider picker in oauth_user mode, not the target audience', () => {
+    render(<Harness initial={{ ...baseForm, egress_auth_mode: 'oauth_user' }} egressEnabled />);
+    expect(screen.getByText('Provider')).toBeInTheDocument();
+    expect(screen.queryByText('Target Audience')).not.toBeInTheDocument();
+  });
+
+  it('shows neither provider nor target audience when egress mode is none', () => {
+    render(<Harness initial={{ ...baseForm, egress_auth_mode: 'none' }} egressEnabled />);
+    expect(screen.getByText('Egress Auth')).toBeInTheDocument();
+    expect(screen.queryByText('Provider')).not.toBeInTheDocument();
+    expect(screen.queryByText('Target Audience')).not.toBeInTheDocument();
   });
 });

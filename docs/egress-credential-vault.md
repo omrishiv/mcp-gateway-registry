@@ -557,6 +557,7 @@ Users can review and revoke their connections in the UI at **Connected Accounts*
 
 ### Related documentation
 
+- [Same-IdP OBO Token Exchange (`obo_exchange`)](obo-token-exchange.md) — the stateless same-IdP sibling egress mode that shares this injection seam.
 - [Unified Parameter Reference](unified-parameter-reference.md) — per-surface variable names.
 - [Token Refresh Service](token-refresh-service.md) — the inbound token refresher (distinct from egress refresh).
 - [OAuth Discovery Endpoints](oauth-discovery-endpoints.md) — inbound RFC 9728/8414 discovery.

@@ -193,6 +193,15 @@ class EntraIdProvider(AuthProvider):
             app_id_uri = os.environ.get("ENTRA_APPLICATION_ID_URI")
             if app_id_uri:
                 accepted_audiences.append(app_id_uri.rstrip("/"))
+            # Per-server OBO resource audiences (RFC 8707). The OBO ingress token
+            # is audienced to the per-server resource URL (e.g.
+            # https://gw/<server>/mcp); the caller passes the expected value(s)
+            # for the server being accessed so we accept it without a static env
+            # list. Still a closed allowlist -- only caller-provided, registry-
+            # derived audiences are added, never a wildcard.
+            for extra in kwargs.get("extra_audiences") or []:
+                if extra:
+                    accepted_audiences.append(extra.rstrip("/"))
             claims = jwt.decode(
                 token,
                 signing_key,

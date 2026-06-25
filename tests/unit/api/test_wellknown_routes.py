@@ -723,3 +723,115 @@ class TestPrmAndResourceMetadataMatchByteForByte:
                 expected_resource_metadata
                 == f"{resource_field}/.well-known/oauth-protected-resource"
             )
+
+
+class TestPerServerOAuthProtectedResource:
+    """Tests for GET /.well-known/oauth-protected-resource/{server_path} (per-server PRM).
+
+    Serves a document ONLY for obo_exchange servers; advertises the SHARED
+    gateway resource (one Entra App ID URI for all obo servers). Non-obo or
+    unknown servers 404 so clients fall back to the global PRM.
+    """
+
+    def _settings(self):
+        s = MagicMock()
+        s.registry_url = "https://gw.example.com"
+        s.mcp_https_required = True
+        s.mcp_resource_documentation_url = None
+        s.mcp_advertised_scopes = ""
+        return s
+
+    def test_obo_server_returns_per_server_connection_url_resource(self, fake_provider):
+        s = self._settings()
+        obo_server = {"path": "/obo-echo", "egress_auth_mode": "obo_exchange"}
+        with (
+            patch("registry.api.wellknown_routes._get_active_auth_provider", return_value=fake_provider),
+            patch("registry.auth.oauth_metadata.settings", s),
+            patch("registry.api.wellknown_routes.settings", s),
+            patch(
+                "registry.api.wellknown_routes.server_service.get_server_info",
+                new=AsyncMock(return_value=obo_server),
+            ),
+        ):
+            client = TestClient(_make_oauth_discovery_app(fake_provider))
+            # path-aware discovery form the client uses (with /mcp suffix)
+            resp = client.get("/.well-known/oauth-protected-resource/obo-echo/mcp")
+            assert resp.status_code == 200
+            data = resp.json()
+            # Per-server connection URL (the only Entra-matchable + client-accepted
+            # value): https://gw/<server>/mcp, no trailing slash.
+            assert data["resource"] == "https://gw.example.com/obo-echo/mcp"
+            assert data["scopes_supported"] == [
+                "https://gw.example.com/obo-echo/mcp/user_impersonation"
+            ]
+
+    def test_append_mcp_false_server_omits_mcp_suffix(self, fake_provider):
+        s = self._settings()
+        obo_server = {
+            "path": "/aws-knowledge",
+            "egress_auth_mode": "obo_exchange",
+            "append_mcp_path": False,
+        }
+        with (
+            patch("registry.api.wellknown_routes._get_active_auth_provider", return_value=fake_provider),
+            patch("registry.auth.oauth_metadata.settings", s),
+            patch("registry.api.wellknown_routes.settings", s),
+            patch(
+                "registry.api.wellknown_routes.server_service.get_server_info",
+                new=AsyncMock(return_value=obo_server),
+            ),
+        ):
+            client = TestClient(_make_oauth_discovery_app(fake_provider))
+            resp = client.get("/.well-known/oauth-protected-resource/aws-knowledge")
+            assert resp.status_code == 200
+            assert resp.json()["resource"] == "https://gw.example.com/aws-knowledge"
+
+    def test_non_obo_server_404s(self, fake_provider):
+        s = self._settings()
+        oauth_user_server = {"path": "/github", "egress_auth_mode": "oauth_user"}
+        with (
+            patch("registry.api.wellknown_routes._get_active_auth_provider", return_value=fake_provider),
+            patch("registry.auth.oauth_metadata.settings", s),
+            patch("registry.api.wellknown_routes.settings", s),
+            patch(
+                "registry.api.wellknown_routes.server_service.get_server_info",
+                new=AsyncMock(return_value=oauth_user_server),
+            ),
+        ):
+            client = TestClient(_make_oauth_discovery_app(fake_provider))
+            resp = client.get("/.well-known/oauth-protected-resource/github/mcp")
+            assert resp.status_code == 404
+
+    def test_unknown_server_404s(self, fake_provider):
+        s = self._settings()
+        with (
+            patch("registry.api.wellknown_routes._get_active_auth_provider", return_value=fake_provider),
+            patch("registry.auth.oauth_metadata.settings", s),
+            patch("registry.api.wellknown_routes.settings", s),
+            patch(
+                "registry.api.wellknown_routes.server_service.get_server_info",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            client = TestClient(_make_oauth_discovery_app(fake_provider))
+            resp = client.get("/.well-known/oauth-protected-resource/nope/mcp")
+            assert resp.status_code == 404
+
+    def test_path_normalization_strips_mcp_suffix(self, fake_provider):
+        """The handler must look up '/obo-echo', not '/obo-echo/mcp'."""
+        s = self._settings()
+        seen = {}
+
+        async def _capture(path, *a, **k):
+            seen["path"] = path
+            return {"path": "/obo-echo", "egress_auth_mode": "obo_exchange"}
+
+        with (
+            patch("registry.api.wellknown_routes._get_active_auth_provider", return_value=fake_provider),
+            patch("registry.auth.oauth_metadata.settings", s),
+            patch("registry.api.wellknown_routes.settings", s),
+            patch("registry.api.wellknown_routes.server_service.get_server_info", new=_capture),
+        ):
+            client = TestClient(_make_oauth_discovery_app(fake_provider))
+            client.get("/.well-known/oauth-protected-resource/obo-echo/mcp")
+            assert seen["path"] == "/obo-echo"

@@ -55,6 +55,59 @@ def build_canonical_resource_url(registry_url: str) -> str:
     return registry_url.rstrip("/")
 
 
+def build_per_server_prm_url(
+    registry_url: str,
+    server_path: str,
+    append_mcp: bool = True,
+) -> str:
+    """Return the per-server PRM URL in RFC 9728 §3.1 path-aware form.
+
+    The well-known segment is inserted between the origin and the resource path:
+    ``<origin>/.well-known/oauth-protected-resource/<server>/mcp`` -- NOT appended
+    to the end of the resource. This is the URL the gateway advertises in the
+    per-server 401 ``WWW-Authenticate: resource_metadata=...`` header and the one
+    the per-server PRM route serves.
+    """
+    base = build_canonical_resource_url(registry_url)
+    seg = server_path.strip("/")
+    suffix = seg
+    if append_mcp and not suffix.endswith("mcp"):
+        suffix = f"{suffix}/mcp" if suffix else "mcp"
+    return f"{base}{WELLKNOWN_PRM_PATH}/{suffix}" if suffix else f"{base}{WELLKNOWN_PRM_PATH}"
+
+
+def build_per_server_resource_url(
+    registry_url: str,
+    server_path: str,
+    append_mcp: bool = True,
+) -> str:
+    """Return the per-server canonical resource URL (RFC 8707) for an obo server.
+
+    This equals the MCP client's CONNECTION URL for the server, which is the
+    only per-server value spec-compliant clients (RFC 9728 §3.3) accept as the
+    PRM ``resource`` and the only one Microsoft Entra can match to an App ID URI
+    (Entra forbids a trailing slash, so a bare origin -- which clients
+    canonicalize with a trailing ``/`` -- cannot be matched; a path-qualified
+    per-server URL can).
+
+    Args:
+        registry_url: the gateway public URL (``settings.registry_url``).
+        server_path: the registered server path (e.g. ``/obo-echo``).
+        append_mcp: whether the connect URL carries the ``/mcp`` transport
+            suffix (the server's ``append_mcp_path``). Most streamable-http
+            servers do; root-endpoint servers set it false.
+
+    Returns:
+        e.g. ``https://gw.example.com/obo-echo/mcp`` (no trailing slash).
+    """
+    base = build_canonical_resource_url(registry_url)
+    seg = server_path.strip("/")
+    url = f"{base}/{seg}" if seg else base
+    if append_mcp and not url.endswith("/mcp"):
+        url = f"{url}/mcp"
+    return url
+
+
 def enforce_https(
     resource_url: str,
     https_required: bool,

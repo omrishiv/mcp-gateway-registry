@@ -50,6 +50,11 @@ try:
 except ImportError:
     from auth_server.observability.meters import token_mint_total
 
+try:
+    from egress_obo import OboExchangeError, obo_exchange
+except ImportError:
+    from auth_server.egress_obo import OboExchangeError, obo_exchange
+
 # Import provider factory
 from providers.factory import get_auth_provider
 from pydantic import (
@@ -1934,6 +1939,46 @@ def _is_federation_api_request(
     return False
 
 
+def _obo_extra_audiences(server_name_from_url: str | None) -> list[str]:
+    """Per-server OBO resource audiences to accept for the server being accessed.
+
+    The OBO ingress token's ``aud`` is the per-server resource URL the gateway
+    advertised in its PRM (RFC 8707), e.g. ``https://gw/<server>/mcp``. We derive
+    it from the request's server path (already parsed from X-Original-URL) and the
+    gateway's public URL -- no static env list. Returns both the ``/mcp`` and
+    bare-path forms to be robust to the server's ``append_mcp_path``. Returns []
+    when there's no server context or no configured gateway URL.
+    """
+    if not server_name_from_url:
+        return []
+    # The token's aud is the PUBLIC per-server resource the registry advertised
+    # in its PRM, built from the PUBLIC gateway URL. On auth-server, settings.
+    # registry_url is the INTERNAL cluster URL, so prefer the public external URL
+    # (AUTH_SERVER_EXTERNAL_URL) and only fall back to registry_url.
+    registry_url = (
+        os.environ.get("AUTH_SERVER_EXTERNAL_URL", "")
+        or getattr(settings, "registry_url", "")
+        or os.environ.get("REGISTRY_URL", "")
+    )
+    if not registry_url:
+        return []
+    try:
+        from registry.auth.oauth_metadata import build_per_server_resource_url
+    except Exception:
+        return []
+    # Normalize: strip a trailing /mcp transport segment to get the server path.
+    path = "/" + server_name_from_url.strip("/")
+    if path.endswith("/mcp"):
+        path = path[: -len("/mcp")]
+    auds = []
+    try:
+        auds.append(build_per_server_resource_url(registry_url, path, append_mcp=True))
+        auds.append(build_per_server_resource_url(registry_url, path, append_mcp=False))
+    except ValueError:
+        return []
+    return auds
+
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
@@ -2312,8 +2357,21 @@ async def validate_request(request: Request):
 
                     # Provider-specific validation
                     if hasattr(auth_provider, "validate_token"):
-                        # For Keycloak, no additional headers needed
-                        validation_result = auth_provider.validate_token(access_token)
+                        # For an OBO ingress token, the aud is the per-server
+                        # resource URL (RFC 8707, e.g. https://gw/<server>/mcp).
+                        # Pass the expected per-server audience for the server being
+                        # accessed so Entra validation accepts it without a static
+                        # env allowlist (registry-derived, still a closed set).
+                        # Pass defensively: providers/mocks whose validate_token
+                        # does not accept the kwarg still work (fall back to the
+                        # bare call).
+                        extra_audiences = _obo_extra_audiences(server_name_from_url)
+                        try:
+                            validation_result = auth_provider.validate_token(
+                                access_token, extra_audiences=extra_audiences
+                            )
+                        except TypeError:
+                            validation_result = auth_provider.validate_token(access_token)
                         logger.info(
                             f"Token validation successful using {auth_provider.__class__.__name__}"
                         )
@@ -3126,9 +3184,7 @@ async def generate_user_token(
                 auth_method=user_context.get("auth_method", "unknown"),
                 provider=user_context.get("provider"),
                 internal_caller=caller,
-                token_kind=(
-                    TokenKind.RESOURCE.value if request.resource else TokenKind.USER.value
-                ),
+                token_kind=(TokenKind.RESOURCE.value if request.resource else TokenKind.USER.value),
                 resource_type=(request.resource.type.value if request.resource else None),
                 resource_id=(request.resource.id if request.resource else None),
                 token_path="unknown",
@@ -3239,9 +3295,7 @@ async def generate_user_token(
                 auth_method=auth_method,
                 provider=provider,
                 internal_caller=caller,
-                token_kind=(
-                    TokenKind.RESOURCE.value if request.resource else TokenKind.USER.value
-                ),
+                token_kind=(TokenKind.RESOURCE.value if request.resource else TokenKind.USER.value),
                 resource_type=(request.resource.type.value if request.resource else None),
                 resource_id=(request.resource.id if request.resource else None),
                 token_path="self_signed",
@@ -4715,6 +4769,43 @@ def _connect_tool_success_response(req_id: object, provider: str):
     )
 
 
+def _ingress_subject_token(request: "Request") -> str:
+    """Extract the raw ingress JWT to use as the OBO exchange subject.
+
+    nginx forwards both ``X-Authorization`` and ``Authorization`` to this hop.
+    Precedence matches /validate (X-Authorization first), then Authorization.
+    Returns "" when neither carries a bearer token -- e.g. session-cookie or
+    M2M callers, for which OBO is impossible (the caller must use a JWT).
+    """
+    for header in ("X-Authorization", "Authorization"):
+        raw = request.headers.get(header, "")
+        if raw and raw.lower().startswith("bearer "):
+            return raw[len("bearer ") :].strip()
+    return ""
+
+
+def _obo_error_response(req_id: object, detail: str):
+    """Terminal JSON-RPC error for an obo_exchange failure.
+
+    Unlike the oauth_user consent path, obo_exchange is non-interactive: there is
+    no browser login an agent can perform mid-tool-call. A failure is terminal,
+    so we surface a plain JSON-RPC error (NOT a -32042 URL elicitation, which a
+    client would try to satisfy by opening a connect URL that does not exist).
+    """
+    return JSONResponse(
+        status_code=200,
+        content={
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "error": {
+                "code": -32001,
+                "message": "obo_exchange_failed",
+                "data": {"detail": detail},
+            },
+        },
+    )
+
+
 # Protocol version the gateway advertises when it answers `initialize` locally
 # (the fallback used if the client did not state one). The handshake is a
 # capability negotiation between the client and THIS server (the gateway); per
@@ -4847,9 +4938,7 @@ def _egress_consent_response(
             "id": req_id,
             "error": {
                 "code": -32001,
-                "message": (
-                    f"{message} Visit: {connect_url}" if connect_url else message
-                ),
+                "message": (f"{message} Visit: {connect_url}" if connect_url else message),
                 "data": {
                     "connect_url": connect_url,
                     "reason": "egress_consent_required",
@@ -4968,7 +5057,48 @@ async def mcp_proxy(
         if internal_proxy_token:
             server_first_segment = (server_name or "").split("/", 1)[0]
             vend = await _vend_egress_token(internal_proxy_token, server_first_segment)
-            if vend and vend.get("access_token"):
+            if vend and vend.get("mode") == "obo_exchange":
+                # OBO hop 1: re-audience the user's ingress JWT to the internal
+                # MCP server's app via the gateway's OWN IdP credentials. The
+                # registry returned only the DIRECTIVE (target_audience+scopes),
+                # never a token; the exchange runs HERE because this hop holds the
+                # raw ingress JWT and the gateway's IdP client creds. This branch
+                # is FIRST: the directive has no access_token, so it must not fall
+                # through to the vault-hit / consent checks below.
+                req_id = incoming_payload.get("id") if isinstance(incoming_payload, dict) else None
+                subject_token = _ingress_subject_token(request)
+                if not subject_token:
+                    # No raw JWT (session-cookie / M2M caller): OBO is impossible.
+                    # Terminal error, never a consent affordance.
+                    logger.warning(
+                        "mcp_proxy: obo_exchange server=%s but no bearer ingress JWT; "
+                        "rejecting (session-cookie/M2M caller cannot do OBO)",
+                        server_name,
+                    )
+                    return _obo_error_response(
+                        req_id, "OBO exchange requires a bearer JWT on the ingress request"
+                    )
+                try:
+                    obo_token = await obo_exchange(
+                        get_auth_provider(),
+                        subject_token=subject_token,
+                        target_audience=vend.get("obo_target_audience") or "",
+                        scopes=vend.get("obo_scopes") or [],
+                    )
+                except OboExchangeError as exc:
+                    logger.warning(
+                        "mcp_proxy: obo_exchange failed for server=%s: %s", server_name, exc
+                    )
+                    return _obo_error_response(req_id, str(exc))
+                # Reuse the egress strip+inject: drop the user's gateway creds /
+                # internal identity headers before injecting the exchanged token.
+                forward_headers = {
+                    k: v
+                    for k, v in forward_headers.items()
+                    if k.lower() not in _EGRESS_STRIP_HEADERS
+                }
+                forward_headers["Authorization"] = f"Bearer {obo_token}"
+            elif vend and vend.get("access_token"):
                 # Token is vaulted (consent done). If the client is calling the
                 # SYNTHETIC connect tool (it only existed pre-consent), do NOT
                 # forward that name upstream -- the upstream would reject it with
@@ -4982,9 +5112,11 @@ async def mcp_proxy(
                         if isinstance(_params, dict):
                             _called_tool = _params.get("name") or ""
                     if _called_tool == _EGRESS_CONNECT_TOOL_NAME:
-                        _req_id = incoming_payload.get("id") if isinstance(
-                            incoming_payload, dict
-                        ) else None
+                        _req_id = (
+                            incoming_payload.get("id")
+                            if isinstance(incoming_payload, dict)
+                            else None
+                        )
                         logger.info(
                             "mcp_proxy: egress server=%s connected; short-circuiting "
                             "synthetic connect_account call with success (token vaulted)",
@@ -5021,9 +5153,7 @@ async def mcp_proxy(
                 #     client, which performs no OAuth itself (it opens the connect
                 #     URL and retries). Spec:
                 #     https://modelcontextprotocol.io/specification/draft/client/elicitation
-                req_id = (
-                    incoming_payload.get("id") if isinstance(incoming_payload, dict) else None
-                )
+                req_id = incoming_payload.get("id") if isinstance(incoming_payload, dict) else None
                 if incoming_method == "initialize":
                     logger.info(
                         "mcp_proxy: egress server=%s has no token; answering "

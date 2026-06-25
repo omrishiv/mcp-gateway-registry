@@ -33,6 +33,7 @@ from registry.auth.dependencies import nginx_proxied_auth
 from registry.auth.internal import validate_internal_auth
 from registry.auth.proxied_token import verify_mcp_proxy_token
 from registry.core.config import settings
+from registry.core.schemas import _is_gateway_own_audience
 from registry.egress_auth.factory import get_egress_auth_service
 from registry.egress_auth.providers import list_provider_names, resolve_provider
 from registry.egress_auth.service import EgressAuthError, is_per_user_auth_method
@@ -151,6 +152,21 @@ class EgressTokenResponse(BaseModel):
         description="Provider key (github/google/entra/...) for the human-readable "
         "elicitation message.",
     )
+    # obo_exchange directive (returned instead of a token; the exchange runs in
+    # auth_server, which holds the gateway's IdP creds and the raw ingress JWT).
+    mode: str | None = Field(
+        default=None,
+        description="Egress mode for this server: 'obo_exchange' when the caller "
+        "should perform a same-IdP OBO token exchange instead of a vault vend.",
+    )
+    obo_target_audience: str | None = Field(
+        default=None,
+        description="obo_exchange: the 'aud' the auth_server requests in OBO hop 1.",
+    )
+    obo_scopes: list[str] | None = Field(
+        default=None,
+        description="obo_exchange: audience-scoped scopes for the exchange request.",
+    )
 
 
 def _base_url(url: str) -> str:
@@ -220,10 +236,13 @@ async def vend_egress_token(
         return EgressTokenResponse(consent_required=True)
 
     # Per-server enablement: a misconfigured/half-deleted server never vends.
-    if server.get("egress_auth_mode") != "oauth_user" or not server.get("egress_oauth"):
+    egress_mode = server.get("egress_auth_mode")
+    if egress_mode not in ("oauth_user", "obo_exchange") or not server.get("egress_oauth"):
         return EgressTokenResponse(consent_required=True)
 
-    # The bound upstream MUST match a registered upstream for this server.
+    # The bound upstream MUST match a registered upstream for this server. This
+    # cross-check applies to BOTH egress modes: an OBO directive must only be
+    # handed out for a legitimately-bound upstream, same as a vault vend.
     legal = _registered_upstreams(server)
     if _base_url(token_upstream) not in legal:
         logger.warning(
@@ -237,6 +256,18 @@ async def vend_egress_token(
         )
 
     egress_oauth = server["egress_oauth"]
+
+    # obo_exchange: return the exchange DIRECTIVE, not a token. The actual IdP
+    # token exchange runs in auth_server (which holds the gateway's own IdP
+    # credentials and the raw ingress JWT); the registry never sees the JWT and
+    # holds no per-user token for this mode. Stateless -- no vault lookup.
+    if egress_mode == "obo_exchange":
+        return EgressTokenResponse(
+            mode="obo_exchange",
+            obo_target_audience=egress_oauth.get("target_audience"),
+            obo_scopes=egress_oauth.get("scopes") or [],
+        )
+
     svc = get_egress_auth_service()
     access_token = await svc.get_valid_token(
         auth_method=auth_method,
@@ -293,9 +324,9 @@ async def vend_egress_token(
 
 
 class EgressConfigRequest(BaseModel):
-    """Configure per-user egress OAuth on a server (admin/registrant)."""
+    """Configure egress auth on a server (admin/registrant)."""
 
-    egress_auth_mode: str = "oauth_user"  # "none" | "oauth_user"
+    egress_auth_mode: str = "oauth_user"  # "none" | "oauth_user" | "obo_exchange"
     egress_provider: str = ""
     client_id: str = ""
     client_secret: str | None = None  # write-only; encrypted, never echoed
@@ -304,6 +335,8 @@ class EgressConfigRequest(BaseModel):
     custom_token_url: str | None = None
     custom_scope_separator: str | None = None
     custom_token_auth_style: str | None = None
+    # obo_exchange only: the internal MCP server's audience (IdP-shaped).
+    target_audience: str | None = None
 
 
 def _egress_config_view(server: dict) -> dict:
@@ -314,6 +347,7 @@ def _egress_config_view(server: dict) -> dict:
         "egress_auth_mode": server.get("egress_auth_mode", "none"),
         "egress_provider": eo.get("provider"),
         "scopes": eo.get("scopes", []),
+        "target_audience": eo.get("target_audience"),
         "callback_url": _callback_url(),
         "custom_authorize_url": eo.get("custom_authorize_url"),
         "custom_token_url": eo.get("custom_token_url"),
@@ -381,6 +415,25 @@ async def configure_egress_auth(
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="client_secret required")
         server["egress_auth_mode"] = "oauth_user"
         server["egress_oauth"] = eo
+    elif body.egress_auth_mode == "obo_exchange":
+        target = (body.target_audience or "").strip()
+        if not target:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail="obo_exchange requires target_audience",
+            )
+        if _is_gateway_own_audience(target):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail="target_audience must differ from the gateway's own IdP client id",
+            )
+        # Same-IdP exchange: no per-server provider/client_id/secret. Only the
+        # target audience and (optional) audience-scoped scopes are stored.
+        server["egress_auth_mode"] = "obo_exchange"
+        server["egress_oauth"] = {
+            "target_audience": target,
+            "scopes": body.scopes,
+        }
     else:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid egress_auth_mode")
 
@@ -403,6 +456,39 @@ async def get_egress_auth_config(
     if not server:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="server not found")
     return _egress_config_view(server)
+
+
+@router.get("/egress/obo-identifier-uris")
+async def get_obo_identifier_uris(
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+):
+    """List the Entra Application ID URIs the operator must register for OBO.
+
+    Each obo_exchange server's per-server resource URL (the value the gateway
+    advertises in its PRM and the audience it validates) must be present in the
+    gateway app's ``identifierUris`` list in Entra. This endpoint returns the
+    exact set, so the operator can keep Entra in sync as obo servers are
+    added/removed -- the registry side is automatic; only this list is manual.
+
+    Admin only. Returns ``{"identifier_uris": [...], "count": N}``.
+    """
+    _feature_enabled_or_404()
+    _require_admin(user_context)
+
+    from registry.auth.oauth_metadata import build_per_server_resource_url
+    from registry.core.config import settings
+
+    servers = await server_service.get_all_servers(include_inactive=True)
+    uris: list[str] = []
+    for path, info in (servers or {}).items():
+        if (info or {}).get("egress_auth_mode") != "obo_exchange":
+            continue
+        append_mcp = info.get("append_mcp_path") is not False
+        uris.append(
+            build_per_server_resource_url(settings.registry_url, path, append_mcp=append_mcp)
+        )
+    uris = sorted(set(uris))
+    return {"identifier_uris": uris, "count": len(uris)}
 
 
 class InitiateRequest(BaseModel):

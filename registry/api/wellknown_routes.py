@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 
 from ..auth.oauth_metadata import (
     build_canonical_resource_url,
+    build_per_server_resource_url,
     build_resource_documentation_url,
     derive_supported_scopes,
     enforce_https,
@@ -445,6 +446,87 @@ async def get_oauth_protected_resource() -> JSONResponse:
         ) from exc
     except Exception as exc:
         logger.exception("Failed to build PRM document")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not build Protected Resource Metadata: {exc}",
+        ) from exc
+
+    return JSONResponse(content=document, headers=OAUTH_DISCOVERY_CACHE_HEADERS)
+
+
+def _normalize_prm_server_path(server_path: str) -> str:
+    """Reduce a path-aware PRM suffix to the registered server path.
+
+    MCP clients doing RFC 9728 path-aware discovery request
+    ``/.well-known/oauth-protected-resource/<server>/mcp`` (the connection URL's
+    path). Strip a trailing ``/mcp`` transport segment and normalize to the
+    leading-slash registered path (e.g. ``obo-echo/mcp`` -> ``/obo-echo``).
+    """
+    p = "/" + server_path.strip("/")
+    if p.endswith("/mcp"):
+        p = p[: -len("/mcp")]
+    return p or "/"
+
+
+@router.get("/oauth-protected-resource/{server_path:path}")
+async def get_oauth_protected_resource_for_server(
+    server_path: str,
+) -> JSONResponse:
+    """Per-server RFC 9728 PRM for obo_exchange servers (path-aware discovery).
+
+    Spec-compliant MCP clients (Claude Code, etc.) try the path-suffixed
+    well-known URL first, derived from the per-server connection URL. We serve a
+    document ONLY for ``obo_exchange`` servers; everything else 404s so the
+    client falls back to the gateway-wide PRM (unchanged behavior).
+
+    The advertised ``resource`` is the **per-server connection URL** (e.g.
+    ``https://gw/obo-echo/mcp``). This is the ONLY value that satisfies all three
+    constraints simultaneously:
+      - RFC 9728 §3.3: the client only accepts a PRM ``resource`` equal to the
+        connection URL it is accessing (or the origin); a made-up shared path is
+        rejected.
+      - RFC 8707 canonicalization: a bare origin gets a trailing ``/`` on the
+        wire, which Entra App ID URIs cannot match -- a path-qualified per-server
+        URL is sent verbatim.
+      - Entra: the sent ``resource`` must equal a registered App ID URI exactly.
+    The trade-off: each obo server's per-server URL must be an App ID URI on the
+    gateway app (operator maintains the ``identifierUris`` list; see
+    GET /api/egress/obo-identifier-uris for the exact list to register). The
+    registry side is fully dynamic -- this is derived from the server entry, no
+    per-server env config.
+    """
+    normalized = _normalize_prm_server_path(server_path)
+    info = await server_service.get_server_info(normalized)
+    if not info or info.get("egress_auth_mode") != "obo_exchange":
+        # Not an obo server -> no per-server PRM; client falls back to global.
+        raise HTTPException(status_code=404, detail="no per-server resource metadata")
+
+    # Per-server connection-URL resource: the only value that satisfies the
+    # client's RFC 9728 §3.3 match, RFC 8707 canonicalization, and Entra's exact
+    # App ID URI match simultaneously (see the docstring).
+    append_mcp = info.get("append_mcp_path") is not False
+    resource = build_per_server_resource_url(
+        settings.registry_url, normalized, append_mcp=append_mcp
+    )
+    scopes_supported = [f"{resource}/user_impersonation"]
+    enforce_https(resource, https_required=settings.mcp_https_required)
+
+    try:
+        provider = _get_active_auth_provider()
+        document = provider.protected_resource_metadata(
+            resource=resource,
+            scopes_supported=scopes_supported,
+            resource_documentation=build_resource_documentation_url(),
+        )
+    except NotImplementedError as exc:
+        raise HTTPException(
+            status_code=501,
+            detail="OAuth discovery not implemented for the configured auth provider",
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Failed to build per-server PRM document")
         raise HTTPException(
             status_code=502,
             detail=f"Could not build Protected Resource Metadata: {exc}",

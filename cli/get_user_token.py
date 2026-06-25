@@ -119,6 +119,13 @@ def _poll_for_token(
         "client_id": client_id,
         "device_code": device_code,
     }
+    # Confidential clients (app has a secret, public-client flows not enabled)
+    # must authenticate even on the device-code grant, or Entra returns
+    # AADSTS7000218. Send the secret when ENTRA_CLIENT_SECRET is set; public
+    # clients omit it (env unset) and the flow works unchanged.
+    client_secret = os.environ.get("ENTRA_CLIENT_SECRET")
+    if client_secret:
+        data["client_secret"] = client_secret
 
     start_time = time.time()
 

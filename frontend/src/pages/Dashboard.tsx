@@ -302,13 +302,15 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
       envRows: [] as { key: string; value: string; required: boolean }[],
     },
     custom_headers: [] as Array<{ name: string; value: string }>,
-    // Per-user egress credential vault (admin config). egress_provider empty == off.
+    // Egress auth to the upstream (admin config).
+    egress_auth_mode: 'none' as 'none' | 'oauth_user' | 'obo_exchange',
     egress_provider: '',
     egress_client_id: '',
     egress_client_secret: '',  // write-only; blank on edit keeps the stored one
     egress_scopes: '',  // comma/space separated
     egress_custom_authorize_url: '',
     egress_custom_token_url: '',
+    egress_target_audience: '',
   });
   const [egressEnabled, setEgressEnabled] = useState(false);
   const [editLoading, setEditLoading] = useState(false);
@@ -1161,12 +1163,14 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         deployment,
         local_runtime: buildLocalRuntimeForm(localRuntimeRaw),
         custom_headers: (serverDetails.custom_header_names || []).map((name: string) => ({ name, value: '' })),
+        egress_auth_mode: (serverDetails.egress_auth_mode || 'none') as 'none' | 'oauth_user' | 'obo_exchange',
         egress_provider: serverDetails.egress_oauth?.provider || '',
         egress_client_id: serverDetails.egress_oauth?.client_id || '',
         egress_client_secret: '',  // never round-trip the secret
         egress_scopes: (serverDetails.egress_oauth?.scopes || []).join(', '),
         egress_custom_authorize_url: serverDetails.egress_oauth?.custom_authorize_url || '',
         egress_custom_token_url: serverDetails.egress_oauth?.custom_token_url || '',
+        egress_target_audience: serverDetails.egress_oauth?.target_audience || '',
       });
     } catch (error) {
       console.error('Failed to fetch server details:', error);
@@ -1190,12 +1194,14 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         deployment,
         local_runtime: buildLocalRuntimeForm(server.local_runtime),
         custom_headers: [],
+        egress_auth_mode: 'none',
         egress_provider: '',
         egress_client_id: '',
         egress_client_secret: '',
         egress_scopes: '',
         egress_custom_authorize_url: '',
         egress_custom_token_url: '',
+        egress_target_audience: '',
       });
     }
   }, []);
@@ -1376,29 +1382,40 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
           const csrf = await axios.get('/api/auth/csrf-token');
           const csrfHeaders: Record<string, string> = {};
           if (csrf.data?.csrf_token) csrfHeaders['X-CSRF-Token'] = csrf.data.csrf_token;
-          const provider = editForm.egress_provider.trim();
-          if (!provider) {
+          const mode = editForm.egress_auth_mode;
+          const scopesList = editForm.egress_scopes
+            .split(/[,\s]+/)
+            .map(s => s.trim())
+            .filter(Boolean);
+          if (mode === 'obo_exchange') {
             await axios.post(
               `/api/servers${editingServer.path}/egress-auth`,
-              { egress_auth_mode: 'none' },
+              {
+                egress_auth_mode: 'obo_exchange',
+                target_audience: editForm.egress_target_audience.trim(),
+                scopes: scopesList,
+              },
+              { headers: csrfHeaders }
+            );
+          } else if (mode === 'oauth_user') {
+            await axios.post(
+              `/api/servers${editingServer.path}/egress-auth`,
+              {
+                egress_auth_mode: 'oauth_user',
+                egress_provider: editForm.egress_provider.trim(),
+                client_id: editForm.egress_client_id.trim(),
+                // Blank secret on edit keeps the stored one (backend semantics).
+                client_secret: editForm.egress_client_secret || undefined,
+                scopes: scopesList,
+                custom_authorize_url: editForm.egress_custom_authorize_url || undefined,
+                custom_token_url: editForm.egress_custom_token_url || undefined,
+              },
               { headers: csrfHeaders }
             );
           } else {
             await axios.post(
               `/api/servers${editingServer.path}/egress-auth`,
-              {
-                egress_auth_mode: 'oauth_user',
-                egress_provider: provider,
-                client_id: editForm.egress_client_id.trim(),
-                // Blank secret on edit keeps the stored one (backend semantics).
-                client_secret: editForm.egress_client_secret || undefined,
-                scopes: editForm.egress_scopes
-                  .split(/[,\s]+/)
-                  .map(s => s.trim())
-                  .filter(Boolean),
-                custom_authorize_url: editForm.egress_custom_authorize_url || undefined,
-                custom_token_url: editForm.egress_custom_token_url || undefined,
-              },
+              { egress_auth_mode: 'none' },
               { headers: csrfHeaders }
             );
           }

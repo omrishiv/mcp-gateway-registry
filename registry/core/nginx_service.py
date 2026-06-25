@@ -1414,6 +1414,26 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
             other_version_ids = server_info.get("other_version_ids", [])
             has_versions = len(other_version_ids) > 0
 
+        # For obo_exchange servers, the 401 WWW-Authenticate must point MCP clients
+        # at the PER-SERVER PRM (so the client discovers the per-server resource that
+        # matches its connection URL and the Entra App ID URI). Override the default
+        # global $mcp_resource_metadata in this location only. RFC 9728 clients
+        # follow the resource_metadata from the 401 header in preference to guessing.
+        obo_resource_metadata = ""
+        if server_info and server_info.get("egress_auth_mode") == "obo_exchange":
+            from registry.auth.oauth_metadata import build_per_server_prm_url
+
+            try:
+                append_mcp = server_info.get("append_mcp_path") is not False
+                per_server_prm = build_per_server_prm_url(
+                    settings.registry_url, path, append_mcp=append_mcp
+                )
+                obo_resource_metadata = (
+                    f'\n        set $mcp_resource_metadata "{per_server_prm}";'
+                )
+            except ValueError:
+                obo_resource_metadata = ""
+
         # Extract hostname from proxy_pass_url for external services
         parsed_url = urlparse(proxy_pass_url)
         upstream_host = parsed_url.netloc
@@ -1536,7 +1556,7 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
 
         # Handle auth errors
         error_page 401 = @auth_error;
-        error_page 403 = @forbidden_error;{version_headers}"""
+        error_page 403 = @forbidden_error;{obo_resource_metadata}{version_headers}"""
 
         # Transport-specific settings
         if transport_type == "sse":

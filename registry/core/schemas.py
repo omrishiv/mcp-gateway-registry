@@ -15,6 +15,36 @@ _IMAGE_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _RFC7230_TOKEN_RE = re.compile(r"[A-Za-z0-9!#$%&'*+\-.^_`|~]+")
 
 
+def _gateway_own_client_id() -> str:
+    """The gateway's own IdP client id, resolved by the configured auth provider.
+
+    Used to reject an obo_exchange target_audience that points back at the
+    gateway's own app (a same-app OBO is not a valid exchange). Returns "" when
+    the provider's client id is not configured (then no same-app check applies).
+    """
+    from registry.core.config import settings
+
+    provider = (settings.auth_provider or "").lower()
+    if provider == "entra":
+        return settings.entra_client_id or ""
+    if provider == "keycloak":
+        return settings.keycloak_client_id or ""
+    return ""
+
+
+def _is_gateway_own_audience(target_audience: str) -> bool:
+    """True if target_audience refers to the gateway's own IdP app.
+
+    Matches the bare client id and the Entra ``api://<client_id>`` App ID URI
+    form, case-insensitively (Entra audiences are GUIDs/URIs, not case-sensitive).
+    """
+    own = _gateway_own_client_id().strip().lower()
+    if not own:
+        return False
+    target = target_audience.strip().lower()
+    return target in (own, f"api://{own}")
+
+
 class CustomHeader(BaseModel):
     """A single user-defined HTTP header attached to an MCP server."""
 
@@ -53,20 +83,41 @@ class CustomHeaderEncrypted(BaseModel):
 
 
 class EgressOAuthConfig(BaseModel):
-    """Per-server egress OAuth config for the per-user credential vault.
+    """Per-server egress OAuth config for the egress credential paths.
 
-    None on ServerInfo == no per-user egress auth. The operator supplies
-    client_id/client_secret/scopes at registration time (write path not yet
-    implemented); custom_* fields apply only when provider == 'custom'.
+    None on ServerInfo == no egress auth. Two modes share this container:
+
+    - ``oauth_user`` (3LO vault): the operator supplies
+      ``provider``/``client_id``/``client_secret``/``scopes`` at registration;
+      ``custom_*`` fields apply only when ``provider == 'custom'``.
+    - ``obo_exchange`` (same-IdP OBO hop 1): the gateway re-audiences the user's
+      ingress token to the internal MCP server's app via the gateway's OWN IdP
+      credentials. No per-server provider/client_id/secret is needed; only
+      ``target_audience`` (and audience-scoped ``scopes``) are required.
+
+    ``provider`` is therefore optional at the model level and required only for
+    ``oauth_user`` (enforced by ServerInfo's egress validator, since the mode
+    lives on ServerInfo, not here).
     """
 
-    provider: str = Field(..., description="Provider key: 'github', 'google', 'custom', ...")
+    provider: str | None = Field(
+        default=None,
+        description="Provider key ('github', 'google', 'custom', ...). Required for "
+        "oauth_user; unused for obo_exchange (same-IdP exchange uses the gateway's own IdP).",
+    )
     client_id: str = Field(default="", description="Operator-supplied OAuth app client_id.")
     client_secret_encrypted: str | None = Field(
         default=None,
         description="Fernet-encrypted client_secret. Never returned in API responses.",
     )
     scopes: list[str] = Field(default_factory=list)
+    # OBO exchange (obo_exchange mode only): the internal MCP server's audience.
+    target_audience: str | None = Field(
+        default=None,
+        description="obo_exchange only: the internal MCP server's App ID URI (Entra, "
+        "e.g. 'api://outlook-mcp-server') or client id (Keycloak). The 'aud' the gateway "
+        "requests in OBO hop 1. IdP-shaped; the exchange engine formats the request per IdP.",
+    )
     # Custom-OIDC overrides (only when provider == 'custom')
     custom_authorize_url: str | None = None
     custom_token_url: str | None = None
@@ -363,11 +414,13 @@ class ServerInfo(BaseModel):
     # today's behavior; the registration write path is not yet implemented.
     egress_auth_mode: str = Field(
         default="none",
-        description="Egress auth to the upstream: 'none' or 'oauth_user'.",
+        description="Egress auth to the upstream: 'none', 'oauth_user' (3LO vault), "
+        "or 'obo_exchange' (same-IdP OBO hop 1).",
     )
     egress_oauth: EgressOAuthConfig | None = Field(
         default=None,
-        description="Per-user egress OAuth config; required when egress_auth_mode == 'oauth_user'.",
+        description="Egress OAuth config. Required when egress_auth_mode is 'oauth_user' "
+        "(provider/client_id/secret) or 'obo_exchange' (target_audience).",
     )
 
     # Lifecycle and federation metadata fields
@@ -443,6 +496,44 @@ class ServerInfo(BaseModel):
     def _validate_deployment_consistency(self) -> "ServerInfo":
         """Enforce remote/local field invariants. See _validate_deployment_invariants."""
         _validate_deployment_invariants(self)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_egress_auth(self) -> "ServerInfo":
+        """Enforce per-mode egress config invariants.
+
+        - oauth_user: requires egress_oauth with a provider (3LO needs a provider).
+        - obo_exchange: requires egress_oauth.target_audience, and that audience
+          MUST differ from the gateway's own IdP client id / app ID URI. Entra
+          rejects an OBO assertion whose aud equals the requested resource (it is
+          a passthrough, not an exchange), so a same-app target is misconfiguration
+          we reject at registration rather than at the first live request.
+        """
+        mode = self.egress_auth_mode
+        if mode not in ("none", "oauth_user", "obo_exchange"):
+            raise ValueError(
+                f"invalid egress_auth_mode {mode!r}; expected 'none', 'oauth_user', "
+                "or 'obo_exchange'"
+            )
+        if mode == "none":
+            return self
+        if self.egress_oauth is None:
+            raise ValueError(f"egress_auth_mode={mode!r} requires egress_oauth config")
+        if mode == "oauth_user":
+            if not self.egress_oauth.provider:
+                raise ValueError("egress_auth_mode='oauth_user' requires egress_oauth.provider")
+            return self
+        # mode == "obo_exchange"
+        target = (self.egress_oauth.target_audience or "").strip()
+        if not target:
+            raise ValueError(
+                "egress_auth_mode='obo_exchange' requires egress_oauth.target_audience"
+            )
+        if _is_gateway_own_audience(target):
+            raise ValueError(
+                "egress_oauth.target_audience must differ from the gateway's own IdP "
+                "client id / app ID URI; same-app OBO is not a valid exchange"
+            )
         return self
 
 
@@ -553,6 +644,3 @@ class OAuth2Provider(BaseModel):
     name: str
     display_name: str
     icon: str | None = None
-
-
-
