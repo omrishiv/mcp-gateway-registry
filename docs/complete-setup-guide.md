@@ -459,7 +459,7 @@ All credentials are automatically generated and saved to the `.oauth-tokens/` di
 
 **Next steps**:
 - Review the generated credentials in `.oauth-tokens/`
-- Configure appropriate access scopes in your `scopes.yml` file
+- Configure appropriate access scopes in the `mcp_scopes` collection in DocumentDB (seeded from the JSON scope seed files in `scripts/`, or managed via the scope management API)
 - Use these credentials for testing M2M client flows and human user authentication
 - Log in to the dashboard with human user accounts to verify access
 
@@ -1306,7 +1306,7 @@ curl -f https://mcpgateway.mycorp.com/realms/mcp-gateway
 
 ### Explore Advanced Features
 
-- **Fine-grained Access Control**: Configure `scopes.yml` for detailed permissions
+- **Fine-grained Access Control**: Configure the `mcp_scopes` collection in DocumentDB for detailed permissions
 - **Custom MCP Servers**: Add your own MCP server implementations
 - **OAuth Integration**: Connect with external services (GitHub, Google, etc.)
 - **Monitoring Dashboard**: Set up Grafana for metrics visualization
@@ -1334,13 +1334,12 @@ For production environments or to contribute pre-built images, you can publish t
 
 ### Publishing Script Overview
 
-The `scripts/publish_containers.sh` script automates building and publishing all 6 container components:
+The `scripts/publish_containers.sh` script automates building and publishing all 5 container components:
 
 - `registry` - Main registry service with nginx and web UI
 - `auth-server` - Authentication service
 - `currenttime-server` - Current time MCP server
 - `realserverfaketools-server` - Example tools MCP server
-- `fininfo-server` - Financial information MCP server
 - `mcpgw-server` - MCP Gateway proxy server
 
 ### Publishing Commands
@@ -1392,7 +1391,6 @@ GITHUB_ORG=agentic-community
 - `mcpgateway/auth-server:latest`
 - `mcpgateway/currenttime-server:latest`
 - `mcpgateway/realserverfaketools-server:latest`
-- `mcpgateway/fininfo-server:latest`
 - `mcpgateway/mcpgw-server:latest`
 
 **GitHub Container Registry:**
@@ -1400,7 +1398,6 @@ GITHUB_ORG=agentic-community
 - `ghcr.io/agentic-community/mcp-auth-server:latest`
 - `ghcr.io/agentic-community/mcp-currenttime-server:latest`
 - `ghcr.io/agentic-community/mcp-realserverfaketools-server:latest`
-- `ghcr.io/agentic-community/mcp-fininfo-server:latest`
 - `ghcr.io/agentic-community/mcp-mcpgw-server:latest`
 
 ### Using Pre-built Images

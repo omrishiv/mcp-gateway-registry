@@ -42,6 +42,7 @@ from registry.api.m2m_management_routes import router as m2m_management_router
 from registry.api.management_routes import router as management_router
 from registry.api.okta_m2m_routes import router as okta_m2m_router
 from registry.api.peer_management_routes import router as peer_management_router
+from registry.api.public_record_routes import router as public_record_router
 from registry.api.registry_management_routes import router as registry_management_router
 from registry.api.registry_routes import router as registry_router
 from registry.api.search_routes import router as search_router
@@ -66,7 +67,6 @@ from registry.auth.routes import router as auth_router
 
 # Import core configuration
 from registry.core.config import (
-    MONGODB_BACKENDS,
     InternalDeploymentType,
     RegistryMode,
     _print_config_warning_banner,
@@ -529,64 +529,16 @@ async def lifespan(app: FastAPI):
         logger.info("📚 Loading server definitions and state...")
         await server_service.load_servers_and_state()
 
-        # Get repository based on STORAGE_BACKEND configuration
+        # Initialize DocumentDB search (embeddings are persisted and survive restarts)
         search_repo = get_search_repository()
-        backend_name = "DocumentDB" if settings.storage_backend in MONGODB_BACKENDS else "FAISS"
 
-        logger.info(f"🔍 Initializing {backend_name} search service...")
+        logger.info("� Initializing DocumentDB search service...")
         await search_repo.initialize()
+        logger.info("✅ DocumentDB search index is persistent, skipping startup re-index")
 
-        # For DocumentDB, embeddings are persisted in the collection and survive
-        # restarts. Only FAISS (in-memory) needs a full re-index on every boot.
-        if settings.storage_backend not in MONGODB_BACKENDS:
-            logger.info(f"📊 Rebuilding in-memory {backend_name} index from DB...")
-            all_servers = await server_service.get_all_servers()
-            for service_path, server_info in all_servers.items():
-                is_enabled = await server_service.is_service_enabled(service_path)
-                try:
-                    await search_repo.index_server(service_path, server_info, is_enabled)
-                except Exception as e:
-                    logger.error(
-                        f"Failed to index service {service_path}: {e}",
-                        exc_info=True,
-                    )
-            logger.info(f"✅ {backend_name} index rebuilt with {len(all_servers)} services")
-
-            logger.info("📋 Loading agent cards and state...")
-            await agent_service.load_agents_and_state()
-
-            all_agents = await agent_service.list_agents()
-            for agent_card in all_agents:
-                is_enabled = await agent_service.is_agent_enabled(agent_card.path)
-                try:
-                    await search_repo.index_agent(agent_card.path, agent_card, is_enabled)
-                except Exception as e:
-                    logger.error(
-                        f"Failed to index agent {agent_card.path}: {e}",
-                        exc_info=True,
-                    )
-            logger.info(f"✅ {backend_name} index rebuilt with {len(all_agents)} agents")
-
-            from registry.repositories.factory import get_skill_repository
-
-            skill_repo = get_skill_repository()
-            all_skills = await skill_repo.list_all(skip=0, limit=10000)
-            for skill_card in all_skills:
-                try:
-                    await search_repo.index_skill(
-                        skill_card.path, skill_card, skill_card.is_enabled
-                    )
-                except Exception as e:
-                    logger.error(
-                        f"Failed to index skill {skill_card.path}: {e}",
-                        exc_info=True,
-                    )
-            logger.info(f"✅ {backend_name} index rebuilt with {len(all_skills)} skills")
-        else:
-            logger.info(f"✅ {backend_name} search index is persistent, skipping startup re-index")
-            # Still need to load agent state (in-memory service cache)
-            logger.info("📋 Loading agent cards and state...")
-            await agent_service.load_agents_and_state()
+        # Load agent state (in-memory service cache)
+        logger.info("📋 Loading agent cards and state...")
+        await agent_service.load_agents_and_state()
 
         logger.info("🏥 Initializing health monitoring service...")
         await health_service.initialize()
@@ -1074,11 +1026,9 @@ logger.info("Registered RegistryMetricsMiddleware (issue #1122)")
 if settings.audit_log_enabled:
     logger.info("📝 Initializing audit logging...")
 
-    # Get audit repository if MongoDB is enabled
+    # Get audit repository if MongoDB audit logging is enabled
     _audit_repository = None
-    _mongodb_enabled = (
-        settings.audit_log_mongodb_enabled and settings.storage_backend in MONGODB_BACKENDS
-    )
+    _mongodb_enabled = settings.audit_log_mongodb_enabled
     if _mongodb_enabled:
         from registry.repositories.factory import get_audit_repository
 
@@ -1155,6 +1105,9 @@ app.include_router(registry_router, prefix="/api/registry", tags=["Registry Card
 # Register well-known discovery router
 app.include_router(wellknown_router, prefix="/.well-known", tags=["Discovery"])
 
+# Register public, anonymous per-record endpoints (ARD catalog url targets, issue #1294)
+app.include_router(public_record_router, prefix="/api", tags=["Public Records"])
+
 
 # Customize OpenAPI schema to add security schemes
 def custom_openapi():
@@ -1182,7 +1135,12 @@ def custom_openapi():
     # Apply Bearer security to all endpoints except auth, health, and public discovery endpoints
     for path, path_item in openapi_schema["paths"].items():
         # Skip authentication, health check, and public discovery endpoints
-        if path.startswith("/api/auth/") or path == "/health" or path.startswith("/.well-known/"):
+        if (
+            path.startswith("/api/auth/")
+            or path == "/health"
+            or path.startswith("/.well-known/")
+            or path.startswith("/api/public/")
+        ):
             continue
 
         # Apply Bearer security to all methods in this path

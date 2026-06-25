@@ -3,7 +3,7 @@ global:
   image:
     # Container registry (host + optional namespace). Shared default across subcharts.
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.24.6
+    tag: 1.24.7
     pullPolicy: IfNotPresent
 
   cloud:
@@ -135,7 +135,11 @@ app:
     maxSuggestions: "3"            # Cap on advisory suggestions per request.
 
   # OpenTelemetry direct OTLP push export configuration
-  otelOtlpEndpoint: ""  # OTLP endpoint URL (e.g., https://otlp.datadoghq.com)
+  # Standard OTel SDK var. Setting this activates the OTLP push exporter (the
+  # entrypoint wraps uvicorn with opentelemetry-instrument) and is read by
+  # registry/main.py. Default empty: pull-only via the prometheus listener.
+  otelExporterOtlpEndpoint: ""  # OTLP endpoint URL (e.g., http://otel-collector:4317)
+  otelOtlpEndpoint: ""  # metrics-service OTLP endpoint (legacy; metrics-service removed in 1.26.0)
   otelExporterOtlpHeaders: ""  # OTLP headers (e.g., dd-api-key=YOUR_KEY)
   otelOtlpExportIntervalMs: "30000"  # Export interval in milliseconds
   otelExporterOtlpMetricsTemporalityPreference: "cumulative"  # cumulative or delta
@@ -313,6 +317,12 @@ registryCard:
   contactEmail: ""  # Optional contact email
   contactUrl: ""  # Optional contact URL/website
 
+# ARD Catalog Publisher (issue #1294): publishes /.well-known/ai-catalog.json
+ard:
+  catalogEnabled: true  # Set false to disable the public ARD catalog endpoint
+  publisherDomain: ""  # URN publisher FQDN (urn:air:<domain>:...). Empty derives from registryCard.url host.
+  defaultNamespace: ""  # Optional override for the URN namespace segment (empty uses entity type)
+
 # Entra ID integration (used when authProvider.type = "entra" in standalone deployment)
 entra:
   clientId: ""
@@ -325,6 +335,14 @@ entra:
 # When set, only groups matching any of these prefixes are shown in IAM > Groups
 # Example: "mcp-,registry-,ai-"
 idpGroupFilterPrefix: ""
+
+# Login-time IdP group allowlist (applies to all identity providers)
+# When set, only these EXACT group names/IDs are stored in a user's session at
+# login. When empty, the registry auto-derives the allowlist from scope mappings
+# (recommended). Fixes session bloat / slowness for users with very large IdP
+# group memberships (e.g. Entra ID with hundreds of AD groups).
+# Example: "registry_readonly,registry_write,ai_admins"
+allowedIdpGroups: ""
 
 # IdP user-to-group fallback (issue #1127)
 # Comma-separated list of IdP providers (e.g. pingfederate) for which the

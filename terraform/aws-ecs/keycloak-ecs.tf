@@ -348,7 +348,7 @@ resource "aws_ecs_service" "keycloak" {
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets          = module.vpc.private_subnets
+    subnets          = local.selected_private_subnet_ids
     security_groups  = [aws_security_group.keycloak_ecs.id]
     assign_public_ip = false
   }

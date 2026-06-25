@@ -570,28 +570,6 @@ def mock_scopes_config() -> dict:
 
 
 @pytest.fixture
-def mock_scopes_config_file(tmp_path, mock_scopes_config):
-    """
-    Create a temporary scopes.yml file for testing.
-
-    Args:
-        tmp_path: Pytest temporary path fixture
-        mock_scopes_config: Mock scopes configuration
-
-    Returns:
-        Path to temporary scopes.yml file
-    """
-    import yaml
-
-    scopes_file = tmp_path / "scopes.yml"
-    with open(scopes_file, "w") as f:
-        yaml.dump(mock_scopes_config, f)
-
-    logger.debug(f"Created mock scopes config file: {scopes_file}")
-    return scopes_file
-
-
-@pytest.fixture
 def mock_scope_repository_with_data(mock_scopes_config):
     """
     Create a mocked scope repository that returns data from mock_scopes_config.
@@ -616,8 +594,22 @@ def mock_scope_repository_with_data(mock_scopes_config):
         group_mappings = mock_scopes_config.get("group_mappings", {})
         return group_mappings.get(group_name, [])
 
+    # get_group_mappings_bulk returns the de-duplicated union across groups
+    # (mirrors the base-class default). map_groups_to_scopes calls this now.
+    async def get_group_mappings_bulk_side_effect(groups: list[str]):
+        group_mappings = mock_scopes_config.get("group_mappings", {})
+        seen: set[str] = set()
+        out: list[str] = []
+        for group in groups:
+            for scope in group_mappings.get(group, []):
+                if scope not in seen:
+                    seen.add(scope)
+                    out.append(scope)
+        return out
+
     mock_repo.get_server_scopes.side_effect = get_server_scopes_side_effect
     mock_repo.get_group_mappings.side_effect = get_group_mappings_side_effect
+    mock_repo.get_group_mappings_bulk.side_effect = get_group_mappings_bulk_side_effect
     mock_repo.load_all = AsyncMock()
     mock_repo.list_groups.return_value = {}
     mock_repo.get_group.return_value = None

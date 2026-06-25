@@ -27,10 +27,13 @@ module "mcp_gateway" {
   name = "${var.name}-v2"
 
   # Network configuration
-  vpc_id              = module.vpc.vpc_id
-  private_subnet_ids  = module.vpc.private_subnets
-  public_subnet_ids   = module.vpc.public_subnets
+  vpc_id              = local.selected_vpc_id
+  private_subnet_ids  = local.selected_private_subnet_ids
+  public_subnet_ids   = local.selected_public_subnet_ids
   ingress_cidr_blocks = var.ingress_cidr_blocks
+
+  # Internal auth-server URL (override for Cloud Map / Service Connect FQDNs)
+  auth_server_url = var.auth_server_url
 
   # ALB logging
   alb_logs_bucket = aws_s3_bucket.alb_logs.id
@@ -152,6 +155,7 @@ module "mcp_gateway" {
   entra_login_base_url                      = var.entra_login_base_url
   entra_graph_base_url                      = var.entra_graph_base_url
   idp_group_filter_prefix                   = var.idp_group_filter_prefix
+  allowed_idp_groups                        = var.allowed_idp_groups
   idp_user_group_fallback_enabled_providers = var.idp_user_group_fallback_enabled_providers
 
   # Amazon Cognito configuration

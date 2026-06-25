@@ -38,8 +38,10 @@ tests:
                 name: my-secret
                 key: my-key
       # Order: chart-managed env vars come first, then user extraEnv entries.
-      # NOTE: positions assume entra.clientSecretExistingSecret is set (above)
-      # and that no other conditional secrets (okta/auth0) are configured.
+      # NOTE: positions assume entra.clientSecretExistingSecret is set (above),
+      # that no other conditional secrets (okta/auth0) are configured, and that
+      # metrics.otelExporterOtlpEndpoint is empty (its OTEL_EXPORTER_OTLP_ENDPOINT block does
+      # not render, so it does not shift the extraEnv indices).
       # Index map:
       #   env[0] = ENTRA_CLIENT_SECRET (conditional valueFrom)
       #   env[1] = METRICS_LEGACY_HTTP_POST  (Issue #1122, unconditional)
@@ -124,6 +126,15 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "\"DOCUMENTDB_PASSWORD\" is a reserved variable"
+
+  - it: fails when extraEnv contains the reserved OTLP push endpoint
+    set:
+      extraEnv:
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://oops:4317"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"OTEL_EXPORTER_OTLP_ENDPOINT\" is a reserved variable"
 
   - it: fails when extraEnv contains the reserved mcp-proxy token TTL
     set:

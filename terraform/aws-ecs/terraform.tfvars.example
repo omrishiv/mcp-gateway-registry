@@ -137,6 +137,48 @@ keycloak_database_password = "CHANGE-ME-DB-PASSWORD"
 # Default: "10.0.0.0/16"
 # vpc_cidr = "10.0.0.0/16"
 
+# Internal URL the registry/nginx use to reach the auth-server.
+# Default: "http://auth-server:8888" (works with the bundled auth-server service).
+# Override with a Cloud Map / ECS Service Connect FQDN when only FQDNs resolve,
+# e.g. http://auth-server.<namespace>.local:8888
+# auth_server_url = "http://auth-server:8888"
+
+# Use an existing VPC instead of creating a new VPC and subnets.
+# Default: false
+# use_existing_vpc = false
+#
+# When use_existing_vpc = true, provide the VPC and subnet IDs below.
+# existing_vpc_id = "vpc-0123456789abcdef0"
+# existing_public_subnet_ids = [
+#   "subnet-0123456789abcdef0",
+#   "subnet-0123456789abcdef1",
+# ]
+# existing_private_subnet_ids = [
+#   "subnet-0123456789abcdef2",
+#   "subnet-0123456789abcdef3",
+# ]
+#
+# Required only when use_existing_vpc = true and create_vpc_endpoints = true.
+# existing_private_route_table_ids = [
+#   "rtb-0123456789abcdef0",
+#   "rtb-0123456789abcdef1",
+# ]
+#
+# Optional. Add the public egress IPs that private ECS tasks use when they call
+# the Keycloak public ALB URL through a NAT gateway, firewall, or proxy.
+# This is only needed when Keycloak ALB ingress is restricted and those egress
+# IPs are not already included in ingress_cidr_blocks or managed elsewhere.
+# existing_nat_public_ips = [
+#   "203.0.113.10",
+#   "203.0.113.11",
+# ]
+#
+# Create STS and S3 VPC endpoints.
+# Default: true
+# Set false when using an existing VPC that already provides endpoints,
+# firewall egress, or internet/NAT routing.
+# create_vpc_endpoints = true
+
 # Enable CloudWatch monitoring
 # Default: true
 # enable_monitoring = true
@@ -257,7 +299,6 @@ session_cookie_domain = ""
 #   "documentdb"    - Provision AWS DocumentDB (this module manages the cluster).
 #                     NOTE: DocumentDB is not available in every region - verify
 #                     your aws_region supports it before deploying.
-#   "file"          - JSON files only, no DocumentDB provisioned (local/dev).
 #   "mongodb-ce" / "mongodb" / "mongodb-atlas"
 #                   - External MongoDB you already own. No DocumentDB provisioned.
 #                     Requires mongodb_connection_string or *_secret_arn (see below).
@@ -320,7 +361,6 @@ storage_backend = "documentdb"
 #   mongodb_connection_string_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:mongodb-atlas-uri-XXXXXX"
 #
 # Accepted storage_backend values (must match registry/core/config.py):
-#   "file"          - JSON files, no DocumentDB provisioned
 #   "documentdb"    - Provision AWS DocumentDB (this module manages the cluster)
 #   "mongodb-ce"    - External MongoDB CE, URI via mongodb_connection_string*
 #   "mongodb"       - Alias for mongodb-ce
@@ -355,7 +395,7 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 
 # Multi-key static tokens with per-key group assignments (JSON string)
 # Each key maps a label to a key/groups pair. Clients send: Authorization: Bearer <key value>
-# Groups must exist in scopes.yml group_mappings for scope resolution.
+# Groups must exist in the group_mappings configuration for scope resolution.
 # Can also be set via environment variable:
 #   export TF_VAR_registry_api_keys='{"monitoring":{"key":"<token>","groups":["public-mcp-users"]}}'
 #
@@ -743,6 +783,14 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # idp_group_filter_prefix = "mcp-"
 # Example with multiple prefixes:
 # idp_group_filter_prefix = "mcp-,registry-,ai-"
+
+# Login-time IdP group allowlist (optional, comma-separated EXACT group names/IDs)
+# When set, only these groups are stored in a user's session at login (Design B).
+# When empty (default), the registry auto-derives the allowlist from scope
+# mappings (Design C, recommended). Fixes session bloat / slowness for users with
+# very large IdP group memberships (e.g. Entra ID with hundreds of AD groups).
+# Example:
+# allowed_idp_groups = "registry_readonly,registry_write,ai_admins"
 
 # IdP User-to-Group Fallback Providers (issue #1127, comma-separated)
 # Comma-separated list of IdP providers (e.g. pingfederate) for which the

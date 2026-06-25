@@ -646,8 +646,8 @@ flowchart TD
     ServerExists -->|Yes| ShowConflictError[Show conflict error]
     ServerExists -->|No| CreateServer[Create server entry]
     
-    CreateServer --> UpdateFAISS[Update FAISS index]
-    UpdateFAISS --> UpdateNginx[Regenerate Nginx config]
+    CreateServer --> UpdateSearchIndex[Update search index]
+    UpdateSearchIndex --> UpdateNginx[Regenerate Nginx config]
     UpdateNginx --> BroadcastUpdate[Broadcast health update]
     BroadcastUpdate --> Success[Redirect to dashboard]
     
@@ -663,7 +663,7 @@ flowchart TD
     
     class Success success
     class ShowError,ShowValidationErrors,ShowConflictError error
-    class ShowForm,UserFillsForm,SubmitForm,BackendValidation,CreateServer,UpdateFAISS,UpdateNginx,BroadcastUpdate process
+    class ShowForm,UserFillsForm,SubmitForm,BackendValidation,CreateServer,UpdateSearchIndex,UpdateNginx,BroadcastUpdate process
          class CheckPerms,ValidateForm,ServerExists decision
 ```
 
@@ -682,7 +682,7 @@ graph TB
     end
     
     subgraph "Permission Mapping Layer"
-        ScopeMapping[Group → Scope Mapping<br/>auth_server/scopes.yml]
+        ScopeMapping[Group → Scope Mapping<br/>mcp_scopes collection in DocumentDB]
         Scopes[MCP Scopes]
         ServerAccess[Accessible Server List]
     end
@@ -774,7 +774,6 @@ graph TB
 - May include toggle permissions for specific services
 
 **Example Scopes**:
-- `mcp-servers-fininfo/read` + `mcp-servers-fininfo/execute`
 - `mcp-servers-currenttime/read` + `mcp-servers-currenttime/execute`
 
 **UI Capabilities**:
@@ -784,7 +783,7 @@ graph TB
 
 ### Scope Configuration System
 
-The authorization system uses a YAML-based configuration file (`auth_server/scopes.yml`) to map groups to permissions:
+The authorization system stores scope configuration in the `mcp_scopes` collection in DocumentDB (seeded from JSON scope files in `scripts/` at init time) to map groups to permissions:
 
 ```yaml
 # Group to scope mappings
@@ -799,23 +798,11 @@ group_mappings:
     - "mcp-servers-restricted/read"
   
   # Server-specific access groups
-  mcp-server-fininfo:
-    - "mcp-servers-fininfo/read"
-    - "mcp-servers-fininfo/execute"
-  
   mcp-server-currenttime:
     - "mcp-servers-currenttime/read"
     - "mcp-servers-currenttime/execute"
 
 # Scope definitions with server mappings
-mcp-servers-fininfo/read:
-  - server: "Financial Info Proxy"
-    permissions: ["read"]
-
-mcp-servers-fininfo/execute:
-  - server: "Financial Info Proxy"
-    permissions: ["read", "execute"]
-
 mcp-servers-currenttime/read:
   - server: "Current Time API"
     permissions: ["read"]
@@ -881,7 +868,7 @@ def enhanced_auth(session: str = Cookie(alias="mcp_gateway_session")) -> Dict[st
 ```python
 # registry/auth/dependencies.py
 def map_cognito_groups_to_scopes(groups: List[str]) -> List[str]:
-    """Map Cognito groups to MCP scopes using scopes.yml configuration"""
+    """Map Cognito groups to MCP scopes using the mcp_scopes collection in DocumentDB"""
     scopes = []
     group_mappings = SCOPES_CONFIG.get('group_mappings', {})
     
@@ -1517,7 +1504,7 @@ else:
 
 2. **Configure Group Mappings**:
    ```yaml
-   # auth_server/scopes.yml
+   # mcp_scopes collection in DocumentDB (group-to-scope mapping structure)
    group_mappings:
      mcp-admin:
        - "mcp-servers-unrestricted/read"
@@ -1699,9 +1686,9 @@ def enhanced_auth(session: str = None) -> Dict[str, Any]:
 ```
 
 **Common Solutions**:
-- **Group Mapping Issues**: Verify `auth_server/scopes.yml` configuration
+- **Group Mapping Issues**: Verify the scope configuration in the `mcp_scopes` collection in DocumentDB
 - **User Group Assignment**: Check user group assignments in identity provider (Cognito)
-- **Server Name Mismatch**: Ensure server names in scopes.yml exactly match server definitions
+- **Server Name Mismatch**: Ensure server names in the `mcp_scopes` collection exactly match server definitions
 - **Scope Configuration**: Verify scope definitions reference correct server names
 
 #### 4. WebSocket Authentication Issues
@@ -1849,7 +1836,7 @@ def log_auth_event(event_type: str, username: str = None, details: dict = None,
 log_auth_event('LOGIN_SUCCESS', username='admin', request=request)
 log_auth_event('LOGIN_FAILED', details={'reason': 'invalid_credentials'}, request=request)
 log_auth_event('PERMISSION_DENIED', username='user', 
-               details={'resource': '/toggle/fininfo', 'required_permission': 'modify'}, 
+               details={'resource': '/toggle/currenttime', 'required_permission': 'modify'}, 
                request=request)
 log_auth_event('SESSION_EXPIRED', username='user', request=request)
 log_auth_event('OAUTH2_LOGIN_START', details={'provider': 'cognito'}, request=request)

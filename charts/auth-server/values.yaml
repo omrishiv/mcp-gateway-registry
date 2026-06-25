@@ -3,7 +3,7 @@ global:
   image:
     # Container registry (host + optional namespace). Shared default across subcharts.
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.24.6
+    tag: 1.24.7
     pullPolicy: IfNotPresent
 
 # Per-service image configuration
@@ -160,6 +160,14 @@ pingfederate:
 # Default: "pingfederate"
 idpUserGroupFallbackEnabledProviders: "pingfederate"
 
+# Login-time IdP group allowlist (applies to all identity providers)
+# When set, only these EXACT group names/IDs are stored in a user's session at
+# login. When empty, the registry auto-derives the allowlist from scope mappings
+# (recommended). Fixes session bloat / slowness for users with very large IdP
+# group memberships (e.g. Entra ID with hundreds of AD groups).
+# Example: "registry_readonly,registry_write,ai_admins"
+allowedIdpGroups: ""
+
 # Service configuration
 service:
   type: ClusterIP
@@ -237,6 +245,10 @@ metrics:
   otelExportIntervalMs: "15000"
   exporterPrometheusHost: "0.0.0.0"
   exporterPrometheusPort: "9464"
+  # Standard OTel SDK var. Setting this activates the OTLP push exporter (the
+  # entrypoint wraps uvicorn with opentelemetry-instrument) and is read by
+  # auth_server/server.py. Default empty: pull-only via the prometheus listener.
+  otelExporterOtlpEndpoint: ""  # OTLP endpoint URL (e.g., http://otel-collector:4317)
 
 # Metrics scrape configuration (Issue #1122)
 # Controls the NetworkPolicy that gates the OTel exporter-prometheus port.

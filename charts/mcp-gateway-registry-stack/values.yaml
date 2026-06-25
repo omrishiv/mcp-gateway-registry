@@ -8,7 +8,7 @@ global:
   image:
     # Container registry (host + optional namespace), e.g. "public.ecr.aws/p3v1o3c6"
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.24.6
+    tag: 1.24.7
     pullPolicy: IfNotPresent
 
   # When installing chart from repository, add --set global.chartVersion=$(git rev-parse HEAD) to add the git hash to a configmap for debugging
@@ -112,7 +112,9 @@ mongodb:
 keycloak:
   create: true  # Deploy Keycloak in this stack (set to false for external Keycloak or Entra)
   image:
-    registry: public.ecr.aws
+    registry: docker.io
+    repository: bitnamilegacy/keycloak
+    tag: 26.3.3-debian-12-r0
 
   global:
     security:
@@ -126,7 +128,9 @@ keycloak:
     auth:
       existingSecret: '{{ .Release.Name }}-keycloak-postgresql'
     image:
-      registry: public.ecr.aws
+      registry: docker.io
+      repository: bitnamilegacy/postgresql
+      tag: 17.6.0-debian-12-r0
 
   # Keycloak always serves from its own root (httpRelativePath defaults
   # to "/" in the Bitnami chart). The registry pod's nginx rewrites
@@ -329,7 +333,9 @@ registry:
       maxSuggestions: "3"            # Cap on advisory suggestions per request.
 
     # OpenTelemetry direct OTLP push export configuration
-    otelOtlpEndpoint: ""  # OTLP endpoint URL (e.g., https://otlp.datadoghq.com)
+    # Standard OTel SDK var. Setting this activates the OTLP push exporter.
+    otelExporterOtlpEndpoint: ""  # OTLP endpoint URL (e.g., http://otel-collector:4317)
+    otelOtlpEndpoint: ""  # metrics-service OTLP endpoint (legacy; metrics-service removed in 1.26.0)
     otelExporterOtlpHeaders: ""  # OTLP headers (e.g., dd-api-key=YOUR_KEY)
     otelOtlpExportIntervalMs: "30000"  # Export interval in milliseconds
     otelExporterOtlpMetricsTemporalityPreference: "cumulative"  # cumulative or delta
@@ -420,10 +426,24 @@ registry:
     contactEmail: ""  # Optional contact email
     contactUrl: ""  # Optional contact URL/website
 
+  # ARD Catalog Publisher (issue #1294): publishes /.well-known/ai-catalog.json
+  ard:
+    catalogEnabled: true  # Set false to disable the public ARD catalog endpoint
+    publisherDomain: ""  # URN publisher FQDN. Empty derives from registryCard.url host.
+    defaultNamespace: ""  # Optional override for the URN namespace segment
+
   # IdP group filtering (applies to all identity providers)
   # When set, only groups whose name starts with any of these prefixes are shown in IAM > Groups
   # Example: "mcp-,registry-,ai-"
   idpGroupFilterPrefix: ""
+
+  # Login-time IdP group allowlist (applies to all identity providers)
+  # When set, only these EXACT group names/IDs are stored in a user's session at
+  # login. When empty, the registry auto-derives the allowlist from scope mappings
+  # (recommended). Fixes session bloat / slowness for users with very large IdP
+  # group memberships (e.g. Entra ID with hundreds of AD groups).
+  # Example: "registry_readonly,registry_write,ai_admins"
+  allowedIdpGroups: ""
 
   # IdP user-to-group fallback (issue #1127)
   # Comma-separated list of IdP providers (e.g. pingfederate) for which the
@@ -510,6 +530,10 @@ auth-server:
     internalTokenTtlSeconds: "30"        # Token lifetime (seconds); the replay-window cap (min 5)
     internalTokenLeewaySeconds: "5"      # Clock-skew leeway (seconds) on token exp/iat
 
+  metrics:
+    # Standard OTel SDK var. Setting this activates the OTLP push exporter.
+    otelExporterOtlpEndpoint: ""  # OTLP endpoint URL (e.g., http://otel-collector:4317)
+
   keycloak:
     enabled: true
     realm: *keycloakRealm
@@ -553,6 +577,13 @@ auth-server:
     clientSecret: ""
     domain: ""  # Optional: custom Cognito domain
     region: "us-east-1"
+
+  # Login-time IdP group allowlist (applies to all identity providers)
+  # When set, only these EXACT group names/IDs are stored in a user's session at
+  # login. When empty, the registry auto-derives the allowlist from scope mappings
+  # (recommended). Keep in sync with registry.allowedIdpGroups above.
+  # Example: "registry_readonly,registry_write,ai_admins"
+  allowedIdpGroups: ""
 
   # IdP user-to-group fallback (issue #1127)
   # Comma-separated list of IdP providers (e.g. pingfederate) for which the

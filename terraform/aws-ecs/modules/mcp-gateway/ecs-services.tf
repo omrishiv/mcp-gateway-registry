@@ -109,7 +109,7 @@ module "ecs_service_auth" {
         },
         {
           name  = "AUTH_SERVER_URL"
-          value = "http://auth-server:8888"
+          value = var.auth_server_url
         },
         {
           name  = "AUTH_SERVER_EXTERNAL_URL"
@@ -189,6 +189,10 @@ module "ecs_service_auth" {
         {
           name  = "IDP_GROUP_FILTER_PREFIX"
           value = var.idp_group_filter_prefix
+        },
+        {
+          name  = "ALLOWED_IDP_GROUPS"
+          value = var.allowed_idp_groups
         },
         {
           name  = "IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS"
@@ -271,10 +275,6 @@ module "ecs_service_auth" {
         {
           name  = "PINGFEDERATE_GROUPS_CLAIM"
           value = var.pingfederate_groups_claim
-        },
-        {
-          name  = "SCOPES_CONFIG_PATH"
-          value = "/efs/auth_config/auth_config/scopes.yml"
         },
         {
           name  = "SESSION_COOKIE_SECURE"
@@ -788,7 +788,7 @@ module "ecs_service_registry" {
         },
         {
           name  = "AUTH_SERVER_URL"
-          value = "http://auth-server:8888"
+          value = var.auth_server_url
         },
         {
           name  = "AUTH_SERVER_EXTERNAL_URL"
@@ -854,6 +854,10 @@ module "ecs_service_registry" {
         {
           name  = "IDP_GROUP_FILTER_PREFIX"
           value = var.idp_group_filter_prefix
+        },
+        {
+          name  = "ALLOWED_IDP_GROUPS"
+          value = var.allowed_idp_groups
         },
         {
           name  = "IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS"
@@ -949,10 +953,6 @@ module "ecs_service_registry" {
         {
           name  = "AWS_REGION"
           value = data.aws_region.current.id
-        },
-        {
-          name  = "SCOPES_CONFIG_PATH"
-          value = "/app/auth_server/scopes.yml"
         },
         {
           name  = "EMBEDDINGS_PROVIDER"

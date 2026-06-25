@@ -246,7 +246,10 @@ class TestSettingsEnvironmentVariables:
     def test_settings_optional_fields_none(self) -> None:
         """Test that optional fields can be None."""
         # Act
-        settings = Settings()
+        # _env_file=None isolates the assertion from a developer's local .env
+        # (which may set these keys to empty strings); CI has no .env so this
+        # also matches CI behavior exactly.
+        settings = Settings(_env_file=None)
 
         # Assert - Optional fields should be None by default
         assert settings.embeddings_api_key is None
@@ -550,36 +553,6 @@ class TestSettingsFixedPaths:
         assert result == expected
 
     @patch.object(
-        Settings, "servers_dir", new_callable=lambda: property(lambda self: Path("/test/servers"))
-    )
-    def test_faiss_index_path(self, mock_servers_dir) -> None:
-        """Test faiss_index_path property."""
-        # Arrange
-        settings = Settings()
-
-        # Act
-        result = settings.faiss_index_path
-
-        # Assert
-        expected = Path("/test/servers") / "service_index.faiss"
-        assert result == expected
-
-    @patch.object(
-        Settings, "servers_dir", new_callable=lambda: property(lambda self: Path("/test/servers"))
-    )
-    def test_faiss_metadata_path(self, mock_servers_dir) -> None:
-        """Test faiss_metadata_path property."""
-        # Arrange
-        settings = Settings()
-
-        # Act
-        result = settings.faiss_metadata_path
-
-        # Assert
-        expected = Path("/test/servers") / "service_index_metadata.json"
-        assert result == expected
-
-    @patch.object(
         Settings, "agents_dir", new_callable=lambda: property(lambda self: Path("/test/agents"))
     )
     def test_agent_state_file_path(self, mock_agents_dir) -> None:
@@ -780,7 +753,9 @@ class TestSettingsSessionCookie:
     def test_session_cookie_domain_none_by_default(self) -> None:
         """Test that session_cookie_domain is None by default."""
         # Act
-        settings = Settings()
+        # _env_file=None isolates this from a developer's local .env (which may
+        # set SESSION_COOKIE_DOMAIN to an empty string); CI has no .env.
+        settings = Settings(_env_file=None)
 
         # Assert
         assert settings.session_cookie_domain is None

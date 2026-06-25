@@ -33,6 +33,10 @@ services:
       - GATEWAY_ADDITIONAL_SERVER_NAMES=${GATEWAY_ADDITIONAL_SERVER_NAMES:-}
       # Registry Card Configuration
       - REGISTRY_URL=${REGISTRY_URL:-http://localhost}
+      # ARD Catalog Publisher (issue #1294)
+      - ARD_CATALOG_ENABLED=${ARD_CATALOG_ENABLED:-true}
+      - ARD_PUBLISHER_DOMAIN=${ARD_PUBLISHER_DOMAIN:-}
+      - ARD_CATALOG_DEFAULT_NAMESPACE=${ARD_CATALOG_DEFAULT_NAMESPACE:-}
       - REGISTRY_NAME=${REGISTRY_NAME:-AI Registry}
       - REGISTRY_ORGANIZATION_NAME=${REGISTRY_ORGANIZATION_NAME:-ACME Inc.}
       - REGISTRY_DESCRIPTION=${REGISTRY_DESCRIPTION:-}
@@ -106,6 +110,8 @@ services:
       - PF_ADMIN_URL=${PF_ADMIN_URL:-https://pingfederate:9999}
       - PF_ADMIN_USER=${PF_ADMIN_USER:-administrator}
       - PF_ADMIN_PASS=${PF_ADMIN_PASS:-2FederateM0re}
+      # Login-time IdP group allowlist (blank = auto-derive from scope mappings)
+      - ALLOWED_IDP_GROUPS=${ALLOWED_IDP_GROUPS:-}
       # IdP user-to-group fallback (issue #1127)
       - IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS=${IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS:-pingfederate}
       # External Registry Configuration
@@ -128,7 +134,7 @@ services:
       - GITHUB_EXTRA_HOSTS=${GITHUB_EXTRA_HOSTS:-}
       - GITHUB_API_BASE_URL=${GITHUB_API_BASE_URL:-https://api.github.com}
       # Storage Backend Configuration
-      - STORAGE_BACKEND=${STORAGE_BACKEND:-file}
+      - STORAGE_BACKEND=${STORAGE_BACKEND:-mongodb-ce}
       # DocumentDB/MongoDB Configuration (when STORAGE_BACKEND=documentdb)
       # MONGODB_CONNECTION_STRING: Optional full URI override (e.g. for MongoDB
       # Atlas, mongodb+srv://...). When set, takes precedence over the discrete
@@ -247,7 +253,6 @@ services:
       # Audit logs kept under ${HOME}/mcp-gateway/logs (legacy path)
       - ${HOME}/mcp-gateway/logs:/app/logs
       - ${HOME}/mcp-gateway/security_scans:/app/security_scans
-      - ${HOME}/mcp-gateway/auth_server/scopes.yml:/app/auth_server/scopes.yml
       - ${HOME}/mcp-gateway/federation.json:/app/config/federation.json
       - ${HOME}/mcp-gateway/ssl:/etc/ssl:ro
       # Application log files (bind mount to host for Splunk ingestion, Issue #987)
@@ -358,10 +363,12 @@ services:
       - PINGFEDERATE_APPLICATION_ID_URI=${PINGFEDERATE_APPLICATION_ID_URI:-}
       - PINGFEDERATE_GROUPS_CLAIM=${PINGFEDERATE_GROUPS_CLAIM:-groups}
       - PINGFEDERATE_ENABLED=${PINGFEDERATE_ENABLED:-false}
+      # Login-time IdP group allowlist (blank = auto-derive from scope mappings)
+      - ALLOWED_IDP_GROUPS=${ALLOWED_IDP_GROUPS:-}
       # IdP user-to-group fallback (issue #1127)
       - IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS=${IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS:-pingfederate}
       # Storage Backend Configuration
-      - STORAGE_BACKEND=${STORAGE_BACKEND:-file}
+      - STORAGE_BACKEND=${STORAGE_BACKEND:-mongodb-ce}
       # DocumentDB/MongoDB Configuration (when STORAGE_BACKEND=documentdb or mongodb-ce)
       # MONGODB_CONNECTION_STRING: Optional full URI override (e.g. for MongoDB
       # Atlas, mongodb+srv://...). When set, takes precedence over the discrete
@@ -415,7 +422,6 @@ services:
       - ${HOME}/mcp-gateway/logs:/app/logs
       # Application log files (bind mount to host for Splunk ingestion, Issue #987)
       - /var/log/containers/ai-registry:/var/log/containers/ai-registry
-      # - ${HOME}/mcp-gateway/auth_server/scopes.yml:/app/scopes.yml
     depends_on:
       metrics-service:
         condition: service_healthy
@@ -431,22 +437,6 @@ services:
       - MCP_TRANSPORT=streamable-http
     ports:
       - "8000:8000"
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    restart: unless-stopped
-
-  # Financial Info MCP Server - using pre-built image
-  fininfo-server:
-    image: ${DOCKERHUB_ORG:-mcpgateway}/fininfo-server:${FININFO_VERSION:-latest}
-    environment:
-      - PORT=8001
-      - SECRET_KEY=${SECRET_KEY}
-    volumes:
-      - ${HOME}/mcp-gateway/secrets/fininfo/:/app/fininfo/
-    ports:
-      - "8001:8001"
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -482,7 +472,6 @@ services:
     volumes:
       - ${HOME}/mcp-gateway/servers:/app/registry/servers
       - ${HOME}/mcp-gateway/models:/app/registry/models
-      - ${HOME}/mcp-gateway/auth_server/scopes.yml:/app/auth_server/scopes.yml
       # Application log file (bind mount to host for Splunk ingestion, Issue #987)
       - /var/log/containers/ai-registry:/var/log/containers/ai-registry
     ports:
@@ -735,6 +724,7 @@ services:
       - ./scripts/mcp-registry-admin.json:/app/scripts/mcp-registry-admin.json:ro
       - ./scripts/mcp-servers-unrestricted-read.json:/app/scripts/mcp-servers-unrestricted-read.json:ro
       - ./scripts/mcp-servers-unrestricted-execute.json:/app/scripts/mcp-servers-unrestricted-execute.json:ro
+      - ./scripts/federation-service.json:/app/scripts/federation-service.json:ro
     command: >
       sh -c "
       pip install --quiet motor pymongo &&

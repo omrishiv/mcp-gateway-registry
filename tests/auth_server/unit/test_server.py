@@ -176,12 +176,14 @@ class TestGroupToScopeMapping:
         """Test basic group to scope mapping."""
         from auth_server.server import map_groups_to_scopes
 
-        # Arrange - Mock the repository to return scopes for groups
+        # Arrange - Mock the repository to return the union of scopes in one
+        # bulk call (map_groups_to_scopes resolves all groups in a single query).
         mock_repo = AsyncMock()
-        mock_repo.get_group_mappings.side_effect = lambda group: {
-            "users": ["read:servers", "read:tools"],
-            "developers": ["write:servers"],
-        }.get(group, [])
+        mock_repo.get_group_mappings_bulk.return_value = [
+            "read:servers",
+            "read:tools",
+            "write:servers",
+        ]
 
         with patch("auth_server.server.get_scope_repository", return_value=mock_repo):
             groups = ["users", "developers"]
@@ -193,19 +195,21 @@ class TestGroupToScopeMapping:
             assert "read:servers" in scopes
             assert "write:servers" in scopes
             assert "read:tools" in scopes
+            mock_repo.get_group_mappings_bulk.assert_awaited_once_with(groups)
 
     @pytest.mark.asyncio
     async def test_map_groups_to_scopes_no_duplicates(self, mock_scopes_config):
         """Test that duplicate scopes are removed."""
         from auth_server.server import map_groups_to_scopes
 
-        # Arrange - Mock the repository to return scopes for groups
+        # Arrange - the bulk query returns the de-duplicated union; verify
+        # map_groups_to_scopes preserves that (no duplicate re-introduced).
         mock_repo = AsyncMock()
-        # Both groups return "read:servers" to test deduplication
-        mock_repo.get_group_mappings.side_effect = lambda group: {
-            "users": ["read:servers", "read:tools"],
-            "developers": ["read:servers", "write:servers"],
-        }.get(group, [])
+        mock_repo.get_group_mappings_bulk.return_value = [
+            "read:servers",
+            "read:tools",
+            "write:servers",
+        ]
 
         with patch("auth_server.server.get_scope_repository", return_value=mock_repo):
             # Both groups have "read:servers"
@@ -227,7 +231,7 @@ class TestGroupToScopeMapping:
 
         # Arrange - Mock repository to return empty list for unknown groups
         mock_repo = AsyncMock()
-        mock_repo.get_group_mappings.return_value = []
+        mock_repo.get_group_mappings_bulk.return_value = []
 
         with patch("auth_server.server.get_scope_repository", return_value=mock_repo):
             groups = ["unknown-group"]
@@ -2236,6 +2240,7 @@ class TestBuildStaticTokenMap:
 
         mock_repo = AsyncMock()
         mock_repo.get_group_mappings.return_value = ["mcp-readonly/read"]
+        mock_repo.get_group_mappings_bulk.return_value = ["mcp-readonly/read"]
 
         with (
             patch.object(server_module, "REGISTRY_STATIC_TOKEN_AUTH_ENABLED", True),
@@ -2909,3 +2914,76 @@ class TestLogScopesLoaded:
         mock_logger.warning.assert_not_called()
         mock_logger.info.assert_called_once()
         assert "1 group mappings" in mock_logger.info.call_args[0][0]
+
+
+# =============================================================================
+# TOKEN LIFETIME ENFORCEMENT (#889)
+# =============================================================================
+
+
+class TestTokenLifetimeEnforcement:
+    """Verify that expires_in_hours is honoured and clamped to
+    MAX_TOKEN_LIFETIME_HOURS (#889).
+    """
+
+    def _generate_self_signed_token(
+        self,
+        auth_env_vars: dict,
+        expires_in_hours: int = 8,
+    ) -> dict:
+        """Helper: call /internal/tokens with an OAuth user context so
+        the self-signed JWT path is taken, and return the decoded claims.
+        """
+        import auth_server.server as server_module
+
+        server_module.user_token_generation_counts.clear()
+
+        client = TestClient(server_module.app)
+        body = {
+            "user_context": {
+                "username": "alice",
+                "scopes": ["mcp-servers/read"],
+                "groups": ["mcp-registry-user"],
+                "auth_method": "oauth2",
+                "provider": "keycloak",
+            },
+            "requested_scopes": ["mcp-servers/read"],
+            "expires_in_hours": expires_in_hours,
+            "description": "lifetime test",
+        }
+        response = client.post(
+            "/internal/tokens",
+            json=body,
+            headers=_internal_auth_headers(auth_env_vars),
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        token = data["access_token"]
+        claims = jwt.decode(
+            token,
+            server_module.SECRET_KEY,
+            algorithms=["HS256"],
+            audience="mcp-registry",
+        )
+        return {**data, "claims": claims}
+
+    def test_default_lifetime_is_8_hours(self, auth_env_vars):
+        """Omitting expires_in_hours defaults to 8 h."""
+        result = self._generate_self_signed_token(auth_env_vars)
+        assert result["expires_in"] == 8 * 3600
+
+    def test_custom_lifetime_honoured(self, auth_env_vars):
+        """A caller-requested 4 h lifetime must be respected (#889)."""
+        result = self._generate_self_signed_token(auth_env_vars, expires_in_hours=4)
+        assert result["expires_in"] == 4 * 3600
+
+    def test_lifetime_clamped_to_max(self, auth_env_vars):
+        """Requesting > MAX_TOKEN_LIFETIME_HOURS (24) must be clamped."""
+        result = self._generate_self_signed_token(auth_env_vars, expires_in_hours=48)
+        # MAX_TOKEN_LIFETIME_HOURS = 24
+        assert result["expires_in"] == 24 * 3600
+
+    def test_lifetime_floor_is_one_hour(self, auth_env_vars):
+        """Requesting 0 or negative hours must be clamped to 1 h."""
+        result = self._generate_self_signed_token(auth_env_vars, expires_in_hours=0)
+        assert result["expires_in"] == 1 * 3600

@@ -48,7 +48,6 @@ from tests.fixtures.mocks.mock_embeddings import (
     create_mock_litellm_module,
     create_mock_st_module,
 )
-from tests.fixtures.mocks.mock_faiss import create_mock_faiss_module
 
 logger = logging.getLogger(__name__)
 
@@ -139,15 +138,10 @@ def _setup_auto_mocking() -> None:
     """
     Set up automatic mocking for heavy dependencies.
 
-    This function mocks FAISS and sentence-transformers BEFORE they are
-    imported by the application code, avoiding loading large ML models
-    during tests.
+    This function mocks sentence-transformers BEFORE they are imported
+    by the application code, avoiding loading large ML models during
+    tests.
     """
-    # Mock FAISS
-    mock_faiss = create_mock_faiss_module()
-    sys.modules["faiss"] = mock_faiss
-    logger.info("Auto-mocked: faiss")
-
     # Mock sentence_transformers
     mock_st = create_mock_st_module()
     sys.modules["sentence_transformers"] = mock_st
@@ -315,6 +309,8 @@ def mock_scope_repository():
     mock = AsyncMock()
     mock.load_all = AsyncMock()
     mock.get_group_mappings.return_value = []
+    mock.get_group_mappings_bulk.return_value = []
+    mock.get_all_mapped_group_names.return_value = set()
     mock.list_groups.return_value = {}  # Return empty dict, not list
     mock.get_group.return_value = None
     mock.get_scope_definition.return_value = None
@@ -371,7 +367,7 @@ def mock_agent_repository():
 @pytest.fixture
 def mock_search_repository():
     """
-    Mock search repository to avoid DocumentDB/FAISS access.
+    Mock search repository to avoid DocumentDB access.
 
     Returns:
         AsyncMock instance with common search repository methods

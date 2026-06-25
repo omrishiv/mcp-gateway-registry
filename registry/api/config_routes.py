@@ -96,6 +96,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
         "order": 4,
         "fields": [
             ("idp_group_filter_prefix", "Group Filter Prefixes (comma-separated)", False),
+            ("allowed_idp_groups", "Allowed IdP Groups (comma-separated, blank = auto)", False),
         ],
         "subgroups": [
             {
@@ -255,6 +256,9 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
         "fields": [
             ("enable_wellknown_discovery", "Enabled", False),
             ("wellknown_cache_ttl", "Cache TTL", False),
+            ("ard_catalog_enabled", "ARD Catalog Enabled", False),
+            ("ard_publisher_domain", "ARD Publisher Domain", False),
+            ("ard_catalog_default_namespace", "ARD URN Namespace", False),
         ],
     },
     "otel": {
