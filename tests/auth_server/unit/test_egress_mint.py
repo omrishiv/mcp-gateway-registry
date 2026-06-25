@@ -91,7 +91,10 @@ class TestAttachMcpProxyTokenMarker:
         )
         assert "X-Internal-Token" not in resp.headers
 
-    def test_marker_disabled_mints_with_auth_method(self, monkeypatch):
+    def test_empty_marker_mints_unconditionally(self, monkeypatch):
+        # Function-level fallback only: an empty marker is rejected at startup
+        # (Settings.__init__), so this state is unreachable in a running server.
+        # Kept to pin the helper's branch behavior.
         monkeypatch.setattr(server.settings, "auth_server_nginx_marker_secret", "")
         resp = _FakeResponse()
         server._attach_mcp_proxy_token(

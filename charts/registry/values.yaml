@@ -417,9 +417,11 @@ egressAuth:
   tokenRefreshSkewSeconds: "300"
   refreshWorkerIntervalSeconds: "300"
   stateTtlSeconds: "600"
-  # nginx marker secret. Optional (empty = marker disabled). When set it
-  # MUST match auth-server. In the stack it is auto-generated + shared, so leave
-  # empty there. Only used by the standalone subchart secret.
+  # nginx marker secret. REQUIRED for standalone deployment (chart render fails
+  # if empty) -- it guards all mcp-proxy token minting and the app requires it
+  # at startup. Set a strong random value, identical to auth-server's. In the
+  # stack it is auto-generated + shared, so leave empty there. Only used by the
+  # standalone subchart secret.
   markerSecret: ""
   secretsManager:
     kmsKeyId: ""  # Optional CMK; empty uses the AWS-managed key.

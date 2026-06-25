@@ -339,7 +339,7 @@ and `AUTH_SERVER_NGINX_MARKER_SECRET`.
 | `EGRESS_REFRESH_WORKER_INTERVAL_SECONDS` | `120` | Background proactive-refresh scan interval; `0` disables the sweep. |
 | `EGRESS_STATE_TTL_SECONDS` | `600` | Lifetime of the AEAD-encrypted OAuth consent state. |
 | `EGRESS_REGISTRY_INTERNAL_URL` | `http://registry:8080` | URL the auth-server uses to reach the registry's internal vend endpoint. |
-| `AUTH_SERVER_NGINX_MARKER_SECRET` | `""` | Shared secret nginx force-sets on `/validate`. Empty disables the marker (mints unconditionally). Set a strong random value in production. **(secret)** |
+| `AUTH_SERVER_NGINX_MARKER_SECRET` | _(required)_ | Shared secret nginx force-sets on `/validate`; the auth-server only mints an mcp-proxy token when it matches. **Required at startup** (auth-server and registry refuse to start without it) and must be identical across both. Set a strong random value. **(secret)** |
 | `AWS_SECRETS_REGION` | `""` | AWS region (required when `SECRET_STORE_BACKEND=secrets-manager`). |
 | `SECRETS_MANAGER_KMS_KEY_ID` | `""` | Optional CMK for envelope encryption; empty uses the AWS-managed key. **(secret)** |
 | `SECRETS_MANAGER_PATH_PREFIX` | `mcp/egress` | Secret-name prefix; also scopes the ECS task IAM grant. |
@@ -518,10 +518,12 @@ Users can review and revoke their connections in the UI at **Connected Accounts*
 ## Security model
 
 - **Marker secret (fail-closed).** nginx force-sets `X-Validate-Source-Secret` on
-  the internal `/validate` subrequest. When `AUTH_SERVER_NGINX_MARKER_SECRET` is
-  set, the auth-server mints an egress-capable proxy token **only** if the marker
-  matches — so a direct caller hitting `:8888` with a forged `X-Resolved-Upstream`
-  cannot obtain one. Empty marker disables the check (mints unconditionally).
+  the internal `/validate` subrequest. The auth-server mints an mcp-proxy token
+  **only** if the marker matches — so a direct caller hitting `:8888` with a forged
+  `X-Resolved-Upstream` cannot obtain one. `AUTH_SERVER_NGINX_MARKER_SECRET` is
+  **required at startup** (both auth-server and registry refuse to start without
+  it); an empty marker — which would mint unconditionally — is rejected rather than
+  silently disabling the check.
 - **Upstream cross-check.** The vend endpoint re-verifies the internal token and
   confirms the token's `upstream_url` falls within the registered server's
   `proxy_pass_url` (and version allowlist) before vending — a forged upstream is

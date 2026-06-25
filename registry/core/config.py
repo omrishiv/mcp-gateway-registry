@@ -999,8 +999,9 @@ class Settings(BaseSettings):
             "Shared secret: nginx force-sets it as X-Validate-Source-Secret on "
             "the /validate subrequest; auth_server only mints the egress-capable mcp-proxy "
             "token when it matches, so a direct :8888 /validate call with a forged "
-            "X-Resolved-Upstream cannot obtain one. Empty = marker disabled (mints "
-            "unconditionally). Treat as a secret."
+            "X-Resolved-Upstream cannot obtain one. Required (non-empty) when "
+            "EGRESS_AUTH_ENABLED=true -- startup fails otherwise, since an empty marker "
+            "would mint unconditionally. Treat as a secret."
         ),
     )
     aws_secrets_region: str = Field(
@@ -1264,6 +1265,14 @@ class Settings(BaseSettings):
                 "Set it to a value at least 32 bytes long, identical across all auth_server "
                 "and registry replicas (see chart values.yaml: global.secretKey)."
             )
+        if not self.auth_server_nginx_marker_secret:
+            raise RuntimeError(
+                "AUTH_SERVER_NGINX_MARKER_SECRET environment variable is required. "
+                "Set it to a strong random value (at least 32 bytes), identical across all "
+                "auth_server and registry replicas (see chart values.yaml). Without it, the "
+                "auth_server mints mcp-proxy tokens unconditionally, letting a direct :8888 "
+                "/validate call with a forged X-Resolved-Upstream bypass nginx and obtain one."
+            )
         self._validate_egress_auth_config()
 
     def _validate_egress_auth_config(self) -> None:
@@ -1274,6 +1283,9 @@ class Settings(BaseSettings):
           Mongo-family storage_backend (the default 'file' backend has no lock
           home -> would silently drop cross-replica single-flight refresh).
         - a public callback base URL is required to build the redirect_uri.
+
+        The nginx marker secret is required unconditionally (in __init__), not
+        just for egress, since it guards all mcp-proxy token minting.
         """
         if not self.egress_auth_enabled:
             return

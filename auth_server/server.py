@@ -254,8 +254,9 @@ def _attach_mcp_proxy_token(
 
     When ``AUTH_SERVER_NGINX_MARKER_SECRET`` is configured, the token is
     minted ONLY if nginx force-set the matching ``X-Validate-Source-Secret`` on
-    this subrequest. Empty marker = disabled (mints unconditionally; the
-    upstream cross-check still applies).
+    this subrequest. An empty marker mints unconditionally; this is rejected at
+    startup when egress is enabled (see Settings._validate_egress_auth_config),
+    so the empty-marker branch only remains reachable when egress is disabled.
     """
     resolved_upstream = request.headers.get("X-Resolved-Upstream", "")
     if not resolved_upstream:

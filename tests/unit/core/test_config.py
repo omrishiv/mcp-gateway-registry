@@ -108,6 +108,20 @@ class TestSettingsInstantiation:
         with pytest.raises(RuntimeError, match="SECRET_KEY"):
             Settings(secret_key="")
 
+    def test_settings_fails_without_marker_secret(self, monkeypatch, tmp_path) -> None:
+        """Settings refuses to instantiate when AUTH_SERVER_NGINX_MARKER_SECRET is unset.
+
+        An empty marker makes the auth_server mint mcp-proxy tokens
+        unconditionally, so a direct :8888 /validate with a forged
+        X-Resolved-Upstream could bypass nginx. The missing-marker path is a
+        hard startup error, like SECRET_KEY.
+        """
+        monkeypatch.delenv("AUTH_SERVER_NGINX_MARKER_SECRET", raising=False)
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(RuntimeError, match="AUTH_SERVER_NGINX_MARKER_SECRET"):
+            Settings(secret_key="present", auth_server_nginx_marker_secret="")
+
     def test_settings_secret_key_not_overridden(self) -> None:
         """Test that provided secret_key is not overridden."""
         # Arrange

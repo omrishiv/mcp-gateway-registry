@@ -18,6 +18,7 @@ def _valid_egress_kwargs(**overrides):
         "storage_backend": "mongodb-ce",
         "egress_oauth_callback_base_url": "https://gw.example",
         "secret_store_backend": "openbao",
+        "auth_server_nginx_marker_secret": "a" * 32,
     }
     base.update(overrides)
     return base

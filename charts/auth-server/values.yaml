@@ -167,9 +167,10 @@ egressAuth:
   # global.domain + the ingress routing mode (see templates/configmap-egress.yaml);
   # set it only to point at a custom public front door.
   oauthCallbackBaseUrl: ""
-  # nginx marker secret. Optional (empty = marker disabled). When set it
-  # MUST match the registry. In the stack it is auto-generated + shared, so
-  # leave empty there.
+  # nginx marker secret. REQUIRED for standalone deployment (chart render fails
+  # if empty) -- it guards all mcp-proxy token minting and the app requires it
+  # at startup. Set a strong random value, identical to the registry's. In the
+  # stack it is auto-generated + shared, so leave empty there.
   markerSecret: ""
 
 # PingFederate integration (used when authProvider.type = "pingfederate")
