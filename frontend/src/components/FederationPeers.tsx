@@ -437,7 +437,7 @@ const FederationPeers: React.FC<FederationPeersProps> = ({ onShowToast }) => {
       ) : (
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-            <thead className="bg-gray-50 dark:bg-gray-900/50">
+            <thead className="bg-gray-50 dark:bg-gray-900">
               <tr>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                   Name
@@ -468,7 +468,7 @@ const FederationPeers: React.FC<FederationPeersProps> = ({ onShowToast }) => {
                 const isSyncing = syncingPeers.has(peer.peer_id);
 
                 return (
-                  <tr key={peer.peer_id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                  <tr key={peer.peer_id} className="table-row">
                     <td className="px-4 py-4 whitespace-nowrap">
                       <div className="flex flex-col">
                         <span className="text-sm font-medium text-gray-900 dark:text-white">
@@ -558,7 +558,7 @@ const FederationPeers: React.FC<FederationPeersProps> = ({ onShowToast }) => {
                 }}
                 disabled={isDeleting}
                 className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200
-                           rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50"
+                           rounded-lg hover:bg-gray-300 dark:hover:bg-gray-800 disabled:opacity-50"
               >
                 Cancel
               </button>

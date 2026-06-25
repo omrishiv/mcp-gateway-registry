@@ -1,5 +1,6 @@
 import React from 'react';
 import DetailsModal from './DetailsModal';
+import Button from './Button';
 import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 
 
@@ -60,30 +61,16 @@ const ConfirmModal: React.FC<ConfirmModalProps> = ({
         </p>
 
         <div className="flex justify-center space-x-3 pt-2 w-full">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={isLoading}
-            className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300
-                       bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600
-                       rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700
-                       disabled:opacity-50 transition-colors"
-          >
+          <Button variant="secondary" onClick={onClose} disabled={isLoading}>
             {cancelLabel}
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            variant={isDestructive ? 'danger' : 'primary'}
             onClick={onConfirm}
             disabled={isLoading}
-            className={`px-4 py-2 text-sm font-medium text-white rounded-lg
-                       disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${
-              isDestructive
-                ? 'bg-red-600 hover:bg-red-700'
-                : 'bg-purple-600 hover:bg-purple-700'
-            }`}
           >
             {isLoading ? loadingLabel : confirmLabel}
-          </button>
+          </Button>
         </div>
       </div>
     </DetailsModal>

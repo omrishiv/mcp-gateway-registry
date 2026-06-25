@@ -215,7 +215,7 @@ function ResourceItem({
   const isPreviewable = TEXT_PREVIEWABLE_TYPES.has(resource.type);
 
   return (
-    <div className="flex items-center justify-between py-2 px-3 border-b border-gray-200 dark:border-gray-700 last:border-b-0 hover:bg-gray-50 dark:hover:bg-gray-800/50">
+    <div className="flex items-center justify-between py-2 px-3 border-b border-gray-200 dark:border-gray-700 last:border-b-0 hover:bg-gray-50 dark:hover:bg-gray-800">
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="font-mono text-sm text-gray-900 dark:text-gray-100 truncate">

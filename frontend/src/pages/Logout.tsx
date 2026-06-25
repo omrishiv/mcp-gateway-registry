@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { CheckCircleIcon } from '@heroicons/react/24/outline';
 import { useUiTitle } from '../hooks/useUiTitle';
+import Button from '../components/Button';
 
 const Logout: React.FC = () => {
   const navigate = useNavigate();
@@ -42,12 +43,14 @@ const Logout: React.FC = () => {
             </p>
 
             <div className="pt-4">
-              <button
+              <Button
+                variant="primary"
+                fullWidth
                 onClick={() => navigate('/login')}
-                className="w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-purple-600 hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 transition-all duration-200 hover:shadow-md"
+                className="py-3 shadow-sm hover:shadow-md focus:ring-2 focus:ring-offset-2 focus:ring-purple-500"
               >
                 Return to Login
-              </button>
+              </Button>
             </div>
 
             <p className="text-xs text-gray-500 dark:text-gray-400">

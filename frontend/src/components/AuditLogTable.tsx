@@ -261,7 +261,7 @@ const AuditLogTable: React.FC<AuditLogTableProps> = ({
       <div className="overflow-x-auto">
         <table className="w-full">
           <thead>
-            <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-700">
+            <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700">
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                 <button
                   onClick={handleSortToggle}
@@ -317,10 +317,10 @@ const AuditLogTable: React.FC<AuditLogTableProps> = ({
                 <tr
                   key={event.request_id}
                   onClick={() => onEventSelect?.(event)}
-                  className={`cursor-pointer transition-colors ${
+                  className={`table-row cursor-pointer ${
                     selectedEventId === event.request_id
                       ? 'bg-blue-50 dark:bg-blue-900/20'
-                      : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'
+                      : ''
                   }`}
                 >
                   <td className="px-4 py-3 text-sm text-gray-900 dark:text-gray-100 whitespace-nowrap">

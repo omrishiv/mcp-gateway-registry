@@ -101,7 +101,7 @@ const AuditLogsPage: React.FC<AuditLogsPageProps> = ({ embedded = false }) => {
           <div className="flex items-center gap-2">
             <button
               onClick={() => handleExport('jsonl')}
-              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
+              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
               title="Export as JSONL"
             >
               <ArrowDownTrayIcon className="h-4 w-4" />
@@ -109,7 +109,7 @@ const AuditLogsPage: React.FC<AuditLogsPageProps> = ({ embedded = false }) => {
             </button>
             <button
               onClick={() => handleExport('csv')}
-              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
+              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
               title="Export as CSV"
             >
               <ArrowDownTrayIcon className="h-4 w-4" />
@@ -177,7 +177,7 @@ const AuditLogsPage: React.FC<AuditLogsPageProps> = ({ embedded = false }) => {
           <div className="flex items-center gap-2">
             <button
               onClick={() => handleExport('jsonl')}
-              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
+              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
               title="Export as JSONL"
             >
               <ArrowDownTrayIcon className="h-4 w-4" />
@@ -185,7 +185,7 @@ const AuditLogsPage: React.FC<AuditLogsPageProps> = ({ embedded = false }) => {
             </button>
             <button
               onClick={() => handleExport('csv')}
-              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
+              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
               title="Export as CSV"
             >
               <ArrowDownTrayIcon className="h-4 w-4" />

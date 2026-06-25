@@ -1,9 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { XMarkIcon, ChevronDownIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
 import { VirtualServerInfo, VirtualServerConfig, ToolMapping } from '../types/virtualServer';
 import axios from 'axios';
-import useEscapeKey from '../hooks/useEscapeKey';
 import ResourceBoundTokenButton from './ResourceBoundTokenButton';
+import { EntityModal, CollapsibleSection } from './modals';
 
 
 interface VirtualServerDetailsModalProps {
@@ -21,8 +20,6 @@ const VirtualServerDetailsModal: React.FC<VirtualServerDetailsModalProps> = ({
   const [fullConfig, setFullConfig] = useState<VirtualServerConfig | null>(null);
   const [loading, setLoading] = useState(false);
   const [expandedBackends, setExpandedBackends] = useState<Record<string, boolean>>({});
-
-  useEscapeKey(onClose, isOpen);
 
   // Fetch full config when modal opens
   useEffect(() => {
@@ -76,34 +73,30 @@ const VirtualServerDetailsModal: React.FC<VirtualServerDetailsModalProps> = ({
     }));
   };
 
-  if (!isOpen) return null;
-
   const backendPaths = virtualServer.backend_paths || [];
   const hasToolDetails = Object.keys(toolsByBackend).length > 0;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-2xl w-full max-h-[80vh] flex flex-col">
-        <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
-          <div>
-            <div className="flex items-center gap-2">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-                {virtualServer.server_name}
-              </h3>
-              <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-200 border border-teal-200 dark:border-teal-600">
-                VIRTUAL
-              </span>
-            </div>
-            <p className="text-sm text-gray-500 dark:text-gray-400">{virtualServer.path}</p>
+    <EntityModal
+      isOpen={isOpen}
+      onClose={onClose}
+      maxWidth="2xl"
+      layout="flush"
+      title={
+        <div>
+          <div className="flex items-center gap-2">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+              {virtualServer.server_name}
+            </h3>
+            <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-200 border border-teal-200 dark:border-teal-600">
+              VIRTUAL
+            </span>
           </div>
-          <button
-            onClick={onClose}
-            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-lg transition-colors"
-          >
-            <XMarkIcon className="h-5 w-5" />
-          </button>
+          <p className="text-sm text-gray-500 dark:text-gray-400">{virtualServer.path}</p>
         </div>
-        <div className="p-4 overflow-auto flex-1 space-y-4">
+      }
+    >
+      <div className="space-y-4">
           {/* Description */}
           <div>
             <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
@@ -156,70 +149,61 @@ const VirtualServerDetailsModal: React.FC<VirtualServerDetailsModalProps> = ({
                 <ul className="space-y-2">
                   {backendPaths.map((path) => {
                     const backendTools = toolsByBackend[path] || [];
-                    const isExpanded = expandedBackends[path];
                     const toolCount = backendTools.length;
 
                     return (
-                      <li key={path} className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
-                        <button
-                          onClick={() => toggleBackend(path)}
-                          className="w-full flex items-center justify-between px-3 py-2 bg-gray-50 dark:bg-gray-900/50 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-left"
-                        >
-                          <div className="flex items-center gap-2">
-                            {hasToolDetails ? (
-                              isExpanded ? (
-                                <ChevronDownIcon className="h-4 w-4 text-gray-500" />
-                              ) : (
-                                <ChevronRightIcon className="h-4 w-4 text-gray-500" />
-                              )
-                            ) : (
-                              <div className="w-4" />
-                            )}
-                            <span className="text-sm font-mono text-gray-700 dark:text-gray-200">
+                      <li key={path}>
+                        <CollapsibleSection
+                          collapsible={hasToolDetails}
+                          expanded={!!expandedBackends[path]}
+                          onToggle={() => toggleBackend(path)}
+                          title={
+                            <span className="text-sm font-mono text-gray-700 dark:text-gray-200 truncate">
                               {path}
                             </span>
-                          </div>
-                          {hasToolDetails && (
-                            <span className="px-2 py-0.5 text-xs bg-teal-100 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300 rounded-full">
-                              {toolCount} tool{toolCount !== 1 ? 's' : ''}
-                            </span>
-                          )}
-                        </button>
-
-                        {/* Expanded tools list */}
-                        {isExpanded && backendTools.length > 0 && (
-                          <ul className="border-t border-gray-200 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-800">
-                            {backendTools.map((tool) => (
-                              <li
-                                key={tool.alias || tool.tool_name}
-                                className="px-4 py-3 bg-white dark:bg-gray-800"
-                              >
-                                <div className="flex items-start justify-between gap-2">
-                                  <div className="flex-1 min-w-0">
-                                    <span className="font-medium text-sm text-gray-900 dark:text-white">
-                                      {tool.alias || tool.tool_name}
-                                    </span>
-                                    {tool.alias && tool.alias !== tool.tool_name && (
-                                      <span className="ml-2 text-xs text-gray-400 dark:text-gray-500">
-                                        (original: {tool.tool_name})
+                          }
+                          badge={
+                            hasToolDetails ? (
+                              <span className="px-2 py-0.5 text-xs bg-teal-100 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300 rounded-full">
+                                {toolCount} tool{toolCount !== 1 ? 's' : ''}
+                              </span>
+                            ) : undefined
+                          }
+                        >
+                          {backendTools.length > 0 && (
+                            <ul className="border-t border-gray-200 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-800">
+                              {backendTools.map((tool) => (
+                                <li
+                                  key={tool.alias || tool.tool_name}
+                                  className="px-4 py-3 bg-white dark:bg-gray-800"
+                                >
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div className="flex-1 min-w-0">
+                                      <span className="font-medium text-sm text-gray-900 dark:text-white">
+                                        {tool.alias || tool.tool_name}
+                                      </span>
+                                      {tool.alias && tool.alias !== tool.tool_name && (
+                                        <span className="ml-2 text-xs text-gray-400 dark:text-gray-500">
+                                          (original: {tool.tool_name})
+                                        </span>
+                                      )}
+                                    </div>
+                                    {tool.backend_version && (
+                                      <span className="px-1.5 py-0.5 text-[10px] bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 rounded font-mono">
+                                        v{tool.backend_version}
                                       </span>
                                     )}
                                   </div>
-                                  {tool.backend_version && (
-                                    <span className="px-1.5 py-0.5 text-[10px] bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 rounded font-mono">
-                                      v{tool.backend_version}
-                                    </span>
+                                  {tool.description_override && (
+                                    <p className="mt-1 text-xs text-gray-600 dark:text-gray-400 leading-relaxed">
+                                      {tool.description_override}
+                                    </p>
                                   )}
-                                </div>
-                                {tool.description_override && (
-                                  <p className="mt-1 text-xs text-gray-600 dark:text-gray-400 leading-relaxed">
-                                    {tool.description_override}
-                                  </p>
-                                )}
-                              </li>
-                            ))}
-                          </ul>
-                        )}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </CollapsibleSection>
                       </li>
                     );
                   })}
@@ -282,9 +266,8 @@ const VirtualServerDetailsModal: React.FC<VirtualServerDetailsModalProps> = ({
               </div>
             </div>
           )}
-        </div>
       </div>
-    </div>
+    </EntityModal>
   );
 };
 
