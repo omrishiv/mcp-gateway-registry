@@ -13,19 +13,6 @@ import { VirtualServerInfo, ResolvedTool } from '../types/virtualServer';
 import ServerConfigModal from './ServerConfigModal';
 import StarRatingWidget from './StarRatingWidget';
 import useEscapeKey from '../hooks/useEscapeKey';
-import {
-  CardShell,
-  CardHeader,
-  CardBody,
-  CardStatsRow,
-  CardFooter,
-  StatusDot,
-  TagList,
-  ToggleSwitch,
-  ACCENTS,
-  ENTITY_ACCENTS,
-} from './cards';
-import Badge from './Badge';
 
 
 /**
@@ -43,17 +30,11 @@ interface VirtualServerCardProps {
 }
 
 
-const ACCENT = ENTITY_ACCENTS.virtualServer;
-
-
 /**
  * VirtualServerCard renders a dashboard card for a virtual MCP server.
  *
- * Composes the shared card primitives (CardShell/Header/Body/Stats/Footer) and
- * uses the teal accent so every shared feature — container, footer, divider,
- * toggle, tags — follows the same rule as the other entity cards. The tools
- * modal (backend-grouped, collapsible) is the entity-specific behavior kept
- * inline here.
+ * Uses a teal/cyan gradient for visual distinction from regular ServerCard.
+ * Matches the layout and UI elements of the regular ServerCard.
  */
 const VirtualServerCard: React.FC<VirtualServerCardProps> = ({
   virtualServer: server,
@@ -163,20 +144,29 @@ const VirtualServerCard: React.FC<VirtualServerCardProps> = ({
 
   return (
     <>
-      <CardShell accent={ACCENT}>
-        <CardHeader
-          title={server.server_name}
-          path={server.path}
-          badges={
-            <Badge tone="teal" bordered>
-              VIRTUAL
-            </Badge>
-          }
-          actions={
-            <>
+      <div className="group rounded-2xl shadow-sm hover:shadow-xl transition-all duration-300 h-full flex flex-col bg-gradient-to-br from-teal-50 to-cyan-50 dark:from-teal-900/20 dark:to-cyan-900/20 border-2 border-teal-200 dark:border-teal-700 hover:border-teal-300 dark:hover:border-teal-600">
+        {/* Header */}
+        <div className="p-5 pb-4">
+          <div className="flex items-start justify-between mb-4">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 mb-3">
+                <h3 className="text-lg font-bold text-gray-900 dark:text-white truncate">
+                  {server.server_name}
+                </h3>
+                <span className="px-2 py-0.5 text-xs font-semibold bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-300 rounded-full flex-shrink-0 border border-teal-200 dark:border-teal-600">
+                  VIRTUAL
+                </span>
+              </div>
+
+              <code className="text-xs text-gray-600 dark:text-gray-300 bg-gray-50 dark:bg-gray-800/50 px-2 py-1 rounded font-mono">
+                {server.path}
+              </code>
+            </div>
+
+            <div className="flex items-center gap-1 flex-shrink-0">
               {canModify && (
                 <button
-                  className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-lg transition-all duration-200"
+                  className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg transition-all duration-200"
                   onClick={() => onEdit(server)}
                   title="Edit virtual server"
                 >
@@ -204,80 +194,122 @@ const VirtualServerCard: React.FC<VirtualServerCardProps> = ({
                   <TrashIcon className="h-4 w-4" />
                 </button>
               )}
-            </>
-          }
-        />
+            </div>
+          </div>
 
-        <CardBody description={server.description}>
-          <TagList tags={server.tags || []} accent={ACCENT} prefix="#" />
-        </CardBody>
+          {/* Description */}
+          <p className="text-gray-600 dark:text-gray-300 text-sm leading-relaxed line-clamp-2 mb-4">
+            {server.description || 'No description available'}
+          </p>
+
+          {/* Tags */}
+          {server.tags && server.tags.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mb-4">
+              {server.tags.slice(0, 3).map((tag) => (
+                <span
+                  key={tag}
+                  className="px-2 py-1 text-xs font-medium bg-teal-50 dark:bg-teal-900/30 text-teal-700 dark:text-teal-300 rounded"
+                >
+                  #{tag}
+                </span>
+              ))}
+              {server.tags.length > 3 && (
+                <span className="px-2 py-1 text-xs font-medium bg-gray-50 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded">
+                  +{server.tags.length - 3}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
 
         {/* Stats - 2-column layout */}
-        <CardStatsRow columns={2}>
-          <StarRatingWidget
-            resourceType="virtual-servers"
-            path={server.path}
-            initialRating={server.num_stars || 0}
-            initialCount={server.rating_details?.length || 0}
-            ratingDetails={server.rating_details}
-            authToken={authToken}
-            onShowToast={onShowToast}
-            onRatingUpdate={(newRating) => {
-              onServerUpdate?.(server.path, { num_stars: newRating });
-            }}
-          />
+        <div className="px-5 pb-4">
+          <div className="grid grid-cols-2 gap-4">
+            {/* Rating */}
+            <StarRatingWidget
+              resourceType="virtual-servers"
+              path={server.path}
+              initialRating={server.num_stars || 0}
+              initialCount={server.rating_details?.length || 0}
+              ratingDetails={server.rating_details}
+              authToken={authToken}
+              onShowToast={onShowToast}
+              onRatingUpdate={(newRating) => {
+                onServerUpdate?.(server.path, { num_stars: newRating });
+              }}
+            />
 
-          {/* Tools - clickable */}
-          <div className="flex items-center gap-2">
-            {server.tool_count > 0 ? (
-              <button
-                onClick={handleViewTools}
-                disabled={loadingTools}
-                className={`flex items-center gap-2 disabled:opacity-50 px-2 py-1 -mx-2 -my-1 rounded transition-all ${ACCENTS[ACCENT].interactive}`}
-                title="View tools"
-              >
-                <div className={`p-1.5 rounded ${ACCENTS[ACCENT].iconChip}`}>
-                  <WrenchScrewdriverIcon className="h-4 w-4" />
+            {/* Tools - clickable */}
+            <div className="flex items-center gap-2">
+              {server.tool_count > 0 ? (
+                <button
+                  onClick={handleViewTools}
+                  disabled={loadingTools}
+                  className="flex items-center gap-2 text-teal-600 hover:text-teal-700 dark:text-teal-400 dark:hover:text-teal-300 disabled:opacity-50 hover:bg-teal-50 dark:hover:bg-teal-900/20 px-2 py-1 -mx-2 -my-1 rounded transition-all"
+                  title="View tools"
+                >
+                  <div className="p-1.5 bg-teal-50 dark:bg-teal-900/30 rounded">
+                    <WrenchScrewdriverIcon className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <div className="text-sm font-semibold">{server.tool_count}</div>
+                    <div className="text-xs">Tools</div>
+                  </div>
+                </button>
+              ) : (
+                <div className="flex items-center gap-2 text-gray-400 dark:text-gray-500">
+                  <div className="p-1.5 bg-gray-50 dark:bg-gray-800 rounded">
+                    <WrenchScrewdriverIcon className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <div className="text-sm font-semibold">0</div>
+                    <div className="text-xs">Tools</div>
+                  </div>
                 </div>
-                <div>
-                  <div className="text-sm font-semibold">{server.tool_count}</div>
-                  <div className="text-xs">Tools</div>
+              )}
+            </div>
+
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="mt-auto px-5 py-4 border-t border-teal-100 dark:border-teal-800 bg-teal-50/50 dark:bg-teal-900/10 rounded-b-2xl">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className={`w-3 h-3 rounded-full ${
+                server.is_enabled
+                  ? 'bg-green-400 shadow-lg shadow-green-400/30'
+                  : 'bg-gray-300 dark:bg-gray-600'
+              }`} />
+              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                {server.is_enabled ? 'Enabled' : 'Disabled'}
+              </span>
+            </div>
+
+            {/* Toggle Switch */}
+            {canModify && (
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={server.is_enabled}
+                  onChange={(e) => onToggle(server.path, e.target.checked)}
+                  className="sr-only peer"
+                  aria-label={`Enable ${server.server_name}`}
+                />
+                <div className={`relative w-12 h-6 rounded-full transition-colors duration-200 ease-in-out ${
+                  server.is_enabled
+                    ? 'bg-teal-600'
+                    : 'bg-gray-300 dark:bg-gray-600'
+                }`}>
+                  <div className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform duration-200 ease-in-out ${
+                    server.is_enabled ? 'translate-x-6' : 'translate-x-0'
+                  }`} />
                 </div>
-              </button>
-            ) : (
-              <div className="flex items-center gap-2 text-gray-400 dark:text-gray-500">
-                <div className="p-1.5 bg-gray-50 dark:bg-gray-800 rounded">
-                  <WrenchScrewdriverIcon className="h-4 w-4" />
-                </div>
-                <div>
-                  <div className="text-sm font-semibold">0</div>
-                  <div className="text-xs">Tools</div>
-                </div>
-              </div>
+              </label>
             )}
           </div>
-        </CardStatsRow>
-
-        <CardFooter
-          accent={ACCENT}
-          status={
-            <StatusDot
-              tone={server.is_enabled ? 'green' : 'off'}
-              label={server.is_enabled ? 'Enabled' : 'Disabled'}
-            />
-          }
-          controls={
-            canModify && (
-              <ToggleSwitch
-                checked={server.is_enabled}
-                onChange={(checked) => onToggle(server.path, checked)}
-                ariaLabel={`Enable ${server.server_name}`}
-                accent={ACCENT}
-              />
-            )
-          }
-        />
-      </CardShell>
+        </div>
+      </div>
 
       {/* Tools Modal */}
       {showTools && (
@@ -341,7 +373,7 @@ const VirtualServerCard: React.FC<VirtualServerCardProps> = ({
                                 {/* Tool header - clickable to expand */}
                                 <button
                                   onClick={() => hasDetails && toggleTool(tool.name)}
-                                  className={`w-full px-4 py-3 text-left ${hasDetails ? 'cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700' : 'cursor-default'}`}
+                                  className={`w-full px-4 py-3 text-left ${hasDetails ? 'cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50' : 'cursor-default'}`}
                                   disabled={!hasDetails}
                                 >
                                   <div className="flex items-start justify-between gap-2">

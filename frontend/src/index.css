@@ -4,200 +4,29 @@
 @tailwind components;
 @tailwind utilities;
 
-/*
- * Design tokens as CSS custom properties.
- *
- * The `primary` and `gray` Tailwind scales resolve through these variables
- * (see tailwind.config.cjs), so a theme can remap the whole palette at runtime
- * by toggling a class on <html> — no rebuild required. The default :root values
- * are the original palette, so existing `primary-*` / `gray-*` / `dark:` classes
- * render identically until another theme is selected.
- *
- * To add a theme: add an `html.<name> { ... }` block overriding the tokens you
- * want to change, then register the name in ThemeContext's availableThemes.
- */
-:root {
-  --color-primary-50: #f7f5ff;
-  --color-primary-100: #f0edff;
-  --color-primary-200: #e2dcff;
-  --color-primary-300: #cdc0ff;
-  --color-primary-400: #b199ff;
-  --color-primary-500: #9573ff;
-  --color-primary-600: #7a00cc;
-  --color-primary-700: #6b46c1;
-  --color-primary-800: #553c9a;
-  --color-primary-900: #483177;
-
-  --color-gray-50: #f8f9fa;
-  --color-gray-100: #f1f3f4;
-  --color-gray-200: #e8eaed;
-  --color-gray-300: #dadce0;
-  --color-gray-400: #bdc1c6;
-  --color-gray-500: #9aa0a6;
-  --color-gray-600: #80868b;
-  --color-gray-700: #5f6368;
-  --color-gray-800: #3c4043;
-  --color-gray-900: #202124;
-
-  /*
-   * Semantic interaction tokens (light-mode defaults).
-   *
-   * These define the surface/hover/text for the shared Button component so that
-   * contrast and color are tuned in ONE place per mode. The dark-mode block
-   * below overrides the secondary/ghost values so hover DARKENS (away from the
-   * light text) instead of lightening into it — the a11y bug we hit.
-   */
-  --btn-secondary-bg: var(--color-gray-100);
-  --btn-secondary-bg-hover: var(--color-gray-200);
-  --btn-secondary-text: var(--color-gray-900);
-
-  --btn-ghost-bg-hover: var(--color-gray-100);
-  --btn-ghost-text: var(--color-gray-700);
-
-  /* Table interaction surfaces (light-mode defaults). */
-  --table-header-bg: var(--color-gray-100);
-  --table-row-hover-bg: var(--color-gray-100);
-  --table-row-selected-bg: var(--color-gray-100);
-}
-
-/*
- * Dark-mode interaction tokens. Applied via the `dark` class on <html>
- * (Tailwind darkMode: 'class'). Secondary/ghost hover surfaces go DARKER than
- * their base so they keep clear contrast with light-gray text (WCAG AA).
- */
-html.dark {
-  --btn-secondary-bg: var(--color-gray-700);
-  --btn-secondary-bg-hover: var(--color-gray-800);
-  --btn-secondary-text: var(--color-gray-100);
-
-  --btn-ghost-bg-hover: var(--color-gray-800);
-  --btn-ghost-text: var(--color-gray-300);
-
-  /*
-   * Table surfaces in dark mode use SOLID dark grays (not opacity composites),
-   * so hovered/selected rows stay clearly darker than the light-gray cell text
-   * — the row-hover a11y bug fixed in one place.
-   */
-  --table-header-bg: var(--color-gray-900);
-  --table-row-hover-bg: var(--color-gray-700);
-  --table-row-selected-bg: var(--color-gray-700);
-}
-
-/*
- * High-contrast theme (sample). Darkens the primary scale and pushes grays
- * toward black/white for stronger contrast. Demonstrates runtime remapping;
- * extend or replace with brand themes as needed.
- */
-html.high-contrast {
-  --color-primary-50: #f3e8ff;
-  --color-primary-100: #e9d5ff;
-  --color-primary-200: #d8b4fe;
-  --color-primary-300: #c084fc;
-  --color-primary-400: #a855f7;
-  --color-primary-500: #9333ea;
-  --color-primary-600: #6b21a8;
-  --color-primary-700: #581c87;
-  --color-primary-800: #3b0764;
-  --color-primary-900: #2e1065;
-
-  --color-gray-50: #ffffff;
-  --color-gray-100: #f4f4f5;
-  --color-gray-200: #e4e4e7;
-  --color-gray-300: #d4d4d8;
-  --color-gray-400: #a1a1aa;
-  --color-gray-500: #71717a;
-  --color-gray-600: #52525b;
-  --color-gray-700: #3f3f46;
-  --color-gray-800: #27272a;
-  --color-gray-900: #000000;
-}
-
 @layer base {
   html {
     font-family: 'Inter', system-ui, sans-serif;
   }
-
+  
   body {
     margin: 0;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
-
-  /*
-   * Text-selection highlight. The browser default can render near-white, which
-   * makes light text (e.g. log lines in dark mode) invisible when selected.
-   * Define it once here with an explicit, contrasting pair for both modes.
-   */
-  ::selection {
-    background-color: var(--color-primary-200);
-    color: var(--color-gray-900);
-  }
-  html.dark ::selection {
-    background-color: var(--color-primary-700);
-    color: #ffffff;
-  }
 }
 
 @layer components {
-  /*
-   * Button surfaces. Layout (padding/radius/weight) is shared via .btn-base;
-   * color comes from the semantic interaction tokens above so light/dark and
-   * future contrast tweaks are one edit. The Button component composes these.
-   */
-  .btn-base {
-    @apply inline-flex items-center justify-center font-medium px-4 py-2 rounded-lg transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed;
-  }
-
   .btn-primary {
-    @apply btn-base bg-primary-600 hover:bg-primary-700 text-white;
+    @apply bg-primary-600 hover:bg-primary-700 text-white font-medium px-4 py-2 rounded-lg transition-colors duration-200;
   }
-
+  
   .btn-secondary {
-    @apply btn-base;
-    background-color: var(--btn-secondary-bg);
-    color: var(--btn-secondary-text);
-  }
-  .btn-secondary:hover {
-    background-color: var(--btn-secondary-bg-hover);
-  }
-
-  .btn-danger {
-    @apply btn-base bg-red-600 hover:bg-red-700 text-white;
-  }
-
-  .btn-ghost {
-    @apply btn-base bg-transparent;
-    color: var(--btn-ghost-text);
-  }
-  .btn-ghost:hover {
-    background-color: var(--btn-ghost-bg-hover);
+    @apply bg-gray-100 hover:bg-gray-200 text-gray-900 font-medium px-4 py-2 rounded-lg transition-colors duration-200;
   }
   
   .card {
     @apply bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700;
-  }
-
-  /*
-   * Table surfaces. Header + row hover/selected states read the table tokens
-   * above, so dark-mode row-hover contrast (the a11y bug) is defined ONCE.
-   * Tables keep their own columns/cells; they just use these classes for chrome.
-   */
-  .table-header {
-    @apply border-b border-gray-200 dark:border-gray-700;
-    background-color: var(--table-header-bg);
-  }
-  .table-header th {
-    @apply px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-200;
-  }
-
-  .table-row {
-    @apply cursor-default transition-colors;
-  }
-  .table-row:hover {
-    background-color: var(--table-row-hover-bg);
-  }
-  .table-row-selected {
-    background-color: var(--table-row-selected-bg);
   }
   
   .input {

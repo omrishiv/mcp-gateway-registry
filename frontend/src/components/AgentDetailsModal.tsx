@@ -1,23 +1,7 @@
 import React from 'react';
+import { ClipboardDocumentIcon } from '@heroicons/react/24/outline';
 import DetailsModal from './DetailsModal';
 import ResourceBoundTokenButton from './ResourceBoundTokenButton';
-import { CopyButton, FieldReferenceGrid, FieldRef } from './modals';
-
-const CORE_FIELDS: FieldRef[] = [
-  { name: 'protocol_version', description: 'A2A protocol version' },
-  { name: 'name', description: 'Agent display name' },
-  { name: 'description', description: 'Agent purpose' },
-  { name: 'url', description: 'Agent endpoint URL' },
-  { name: 'path', description: 'Registry path' },
-];
-
-const METADATA_FIELDS: FieldRef[] = [
-  { name: 'skills', description: 'Agent capabilities' },
-  { name: 'security_schemes', description: 'Auth methods' },
-  { name: 'tags', description: 'Categorization' },
-  { name: 'trust_level', description: 'Verification status' },
-  { name: 'status', description: 'Lifecycle status' },
-];
 
 interface AgentLike {
   name: string;
@@ -67,6 +51,18 @@ const AgentDetailsModal: React.FC<AgentDetailsModalProps> = ({
 }) => {
   const dataToCopy = fullDetails || agent;
 
+  const handleCopy = async () => {
+    try {
+      if (onCopy) {
+        await onCopy(dataToCopy);
+      } else {
+        await navigator.clipboard.writeText(JSON.stringify(dataToCopy, null, 2));
+      }
+    } catch (error) {
+      console.error('Failed to copy agent JSON:', error);
+    }
+  };
+
   return (
     <DetailsModal
       title={`${agent.name} - Full Details (JSON)`}
@@ -115,10 +111,13 @@ const AgentDetailsModal: React.FC<AgentDetailsModalProps> = ({
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <h4 className="font-medium text-gray-900 dark:text-white">Agent JSON Schema:</h4>
-            <CopyButton
-              getText={() => JSON.stringify(dataToCopy, null, 2)}
-              onCopy={onCopy ? () => onCopy(dataToCopy) : undefined}
-            />
+            <button
+              onClick={handleCopy}
+              className="flex items-center gap-2 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors duration-200"
+            >
+              <ClipboardDocumentIcon className="h-4 w-4" />
+              Copy JSON
+            </button>
           </div>
 
           <pre className="p-4 bg-gray-50 dark:bg-gray-900 border dark:border-gray-700 rounded-lg overflow-x-auto text-xs text-gray-900 dark:text-gray-100 max-h-[30vh] overflow-y-auto">
@@ -126,12 +125,52 @@ const AgentDetailsModal: React.FC<AgentDetailsModalProps> = ({
           </pre>
         </div>
 
-        <FieldReferenceGrid
-          columns={[
-            { heading: 'Core Fields', fields: CORE_FIELDS },
-            { heading: 'Metadata Fields', fields: METADATA_FIELDS },
-          ]}
-        />
+        <div className="bg-gray-50 dark:bg-gray-900 border dark:border-gray-700 rounded-lg p-4">
+          <h4 className="font-medium text-gray-900 dark:text-white mb-3">Field Reference</h4>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+            <div>
+              <h5 className="font-medium text-gray-700 dark:text-gray-300 mb-2">Core Fields</h5>
+              <ul className="space-y-1 text-gray-600 dark:text-gray-400">
+                <li>
+                  <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">protocol_version</code> - A2A protocol
+                  version
+                </li>
+                <li>
+                  <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">name</code> - Agent display name
+                </li>
+                <li>
+                  <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">description</code> - Agent purpose
+                </li>
+                <li>
+                  <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">url</code> - Agent endpoint URL
+                </li>
+                <li>
+                  <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">path</code> - Registry path
+                </li>
+              </ul>
+            </div>
+            <div>
+              <h5 className="font-medium text-gray-700 dark:text-gray-300 mb-2">Metadata Fields</h5>
+              <ul className="space-y-1 text-gray-600 dark:text-gray-400">
+                <li>
+                  <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">skills</code> - Agent capabilities
+                </li>
+                <li>
+                  <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">security_schemes</code> - Auth methods
+                </li>
+                <li>
+                  <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">tags</code> - Categorization
+                </li>
+                <li>
+                  <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">trust_level</code> - Verification status
+                </li>
+                <li>
+                  <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">status</code> - Lifecycle status
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
       </div>
     </DetailsModal>
   );

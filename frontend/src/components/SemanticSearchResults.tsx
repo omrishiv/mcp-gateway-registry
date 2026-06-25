@@ -26,9 +26,6 @@ import type { Server } from './ServerCard';
 import type { Agent as AgentType } from './AgentCard';
 import useEscapeKey from '../hooks/useEscapeKey';
 import ANSBadge from './ANSBadge';
-import { parseYamlFrontmatter } from '../utils/yamlFrontmatter';
-import SearchResultCard from './search/SearchResultCard';
-import { EntityModal } from './modals';
 
 interface SemanticSearchResultsProps {
   query: string;
@@ -57,34 +54,70 @@ const ToolSchemaModal: React.FC<ToolSchemaModalProps> = ({
   isOpen,
   onClose
 }) => {
+  useEscapeKey(onClose, isOpen);
+  if (!isOpen) return null;
+
   return (
-    <EntityModal
-      isOpen={isOpen}
-      onClose={onClose}
-      maxWidth="2xl"
-      layout="flush"
-      title={
-        <div>
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">{toolName}</h3>
-          <p className="text-sm text-gray-500 dark:text-gray-400">{serverName}</p>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-2xl w-full max-h-[80vh] flex flex-col">
+        <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+              {toolName}
+            </h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400">{serverName}</p>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-lg transition-colors"
+          >
+            <XMarkIcon className="h-5 w-5" />
+          </button>
         </div>
-      }
-    >
-      <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
-        Input Schema
-      </p>
-      {schema && Object.keys(schema).length > 0 ? (
-        <pre className="text-xs bg-gray-100 dark:bg-gray-900 p-3 rounded-lg overflow-auto text-gray-800 dark:text-gray-200">
-          {JSON.stringify(schema, null, 2)}
-        </pre>
-      ) : (
-        <p className="text-sm text-gray-500 dark:text-gray-400 italic">
-          No input schema available for this tool.
-        </p>
-      )}
-    </EntityModal>
+        <div className="p-4 overflow-auto flex-1">
+          <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
+            Input Schema
+          </p>
+          {schema && Object.keys(schema).length > 0 ? (
+            <pre className="text-xs bg-gray-100 dark:bg-gray-900 p-3 rounded-lg overflow-auto text-gray-800 dark:text-gray-200">
+              {JSON.stringify(schema, null, 2)}
+            </pre>
+          ) : (
+            <p className="text-sm text-gray-500 dark:text-gray-400 italic">
+              No input schema available for this tool.
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
   );
 };
+
+// Helper function to parse YAML frontmatter from markdown
+const parseYamlFrontmatter = (content: string): { frontmatter: Record<string, string> | null; body: string } => {
+  const frontmatterRegex = /^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/;
+  const match = content.match(frontmatterRegex);
+
+  if (match) {
+    const yamlContent = match[1];
+    const body = match[2];
+    const frontmatter: Record<string, string> = {};
+    const lines = yamlContent.split('\n');
+    for (const line of lines) {
+      const colonIndex = line.indexOf(':');
+      if (colonIndex > 0) {
+        const key = line.substring(0, colonIndex).trim();
+        const value = line.substring(colonIndex + 1).trim();
+        if (key && value) {
+          frontmatter[key] = value;
+        }
+      }
+    }
+    return { frontmatter: Object.keys(frontmatter).length > 0 ? frontmatter : null, body };
+  }
+  return { frontmatter: null, body: content };
+};
+
 
 interface ServerDetailsModalProps {
   server: SemanticServerHit;
@@ -97,34 +130,39 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
   isOpen,
   onClose
 }) => {
+  useEscapeKey(onClose, isOpen);
+  if (!isOpen) return null;
+
   const isFederatedServer = server.sync_metadata?.is_federated === true;
   const peerRegistryId = isFederatedServer && server.sync_metadata?.source_peer_id
     ? server.sync_metadata.source_peer_id.replace('peer-registry-', '').replace('peer-', '').toUpperCase()
     : null;
 
   return (
-    <EntityModal
-      isOpen={isOpen}
-      onClose={onClose}
-      maxWidth="2xl"
-      layout="flush"
-      title={
-        <div>
-          <div className="flex items-center gap-2">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-              {server.server_name}
-            </h3>
-            {isFederatedServer && peerRegistryId && (
-              <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-200 border border-cyan-200 dark:border-cyan-700">
-                {peerRegistryId}
-              </span>
-            )}
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-2xl w-full max-h-[80vh] flex flex-col">
+        <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                {server.server_name}
+              </h3>
+              {isFederatedServer && peerRegistryId && (
+                <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-200 border border-cyan-200 dark:border-cyan-700">
+                  {peerRegistryId}
+                </span>
+              )}
+            </div>
+            <p className="text-sm text-gray-500 dark:text-gray-400">{server.path}</p>
           </div>
-          <p className="text-sm text-gray-500 dark:text-gray-400">{server.path}</p>
+          <button
+            onClick={onClose}
+            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-lg transition-colors"
+          >
+            <XMarkIcon className="h-5 w-5" />
+          </button>
         </div>
-      }
-    >
-        <div className="space-y-4">
+        <div className="p-4 overflow-auto flex-1 space-y-4">
           {/* Description */}
           <div>
             <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
@@ -202,7 +240,8 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
             </span>
           </div>
         </div>
-    </EntityModal>
+      </div>
+    </div>
   );
 };
 
@@ -418,6 +457,9 @@ const VirtualServerDetailsModal: React.FC<VirtualServerDetailsModalProps> = ({
   const [copiedEndpoint, setCopiedEndpoint] = useState(false);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
 
+  useEscapeKey(onClose, isOpen);
+  if (!isOpen) return null;
+
   const tools = virtualServer.matching_tools || [];
   const backendPaths = virtualServer.backend_paths || [];
 
@@ -442,26 +484,28 @@ const VirtualServerDetailsModal: React.FC<VirtualServerDetailsModalProps> = ({
   };
 
   return (
-    <EntityModal
-      isOpen={isOpen}
-      onClose={onClose}
-      maxWidth="2xl"
-      layout="flush"
-      title={
-        <div>
-          <div className="flex items-center gap-2">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-              {virtualServer.server_name}
-            </h3>
-            <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-200 border border-indigo-200 dark:border-indigo-600">
-              VIRTUAL
-            </span>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-2xl w-full max-h-[80vh] flex flex-col">
+        <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                {virtualServer.server_name}
+              </h3>
+              <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-200 border border-indigo-200 dark:border-indigo-600">
+                VIRTUAL
+              </span>
+            </div>
+            <p className="text-sm text-gray-500 dark:text-gray-400">{virtualServer.path}</p>
           </div>
-          <p className="text-sm text-gray-500 dark:text-gray-400">{virtualServer.path}</p>
+          <button
+            onClick={onClose}
+            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-lg transition-colors"
+          >
+            <XMarkIcon className="h-5 w-5" />
+          </button>
         </div>
-      }
-    >
-        <div className="space-y-4">
+        <div className="p-4 overflow-auto flex-1 space-y-4">
           {/* Endpoint URL */}
           {virtualServer.endpoint_url && (
             <div>
@@ -546,7 +590,7 @@ const VirtualServerDetailsModal: React.FC<VirtualServerDetailsModalProps> = ({
                       <button
                         type="button"
                         onClick={() => toggleToolExpand(tool.tool_name)}
-                        className="w-full p-3 text-left hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+                        className="w-full p-3 text-left hover:bg-gray-100 dark:hover:bg-gray-800/50 transition-colors"
                       >
                         <div className="flex items-center justify-between">
                           <span className="font-medium text-gray-900 dark:text-white">{tool.tool_name}</span>
@@ -617,7 +661,8 @@ const VirtualServerDetailsModal: React.FC<VirtualServerDetailsModalProps> = ({
             </span>
           </div>
         </div>
-    </EntityModal>
+      </div>
+    </div>
   );
 };
 
@@ -873,30 +918,32 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
               const isOrphanedServer = server.sync_metadata?.is_orphaned === true;
 
               return (
-              <SearchResultCard
+              <div
                 key={server.path}
-                accent="server"
-                title={server.server_name}
-                subtitle={server.path}
-                relevanceScore={server.relevance_score}
-                description={server.description || server.match_context}
-                tags={server.tags}
-                badges={
-                  <>
-                    {isFederatedServer && (
-                      <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-200 border border-cyan-200 dark:border-cyan-700">
-                        {peerRegistryId}
-                      </span>
-                    )}
-                    {isOrphanedServer && (
-                      <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-200 border border-red-200 dark:border-red-700" title="No longer exists on peer registry">
-                        ORPHANED
-                      </span>
-                    )}
-                  </>
-                }
-                actions={
-                  <>
+                className="rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-5 shadow-sm hover:shadow-md transition-shadow"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <p className="text-base font-semibold text-gray-900 dark:text-white">
+                        {server.server_name}
+                      </p>
+                      {/* Registry source badge - only show for federated (peer registry) items */}
+                      {isFederatedServer && (
+                        <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-200 border border-cyan-200 dark:border-cyan-700">
+                          {peerRegistryId}
+                        </span>
+                      )}
+                      {/* Orphaned badge */}
+                      {isOrphanedServer && (
+                        <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-200 border border-red-200 dark:border-red-700" title="No longer exists on peer registry">
+                          ORPHANED
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-sm text-gray-500 dark:text-gray-300">{server.path}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
                     <button
                       type="button"
                       onClick={() => setDetailsServer(server)}
@@ -913,9 +960,28 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
                     >
                       <CogIcon className="h-4 w-4" />
                     </button>
-                  </>
-                }
-              >
+                    <span className="inline-flex items-center rounded-full bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-200 px-3 py-1 text-xs font-semibold">
+                      {formatPercent(server.relevance_score)} match
+                    </span>
+                  </div>
+                </div>
+                <p className="mt-3 text-sm text-gray-600 dark:text-gray-300 line-clamp-3">
+                  {server.description || server.match_context || 'No description available.'}
+                </p>
+
+                {server.tags?.length > 0 && (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {server.tags.slice(0, 6).map((tag) => (
+                      <span
+                        key={tag}
+                        className="px-2.5 py-1 text-xs rounded-full bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-200"
+                      >
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
                 {server.matching_tools?.length > 0 ? (
                   <div className="mt-4 border-t border-dashed border-gray-200 dark:border-gray-700 pt-3">
                     <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
@@ -950,7 +1016,7 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
                     </p>
                   </div>
                 ) : null}
-              </SearchResultCard>
+              </div>
             );
             })}
           </div>
@@ -1044,55 +1110,52 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
               const isOrphanedAgent = syncMetadata?.is_orphaned === true;
 
               return (
-              <SearchResultCard
+              <div
                 key={agent.path}
-                accent="agent"
-                title={agentName}
-                subtitle={
-                  <span className="text-xs uppercase tracking-wide text-gray-400 dark:text-gray-500">
-                    {agentVisibility}
-                  </span>
-                }
-                relevanceScore={agent.relevance_score}
-                description={agentDescription || agent.match_context}
-                tags={agentTags}
-                badges={
-                  <>
-                    {isFederatedAgent && (
-                      <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-200 border border-violet-200 dark:border-violet-700">
-                        {peerRegistryId}
-                      </span>
-                    )}
-                    {isOrphanedAgent && (
-                      <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-200 border border-red-200 dark:border-red-700" title="No longer exists on peer registry">
-                        ORPHANED
-                      </span>
-                    )}
-                  </>
-                }
-                actions={
-                  <button
-                    type="button"
-                    onClick={() => openAgentDetails(agent)}
-                    className="p-2 text-gray-400 hover:text-cyan-600 dark:hover:text-cyan-300 hover:bg-cyan-50 dark:hover:bg-cyan-700/30 rounded-lg transition-colors"
-                    title="View full agent details"
-                  >
-                    <InformationCircleIcon className="h-4 w-4" />
-                  </button>
-                }
-                footer={
-                  <>
-                    {(card.ans_metadata || card.ansMetadata) ? (
-                      <ANSBadge ansMetadata={card.ans_metadata || card.ansMetadata} compact />
-                    ) : (
-                      <span className="font-semibold text-cyan-700 dark:text-cyan-200">
-                        {agentTrustLevel}
-                      </span>
-                    )}
-                    <span>{agentIsEnabled ? 'Enabled' : 'Disabled'}</span>
-                  </>
-                }
+                className="rounded-2xl border border-cyan-200 dark:border-cyan-900/40 bg-white dark:bg-gray-800 p-5 shadow-sm hover:shadow-md transition-shadow"
               >
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <p className="text-base font-semibold text-gray-900 dark:text-white">
+                        {agentName}
+                      </p>
+                      {/* Registry source badge - only show for federated (peer registry) items */}
+                      {isFederatedAgent && (
+                        <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-200 border border-violet-200 dark:border-violet-700">
+                          {peerRegistryId}
+                        </span>
+                      )}
+                      {/* Orphaned badge */}
+                      {isOrphanedAgent && (
+                        <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-200 border border-red-200 dark:border-red-700" title="No longer exists on peer registry">
+                          ORPHANED
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                      {agentVisibility}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => openAgentDetails(agent)}
+                      className="p-2 text-gray-400 hover:text-cyan-600 dark:hover:text-cyan-300 hover:bg-cyan-50 dark:hover:bg-cyan-700/30 rounded-lg transition-colors"
+                      title="View full agent details"
+                    >
+                      <InformationCircleIcon className="h-4 w-4" />
+                    </button>
+                    <span className="inline-flex items-center rounded-full bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-200 px-3 py-1 text-xs font-semibold">
+                      {formatPercent(agent.relevance_score)} match
+                    </span>
+                  </div>
+                </div>
+
+                <p className="mt-3 text-sm text-gray-600 dark:text-gray-300 line-clamp-3">
+                  {agentDescription || agent.match_context || 'No description available.'}
+                </p>
+
                 {skillNames.length > 0 && (
                   <div className="mt-4">
                     <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">
@@ -1104,7 +1167,31 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
                     </p>
                   </div>
                 )}
-              </SearchResultCard>
+
+                {agentTags.length > 0 && (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {agentTags.slice(0, 6).map((tag: string) => (
+                      <span
+                        key={tag}
+                        className="px-2.5 py-1 text-[11px] rounded-full bg-cyan-50 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-200"
+                      >
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                <div className="mt-4 flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
+                  {(card.ans_metadata || card.ansMetadata) ? (
+                    <ANSBadge ansMetadata={card.ans_metadata || card.ansMetadata} compact />
+                  ) : (
+                    <span className="font-semibold text-cyan-700 dark:text-cyan-200">
+                      {agentTrustLevel}
+                    </span>
+                  )}
+                  <span>{agentIsEnabled ? 'Enabled' : 'Disabled'}</span>
+                </div>
+              </div>
             );
             })}
           </div>
@@ -1123,41 +1210,68 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
             style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.25rem' }}
           >
             {skills.map((skill) => (
-              <SearchResultCard
+              <div
                 key={skill.path}
-                accent="skill"
-                title={skill.skill_name}
-                subtitle={skill.visibility || 'public'}
-                relevanceScore={skill.relevance_score}
-                description={skill.description || skill.match_context}
-                tags={skill.tags}
-                badges={
-                  <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-200 border border-amber-200 dark:border-amber-600">
-                    SKILL
-                  </span>
-                }
-                actions={
-                  <button
-                    type="button"
-                    onClick={() => setDetailsSkill(skill)}
-                    className="p-2 text-gray-400 hover:text-amber-600 dark:hover:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-700/30 rounded-lg transition-colors"
-                    title="View SKILL.md content"
-                  >
-                    <InformationCircleIcon className="h-4 w-4" />
-                  </button>
-                }
-                footer={
-                  <>
+                className="rounded-2xl border-2 border-amber-200 dark:border-amber-700 bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-900/20 dark:to-orange-900/20 p-5 shadow-sm hover:shadow-md transition-shadow"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div>
                     <div className="flex items-center gap-2">
-                      {skill.author && <span>by {skill.author}</span>}
-                      {skill.version && (
-                        <span className="text-amber-600 dark:text-amber-400">v{skill.version}</span>
-                      )}
+                      <p className="text-base font-semibold text-gray-900 dark:text-white">
+                        {skill.skill_name}
+                      </p>
+                      <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-200 border border-amber-200 dark:border-amber-600">
+                        SKILL
+                      </span>
                     </div>
-                    <span>{skill.is_enabled ? 'Enabled' : 'Disabled'}</span>
-                  </>
-                }
-              />
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      {skill.visibility || 'public'}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setDetailsSkill(skill)}
+                      className="p-2 text-gray-400 hover:text-amber-600 dark:hover:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-700/30 rounded-lg transition-colors"
+                      title="View SKILL.md content"
+                    >
+                      <InformationCircleIcon className="h-4 w-4" />
+                    </button>
+                    <span className="inline-flex items-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-200 px-3 py-1 text-xs font-semibold">
+                      {formatPercent(skill.relevance_score)} match
+                    </span>
+                  </div>
+                </div>
+
+                <p className="mt-3 text-sm text-gray-600 dark:text-gray-300 line-clamp-3">
+                  {skill.description || skill.match_context || 'No description available.'}
+                </p>
+
+                {skill.tags && skill.tags.length > 0 && (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {skill.tags.slice(0, 6).map((tag) => (
+                      <span
+                        key={tag}
+                        className="px-2.5 py-1 text-[11px] rounded-full bg-amber-50 text-amber-700 dark:bg-amber-900/40 dark:text-amber-200"
+                      >
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                <div className="mt-4 flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
+                  <div className="flex items-center gap-2">
+                    {skill.author && (
+                      <span>by {skill.author}</span>
+                    )}
+                    {skill.version && (
+                      <span className="text-amber-600 dark:text-amber-400">v{skill.version}</span>
+                    )}
+                  </div>
+                  <span>{skill.is_enabled ? 'Enabled' : 'Disabled'}</span>
+                </div>
+              </div>
             ))}
           </div>
         </section>
@@ -1197,26 +1311,51 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
             style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.25rem' }}
           >
             {custom.map((record) => (
-              <SearchResultCard
+              <div
                 key={record.path}
-                accent="custom"
-                title={record.name}
-                subtitle={record.visibility || 'public'}
-                relevanceScore={record.relevance_score}
-                description={record.description || record.match_context}
-                tags={record.tags}
-                badges={
-                  <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-200 border border-teal-200 dark:border-teal-600 uppercase">
-                    {humanize(record.entity_type)}
+                className="rounded-2xl border-2 border-teal-200 dark:border-teal-700 bg-gradient-to-br from-teal-50 to-emerald-50 dark:from-teal-900/20 dark:to-emerald-900/20 p-5 shadow-sm hover:shadow-md transition-shadow"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <p className="text-base font-semibold text-gray-900 dark:text-white">
+                        {record.name}
+                      </p>
+                      <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-200 border border-teal-200 dark:border-teal-600 uppercase">
+                        {humanize(record.entity_type)}
+                      </span>
+                    </div>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      {record.visibility || 'public'}
+                    </p>
+                  </div>
+                  <span className="inline-flex items-center rounded-full bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-200 px-3 py-1 text-xs font-semibold">
+                    {formatPercent(record.relevance_score)} match
                   </span>
-                }
-                footer={
-                  <>
-                    {record.owner && <span>by {record.owner}</span>}
-                    <span className="ml-auto">{record.is_enabled === false ? 'Disabled' : 'Enabled'}</span>
-                  </>
-                }
-              />
+                </div>
+
+                <p className="mt-3 text-sm text-gray-600 dark:text-gray-300 line-clamp-3">
+                  {record.description || record.match_context || 'No description available.'}
+                </p>
+
+                {record.tags && record.tags.length > 0 && (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {record.tags.slice(0, 6).map((tag) => (
+                      <span
+                        key={tag}
+                        className="px-2.5 py-1 text-[11px] rounded-full bg-teal-50 text-teal-700 dark:bg-teal-900/40 dark:text-teal-200"
+                      >
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                <div className="mt-4 flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
+                  {record.owner && <span>by {record.owner}</span>}
+                  <span className="ml-auto">{record.is_enabled === false ? 'Disabled' : 'Enabled'}</span>
+                </div>
+              </div>
             ))}
           </div>
         </section>
