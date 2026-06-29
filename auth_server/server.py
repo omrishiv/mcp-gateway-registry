@@ -3126,9 +3126,7 @@ async def generate_user_token(
                 auth_method=user_context.get("auth_method", "unknown"),
                 provider=user_context.get("provider"),
                 internal_caller=caller,
-                token_kind=(
-                    TokenKind.RESOURCE.value if request.resource else TokenKind.USER.value
-                ),
+                token_kind=(TokenKind.RESOURCE.value if request.resource else TokenKind.USER.value),
                 resource_type=(request.resource.type.value if request.resource else None),
                 resource_id=(request.resource.id if request.resource else None),
                 token_path="unknown",
@@ -3239,9 +3237,7 @@ async def generate_user_token(
                 auth_method=auth_method,
                 provider=provider,
                 internal_caller=caller,
-                token_kind=(
-                    TokenKind.RESOURCE.value if request.resource else TokenKind.USER.value
-                ),
+                token_kind=(TokenKind.RESOURCE.value if request.resource else TokenKind.USER.value),
                 resource_type=(request.resource.type.value if request.resource else None),
                 resource_id=(request.resource.id if request.resource else None),
                 token_path="self_signed",
@@ -4847,9 +4843,7 @@ def _egress_consent_response(
             "id": req_id,
             "error": {
                 "code": -32001,
-                "message": (
-                    f"{message} Visit: {connect_url}" if connect_url else message
-                ),
+                "message": (f"{message} Visit: {connect_url}" if connect_url else message),
                 "data": {
                     "connect_url": connect_url,
                     "reason": "egress_consent_required",
@@ -4955,6 +4949,17 @@ async def mcp_proxy(
     max_body_bytes = _read_mcp_proxy_max_body_bytes()
     forward_headers = _forward_headers(dict(request.headers))
 
+    # True once we inject a vaulted egress token below. An egress upstream is
+    # itself an OAuth resource server: if it rejects our injected token it 401s
+    # with its OWN WWW-Authenticate (resource_metadata pointing at the upstream's
+    # PRM, e.g. https://mcp.slack.com/.well-known/oauth-protected-resource). That
+    # header is on the forward allowlist, so without intervention the gateway
+    # would relay the upstream's resource identifier to the MCP client, which
+    # rejects it as not matching the gateway resource it connected to (the
+    # cross-resource "Protected resource ... does not match expected ..." error).
+    # We drop the foreign header on this path (see the 401 handling below).
+    egress_token_injected = False
+
     # Per-user egress credential vault. When the feature is on, ask the
     # registry to vend this user's third-party token for the resolved server. The
     # registry re-verifies the signed proxy token, enforces per-user/upstream
@@ -4982,9 +4987,11 @@ async def mcp_proxy(
                         if isinstance(_params, dict):
                             _called_tool = _params.get("name") or ""
                     if _called_tool == _EGRESS_CONNECT_TOOL_NAME:
-                        _req_id = incoming_payload.get("id") if isinstance(
-                            incoming_payload, dict
-                        ) else None
+                        _req_id = (
+                            incoming_payload.get("id")
+                            if isinstance(incoming_payload, dict)
+                            else None
+                        )
                         logger.info(
                             "mcp_proxy: egress server=%s connected; short-circuiting "
                             "synthetic connect_account call with success (token vaulted)",
@@ -4999,6 +5006,7 @@ async def mcp_proxy(
                     if k.lower() not in _EGRESS_STRIP_HEADERS
                 }
                 forward_headers["Authorization"] = f"Bearer {vend['access_token']}"
+                egress_token_injected = True
             elif vend and (vend.get("connect_url") or vend.get("authorize_url")):
                 # Egress is configured for this server but the user has no usable
                 # token, and the upstream is itself an OAuth resource server that
@@ -5021,9 +5029,7 @@ async def mcp_proxy(
                 #     client, which performs no OAuth itself (it opens the connect
                 #     URL and retries). Spec:
                 #     https://modelcontextprotocol.io/specification/draft/client/elicitation
-                req_id = (
-                    incoming_payload.get("id") if isinstance(incoming_payload, dict) else None
-                )
+                req_id = incoming_payload.get("id") if isinstance(incoming_payload, dict) else None
                 if incoming_method == "initialize":
                     logger.info(
                         "mcp_proxy: egress server=%s has no token; answering "
@@ -5104,6 +5110,23 @@ async def mcp_proxy(
     # allowlist itself is the auditable enforcement point -- adding to
     # it requires a security review (see comment on the constant).
     response_headers = _select_forwarded_response_headers(upstream_headers)
+
+    # Egress trust boundary: when we injected a vaulted egress token and the
+    # upstream still 401s, the token is bad/insufficient (e.g. a Slack bot token
+    # where mcp.slack.com requires a user token). The upstream's WWW-Authenticate
+    # advertises the UPSTREAM's resource_metadata; relaying it makes the MCP
+    # client chase the upstream's PRM and fail the cross-resource check against
+    # the gateway URL it connected to. Drop it so the client does not see a
+    # foreign resource identifier. (Re-consent is surfaced on the token-requiring
+    # methods via the URL-mode elicitation, not via this passthrough 401.)
+    if egress_token_injected and status_code == 401:
+        for key in [k for k in response_headers if k.lower() == "www-authenticate"]:
+            del response_headers[key]
+        logger.warning(
+            "mcp_proxy: egress server=%s upstream 401 with injected token; "
+            "dropped upstream WWW-Authenticate to avoid cross-resource PRM mismatch",
+            server_name,
+        )
 
     if not should_filter:
         # Forward the upstream body and content_type unchanged. Many MCP

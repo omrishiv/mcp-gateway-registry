@@ -144,6 +144,21 @@ class TestQuirkParsers:
         assert out["access_token"] == "xoxp-user"
         assert out["scope"] == "search:read"
 
+    def test_slack_user_endpoint_top_level_token(self):
+        # The v2_user token endpoint (oauth.v2.user.access) returns the user
+        # token at the TOP level rather than nested under authed_user. The parser
+        # must fall through to it instead of dropping the token.
+        cfg = PROVIDER_REGISTRY["slack"]
+        payload = {
+            "ok": True,
+            "access_token": "xoxp-user-top",
+            "token_type": "Bearer",
+            "scope": "search:read,chat:write",
+        }
+        out = oauth_engine._parse_token_response(cfg, payload)
+        assert out["access_token"] == "xoxp-user-top"
+        assert out["scope"] == "search:read,chat:write"
+
     def test_slack_error_raises(self):
         cfg = PROVIDER_REGISTRY["slack"]
         with pytest.raises(oauth_engine.OAuthEngineError, match="Slack token error"):
