@@ -56,6 +56,12 @@ from ..services.agent_batch_service import (
 )
 from ..services.agent_service import agent_service
 from ..services.duplicate_check_service import get_duplicate_check_service
+from ..services.lifecycle_events import (
+    EnforcedStatusError,
+    enforce_registration_status,
+    fire_scan_complete_event,
+    user_can_change_lifecycle_status,
+)
 from ..services.registration_gate_service import check_registration_gate
 from ..services.webhook_service import send_registration_webhook
 from ..utils.metadata import flatten_metadata_to_text
@@ -95,7 +101,7 @@ async def _perform_agent_security_scan_on_registration(
     - Running the security scan with configured analyzers
     - Adding security-pending tag if scan fails
     - Disabling agent if configured and scan fails
-    - Updating FAISS with disabled state if agent disabled
+    - Updating search index with disabled state if agent disabled
 
     All scan failures are non-fatal and will be logged but not raised.
 
@@ -107,7 +113,6 @@ async def _perform_agent_security_scan_on_registration(
     Returns:
         bool: True if agent should remain enabled, False if disabled due to scan
     """
-    from ..repositories.factory import get_search_repository
     from ..services.agent_scanner import agent_scanner_service
 
     scan_config = agent_scanner_service.get_scan_config()
@@ -168,16 +173,37 @@ async def _perform_agent_security_scan_on_registration(
                 # added a few lines above.
                 search_repo = get_search_repository()
                 await search_repo.index_agent(path, agent_card, is_enabled=False)
+                # scan_complete webhook (Issue #1330): agent was disabled.
+                fire_scan_complete_event(
+                    agent_card.model_dump(),
+                    scan_result,
+                    auto_disabled=True,
+                    registration_type="agent",
+                )
                 return False  # Agent disabled
 
         else:
             logger.info(f"Agent {path} passed security scan")
 
+        # scan_complete webhook (Issue #1330): safe, or unsafe-but-not-blocked.
+        fire_scan_complete_event(
+            agent_card.model_dump(),
+            scan_result,
+            auto_disabled=False,
+            registration_type="agent",
+        )
         return True  # Agent remains enabled
 
     except Exception as e:
         logger.error(f"Failed to run security scan for agent {path}: {e}")
-        # Non-fatal error - agent is registered but not scanned
+        # Non-fatal error - agent is registered but not scanned. Still notify
+        # consumers so they are not left polling for a scan that never reports.
+        fire_scan_complete_event(
+            agent_card_dict,
+            None,
+            scan_error=f"{type(e).__name__}: {e}",
+            registration_type="agent",
+        )
         return True  # Agent remains enabled on scan error
 
 
@@ -378,9 +404,7 @@ def _compute_card_diff(
                     key=lambda s: (s.get("id") if isinstance(s, dict) else "") or "",
                 )
             if isinstance(remote_value, list):
-                remote_value = [
-                    _drop_nulls(s) if isinstance(s, dict) else s for s in remote_value
-                ]
+                remote_value = [_drop_nulls(s) if isinstance(s, dict) else s for s in remote_value]
                 remote_value = sorted(
                     remote_value,
                     key=lambda s: (s.get("id") if isinstance(s, dict) else "") or "",
@@ -388,13 +412,11 @@ def _compute_card_diff(
 
         if field_name == "security_schemes" and isinstance(current_value, dict):
             current_value = {
-                k: _drop_nulls(v) if isinstance(v, dict) else v
-                for k, v in current_value.items()
+                k: _drop_nulls(v) if isinstance(v, dict) else v for k, v in current_value.items()
             }
             if isinstance(remote_value, dict):
                 remote_value = {
-                    k: _drop_nulls(v) if isinstance(v, dict) else v
-                    for k, v in remote_value.items()
+                    k: _drop_nulls(v) if isinstance(v, dict) else v for k, v in remote_value.items()
                 }
 
         if current_value != remote_value:
@@ -531,6 +553,41 @@ def _check_agent_permission(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"You do not have permission to {permission} for {agent_name}",
         )
+
+
+def _check_agent_lifecycle_status_permission(
+    existing_agent,
+    merged_agent,
+    user_context: dict[str, Any],
+) -> None:
+    """Gate agent lifecycle status changes on change_lifecycle_status (Issue #1330).
+
+    No-op when the status is unchanged. Admins always pass; other users need the
+    'change_lifecycle_status' permission for the agent.
+
+    Raises:
+        HTTPException: 403 if the user may not change lifecycle status.
+    """
+    old_status = (getattr(existing_agent, "status", None) or "active").lower()
+    new_status = (getattr(merged_agent, "status", None) or "active").lower()
+    if new_status == old_status:
+        return
+
+    if user_can_change_lifecycle_status(existing_agent.name, user_context):
+        return
+
+    logger.warning(
+        f"User {user_context['username']} attempted to change lifecycle status "
+        f"of agent {existing_agent.name} without change_lifecycle_status permission"
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=(
+            f"You do not have permission to change the lifecycle status of "
+            f"{existing_agent.name}. This action requires the 'change_lifecycle_status' "
+            f"permission, which is typically granted to admins."
+        ),
+    )
 
 
 def _has_delete_agent_permission(user_context: dict[str, Any], agent_path: str) -> bool:
@@ -780,6 +837,18 @@ async def register_agent(
         if capabilities:
             optional_card_kwargs["capabilities"] = capabilities
 
+        # Enforced-status policy (Issue #1330). Use model_fields_set to tell an
+        # omitted status (force to enforced) from an explicit one (reject on
+        # mismatch). When the policy is unset, fall back to the request value.
+        requested_status = request.status if "status" in request.model_fields_set else None
+        try:
+            effective_status = enforce_registration_status(requested_status, "agent")
+        except EnforcedStatusError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+
         agent_card = AgentCard(
             protocol_version=request.protocol_version,
             name=request.name,
@@ -787,7 +856,7 @@ async def register_agent(
             url=request.url,
             path=path,
             version=request.version,
-            status=request.status,
+            status=effective_status or request.status,
             provider=provider_obj,
             security_schemes=request.security_schemes or {},
             skills=request.skills or [],
@@ -855,15 +924,12 @@ async def register_agent(
             },
         )
 
-    from ..search.service import faiss_service
-
     is_enabled = await agent_service.is_agent_enabled(path)
-    await faiss_service.add_or_update_entity(
-        path,
-        agent_card.model_dump(),
-        "a2a_agent",
-        is_enabled,
-    )
+    try:
+        search_repo = get_search_repository()
+        await search_repo.index_agent(path, agent_card, is_enabled)
+    except Exception as e:
+        logger.warning(f"Failed to update search index for {path}: {e}")
 
     logger.info(
         f"New agent registered: '{request.name}' at path '{path}' "
@@ -1065,6 +1131,8 @@ async def list_agents(
                 streaming=streaming,
                 trust_level=agent.trust_level,
                 sync_metadata=agent.sync_metadata,
+                record_kind=getattr(agent, "record_kind", None),
+                ard_source_url=getattr(agent, "ard_source_url", None),
                 ans_metadata=agent.ans_metadata,
                 registered_by=agent.registered_by,
                 status=agent.status if hasattr(agent, "status") and agent.status else "active",
@@ -1378,6 +1446,23 @@ async def toggle_agent(
 
     _check_agent_permission("toggle_service", agent_card.name, user_context)
 
+    # Per-resource access check for non-admins, mirroring the server toggle
+    # (POST /api/servers/toggle). Having toggle_service permission is not
+    # enough; the caller must also have access to this specific agent (in
+    # accessible_agents, or be its owner).
+    if not user_context.get("is_admin", False):
+        accessible_agents = user_context.get("accessible_agents", [])
+        owns_agent = agent_card.registered_by == user_context.get("username")
+        if "all" not in accessible_agents and path not in accessible_agents and not owns_agent:
+            logger.warning(
+                f"User {user_context.get('username')} attempted to toggle agent "
+                f"{path} without access"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have access to this agent",
+            )
+
     success = await agent_service.toggle_agent(path, enabled)
 
     if not success:
@@ -1386,14 +1471,11 @@ async def toggle_agent(
             content={"detail": "Failed to toggle agent state"},
         )
 
-    from ..search.service import faiss_service
-
-    await faiss_service.add_or_update_entity(
-        path,
-        agent_card.model_dump(),
-        "a2a_agent",
-        enabled,
-    )
+    try:
+        search_repo = get_search_repository()
+        await search_repo.index_agent(path, agent_card, enabled)
+    except Exception as e:
+        logger.warning(f"Failed to update search index for {path}: {e}")
 
     logger.info(
         f"Agent '{agent_card.name}' ({path}) toggled to {enabled} by user "
@@ -1445,10 +1527,17 @@ async def get_agent_security_scan(
             detail=f"Agent not found at path '{path}'",
         )
 
-    # Check user permissions
-    if not user_context["is_admin"]:
-        # Allow all authenticated users to view agent scan results
-        pass
+    # Authorization: scan results expose security findings for the agent, so
+    # restrict to users who can see the agent (admins always can). Without this
+    # a non-admin could read scan results for a private/group agent.
+    if not user_context.get("is_admin"):
+        from ..services.visibility import user_can_access_agent
+
+        if not await user_can_access_agent(path, user_context):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have access to this agent",
+            )
 
     # Get scan results
     from ..services.agent_scanner import agent_scanner_service
@@ -1786,15 +1875,12 @@ async def pull_agent_card(
             )
     else:
         if not dry_run and has_changes:
-            from ..search.service import faiss_service
-
             is_enabled = await agent_service.is_agent_enabled(path)
-            await faiss_service.add_or_update_entity(
-                path,
-                updated_agent.model_dump(),
-                "a2a_agent",
-                is_enabled,
-            )
+            try:
+                search_repo = get_search_repository()
+                await search_repo.index_agent(path, updated_agent, is_enabled)
+            except Exception as e:
+                logger.warning(f"Failed to update search index for {path}: {e}")
             applied = True
             logger.info(
                 f"Applied {len(changes)} A2A card changes to agent {path} "
@@ -1961,6 +2047,9 @@ async def update_agent(
             **update_optional_kwargs,
         )
 
+        # Lifecycle status change requires change_lifecycle_status (Issue #1330).
+        _check_agent_lifecycle_status_permission(existing_agent, updated_agent, user_context)
+
         from ..utils.agent_validator import agent_validator
 
         validation_result = await agent_validator.validate_agent_card(
@@ -2008,15 +2097,12 @@ async def update_agent(
             content={"detail": "Failed to save updated agent data"},
         )
 
-    from ..search.service import faiss_service
-
     is_enabled = await agent_service.is_agent_enabled(path)
-    await faiss_service.add_or_update_entity(
-        path,
-        updated_agent.model_dump(),
-        "a2a_agent",
-        is_enabled,
-    )
+    try:
+        search_repo = get_search_repository()
+        await search_repo.index_agent(path, updated_agent, is_enabled)
+    except Exception as e:
+        logger.warning(f"Failed to update search index for {path}: {e}")
 
     logger.info(
         f"Agent '{updated_agent.name}' ({path}) updated by user '{user_context['username']}'"
@@ -2134,6 +2220,9 @@ async def patch_agent(
     # Defence in depth: re-pin server-managed fields from the existing card.
     for field in REGISTRANT_ONLY_FIELDS:
         setattr(merged_agent, field, getattr(existing_agent, field))
+
+    # Lifecycle status change requires change_lifecycle_status (Issue #1330).
+    _check_agent_lifecycle_status_permission(existing_agent, merged_agent, user_context)
 
     from ..utils.agent_validator import agent_validator
 
@@ -2263,9 +2352,11 @@ async def delete_agent(
             content={"detail": "Failed to delete agent"},
         )
 
-    from ..search.service import faiss_service
-
-    await faiss_service.remove_entity(path)
+    try:
+        search_repo = get_search_repository()
+        await search_repo.remove_entity(path)
+    except Exception as e:
+        logger.warning(f"Failed to remove search index for {path}: {e}")
 
     logger.info(f"Agent at path '{path}' deleted by user '{user_context['username']}'")
 
@@ -2411,7 +2502,7 @@ async def discover_agents_semantic(
     """
     Discover agents using natural language semantic search.
 
-    Uses search repository (FAISS or DocumentDB) to find agents matching the query intent.
+    Uses search repository (DocumentDB) to find agents matching the query intent.
 
     Args:
         query: Natural language query describing needed capabilities

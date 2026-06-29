@@ -226,14 +226,14 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
         <div className="flex items-center gap-2">
           <button
             onClick={handleRefresh}
-            className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
+            className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
             title="Refresh"
           >
             <ArrowPathIcon className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
           <button
             onClick={handleExport}
-            className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
+            className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
             title="Export as JSONL"
           >
             <ArrowDownTrayIcon className="h-4 w-4" />
@@ -249,7 +249,7 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
           className={`flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-lg border transition-colors ${
             filterCount > 0
               ? 'text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-900/20 border-purple-300 dark:border-purple-700'
-              : 'text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600'
+              : 'text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-800'
           }`}
         >
           <FunnelIcon className="h-4 w-4" />
@@ -411,20 +411,20 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
             <div className="overflow-x-auto">
               <table className="w-full text-sm" aria-label="Application log entries">
                 <thead>
-                  <tr className="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
-                    <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-400 w-40">Timestamp</th>
-                    <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-400 w-24">Level</th>
-                    <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-400 w-28">Service</th>
-                    <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-400 w-36">Source</th>
-                    <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-400">Message</th>
+                  <tr className="table-header">
+                    <th className="w-40">Timestamp</th>
+                    <th className="w-24">Level</th>
+                    <th className="w-28">Service</th>
+                    <th className="w-36">Source</th>
+                    <th>Message</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 dark:divide-gray-700/50">
                   {entries.map((entry, idx) => (
                     <React.Fragment key={idx}>
                       <tr
-                        className={`hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer transition-colors ${
-                          expandedRow === idx ? 'bg-gray-50 dark:bg-gray-700/50' : ''
+                        className={`table-row cursor-pointer ${
+                          expandedRow === idx ? 'table-row-selected' : ''
                         }`}
                         role="button"
                         tabIndex={0}
@@ -433,7 +433,7 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
                         onClick={() => setExpandedRow(expandedRow === idx ? null : idx)}
                         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setExpandedRow(expandedRow === idx ? null : idx); } }}
                       >
-                        <td className="px-4 py-2.5 text-gray-600 dark:text-gray-400 font-mono text-xs whitespace-nowrap">
+                        <td className="px-4 py-2.5 text-gray-600 dark:text-gray-300 font-mono text-xs whitespace-nowrap">
                           {_formatTimestamp(entry.timestamp)}
                         </td>
                         <td className="px-4 py-2.5">
@@ -444,7 +444,7 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
                         <td className="px-4 py-2.5 text-gray-700 dark:text-gray-300 font-mono text-xs">
                           {entry.service}
                         </td>
-                        <td className="px-4 py-2.5 text-gray-500 dark:text-gray-500 font-mono text-xs">
+                        <td className="px-4 py-2.5 text-gray-500 dark:text-gray-400 font-mono text-xs">
                           {entry.filename}:{entry.lineno}
                         </td>
                         <td className="px-4 py-2.5 text-gray-800 dark:text-gray-200 text-xs">
@@ -453,7 +453,7 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
                       </tr>
                       {expandedRow === idx && (
                         <tr>
-                          <td colSpan={5} className="px-4 py-3 bg-gray-50 dark:bg-gray-900/30">
+                          <td colSpan={5} className="px-4 py-3 bg-gray-50 dark:bg-gray-900">
                             <div className="space-y-2">
                               <div className="flex gap-6 text-xs text-gray-500 dark:text-gray-400">
                                 <span><strong>Hostname:</strong> {entry.hostname}</span>
@@ -475,7 +475,7 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
 
           {/* Pagination */}
           {entries.length > 0 && (
-            <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30">
+            <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
               <div className="text-xs text-gray-500 dark:text-gray-400">
                 Showing {offset + 1}-{Math.min(offset + entries.length, totalCount)} of {totalCount.toLocaleString()}
               </div>
@@ -483,7 +483,7 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
                 <button
                   onClick={handlePrevPage}
                   disabled={offset === 0}
-                  className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                 >
                   <ChevronLeftIcon className="h-4 w-4 text-gray-600 dark:text-gray-400" />
                 </button>
@@ -493,7 +493,7 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
                 <button
                   onClick={handleNextPage}
                   disabled={!hasNext}
-                  className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                 >
                   <ChevronRightIcon className="h-4 w-4 text-gray-600 dark:text-gray-400" />
                 </button>

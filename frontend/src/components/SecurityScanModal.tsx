@@ -304,7 +304,7 @@ const SecurityScanModal: React.FC<SecurityScanModalProps> = ({
                       <div key={analyzer} className="border-b dark:border-gray-700 last:border-b-0">
                         <button
                           onClick={() => toggleAnalyzer(analyzer)}
-                          className="w-full flex items-center justify-between p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
+                          className="w-full flex items-center justify-between p-3 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
                           aria-expanded={expandedAnalyzers.has(analyzer)}
                         >
                           <span className="font-medium text-gray-900 dark:text-white">

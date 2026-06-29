@@ -14,6 +14,7 @@ import {
 import { useIAMUsers, useIAMGroups, createHumanUser, deleteUser, updateUserGroups, CreateHumanUserPayload } from '../hooks/useIAM';
 import DeleteConfirmation from './DeleteConfirmation';
 import SearchableSelect from './SearchableSelect';
+import ListStateBoundary from './iam/ListStateBoundary';
 
 interface IAMUsersProps {
   onShowToast: (message: string, type: 'success' | 'error' | 'info') => void;
@@ -315,7 +316,7 @@ const IAMUsers: React.FC<IAMUsersProps> = ({ onShowToast }) => {
 
         <div className="flex justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
           <button onClick={() => { resetForm(); setView('list'); }}
-            className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600">
+            className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-800">
             Cancel
           </button>
           <button onClick={handleCreate}
@@ -351,19 +352,14 @@ const IAMUsers: React.FC<IAMUsersProps> = ({ onShowToast }) => {
           className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent" />
       </div>
 
-      {isLoading && (
-        <div className="flex justify-center py-12"><ArrowPathIcon className="h-6 w-6 text-gray-400 animate-spin" /></div>
-      )}
-      {error && !isLoading && (
-        <div className="text-center py-8 text-red-500 dark:text-red-400 text-sm">{error}</div>
-      )}
-      {!isLoading && !error && filteredUsers.length === 0 && (
-        <div className="text-center py-12 text-gray-500 dark:text-gray-400">
-          {searchQuery ? 'No users match your search.' : 'No users yet. Create your first user.'}
-        </div>
-      )}
-
-      {!isLoading && !error && filteredUsers.length > 0 && (
+      <ListStateBoundary
+        isLoading={isLoading}
+        error={error}
+        isEmpty={filteredUsers.length === 0}
+        emptyMessage={
+          searchQuery ? 'No users match your search.' : 'No users yet. Create your first user.'
+        }
+      >
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -378,7 +374,7 @@ const IAMUsers: React.FC<IAMUsersProps> = ({ onShowToast }) => {
             <tbody>
               {filteredUsers.map((u) => (
                 <React.Fragment key={u.username}>
-                  <tr className="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50">
+                  <tr className="table-row border-b border-gray-100 dark:border-gray-800">
                     <td className="py-3 px-4 text-gray-900 dark:text-white font-medium">{u.username}</td>
                     <td className="py-3 px-4 text-gray-600 dark:text-gray-400">{u.email || '\u2014'}</td>
                     <td className="py-3 px-4 text-gray-600 dark:text-gray-400">
@@ -493,7 +489,7 @@ const IAMUsers: React.FC<IAMUsersProps> = ({ onShowToast }) => {
             </tbody>
           </table>
         </div>
-      )}
+      </ListStateBoundary>
     </div>
   );
 };

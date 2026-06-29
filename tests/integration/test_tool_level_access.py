@@ -103,14 +103,14 @@ def current_time_server_info() -> dict[str, Any]:
 
 
 @pytest.fixture
-def fininfo_server_info() -> dict[str, Any]:
+def finance_server_info() -> dict[str, Any]:
     """Second backend server with two distinct tools."""
     return {
-        "id": "srv-fininfo",
-        "server_name": "fininfo",
-        "path": "/fininfo/",
+        "id": "srv-finance",
+        "server_name": "finance",
+        "path": "/finance/",
         "description": "Financial info",
-        "proxy_pass_url": "http://fininfo:8000/",
+        "proxy_pass_url": "http://finance:8000/",
         "is_enabled": True,
         "tags": ["finance"],
         "num_tools": 2,
@@ -129,12 +129,12 @@ def fininfo_server_info() -> dict[str, Any]:
 
 @pytest.fixture
 def all_servers_map(
-    current_time_server_info, fininfo_server_info
+    current_time_server_info, finance_server_info
 ) -> dict[str, dict[str, Any]]:
     """Map of path -> server_info used by get_all_servers mocks."""
     return {
         "/current_time/": current_time_server_info,
-        "/fininfo/": fininfo_server_info,
+        "/finance/": finance_server_info,
     }
 
 
@@ -165,13 +165,9 @@ class TestGetServiceToolsEndpoint:
             return_value=current_time_server_info["tool_list"]
         )
 
-        fake_faiss = AsyncMock()
-        fake_faiss.add_or_update_service = AsyncMock()
-
         with (
             patch("registry.api.server_routes.server_service", fake_server_service),
             patch("registry.core.mcp_client.mcp_client_service", fake_mcp),
-            patch("registry.search.service.faiss_service", fake_faiss),
         ):
             # Act
             result = await get_service_tools("current_time", RESTRICTED_CONTEXT)
@@ -183,7 +179,7 @@ class TestGetServiceToolsEndpoint:
 
     @pytest.mark.asyncio
     async def test_get_tools_service_path_unauthorized_server_returns_403(
-        self, fininfo_server_info
+        self, finance_server_info
     ):
         """Restricted user gets 403 for a server they cannot access."""
         from fastapi import HTTPException
@@ -192,13 +188,13 @@ class TestGetServiceToolsEndpoint:
 
         # Arrange
         fake_server_service = AsyncMock()
-        fake_server_service.get_server_info = AsyncMock(return_value=fininfo_server_info)
+        fake_server_service.get_server_info = AsyncMock(return_value=finance_server_info)
         fake_server_service.user_can_access_server_path = AsyncMock(return_value=False)
 
         with patch("registry.api.server_routes.server_service", fake_server_service):
             # Act / Assert
             with pytest.raises(HTTPException) as excinfo:
-                await get_service_tools("fininfo", RESTRICTED_CONTEXT)
+                await get_service_tools("finance", RESTRICTED_CONTEXT)
             assert excinfo.value.status_code == 403
 
     @pytest.mark.asyncio
@@ -218,12 +214,9 @@ class TestGetServiceToolsEndpoint:
         # Live fetch returns None -> handler falls back to cached tool_list.
         fake_mcp.get_tools_from_server_with_server_info = AsyncMock(return_value=None)
 
-        fake_faiss = AsyncMock()
-
         with (
             patch("registry.api.server_routes.server_service", fake_server_service),
             patch("registry.core.mcp_client.mcp_client_service", fake_mcp),
-            patch("registry.search.service.faiss_service", fake_faiss),
         ):
             # Act
             result = await get_service_tools("current_time", RESTRICTED_CONTEXT)
@@ -257,12 +250,10 @@ class TestGetToolsAllEndpoint:
         fake_server_service.get_all_servers = AsyncMock(return_value=all_servers_map)
 
         fake_mcp = AsyncMock()
-        fake_faiss = AsyncMock()
 
         with (
             patch("registry.api.server_routes.server_service", fake_server_service),
             patch("registry.core.mcp_client.mcp_client_service", fake_mcp),
-            patch("registry.search.service.faiss_service", fake_faiss),
         ):
             # Act
             result = await get_service_tools("all", RESTRICTED_CONTEXT)
@@ -270,8 +261,8 @@ class TestGetToolsAllEndpoint:
         # Assert
         names = sorted(t["name"] for t in result["tools"])
         assert names == ["current_time_by_timezone"]
-        # fininfo had zero allowed tools, so it must be skipped entirely.
-        assert "/fininfo/" not in result["servers"]
+        # finance server had zero allowed tools, so it must be skipped entirely.
+        assert "/finance/" not in result["servers"]
         # current_time aggregation retains the single allowed tool.
         ct_names = [t["name"] for t in result["servers"]["/current_time/"]]
         assert ct_names == ["current_time_by_timezone"]
@@ -289,12 +280,10 @@ class TestGetToolsAllEndpoint:
         )
 
         fake_mcp = AsyncMock()
-        fake_faiss = AsyncMock()
 
         with (
             patch("registry.api.server_routes.server_service", fake_server_service),
             patch("registry.core.mcp_client.mcp_client_service", fake_mcp),
-            patch("registry.search.service.faiss_service", fake_faiss),
         ):
             # Act
             result = await get_service_tools("all", ADMIN_CONTEXT)
@@ -391,16 +380,16 @@ class TestSemanticSearchFilter:
     """Validates filter application at the three semantic-search sites.
 
     As with /servers above, these tests call the same filter the handler
-    calls rather than booting the FAISS + search repo machinery.
+    calls rather than booting the search repo machinery.
     """
 
     def test_semantic_search_per_server_matching_tools_pruned(
         self, current_time_server_info
     ):
-        """matching_tools from FAISS is pruned to the user's allowlist."""
+        """matching_tools from search is pruned to the user's allowlist."""
         from registry.auth.tool_filter import filter_tools_for_user
 
-        # Arrange: FAISS-shaped entries use `tool_name`.
+        # Arrange: search-shaped entries use `tool_name`.
         raw_matching = [
             {"tool_name": "current_time_by_timezone", "relevance_score": 0.9},
             {"tool_name": "current_time_utc", "relevance_score": 0.8},
@@ -474,7 +463,7 @@ class TestSemanticSearchFilter:
         from registry.auth.tool_filter import filter_tools_for_user
 
         # Arrange: virtual server wraps current_time; matching_tools came
-        # from the FAISS search and point at the underlying server name.
+        # from the search results and point at the underlying server name.
         vs_matching = [
             {"tool_name": "current_time_by_timezone", "relevance_score": 0.95},
             {"tool_name": "current_time_utc", "relevance_score": 0.80},
@@ -502,7 +491,7 @@ class TestSemanticSearchFilter:
     def test_semantic_search_admin_no_filtering_applied(
         self, current_time_server_info
     ):
-        """Admin requests leave all FAISS entries intact."""
+        """Admin requests leave all search entries intact."""
         from registry.auth.tool_filter import filter_tools_for_user, tool_allowed_for_user
 
         # Arrange

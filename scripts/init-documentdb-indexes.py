@@ -279,6 +279,8 @@ async def _create_servers_indexes(
         ("is_enabled", 1, False),
         ("version", 1, False),
         ("tags", 1, False),
+        # Lifecycle status filter (Issue #1330): admin review queue + status= filter.
+        ("status", 1, False),
     ]
 
     for field, order, unique in indexes:
@@ -315,6 +317,8 @@ async def _create_agents_indexes(
         ("is_enabled", 1, False),
         ("version", 1, False),
         ("tags", 1, False),
+        # Lifecycle status filter (Issue #1330): admin review queue + status= filter.
+        ("status", 1, False),
     ]
 
     for field, order, unique in indexes:
@@ -378,7 +382,11 @@ async def _load_default_scopes(
     namespace: str,
     entra_group_id: str | None = None,
 ) -> None:
-    """Load default admin scope from JSON file into scopes collection.
+    """Load default scopes from JSON files into scopes collection.
+
+    This loads all scope JSON files from the scripts directory:
+    - registry-admins.json: Bootstrap admin scope with full permissions
+    - federation-service.json: Federation service scope
 
     Args:
         db: Database connection
@@ -389,42 +397,54 @@ async def _load_default_scopes(
     collection_name = f"{COLLECTION_SCOPES}_{namespace}"
     collection = db[collection_name]
 
-    # Find the registry-admins.json file in the same directory as this script
+    # Find scope files in the same directory as this script
     script_dir = Path(__file__).parent
-    admin_scope_file = script_dir / "registry-admins.json"
 
-    if not admin_scope_file.exists():
-        logger.warning(f"Default admin scope file not found: {admin_scope_file}")
-        return
+    # List of scope files to load (order matters - base scopes first)
+    scope_files = [
+        "registry-admins.json",
+        "federation-service.json",
+    ]
 
-    try:
-        with open(admin_scope_file) as f:
-            admin_scope = json.load(f)
+    loaded_count = 0
+    for scope_filename in scope_files:
+        scope_file = script_dir / scope_filename
 
-        logger.info(f"Loading default admin scope from {admin_scope_file}")
+        if not scope_file.exists():
+            logger.warning(f"Scope file not found: {scope_file}")
+            continue
 
-        # Add Entra ID Group Object ID if provided
-        if entra_group_id:
-            if entra_group_id not in admin_scope.get("group_mappings", []):
-                admin_scope["group_mappings"].append(entra_group_id)
-                logger.info(f"Added Entra ID Group Object ID: {entra_group_id}")
+        try:
+            with open(scope_file) as f:
+                scope_data = json.load(f)
 
-        # Upsert the admin scope document
-        result = await collection.update_one(
-            {"_id": admin_scope["_id"]}, {"$set": admin_scope}, upsert=True
-        )
+            logger.info(f"Loading scope from {scope_filename}")
 
-        if result.upserted_id:
-            logger.info(f"Inserted admin scope: {admin_scope['_id']}")
-        elif result.modified_count > 0:
-            logger.info(f"Updated admin scope: {admin_scope['_id']}")
-        else:
-            logger.info(f"Admin scope already up-to-date: {admin_scope['_id']}")
+            # For registry-admins scope, add Entra ID Group Object ID if provided
+            if scope_data["_id"] == "registry-admins" and entra_group_id:
+                if entra_group_id not in scope_data.get("group_mappings", []):
+                    scope_data["group_mappings"].append(entra_group_id)
+                    logger.info(f"  Added Entra ID Group Object ID: {entra_group_id}")
 
-        logger.info(f"Admin scope group_mappings: {admin_scope.get('group_mappings', [])}")
+            # Upsert the scope document
+            result = await collection.update_one(
+                {"_id": scope_data["_id"]}, {"$set": scope_data}, upsert=True
+            )
 
-    except Exception as e:
-        logger.error(f"Failed to load default admin scope: {e}", exc_info=True)
+            if result.upserted_id:
+                logger.info(f"  Inserted scope: {scope_data['_id']}")
+            elif result.modified_count > 0:
+                logger.info(f"  Updated scope: {scope_data['_id']}")
+            else:
+                logger.info(f"  Scope already up-to-date: {scope_data['_id']}")
+
+            logger.info(f"  group_mappings: {scope_data.get('group_mappings', [])}")
+            loaded_count += 1
+
+        except Exception as e:
+            logger.error(f"Failed to load scope from {scope_filename}: {e}", exc_info=True)
+
+    logger.info(f"Loaded {loaded_count}/{len(scope_files)} default scopes")
 
 
 async def _create_security_scans_indexes(
@@ -568,6 +588,31 @@ async def _create_audit_events_indexes(
         logger.info(f"Created composite unique index '{composite_index_name}' on {collection_name}")
     except Exception as e:
         logger.error(f"Failed to create index '{composite_index_name}' on {collection_name}: {e}")
+
+    # Compound index for token_mint flat-field queries (resource_type/resource_id at
+    # the top level, not nested under action.*). Required because the existing
+    # action.resource_type index does not cover TokenMintAuditRecord's flat layout.
+    token_mint_index_name = "log_type_resource_type_resource_id_timestamp_idx"
+
+    if recreate:
+        try:
+            await collection.drop_index(token_mint_index_name)
+            logger.info(
+                f"Dropped existing index '{token_mint_index_name}' from {collection_name}"
+            )
+        except Exception as e:
+            logger.debug(f"No existing index '{token_mint_index_name}' to drop: {e}")
+
+    try:
+        await collection.create_index(
+            [("log_type", 1), ("resource_type", 1), ("resource_id", 1), ("timestamp", -1)],
+            name=token_mint_index_name,
+        )
+        logger.info(f"Created index '{token_mint_index_name}' on {collection_name}")
+    except Exception as e:
+        logger.error(
+            f"Failed to create index '{token_mint_index_name}' on {collection_name}: {e}"
+        )
 
     # TTL index for automatic expiration
     # Default 7 days (604800 seconds), configurable via AUDIT_LOG_MONGODB_TTL_DAYS

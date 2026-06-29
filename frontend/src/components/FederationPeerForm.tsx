@@ -266,7 +266,7 @@ const FederationPeerForm: React.FC<FederationPeerFormProps> = ({
         <button
           onClick={() => navigate('/settings/federation/peers')}
           className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200
-                     rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600"
+                     rounded-lg hover:bg-gray-300 dark:hover:bg-gray-800"
         >
           Back to Peers
         </button>
@@ -591,7 +591,7 @@ const FederationPeerForm: React.FC<FederationPeerFormProps> = ({
             onClick={() => navigate('/settings/federation/peers')}
             disabled={isSubmitting}
             className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200
-                       rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50"
+                       rounded-lg hover:bg-gray-300 dark:hover:bg-gray-800 disabled:opacity-50"
           >
             Cancel
           </button>

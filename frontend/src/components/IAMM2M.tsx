@@ -25,6 +25,9 @@ import {
   M2MClient,
 } from '../hooks/useIAM';
 import DeleteConfirmation from './DeleteConfirmation';
+import ProviderBadge from './iam/ProviderBadge';
+import ListStateBoundary from './iam/ListStateBoundary';
+import { extractErrorDetail as extractDetail } from '../utils/apiError';
 
 interface IAMM2MProps {
   onShowToast: (message: string, type: 'success' | 'error' | 'info') => void;
@@ -45,35 +48,6 @@ interface RegisterFormErrors {
 
 // Mirrors the backend regex at registry/schemas/idp_m2m_client.py:18.
 const CLIENT_ID_REGEX = /^[A-Za-z0-9_\-.:]{1,256}$/;
-
-const PROVIDER_STYLES: Record<string, string> = {
-  manual: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300',
-  okta: 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300',
-  auth0: 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300',
-  keycloak: 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300',
-  entra: 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300',
-};
-
-const ProviderBadge: React.FC<{ provider: string }> = ({ provider }) => {
-  const style =
-    PROVIDER_STYLES[provider] ??
-    'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300';
-  return (
-    <span
-      className={`inline-block px-2 py-0.5 text-xs rounded-full font-mono ${style}`}
-    >
-      {provider}
-    </span>
-  );
-};
-
-const extractDetail = (err: any, fallback: string): string => {
-  const detail = err?.response?.data?.detail;
-  if (Array.isArray(detail)) {
-    return detail.map((d: any) => d?.msg).filter(Boolean).join(', ') || fallback;
-  }
-  return detail || fallback;
-};
 
 const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
   const { clients, isLoading, error, refetch } = useM2MClients();
@@ -404,7 +378,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
 
         <div className="flex justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
           <button onClick={() => { setFormGroups(new Set()); setEditTarget(null); setErrors({}); setGroupSearch(''); setView('list'); }}
-            className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600">
+            className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-800">
             Cancel
           </button>
           <button onClick={handleUpdate} disabled={isUpdating}
@@ -483,7 +457,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
 
         <div className="flex justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
           <button onClick={() => { resetCreateForm(); setGroupSearch(''); setView('list'); }}
-            className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600">
+            className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-800">
             Cancel
           </button>
           <button onClick={handleCreate} disabled={isCreating}
@@ -578,7 +552,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
 
         <div className="flex justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
           <button onClick={() => { resetRegisterForm(); setView('list'); }}
-            className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600">
+            className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-800">
             Cancel
           </button>
           <button onClick={handleRegister} disabled={isRegistering}
@@ -606,7 +580,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
             <InformationCircleIcon className="h-5 w-5" />
           </button>
           <button onClick={() => { resetRegisterForm(); setView('register'); }}
-            className="flex items-center px-3 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600"
+            className="flex items-center px-3 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-800"
             title="Register a client_id that already exists in your IdP (no IdP Admin API token required)">
             <PlusIcon className="h-4 w-4 mr-1" /> Register existing client
           </button>
@@ -645,19 +619,16 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
           className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent" />
       </div>
 
-      {isLoading && (
-        <div className="flex justify-center py-12"><ArrowPathIcon className="h-6 w-6 text-gray-400 animate-spin" /></div>
-      )}
-      {error && !isLoading && (
-        <div className="text-center py-8 text-red-500 dark:text-red-400 text-sm">{error}</div>
-      )}
-      {!isLoading && !error && filteredClients.length === 0 && (
-        <div className="text-center py-12 text-gray-500 dark:text-gray-400">
-          {searchQuery ? 'No accounts match your search.' : 'No M2M accounts yet. Create your first service account.'}
-        </div>
-      )}
-
-      {!isLoading && !error && filteredClients.length > 0 && (
+      <ListStateBoundary
+        isLoading={isLoading}
+        error={error}
+        isEmpty={filteredClients.length === 0}
+        emptyMessage={
+          searchQuery
+            ? 'No accounts match your search.'
+            : 'No M2M accounts yet. Create your first service account.'
+        }
+      >
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -674,7 +645,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
                 const isManual = c.provider === 'manual';
                 return (
                   <React.Fragment key={c.client_id}>
-                    <tr className="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50">
+                    <tr className="table-row border-b border-gray-100 dark:border-gray-800">
                       <td className="py-3 px-4 text-gray-900 dark:text-white font-medium">
                         <div>{c.name}</div>
                         <div className="text-xs text-gray-400 font-mono">{c.client_id}</div>
@@ -740,7 +711,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
             </tbody>
           </table>
         </div>
-      )}
+      </ListStateBoundary>
     </div>
   );
 };

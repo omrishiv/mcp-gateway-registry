@@ -67,7 +67,6 @@ from registry.auth.routes import router as auth_router
 
 # Import core configuration
 from registry.core.config import (
-    MONGODB_BACKENDS,
     InternalDeploymentType,
     RegistryMode,
     _print_config_warning_banner,
@@ -530,64 +529,16 @@ async def lifespan(app: FastAPI):
         logger.info("📚 Loading server definitions and state...")
         await server_service.load_servers_and_state()
 
-        # Get repository based on STORAGE_BACKEND configuration
+        # Initialize DocumentDB search (embeddings are persisted and survive restarts)
         search_repo = get_search_repository()
-        backend_name = "DocumentDB" if settings.storage_backend in MONGODB_BACKENDS else "FAISS"
 
-        logger.info(f"🔍 Initializing {backend_name} search service...")
+        logger.info("� Initializing DocumentDB search service...")
         await search_repo.initialize()
+        logger.info("✅ DocumentDB search index is persistent, skipping startup re-index")
 
-        # For DocumentDB, embeddings are persisted in the collection and survive
-        # restarts. Only FAISS (in-memory) needs a full re-index on every boot.
-        if settings.storage_backend not in MONGODB_BACKENDS:
-            logger.info(f"📊 Rebuilding in-memory {backend_name} index from DB...")
-            all_servers = await server_service.get_all_servers()
-            for service_path, server_info in all_servers.items():
-                is_enabled = await server_service.is_service_enabled(service_path)
-                try:
-                    await search_repo.index_server(service_path, server_info, is_enabled)
-                except Exception as e:
-                    logger.error(
-                        f"Failed to index service {service_path}: {e}",
-                        exc_info=True,
-                    )
-            logger.info(f"✅ {backend_name} index rebuilt with {len(all_servers)} services")
-
-            logger.info("📋 Loading agent cards and state...")
-            await agent_service.load_agents_and_state()
-
-            all_agents = await agent_service.list_agents()
-            for agent_card in all_agents:
-                is_enabled = await agent_service.is_agent_enabled(agent_card.path)
-                try:
-                    await search_repo.index_agent(agent_card.path, agent_card, is_enabled)
-                except Exception as e:
-                    logger.error(
-                        f"Failed to index agent {agent_card.path}: {e}",
-                        exc_info=True,
-                    )
-            logger.info(f"✅ {backend_name} index rebuilt with {len(all_agents)} agents")
-
-            from registry.repositories.factory import get_skill_repository
-
-            skill_repo = get_skill_repository()
-            all_skills = await skill_repo.list_all(skip=0, limit=10000)
-            for skill_card in all_skills:
-                try:
-                    await search_repo.index_skill(
-                        skill_card.path, skill_card, skill_card.is_enabled
-                    )
-                except Exception as e:
-                    logger.error(
-                        f"Failed to index skill {skill_card.path}: {e}",
-                        exc_info=True,
-                    )
-            logger.info(f"✅ {backend_name} index rebuilt with {len(all_skills)} skills")
-        else:
-            logger.info(f"✅ {backend_name} search index is persistent, skipping startup re-index")
-            # Still need to load agent state (in-memory service cache)
-            logger.info("📋 Loading agent cards and state...")
-            await agent_service.load_agents_and_state()
+        # Load agent state (in-memory service cache)
+        logger.info("📋 Loading agent cards and state...")
+        await agent_service.load_agents_and_state()
 
         logger.info("🏥 Initializing health monitoring service...")
         await health_service.initialize()
@@ -783,6 +734,21 @@ async def lifespan(app: FastAPI):
         await peer_sync_scheduler.start()
         logger.info("Peer sync scheduler started")
 
+        # Start ARD ai-catalog ingestion scheduler (issue #1296). Runs only when
+        # the ai_catalog federation config is enabled; safe no-op otherwise.
+        from registry.services.ard_ingestion_scheduler import get_ard_ingestion_scheduler
+        from registry.services.ard_ingestion_service import get_ard_ingestion_service
+
+        ard_ingestion_scheduler = get_ard_ingestion_scheduler()
+        await ard_ingestion_scheduler.start()
+        try:
+            ard_cfg = await get_ard_ingestion_service().get_config()
+            if ard_cfg.enabled and ard_cfg.sync_on_startup and ard_cfg.sources:
+                logger.info("Running ARD ingestion startup pass for %d source(s)", len(ard_cfg.sources))
+                await get_ard_ingestion_service().ingest_all()
+        except Exception as e:  # noqa: BLE001
+            logger.error("ARD ingestion startup pass failed: %s", e, exc_info=True)
+
         # Start ANS sync scheduler
         if settings.ans_integration_enabled:
             from registry.services.ans_sync_scheduler import get_ans_sync_scheduler
@@ -912,6 +878,10 @@ async def lifespan(app: FastAPI):
         # Stop peer sync scheduler
         peer_sync_scheduler = get_peer_sync_scheduler()
         await peer_sync_scheduler.stop()
+
+        # Stop ARD ingestion scheduler
+        from registry.services.ard_ingestion_scheduler import get_ard_ingestion_scheduler
+        await get_ard_ingestion_scheduler().stop()
 
         # Stop update-check poller
         from registry.core.update_check import stop_update_checker
@@ -1075,11 +1045,9 @@ logger.info("Registered RegistryMetricsMiddleware (issue #1122)")
 if settings.audit_log_enabled:
     logger.info("📝 Initializing audit logging...")
 
-    # Get audit repository if MongoDB is enabled
+    # Get audit repository if MongoDB audit logging is enabled
     _audit_repository = None
-    _mongodb_enabled = (
-        settings.audit_log_mongodb_enabled and settings.storage_backend in MONGODB_BACKENDS
-    )
+    _mongodb_enabled = settings.audit_log_mongodb_enabled
     if _mongodb_enabled:
         from registry.repositories.factory import get_audit_repository
 
@@ -1155,6 +1123,22 @@ app.include_router(registry_router, prefix="/api/registry", tags=["Registry Card
 
 # Register well-known discovery router
 app.include_router(wellknown_router, prefix="/.well-known", tags=["Discovery"])
+
+# Register ARD Registry adapter (POST /api/ard/search, GET /api/ard/agents, issue #1295)
+from fastapi.exceptions import RequestValidationError  # noqa: E402
+from starlette.exceptions import HTTPException as StarletteHTTPException  # noqa: E402
+
+from registry.api.ard_routes import (  # noqa: E402
+    ard_http_exception_handler,
+    ard_validation_exception_handler,
+)
+from registry.api.ard_routes import router as ard_router  # noqa: E402
+
+app.include_router(ard_router, prefix="/api/ard", tags=["ARD Registry"])
+# ARD error envelope: reshape HTTPException / validation errors on /api/ard/* only;
+# default behavior is preserved for every other path.
+app.add_exception_handler(StarletteHTTPException, ard_http_exception_handler)
+app.add_exception_handler(RequestValidationError, ard_validation_exception_handler)
 
 # Register public, anonymous per-record endpoints (ARD catalog url targets, issue #1294)
 app.include_router(public_record_router, prefix="/api", tags=["Public Records"])

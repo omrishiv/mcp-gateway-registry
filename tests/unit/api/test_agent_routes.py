@@ -44,7 +44,17 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.fixture
-def test_app(mock_user_context):
+def mock_search_repo():
+    """Mock search repository for search indexing calls."""
+    mock = AsyncMock()
+    mock.index_server = AsyncMock()
+    mock.index_agent = AsyncMock()
+    mock.remove_entity = AsyncMock()
+    return mock
+
+
+@pytest.fixture
+def test_app(mock_user_context, mock_search_repo):
     """Create a test FastAPI application with agent routes."""
     from fastapi import FastAPI
 
@@ -58,8 +68,12 @@ def test_app(mock_user_context):
     app.dependency_overrides[nginx_proxied_auth] = lambda: mock_user_context
     app.dependency_overrides[verify_csrf_token_flexible] = lambda: None
 
-    client = TestClient(app)
-    yield client
+    with patch(
+        "registry.api.agent_routes.get_search_repository",
+        return_value=mock_search_repo,
+    ):
+        client = TestClient(app)
+        yield client
 
     # Cleanup
     app.dependency_overrides.clear()
@@ -128,7 +142,7 @@ def mock_limited_user_context() -> dict[str, Any]:
 
 
 @pytest.fixture
-def test_app_admin(mock_admin_context):
+def test_app_admin(mock_admin_context, mock_search_repo):
     """Create a test FastAPI application with admin auth."""
     from fastapi import FastAPI
 
@@ -141,13 +155,17 @@ def test_app_admin(mock_admin_context):
     app.dependency_overrides[nginx_proxied_auth] = lambda: mock_admin_context
     app.dependency_overrides[verify_csrf_token_flexible] = lambda: None
 
-    client = TestClient(app)
-    yield client
+    with patch(
+        "registry.api.agent_routes.get_search_repository",
+        return_value=mock_search_repo,
+    ):
+        client = TestClient(app)
+        yield client
     app.dependency_overrides.clear()
 
 
 @pytest.fixture
-def test_app_limited(mock_limited_user_context):
+def test_app_limited(mock_limited_user_context, mock_search_repo):
     """Create a test FastAPI application with limited user auth."""
     from fastapi import FastAPI
 
@@ -160,8 +178,12 @@ def test_app_limited(mock_limited_user_context):
     app.dependency_overrides[nginx_proxied_auth] = lambda: mock_limited_user_context
     app.dependency_overrides[verify_csrf_token_flexible] = lambda: None
 
-    client = TestClient(app)
-    yield client
+    with patch(
+        "registry.api.agent_routes.get_search_repository",
+        return_value=mock_search_repo,
+    ):
+        client = TestClient(app)
+        yield client
     app.dependency_overrides.clear()
 
 
@@ -480,7 +502,6 @@ class TestRegisterAgent:
         with (
             patch("registry.api.agent_routes.agent_service") as mock_agent_service,
             patch("registry.utils.agent_validator.agent_validator") as mock_validator,
-            patch("registry.search.service.faiss_service") as mock_faiss,
         ):
             mock_agent_service.get_agent_info = AsyncMock(return_value=None)
             mock_agent_service.register_agent = AsyncMock(return_value=True)
@@ -491,7 +512,6 @@ class TestRegisterAgent:
             mock_validation_result.errors = []
             mock_validation_result.warnings = []
             mock_validator.validate_agent_card = AsyncMock(return_value=mock_validation_result)
-            mock_faiss.add_or_update_entity = AsyncMock()
 
             # Act
             response = test_app.post("/agents/register", json=request_data)
@@ -623,7 +643,9 @@ class TestListAgents:
             mock_agent_service.get_all_agents = AsyncMock(
                 return_value=[enabled_agent, disabled_agent]
             )
-            mock_agent_service.is_agent_enabled = AsyncMock(side_effect=lambda path: path == "/agents/enabled")
+            mock_agent_service.is_agent_enabled = AsyncMock(
+                side_effect=lambda path: path == "/agents/enabled"
+            )
 
             # Act
             response = test_app.get("/agents?enabled_only=true")
@@ -835,7 +857,9 @@ class TestListAgents:
     # --- Pagination: Fast path tests (unrestricted user, no field filters) ---
 
     @pytest.mark.asyncio
-    async def test_list_agents_fast_path_with_limit_offset(self, test_app_admin, mock_admin_context):
+    async def test_list_agents_fast_path_with_limit_offset(
+        self, test_app_admin, mock_admin_context
+    ):
         """Admin user with limit/offset uses DB-level pagination."""
         agents = [AgentCardFactory(path=f"/agents/agent-{i}") for i in range(5)]
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
@@ -870,7 +894,9 @@ class TestListAgents:
             assert data["has_next"] is False
 
     @pytest.mark.asyncio
-    async def test_list_agents_fast_path_offset_beyond_total(self, test_app_admin, mock_admin_context):
+    async def test_list_agents_fast_path_offset_beyond_total(
+        self, test_app_admin, mock_admin_context
+    ):
         """Fast path: offset beyond total returns empty list."""
         with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
             mock_agent_service.get_agents_paginated = AsyncMock(return_value=([], 3))
@@ -1203,11 +1229,9 @@ class TestToggleAgent:
             patch(
                 "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
             ),
-            patch("registry.search.service.faiss_service") as mock_faiss,
         ):
             mock_agent_service.get_agent_info = AsyncMock(return_value=sample_agent_card)
             mock_agent_service.toggle_agent = AsyncMock(return_value=True)
-            mock_faiss.add_or_update_entity = AsyncMock()
 
             # Act
             response = test_app.post("/agents/test-agent/toggle?enabled=true")
@@ -1250,6 +1274,102 @@ class TestToggleAgent:
 
             # Assert
             assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    @pytest.mark.asyncio
+    async def test_toggle_agent_rejects_without_access(self, mock_search_repo, sample_agent_card):
+        """Permission alone is not enough: non-admin needs per-agent access.
+
+        Mirrors the per-server access check on POST /api/servers/toggle. The
+        caller has toggle_service for "all" (so the permission check passes)
+        but the target agent is not in accessible_agents and they are not the
+        owner, so the toggle must be rejected.
+        """
+        from fastapi import FastAPI
+
+        from registry.api.agent_routes import nginx_proxied_auth, router
+        from registry.auth.csrf import verify_csrf_token_flexible
+
+        ctx = {
+            "username": "outsider",
+            "groups": ["other-group"],
+            "scopes": ["read:agents"],
+            "accessible_agents": ["/agents/some-other-agent"],
+            "ui_permissions": {"toggle_service": ["all"]},
+            "is_admin": False,
+        }
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[nginx_proxied_auth] = lambda: ctx
+        app.dependency_overrides[verify_csrf_token_flexible] = lambda: None
+
+        with (
+            patch("registry.api.agent_routes.agent_service") as mock_agent_service,
+            patch(
+                "registry.auth.dependencies.user_has_ui_permission_for_service",
+                return_value=True,
+            ),
+            patch(
+                "registry.api.agent_routes.get_search_repository",
+                return_value=mock_search_repo,
+            ),
+        ):
+            mock_agent_service.get_agent_info = AsyncMock(return_value=sample_agent_card)
+            mock_agent_service.toggle_agent = AsyncMock(return_value=True)
+
+            client = TestClient(app)
+            response = client.post("/agents/test-agent/toggle?enabled=true")
+
+            assert response.status_code == status.HTTP_403_FORBIDDEN
+            mock_agent_service.toggle_agent.assert_not_called()
+
+        app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
+    async def test_toggle_agent_allows_owner_without_accessible_list(
+        self, mock_search_repo, sample_agent_card
+    ):
+        """Owner with permission can toggle even if not in accessible_agents."""
+        from fastapi import FastAPI
+
+        from registry.api.agent_routes import nginx_proxied_auth, router
+        from registry.auth.csrf import verify_csrf_token_flexible
+
+        # sample_agent_card.registered_by == "testuser"
+        ctx = {
+            "username": "testuser",
+            "groups": ["test-group"],
+            "scopes": ["write:agents"],
+            "accessible_agents": ["/agents/some-other-agent"],
+            "ui_permissions": {"toggle_service": ["all"]},
+            "is_admin": False,
+        }
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[nginx_proxied_auth] = lambda: ctx
+        app.dependency_overrides[verify_csrf_token_flexible] = lambda: None
+
+        with (
+            patch("registry.api.agent_routes.agent_service") as mock_agent_service,
+            patch(
+                "registry.auth.dependencies.user_has_ui_permission_for_service",
+                return_value=True,
+            ),
+            patch(
+                "registry.api.agent_routes.get_search_repository",
+                return_value=mock_search_repo,
+            ),
+        ):
+            mock_agent_service.get_agent_info = AsyncMock(return_value=sample_agent_card)
+            mock_agent_service.toggle_agent = AsyncMock(return_value=True)
+
+            client = TestClient(app)
+            response = client.post("/agents/test-agent/toggle?enabled=true")
+
+            assert response.status_code == status.HTTP_200_OK
+
+        app.dependency_overrides.clear()
 
 
 @pytest.mark.unit
@@ -1330,7 +1450,6 @@ class TestUpdateAgent:
                 "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
             ),
             patch("registry.utils.agent_validator.agent_validator") as mock_validator,
-            patch("registry.search.service.faiss_service") as mock_faiss,
         ):
             mock_agent_service.get_agent_info = AsyncMock(return_value=sample_agent_card)
             mock_agent_service.update_agent = AsyncMock(return_value=True)
@@ -1339,7 +1458,6 @@ class TestUpdateAgent:
             mock_validation_result = MagicMock()
             mock_validation_result.is_valid = True
             mock_validator.validate_agent_card = AsyncMock(return_value=mock_validation_result)
-            mock_faiss.add_or_update_entity = AsyncMock()
 
             # Act
             response = test_app.put("/agents/test-agent", json=update_data)
@@ -1422,13 +1540,9 @@ class TestDeleteAgent:
     async def test_delete_agent_success(self, test_app, mock_user_context, sample_agent_card):
         """Test successfully deleting an agent."""
         # Arrange
-        with (
-            patch("registry.api.agent_routes.agent_service") as mock_agent_service,
-            patch("registry.search.service.faiss_service") as mock_faiss,
-        ):
+        with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
             mock_agent_service.get_agent_info = AsyncMock(return_value=sample_agent_card)
             mock_agent_service.remove_agent = AsyncMock(return_value=True)
-            mock_faiss.remove_entity = AsyncMock()
 
             # Act
             response = test_app.delete("/agents/test-agent")
@@ -1600,13 +1714,8 @@ class TestDiscoverAgentsSemantic:
             }
         ]
 
-        # Patch faiss_service where it's dynamically imported in the route function
-        with (
-            patch("registry.api.agent_routes.agent_service") as mock_agent_service,
-            patch("registry.search.service.faiss_service") as mock_faiss,
-        ):
+        with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
             mock_agent_service.get_all_agents = AsyncMock(return_value=[agent])
-            mock_faiss.search_entities = AsyncMock(return_value=mock_search_results)
 
             # Act - query sent as body string, max_results as query param
             response = test_app.post(
@@ -1732,9 +1841,12 @@ class TestRunSecurityScanOnRegistrationUpdatesViaUpdateAgent:
             toggle_agent=AsyncMock(),
         )
 
-        with patch("registry.api.agent_routes.agent_service", new=service_mock), patch(
-            "registry.services.agent_scanner.agent_scanner_service",
-            new=scanner_mock,
+        with (
+            patch("registry.api.agent_routes.agent_service", new=service_mock),
+            patch(
+                "registry.services.agent_scanner.agent_scanner_service",
+                new=scanner_mock,
+            ),
         ):
             # Act
             still_enabled = await _perform_agent_security_scan_on_registration(
@@ -1808,12 +1920,16 @@ class TestRunSecurityScanOnRegistrationUpdatesViaUpdateAgent:
         search_repo_mock = MagicMock()
         search_repo_mock.index_agent = AsyncMock()
 
-        with patch("registry.api.agent_routes.agent_service", new=service_mock), patch(
-            "registry.services.agent_scanner.agent_scanner_service",
-            new=scanner_mock,
-        ), patch(
-            "registry.repositories.factory.get_search_repository",
-            return_value=search_repo_mock,
+        with (
+            patch("registry.api.agent_routes.agent_service", new=service_mock),
+            patch(
+                "registry.services.agent_scanner.agent_scanner_service",
+                new=scanner_mock,
+            ),
+            patch(
+                "registry.api.agent_routes.get_search_repository",
+                return_value=search_repo_mock,
+            ),
         ):
             # Act
             still_enabled = await _perform_agent_security_scan_on_registration(
@@ -1874,9 +1990,12 @@ class TestRunSecurityScanOnRegistrationUpdatesViaUpdateAgent:
             toggle_agent=AsyncMock(),
         )
 
-        with patch("registry.api.agent_routes.agent_service", new=service_mock), patch(
-            "registry.services.agent_scanner.agent_scanner_service",
-            new=scanner_mock,
+        with (
+            patch("registry.api.agent_routes.agent_service", new=service_mock),
+            patch(
+                "registry.services.agent_scanner.agent_scanner_service",
+                new=scanner_mock,
+            ),
         ):
             # Act
             still_enabled = await _perform_agent_security_scan_on_registration(

@@ -41,19 +41,19 @@ variable "task_execution_role_arn" {
 variable "registry_image_uri" {
   description = "Container image URI for registry service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/registry:1.24.7"
+  default     = "public.ecr.aws/p3v1o3c6/registry:1.25.0"
 }
 
 variable "auth_server_image_uri" {
   description = "Container image URI for auth server service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/auth-server:1.24.7"
+  default     = "public.ecr.aws/p3v1o3c6/auth-server:1.25.0"
 }
 
 variable "mcpgw_image_uri" {
   description = "Container image URI for mcpgw service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/mcpgw:1.24.7"
+  default     = "public.ecr.aws/p3v1o3c6/mcpgw:1.25.0"
 }
 
 variable "enable_demo_servers" {
@@ -893,6 +893,19 @@ variable "registration_webhook_timeout_seconds" {
   description = "Timeout for webhook HTTP calls in seconds."
   type        = number
   default     = 10
+}
+
+variable "registration_webhook_signing_secret" {
+  description = "Shared secret for HMAC-SHA256 signing of outbound webhook payloads."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "registration_enforced_status" {
+  description = "Mandated initial lifecycle status for new registrations (e.g. 'draft'). Empty = default 'active'."
+  type        = string
+  default     = ""
 }
 
 # Agent batch API (issue #956)

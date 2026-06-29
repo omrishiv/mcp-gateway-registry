@@ -105,6 +105,11 @@ class ServerSearchResult(BaseModel):
     match_context: str | None = None
     matching_tools: list[MatchingToolResult] = Field(default_factory=list)
     sync_metadata: SyncMetadata | None = None
+    # ARD discovery imports (#1296): origin marker + the source registry's
+    # descriptor URL (the "view at source" / resolve link) so search-result
+    # consumers can route an ARD-discovered server back to the source.
+    record_kind: str | None = Field(default=None)
+    ard_source_url: str | None = Field(default=None)
     # Endpoint URL for agent connectivity (computed based on deployment mode)
     endpoint_url: str | None = Field(
         default=None, description="URL for agents to connect to this MCP server"
@@ -410,7 +415,7 @@ async def semantic_search(
     search_repo: SearchRepositoryBase = Depends(get_search_repo),
 ) -> SemanticSearchResponse:
     """
-    Run a semantic search against MCP servers (and their tools) using FAISS embeddings.
+    Run a semantic search against MCP servers (and their tools) using DocumentDB vector search.
     """
     # Parse #tag tokens from query for exact tag matching
     search_query, hashtag_tags = _parse_hashtags(request.query)
@@ -465,7 +470,7 @@ async def semantic_search(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except RuntimeError as exc:
-        logger.error("FAISS search service unavailable: %s", exc, exc_info=True)
+        logger.error("Search service unavailable: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Semantic search is temporarily unavailable. Please try again later.",
@@ -535,7 +540,7 @@ async def semantic_search(
         server_trust = _compute_trust_verified(server_ans_meta)
 
         # For local servers, endpoint_url is meaningless (no nginx route). The
-        # FAISS service surfaces deployment + local_runtime in its result dict;
+        # search service surfaces deployment + local_runtime in its result dict;
         # propagate them so consumers can construct a stdio launch recipe
         # rather than try to GET a gateway URL that returns 503.
         server_deployment = server.get("deployment", "remote")
@@ -576,6 +581,8 @@ async def semantic_search(
                 trust_verified=server_trust,
                 deployment=server_deployment,
                 local_runtime=server_local_runtime,
+                record_kind=(server_full_info or {}).get("record_kind"),
+                ard_source_url=(server_full_info or {}).get("ard_source_url"),
             )
         )
 

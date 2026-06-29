@@ -205,7 +205,7 @@ describe('ServerConfigModal IDE OAuth login (oauth_client_id)', () => {
     expect(serverConfig.headers.Authorization).toBeUndefined();
   });
 
-  test('Kiro: drops server Authorization but keeps the static gateway token under OAuth login', async () => {
+  test('Kiro: emits a URL-only config that relies on DCR (no headers, no autoApprove)', async () => {
     connectConfig = { custom_headers: [], oauth_client_id: 'mcp-gateway' };
 
     renderModal({ auth_scheme: 'bearer' } as Partial<Server>);
@@ -215,11 +215,15 @@ describe('ServerConfigModal IDE OAuth login (oauth_client_id)', () => {
 
     await waitFor(() => {
       const serverConfig = getDisplayedConfig().mcpServers['test-server'];
-      expect(serverConfig.autoApprove).toBeDefined();
+      expect(serverConfig.url).toBeDefined();
     });
     const serverConfig = getDisplayedConfig().mcpServers['test-server'];
-    expect(serverConfig.headers['X-Authorization']).toContain('Bearer');
-    expect(serverConfig.headers.Authorization).toBeUndefined();
+    // Kiro now supports Dynamic Client Registration, so the config carries only
+    // the server URL: no static gateway token, headers, or disabled/autoApprove.
+    expect(serverConfig.url).toContain('/test-server');
+    expect(serverConfig.headers).toBeUndefined();
+    expect(serverConfig.autoApprove).toBeUndefined();
+    expect(serverConfig.disabled).toBeUndefined();
   });
 
   test('Cursor: keeps the static gateway token when oauth_client_id is absent', async () => {

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
+import { useIAMResource } from './useIAMResource';
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -57,26 +58,14 @@ export interface CreateGroupPayload {
 // ─── Hook: useIAMGroups ─────────────────────────────────────────
 
 export function useIAMGroups() {
-  const [groups, setGroups] = useState<IAMGroup[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetchGroups = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
+  const { data, isLoading, error, refetch } = useIAMResource<IAMGroup>(
+    async () => {
       const res = await axios.get('/api/management/iam/groups');
-      setGroups(res.data.groups || res.data || []);
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to load groups');
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { fetchGroups(); }, [fetchGroups]);
-
-  return { groups, isLoading, error, refetch: fetchGroups };
+      return res.data.groups || res.data || [];
+    },
+    'Failed to load groups',
+  );
+  return { groups: data, isLoading, error, refetch };
 }
 
 export async function createGroup(payload: CreateGroupPayload): Promise<any> {
@@ -131,28 +120,17 @@ export async function updateGroup(
 // ─── Hook: useIAMUsers ──────────────────────────────────────────
 
 export function useIAMUsers(search?: string) {
-  const [users, setUsers] = useState<IAMUser[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetchUsers = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
+  const { data, isLoading, error, refetch } = useIAMResource<IAMUser>(
+    async () => {
       const params: Record<string, string | number> = { limit: 500 };
       if (search) params.search = search;
       const res = await axios.get('/api/management/iam/users', { params });
-      setUsers(res.data.users || res.data || []);
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to load users');
-    } finally {
-      setIsLoading(false);
-    }
-  }, [search]);
-
-  useEffect(() => { fetchUsers(); }, [fetchUsers]);
-
-  return { users, isLoading, error, refetch: fetchUsers };
+      return res.data.users || res.data || [];
+    },
+    'Failed to load users',
+    search ?? '',
+  );
+  return { users: data, isLoading, error, refetch };
 }
 
 export async function createHumanUser(payload: CreateHumanUserPayload): Promise<any> {
@@ -227,29 +205,16 @@ export interface M2MClientListResponse {
 // ─── Hook: useM2MClients ────────────────────────────────────────
 
 export function useM2MClients() {
-  const [clients, setClients] = useState<M2MClient[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetchClients = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const res = await axios.get<M2MClientListResponse>(
-        '/api/iam/m2m-clients',
-        { params: { limit: 1000 } }
-      );
-      setClients(res.data.items || []);
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to load M2M clients');
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { fetchClients(); }, [fetchClients]);
-
-  return { clients, isLoading, error, refetch: fetchClients };
+  const { data, isLoading, error, refetch } = useIAMResource<M2MClient>(
+    async () => {
+      const res = await axios.get<M2MClientListResponse>('/api/iam/m2m-clients', {
+        params: { limit: 1000 },
+      });
+      return res.data.items || [];
+    },
+    'Failed to load M2M clients',
+  );
+  return { clients: data, isLoading, error, refetch };
 }
 
 export async function registerM2MClient(

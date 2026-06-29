@@ -16,6 +16,7 @@ import secrets
 import sys
 import time
 import urllib.parse
+import uuid
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -44,6 +45,11 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from jwt.api_jwk import PyJWK
 from metrics_middleware import add_auth_metrics_middleware
 
+try:
+    from observability.meters import token_mint_total
+except ImportError:
+    from auth_server.observability.meters import token_mint_total
+
 # Import provider factory
 from providers.factory import get_auth_provider
 from pydantic import (
@@ -56,8 +62,9 @@ from pydantic import (
 sys.path.insert(0, "/app")
 # Import MCP audit logging components
 from registry.audit.mcp_logger import MCPLogger
-from registry.audit.models import Identity, MCPServer
+from registry.audit.models import Identity, MCPServer, TokenMintAuditRecord
 from registry.audit.service import AuditLogger
+from registry.audit.sink import emit_audit_event
 from registry.common.scopes_loader import reload_scopes_config
 from registry.core.config import settings
 from registry.repositories.factory import get_scope_repository
@@ -1370,6 +1377,7 @@ class GenerateTokenRequest(BaseModel):
     expires_in_hours: int = DEFAULT_TOKEN_LIFETIME_HOURS
     description: str | None = None
     resource: ResourceBinding | None = None
+    correlation_id: str | None = None
 
 
 class GenerateTokenResponse(BaseModel):
@@ -1919,8 +1927,11 @@ async def validate_request(request: Request):
                         server_name_from_url = "/".join(path_parts)
                         endpoint_from_url = None
 
-                logger.info(
-                    f"Extracted server_name '{server_name_from_url}' and endpoint '{endpoint_from_url}' from original_url: {original_url}"
+                logger.debug(
+                    "Extracted server_name '%s' and endpoint '%s' from original_url: %s",
+                    server_name_from_url,
+                    endpoint_from_url,
+                    original_url,
                 )
             except Exception as e:
                 logger.warning(
@@ -1932,13 +1943,16 @@ async def validate_request(request: Request):
         try:
             if body:
                 payload_text = body  # .decode('utf-8')
-                logger.info(
-                    f"Raw Request Payload ({len(payload_text)} chars): {payload_text[:1000]}..."
+                logger.debug(
+                    "Raw Request Payload (%d chars): %s...",
+                    len(payload_text),
+                    payload_text[:1000],
                 )
                 request_payload = json.loads(payload_text)
-                logger.info(f"JSON RPC Request Payload: {json.dumps(request_payload, indent=2)}")
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug("JSON RPC Request Payload: %s", json.dumps(request_payload))
             else:
-                logger.info("No request body provided, skipping payload parsing")
+                logger.debug("No request body provided, skipping payload parsing")
         except UnicodeDecodeError as e:
             logger.warning(f"Could not decode body as UTF-8: {e}")
         except json.JSONDecodeError as e:
@@ -1948,23 +1962,29 @@ async def validate_request(request: Request):
 
         # Log request for debugging with anonymized IP
         client_ip = get_client_ip(request)
-        logger.info(f"Validation request from {anonymize_ip(client_ip)}")
-        logger.info(f"Request Method: {request.method}")
+        logger.debug("Validation request from %s", anonymize_ip(client_ip))
+        logger.debug("Request Method: %s", request.method)
 
         # Log masked HTTP headers for GDPR/SOX compliance
         all_headers = dict(request.headers)
         masked_headers = mask_headers(all_headers)
-        logger.debug(f"HTTP Headers (masked): {json.dumps(masked_headers, indent=2)}")
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("HTTP Headers (masked): %s", json.dumps(masked_headers))
 
         # Log specific headers for debugging with masked sensitive data
-        logger.info(
-            f"Key Headers: Authorization={bool(authorization)}, Cookie={bool(cookie_header)}, "
-            f"User-Pool-Id={mask_sensitive_id(user_pool_id) if user_pool_id else 'None'}, "
-            f"Client-Id={mask_sensitive_id(client_id) if client_id else 'None'}, "
-            f"Region={region}, Original-URL={original_url}"
-        )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "Key Headers: Authorization=%s, Cookie=%s, "
+                "User-Pool-Id=%s, Client-Id=%s, Region=%s, Original-URL=%s",
+                bool(authorization),
+                bool(cookie_header),
+                mask_sensitive_id(user_pool_id) if user_pool_id else "None",
+                mask_sensitive_id(client_id) if client_id else "None",
+                region,
+                original_url,
+            )
 
-        logger.info(f"Server Name from URL: {server_name_from_url}")
+        logger.debug("Server Name from URL: %s", server_name_from_url)
 
         # Only activate static token auth when there is no session cookie
         # (UI uses cookies, CLI uses Bearer)
@@ -2270,7 +2290,7 @@ async def validate_request(request: Request):
                     headers={"Connection": "close"},
                 )
 
-        logger.info(f"Token validation successful using method: {validation_result['method']}")
+        logger.debug("Token validation successful using method: %s", validation_result["method"])
 
         # Enrich groups from MongoDB if empty (for M2M clients)
         try:
@@ -2391,7 +2411,7 @@ async def validate_request(request: Request):
         if user_groups and auth_method in ["keycloak", "entra", "cognito", "okta", "auth0"]:
             # Map IdP groups to scopes using the group mappings (query DocumentDB)
             user_scopes = await map_groups_to_scopes(user_groups)
-            logger.info(f"Mapped {auth_method} groups {user_groups} to scopes: {user_scopes}")
+            logger.debug("Mapped %s groups %s to scopes: %s", auth_method, user_groups, user_scopes)
         elif (
             user_groups
             and not existing_scopes
@@ -2406,9 +2426,12 @@ async def validate_request(request: Request):
             # "pingfederate" — keeps Keycloak/Okta/etc. completely
             # unchanged.
             user_scopes = await map_groups_to_scopes(user_groups)
-            logger.info(
-                f"Re-mapped pingfederate groups {user_groups} to scopes: {user_scopes} "
-                f"after fallback enrichment (transport={auth_method})"
+            logger.debug(
+                "Re-mapped pingfederate groups %s to scopes: %s "
+                "after fallback enrichment (transport=%s)",
+                user_groups,
+                user_scopes,
+                auth_method,
             )
         else:
             user_scopes = validation_result.get("scopes", [])
@@ -2425,8 +2448,11 @@ async def validate_request(request: Request):
                 if tool_name
                 else (endpoint_from_url if endpoint_from_url else "initialize")
             )
-            logger.info(
-                f"Method determined for validation: '{method}' (tool_name={tool_name}, endpoint_from_url={endpoint_from_url})"
+            logger.debug(
+                "Method determined for validation: '%s' (tool_name=%s, endpoint_from_url=%s)",
+                method,
+                tool_name,
+                endpoint_from_url,
             )
             actual_tool_name = None
 
@@ -2435,7 +2461,9 @@ async def validate_request(request: Request):
                 params = request_payload.get("params", {})
                 if isinstance(params, dict):
                     actual_tool_name = params.get("name")
-                    logger.info(f"Extracted actual tool name for tools/call: '{actual_tool_name}'")
+                    logger.debug(
+                        "Extracted actual tool name for tools/call: '%s'", actual_tool_name
+                    )
 
             # Check if user has any scopes - if not, deny access (fail closed)
             if not user_scopes:
@@ -2459,8 +2487,11 @@ async def validate_request(request: Request):
                     detail=f"Access denied to {server_name}.{method}",
                     headers={"Connection": "close"},
                 )
-            logger.info(
-                f"Scope validation passed for {server_name}.{method} (tool: {actual_tool_name})"
+            logger.debug(
+                "Scope validation passed for %s.%s (tool: %s)",
+                server_name,
+                method,
+                actual_tool_name,
             )
         else:
             logger.debug("No server information available, skipping scope validation")
@@ -2641,10 +2672,12 @@ async def validate_request(request: Request):
             "server_name": server_name,
             "tool_name": tool_name,
         }
-        logger.info(
-            f"Full validation result: {json.dumps(_mask_sensitive_dict(validation_result), indent=2)}"
-        )
-        logger.info(f"Response data being sent: {json.dumps(response_data, indent=2)}")
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "Full validation result: %s",
+                json.dumps(_mask_sensitive_dict(validation_result)),
+            )
+            logger.debug("Response data being sent: %s", json.dumps(response_data))
 
         # Log MCP server access event if this is an MCP request (has server_name)
         if server_name:
@@ -2891,6 +2924,66 @@ async def manage_federation_token(request: Request):
         }
 
 
+async def _emit_token_mint_audit(
+    request_id: str,
+    correlation_id: str | None,
+    username: str,
+    auth_method: str,
+    provider: str | None,
+    internal_caller: str,
+    token_kind: str,
+    resource_type: str | None,
+    resource_id: str | None,
+    token_path: str,
+    requested_scopes: list[str],
+    expires_in_seconds: int | None,
+    outcome: str,
+    failure_reason: str | None = None,
+) -> None:
+    """Emit a token-mint audit record and increment the mint metric.
+
+    Best-effort: any failure here is logged and swallowed so token minting is
+    never broken by observability.
+    """
+    try:
+        token_mint_total.add(
+            1,
+            {
+                "token_kind": token_kind,
+                "resource_type": resource_type or "none",
+                "token_path": token_path,
+                "outcome": outcome,
+            },
+        )
+    except Exception:
+        logger.debug("token_mint metric increment failed", exc_info=True)
+
+    try:
+        record = TokenMintAuditRecord(
+            request_id=request_id,
+            correlation_id=correlation_id,
+            username_hash=hash_username(username),
+            auth_method=auth_method,
+            provider=provider,
+            internal_caller=internal_caller,
+            token_kind=token_kind,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            token_path=token_path,
+            requested_scopes=requested_scopes,
+            expires_in_seconds=expires_in_seconds,
+            outcome=outcome,
+            failure_reason=failure_reason,
+        )
+        emit_audit_event(record)
+
+        audit_logger = get_audit_logger()
+        if audit_logger is not None:
+            await audit_logger.log_event(record)
+    except Exception:
+        logger.warning("Failed to emit token-mint audit record", exc_info=True)
+
+
 @internal_router.post("/tokens", response_model=GenerateTokenResponse)
 async def generate_user_token(
     body: GenerateTokenRequest,
@@ -2928,6 +3021,15 @@ async def generate_user_token(
     logger.info(f"/internal/tokens call from '{caller}'")
 
     request = body  # keep the existing variable name used throughout the body
+    mint_request_id = str(uuid.uuid4())
+    correlation_id = request.correlation_id
+
+    # Initialize audit context up front so the unexpected-error handler can
+    # reference these directly instead of introspecting locals(). They are
+    # overwritten with the real values once the user context is parsed below.
+    username = "unknown"
+    auth_method = "unknown"
+    provider = None
 
     try:
         # Extract user context
@@ -2944,6 +3046,24 @@ async def generate_user_token(
 
         # Check rate limiting
         if not check_rate_limit(username):
+            await _emit_token_mint_audit(
+                request_id=mint_request_id,
+                correlation_id=correlation_id,
+                username=username,
+                auth_method=user_context.get("auth_method", "unknown"),
+                provider=user_context.get("provider"),
+                internal_caller=caller,
+                token_kind=(
+                    TokenKind.RESOURCE.value if request.resource else TokenKind.USER.value
+                ),
+                resource_type=(request.resource.type.value if request.resource else None),
+                resource_id=(request.resource.id if request.resource else None),
+                token_path="unknown",
+                requested_scopes=request.requested_scopes,
+                expires_in_seconds=None,
+                outcome="failure",
+                failure_reason="rate_limited",
+            )
             raise HTTPException(
                 status_code=429,
                 detail=f"Rate limit exceeded. Maximum {MAX_TOKENS_PER_USER_PER_HOUR} tokens per hour.",
@@ -3039,6 +3159,24 @@ async def generate_user_token(
                 f"expires in {expires_in} seconds"
             )
 
+            await _emit_token_mint_audit(
+                request_id=mint_request_id,
+                correlation_id=correlation_id,
+                username=username,
+                auth_method=auth_method,
+                provider=provider,
+                internal_caller=caller,
+                token_kind=(
+                    TokenKind.RESOURCE.value if request.resource else TokenKind.USER.value
+                ),
+                resource_type=(request.resource.type.value if request.resource else None),
+                resource_id=(request.resource.id if request.resource else None),
+                token_path="self_signed",
+                requested_scopes=requested_scopes,
+                expires_in_seconds=expires_in,
+                outcome="success",
+            )
+
             return GenerateTokenResponse(
                 access_token=access_token,
                 refresh_token=None,
@@ -3088,6 +3226,22 @@ async def generate_user_token(
                 f"with scopes: {requested_scopes}, expires in {expires_in} seconds"
             )
 
+            await _emit_token_mint_audit(
+                request_id=mint_request_id,
+                correlation_id=correlation_id,
+                username=username,
+                auth_method=auth_method or "m2m",
+                provider=provider,
+                internal_caller=caller,
+                token_kind="user",
+                resource_type=None,
+                resource_id=None,
+                token_path="m2m",
+                requested_scopes=requested_scopes,
+                expires_in_seconds=expires_in,
+                outcome="success",
+            )
+
             return GenerateTokenResponse(
                 access_token=access_token,
                 refresh_token=refresh_token_value,
@@ -3100,6 +3254,22 @@ async def generate_user_token(
 
         except ValueError as e:
             logger.error(f"Token generation failed: {e}")
+            await _emit_token_mint_audit(
+                request_id=mint_request_id,
+                correlation_id=correlation_id,
+                username=username,
+                auth_method=auth_method or "m2m",
+                provider=provider,
+                internal_caller=caller,
+                token_kind="user",
+                resource_type=None,
+                resource_id=None,
+                token_path="m2m",
+                requested_scopes=requested_scopes,
+                expires_in_seconds=None,
+                outcome="failure",
+                failure_reason="provider_error",
+            )
             raise HTTPException(
                 status_code=500,
                 detail=f"Failed to generate token: {e}",
@@ -3110,6 +3280,22 @@ async def generate_user_token(
         raise
     except Exception as e:
         logger.error(f"Unexpected error generating token: {e}")
+        await _emit_token_mint_audit(
+            request_id=mint_request_id,
+            correlation_id=correlation_id,
+            username=username,
+            auth_method=auth_method,
+            provider=provider,
+            internal_caller=caller,
+            token_kind="unknown",
+            resource_type=None,
+            resource_id=None,
+            token_path="unknown",
+            requested_scopes=[],
+            expires_in_seconds=None,
+            outcome="failure",
+            failure_reason="unexpected_error",
+        )
         raise HTTPException(
             status_code=500,
             detail="Internal error generating token",
@@ -3338,6 +3524,16 @@ def get_mcp_logger() -> MCPLogger | None:
             _mcp_logger = None
 
     return _mcp_logger
+
+
+def get_audit_logger() -> AuditLogger | None:
+    """Return the shared AuditLogger, initializing it if needed.
+
+    Reuses the same DocumentDB-backed AuditLogger that MCP access logging uses.
+    Returns None when audit logging is disabled or initialization failed.
+    """
+    get_mcp_logger()
+    return _mcp_audit_logger
 
 
 def get_enabled_providers():

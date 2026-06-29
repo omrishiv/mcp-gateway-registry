@@ -388,7 +388,7 @@ graph TB
 
 ### Scope Configuration System
 
-The system uses a YAML-based scope configuration (`auth_server/scopes.yml`):
+The system stores scope configuration in the `mcp_scopes` collection in DocumentDB (seeded from JSON scope files in `scripts/` at init time). The group-to-scope mappings have the following structure:
 
 ```yaml
 # Example scope configuration
@@ -400,17 +400,17 @@ group_mappings:
   mcp-user:
     - "mcp-servers-restricted/read"
   
-  mcp-server-fininfo:
-    - "mcp-servers-fininfo/read"
-    - "mcp-servers-fininfo/execute"
+  mcp-server-currenttime:
+    - "mcp-servers-currenttime/read"
+    - "mcp-servers-currenttime/execute"
 
 # Scope definitions
-mcp-servers-fininfo/read:
-  - server: "Financial Info Proxy"
+mcp-servers-currenttime/read:
+  - server: "Current Time Proxy"
     permissions: ["read"]
 
-mcp-servers-fininfo/execute:
-  - server: "Financial Info Proxy"
+mcp-servers-currenttime/execute:
+  - server: "Current Time Proxy"
     permissions: ["read", "execute"]
 ```
 
@@ -743,7 +743,7 @@ def debug_user_permissions(user_context: dict):
 ```
 
 **Solutions**:
-- Verify group mappings in `auth_server/scopes.yml`
+- Verify group mappings in the `mcp_scopes` collection in DocumentDB
 - Check user group assignments in identity provider
 - Ensure scope configuration matches server names exactly
 
@@ -789,7 +789,7 @@ def log_auth_event(event_type: str, username: str = None, details: dict = None):
 
 # Usage examples
 log_auth_event('LOGIN_SUCCESS', username='admin')
-log_auth_event('PERMISSION_DENIED', username='user', details={'resource': '/toggle/fininfo'})
+log_auth_event('PERMISSION_DENIED', username='user', details={'resource': '/toggle/currenttime'})
 log_auth_event('SESSION_EXPIRED', username='user')
 ```
 

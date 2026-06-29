@@ -7,6 +7,7 @@ import {
   ToolMapping,
 } from '../types/virtualServer';
 import ToolSelector from './ToolSelector';
+import { pathFromName } from '../utils/slug';
 
 
 /**
@@ -38,11 +39,7 @@ type StepId = typeof STEPS[number]['id'];
  * Generate a URL path from a server name.
  */
 function _generatePathFromName(name: string): string {
-  const slug = name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '');
-  return `/virtual/${slug}`;
+  return pathFromName(name, 'virtual');
 }
 
 
@@ -666,7 +663,7 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
             disabled={saving}
             className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300
                        bg-gray-100 dark:bg-gray-700 rounded-lg
-                       hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors
+                       hover:bg-gray-200 dark:hover:bg-gray-800 transition-colors
                        disabled:opacity-50"
           >
             {isFirstStep ? 'Cancel' : 'Back'}

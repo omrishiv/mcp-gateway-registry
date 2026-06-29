@@ -193,7 +193,7 @@ const LocalRuntimeFormPanel: React.FC<LocalRuntimeFormPanelProps> = ({
           ))}
           <button
             type="button"
-            className="mt-1 px-3 py-1 text-sm bg-purple-100 dark:bg-purple-800 text-purple-700 dark:text-purple-200 rounded hover:bg-purple-200"
+            className="mt-1 px-3 py-1 text-sm bg-purple-100 dark:bg-purple-800 text-purple-700 dark:text-purple-200 rounded hover:bg-purple-200 dark:hover:bg-purple-700"
             onClick={addArg}
           >
             + Add arg
@@ -259,7 +259,7 @@ const LocalRuntimeFormPanel: React.FC<LocalRuntimeFormPanelProps> = ({
           {errors.env && <p className={errorClass}>{errors.env}</p>}
           <button
             type="button"
-            className="mt-2 px-3 py-1 text-sm bg-purple-100 dark:bg-purple-800 text-purple-700 dark:text-purple-200 rounded hover:bg-purple-200"
+            className="mt-2 px-3 py-1 text-sm bg-purple-100 dark:bg-purple-800 text-purple-700 dark:text-purple-200 rounded hover:bg-purple-200 dark:hover:bg-purple-700"
             onClick={addEnvRow}
           >
             + Add env var

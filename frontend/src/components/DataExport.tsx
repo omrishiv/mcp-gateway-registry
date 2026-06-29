@@ -8,6 +8,7 @@ import {
 import axios from 'axios';
 import JSZip from 'jszip';
 import { triggerBlobDownload } from '../utils/blobDownload';
+import Button from './Button';
 
 
 interface ExportableCollection {
@@ -402,7 +403,7 @@ const DataExport: React.FC<DataExportProps> = ({ onShowToast }) => {
       {/* Collection table */}
       <div className="overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700">
         <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-          <thead className="bg-gray-50 dark:bg-gray-900/50">
+          <thead className="bg-gray-50 dark:bg-gray-900">
             <tr>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                 Collection
@@ -420,7 +421,7 @@ const DataExport: React.FC<DataExportProps> = ({ onShowToast }) => {
           </thead>
           <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
             {EXPORTABLE_COLLECTIONS.map((collection) => (
-              <tr key={collection.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+              <tr key={collection.id} className="table-row">
                 <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-gray-100">
                   {collection.label}
                 </td>
@@ -466,13 +467,11 @@ const DataExport: React.FC<DataExportProps> = ({ onShowToast }) => {
 
       {/* Download All button */}
       <div className="mt-6 flex justify-end">
-        <button
+        <Button
+          variant="primary"
           onClick={handleDownloadAll}
           disabled={isAnyDownloading}
-          className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium rounded-lg
-                     text-white bg-purple-600 hover:bg-purple-700
-                     disabled:opacity-50 disabled:cursor-not-allowed
-                     transition-colors"
+          className="px-5 py-2.5"
         >
           {downloadingAll ? (
             <>
@@ -485,7 +484,7 @@ const DataExport: React.FC<DataExportProps> = ({ onShowToast }) => {
               Download All as ZIP
             </>
           )}
-        </button>
+        </Button>
       </div>
     </div>
   );

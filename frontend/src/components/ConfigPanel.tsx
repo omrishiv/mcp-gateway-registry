@@ -75,7 +75,7 @@ function highlightMatch(text: string, term: string): React.ReactNode {
   return (
     <>
       {text.slice(0, idx)}
-      <mark className="bg-yellow-200 dark:bg-yellow-700 rounded px-0.5">{text.slice(idx, idx + term.length)}</mark>
+      <mark className="bg-yellow-200 text-gray-900 dark:bg-yellow-600 dark:text-gray-900 rounded px-0.5">{text.slice(idx, idx + term.length)}</mark>
       {text.slice(idx + term.length)}
     </>
   );
@@ -105,7 +105,7 @@ const FieldRow: React.FC<{
 }> = ({ field, searchTerm, copiedKey, onCopy }) => (
   <div
     key={field.key}
-    className="flex items-center justify-between px-4 py-2.5 hover:bg-gray-50 dark:hover:bg-gray-800/50"
+    className="flex items-center justify-between px-4 py-2.5 hover:bg-gray-50 dark:hover:bg-gray-700"
   >
     <div className="flex-1 min-w-0 mr-4">
       <div className="text-xs text-gray-500 dark:text-gray-400 font-mono truncate">
@@ -119,13 +119,13 @@ const FieldRow: React.FC<{
       <span
         className={`text-sm font-mono ${
           field.is_masked
-            ? 'text-gray-400 dark:text-gray-500 italic'
+            ? 'text-gray-400 dark:text-gray-400 italic'
             : 'text-gray-700 dark:text-gray-300'
         }`}
       >
         {highlightMatch(field.value, searchTerm)}
         {field.unit && !field.is_masked && (
-          <span className="text-xs text-gray-400 dark:text-gray-500 ml-1">
+          <span className="text-xs text-gray-400 dark:text-gray-400 ml-1">
             {field.unit}
           </span>
         )}
@@ -140,7 +140,7 @@ const FieldRow: React.FC<{
           {copiedKey === field.key ? (
             <CheckIcon className="h-4 w-4 text-green-500" />
           ) : (
-            <ClipboardIcon className="h-4 w-4 text-gray-400 dark:text-gray-500" />
+            <ClipboardIcon className="h-4 w-4 text-gray-400 dark:text-gray-400" />
           )}
         </button>
       )}
@@ -168,7 +168,7 @@ const ConfigGroupPanel: React.FC<ConfigGroupPanelProps> = ({
         aria-expanded={expanded}
         aria-controls={panelId}
         className="w-full flex items-center justify-between px-4 py-3
-                   bg-gray-50 dark:bg-gray-900/50 hover:bg-gray-100 dark:hover:bg-gray-700/50
+                   bg-gray-50 dark:bg-gray-900 hover:bg-gray-100 dark:hover:bg-gray-700
                    transition-colors text-left"
       >
         <div className="flex items-center space-x-2">
@@ -214,11 +214,11 @@ const ConfigGroupPanel: React.FC<ConfigGroupPanelProps> = ({
           {/* Subgroups */}
           {group.subgroups?.map((sg) => (
             <div key={sg.id}>
-              <div className="px-4 py-2 bg-gray-100/50 dark:bg-gray-800/50 border-t border-gray-200 dark:border-gray-700">
+              <div className="px-4 py-2 bg-gray-100 dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700">
                 <span className="text-xs font-semibold text-gray-600 dark:text-gray-300 uppercase tracking-wider">
                   {highlightMatch(sg.title, searchTerm)}
                 </span>
-                <span className="text-xs text-gray-400 dark:text-gray-500 ml-2">
+                <span className="text-xs text-gray-400 dark:text-gray-400 ml-2">
                   {sg.fields.length} {sg.fields.length === 1 ? 'field' : 'fields'}
                 </span>
               </div>
@@ -558,7 +558,7 @@ const ConfigPanel: React.FC<ConfigPanelProps> = ({ onError, showToast }) => {
       </div>
 
       {/* Legend */}
-      <div className="flex items-center space-x-4 text-xs text-gray-400 dark:text-gray-500 pt-2 border-t border-gray-200 dark:border-gray-700">
+      <div className="flex items-center space-x-4 text-xs text-gray-400 dark:text-gray-400 pt-2 border-t border-gray-200 dark:border-gray-700">
         <span>
           <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">****</code> = masked sensitive value
         </span>

@@ -57,6 +57,12 @@ from ..schemas.skill_models import (
     VisibilityEnum,
 )
 from ..services.duplicate_check_service import get_duplicate_check_service
+from ..services.lifecycle_events import (
+    EnforcedStatusError,
+    enforce_registration_status,
+    fire_scan_complete_event,
+    user_can_change_lifecycle_status,
+)
 from ..services.registration_gate_service import check_registration_gate
 from ..services.skill_service import (
     _build_fetch_headers,
@@ -277,6 +283,18 @@ async def parse_skill_md(
     Useful for auto-populating the skill registration form.
     Accepts optional auth parameters for parsing private repo SKILL.md files.
     """
+    # Authorization: this registration helper drives a server-side fetch of a
+    # caller-supplied URL (SSRF is mitigated by the service's _is_safe_url
+    # allowlist, but the fetch should still be limited to users who may
+    # register skills), so require the publish_skill permission like
+    # check_skill_duplicates / register_skill.
+    publish_permissions = (user_context.get("ui_permissions") or {}).get("publish_skill", [])
+    if not publish_permissions:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to register skills",
+        )
+
     service = get_skill_service()
     try:
         result = await service.parse_skill_md(
@@ -458,6 +476,21 @@ async def check_skill_health(
     """
     normalized_path = normalize_skill_path(skill_path)
     service = get_skill_service()
+
+    # Authorization: a health probe both confirms existence and triggers an
+    # outbound request to the skill's URL, so gate it behind view access like
+    # the sibling read endpoints. Otherwise a private/group skill could be
+    # probed by any authenticated user.
+    skill = await service.get_skill(normalized_path)
+    if not skill:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Skill not found: {normalized_path}"
+        )
+    if not _user_can_access_skill(skill, user_context):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="You do not have access to this skill"
+        )
+
     result = await service.check_skill_health(normalized_path)
     return {
         "path": normalized_path,
@@ -615,6 +648,11 @@ async def get_skill_tools(
     if not skill:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Skill not found: {normalized_path}"
+        )
+
+    if not _user_can_access_skill(skill, user_context):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="You do not have access to this skill"
         )
 
     tool_service = get_tool_validation_service()
@@ -888,6 +926,17 @@ async def register_skill(
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
 ) -> SkillCard:
     """Register a new skill in the registry."""
+    # Authorization: require the publish_skill UI permission, mirroring
+    # check_skill_duplicates and register_agent. Without this any authenticated
+    # user could register a skill (and drive an outbound fetch/scan of an
+    # attacker-supplied URL). nginx_proxied_auth only authenticates.
+    publish_permissions = (user_context.get("ui_permissions") or {}).get("publish_skill", [])
+    if not publish_permissions:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to register skills",
+        )
+
     # Set audit action for skill registration
     # Note: path is derived from name, so use name as resource_id
     set_audit_action(
@@ -914,6 +963,20 @@ async def register_skill(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Registration denied by policy gate: {gate_result.error_message}",
         )
+
+    # Enforced-status policy (Issue #1330). Use model_fields_set to tell an
+    # omitted status (force to enforced) from an explicit one (reject on
+    # mismatch). When the policy is unset, the request value is unchanged.
+    requested_status = request.status if "status" in request.model_fields_set else None
+    try:
+        effective_status = enforce_registration_status(requested_status, "skill")
+    except EnforcedStatusError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    if effective_status:
+        request.status = effective_status
 
     service = get_skill_service()
     owner = user_context.get("username")
@@ -1008,6 +1071,22 @@ async def update_skill(
         )
 
     updates = request.model_dump(exclude_unset=True, mode="json")
+
+    # Lifecycle status change requires change_lifecycle_status (Issue #1330).
+    if "status" in updates:
+        old_status = (getattr(existing, "status", None) or "active").lower()
+        new_status = (updates.get("status") or "active").lower()
+        if new_status != old_status and not user_can_change_lifecycle_status(
+            existing.name, user_context
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    f"You do not have permission to change the lifecycle status of "
+                    f"{existing.name}. This action requires the 'change_lifecycle_status' "
+                    f"permission, which is typically granted to admins."
+                ),
+            )
 
     # Convert raw metadata dict to SkillMetadata structure for consistent storage
     if "metadata" in updates and updates["metadata"] is not None:
@@ -1282,16 +1361,25 @@ async def _perform_skill_security_scan_on_registration(
             headers=fetch_headers or None,
         )
 
+        auto_disabled = False
         if not result.is_safe and config.block_unsafe_skills:
             logger.warning(f"Disabling unsafe skill: {skill.path}")
             await service.toggle_skill(skill.path, enabled=False)
+            auto_disabled = True
 
             if config.add_security_pending_tag:
                 current_tags = skill.tags or []
                 if "security-pending" not in current_tags:
-                    await service.update_skill(
-                        skill.path, {"tags": current_tags + ["security-pending"]}
-                    )
+                    skill.tags = current_tags + ["security-pending"]
+                    await service.update_skill(skill.path, {"tags": skill.tags})
+
+        # scan_complete webhook (Issue #1330): safe or unsafe path.
+        fire_scan_complete_event(
+            skill.model_dump(),
+            result,
+            auto_disabled=auto_disabled,
+            registration_type="skill",
+        )
 
     except Exception as e:
         logger.error(f"Security scan failed for skill {skill.path}: {e}")
@@ -1299,8 +1387,14 @@ async def _perform_skill_security_scan_on_registration(
             try:
                 current_tags = skill.tags or []
                 if "security-pending" not in current_tags:
-                    await service.update_skill(
-                        skill.path, {"tags": current_tags + ["security-pending"]}
-                    )
+                    skill.tags = current_tags + ["security-pending"]
+                    await service.update_skill(skill.path, {"tags": skill.tags})
             except Exception as tag_err:
                 logger.error(f"Failed to add security-pending tag: {tag_err}")
+        # Still notify consumers so they are not left polling.
+        fire_scan_complete_event(
+            skill.model_dump(),
+            None,
+            scan_error=f"{type(e).__name__}: {e}",
+            registration_type="skill",
+        )

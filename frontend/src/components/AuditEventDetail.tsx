@@ -68,7 +68,7 @@ const AuditEventDetail: React.FC<AuditEventDetailProps> = ({ event, onClose }) =
         <div className="flex items-center gap-2">
           <button
             onClick={handleCopy}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
             title="Copy JSON to clipboard"
           >
             {copied ? (
@@ -108,10 +108,10 @@ const AuditEventDetail: React.FC<AuditEventDetailProps> = ({ event, onClose }) =
             User
           </div>
           <div className="text-sm text-gray-900 dark:text-gray-100 flex items-center gap-1 min-w-0">
-            <span className="truncate" title={event.identity.username}>
-              {event.identity.username}
+            <span className="truncate" title={event.identity?.username || event.username_hash || '-'}>
+              {event.identity?.username || event.username_hash || '-'}
             </span>
-            {event.identity.is_admin && (
+            {event.identity?.is_admin && (
               <span className="px-1.5 py-0.5 text-xs font-medium bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300 rounded flex-shrink-0">
                 Admin
               </span>

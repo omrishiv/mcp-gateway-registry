@@ -12,7 +12,6 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 # typos with the same messages.
 ALLOWED_STORAGE_BACKENDS: frozenset[str] = frozenset(
     {
-        "file",
         "documentdb",
         "mongodb-ce",
         "mongodb",
@@ -134,6 +133,25 @@ class Settings(BaseSettings):
     registration_webhook_timeout_seconds: int = Field(
         default=10,
         description="Timeout for webhook HTTP calls in seconds",
+    )
+    registration_webhook_signing_secret: str | None = Field(
+        default=None,
+        description=(
+            "Shared secret for HMAC-SHA256 signing of outbound registration "
+            "webhook payloads. When set, an X-Registry-Signature header is added. "
+            "When unset, no signature is sent (current behavior)."
+        ),
+    )
+
+    # Lifecycle workflow settings (Issue #1330)
+    registration_enforced_status: str | None = Field(
+        default=None,
+        description=(
+            "When set (e.g. 'draft'), mandates the initial lifecycle status for all "
+            "new asset registrations. A registration with no status is forced to this "
+            "value; a registration with a different explicit status fails with 4xx. "
+            "Unset = current behavior (new assets default to 'active')."
+        ),
     )
 
     # Registration Gate Configuration (Admission Control, Issue #809)
@@ -264,6 +282,14 @@ class Settings(BaseSettings):
         default=True,
         description="Enable the /.well-known/ai-catalog.json ARD publisher endpoint",
     )
+    ard_registry_enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable the ARD Registry adapter (POST /api/ard/search, GET /api/ard/agents) "
+            "and the self application/ai-registry+json catalog entry. Independent of the "
+            "Phase 1 publisher toggle ard_catalog_enabled."
+        ),
+    )
     ard_publisher_domain: str = Field(
         default="",
         description=(
@@ -279,6 +305,11 @@ class Settings(BaseSettings):
             "Empty uses the entity type (server/agent/skill)."
         ),
     )
+
+    # ARD Phase 3 ingestion (issue #1296): all behavior config lives in the DB
+    # (FederationConfig.ai_catalog) and is managed via the federation API / External
+    # Registries UI, mirroring the Anthropic/ASOR/AWS upstream registries. No
+    # per-knob env vars here by design.
 
     # MCP OAuth discovery settings (RFC 9728 / RFC 8414)
     mcp_https_required: bool = Field(
@@ -935,14 +966,15 @@ class Settings(BaseSettings):
 
     # Storage Backend Configuration
     storage_backend: str = Field(
-        default="file",
+        default="mongodb-ce",
         description=(
             "Storage backend selection. Accepted values: "
-            "file, documentdb, mongodb-ce, mongodb, mongodb-atlas. "
+            "documentdb, mongodb-ce, mongodb, mongodb-atlas. "
             "mongodb, mongodb-atlas, and mongodb-ce are aliases that route to "
             "the same MongoDB/DocumentDB repositories. documentdb is retained "
             "for AWS DocumentDB-specific auth (SCRAM-SHA-1). Unknown values "
-            "fail startup with a clear error listing accepted values."
+            "fail startup with a clear error listing accepted values. "
+            "The 'file' backend was removed in v1.24.8."
         ),
     )
 
@@ -1008,20 +1040,26 @@ class Settings(BaseSettings):
     ) -> str:
         """Reject unknown STORAGE_BACKEND values at startup.
 
-        Empty string and None coerce to "file" (the historical default). Any
-        other value is normalized (stripped, lowercased) and compared against
-        ALLOWED_STORAGE_BACKENDS. Unknown values raise ValueError with the
-        full allowlist in the error message so operators can fix the env var
-        without a round-trip through the code.
+        Empty string and None coerce to "mongodb-ce" (the default since
+        v1.24.8). Any other value is normalized (stripped, lowercased) and
+        compared against ALLOWED_STORAGE_BACKENDS. The legacy "file" value
+        is rejected with an actionable migration message.
 
         Safe to echo v in the error: storage_backend is a non-secret config
         name. Do not copy this pattern for fields that could hold credentials.
         """
         if v is None or v == "":
-            return "file"
+            return "mongodb-ce"
         if not isinstance(v, str):
             raise ValueError(f"STORAGE_BACKEND must be a string, got {type(v).__name__}")
         normalized = v.strip().lower()
+        if normalized == "file":
+            raise ValueError(
+                "The 'file' storage backend was removed in v1.24.8. "
+                "Set STORAGE_BACKEND to 'mongodb-ce' or 'documentdb'. "
+                "To migrate existing data, run: "
+                "python scripts/migrate-file-to-mongodb.py"
+            )
         if normalized not in ALLOWED_STORAGE_BACKENDS:
             accepted = ", ".join(sorted(ALLOWED_STORAGE_BACKENDS))
             raise ValueError(f"Invalid STORAGE_BACKEND={v!r}. Accepted values: {accepted}.")
@@ -1215,14 +1253,6 @@ class Settings(BaseSettings):
         which computes the same path via log_dir.
         """
         return self.log_dir / "registry.log"
-
-    @property
-    def faiss_index_path(self) -> Path:
-        return self.servers_dir / "service_index.faiss"
-
-    @property
-    def faiss_metadata_path(self) -> Path:
-        return self.servers_dir / "service_index_metadata.json"
 
     @property
     def dotenv_path(self) -> Path:

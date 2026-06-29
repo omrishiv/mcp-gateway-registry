@@ -35,6 +35,23 @@ _FALLBACK_DOMAIN = "example.com"  # RFC 2606 placeholder, never localhost
 _DEFAULT_HOST_DISPLAY_NAME = "MCP Gateway Registry"
 
 
+def _is_local_origin(
+    record: dict,
+) -> bool:
+    """Return True iff a record is locally owned (not synced from a peer/ingested).
+
+    The Publisher catalog must advertise only this registry's own assets, never
+    re-publish another registry's entries. Synced/ingested items are tagged by
+    ``sync_metadata.is_federated`` (peer sync) and/or ``registry_name != "local"``
+    (issue #1296). Skills are already filtered to ``registry_name="local"`` at the
+    query level; this guards servers and agents.
+    """
+    sync_metadata = record.get("sync_metadata") or {}
+    if sync_metadata.get("is_federated"):
+        return False
+    return (record.get("registry_name") or "local") == "local"
+
+
 def _resolve_publisher_domain() -> str:
     """Resolve the URN publisher FQDN.
 
@@ -109,6 +126,24 @@ def _build_host(
     )
 
 
+def _build_registry_self_entry(
+    publisher: str,
+    base_url: str,
+) -> ArdCatalogEntry | None:
+    """Build the self-referential application/ai-registry+json catalog entry that
+    points crawlers at this registry's ARD search endpoint (issue #1295)."""
+    urn = ard_mapping._build_urn(publisher, "registry", "self")
+    if urn is None:
+        return None
+    return ArdCatalogEntry(
+        identifier=urn,
+        display_name=settings.registry_name or _DEFAULT_HOST_DISPLAY_NAME,
+        type=ard_mapping.MEDIA_TYPE_REGISTRY,
+        url=f"{base_url}/api/ard",
+        description="ARD Registry search API for this registry (POST /search, GET /agents).",
+    )
+
+
 async def _load_server_entries(
     publisher: str,
     base_url: str,
@@ -120,6 +155,8 @@ async def _load_server_entries(
     entries: list[ArdCatalogEntry] = []
     skipped = 0
     for path, record in records.items():
+        if not _is_local_origin(record):
+            continue  # never re-publish synced/ingested items (issue #1296)
         url = _public_record_url(base_url, "servers", path)
         entry = ard_mapping.map_server(path, record, publisher, url, namespace)
         if entry is None:
@@ -140,6 +177,8 @@ async def _load_agent_entries(
     entries: list[ArdCatalogEntry] = []
     skipped = 0
     for path, record in records.items():
+        if not _is_local_origin(record):
+            continue  # never re-publish synced/ingested items (issue #1296)
         url = _public_record_url(base_url, "agents", path)
         entry = ard_mapping.map_agent(path, record, publisher, url, namespace)
         if entry is None:
@@ -207,6 +246,15 @@ async def build_catalog(
     skill_entries, skill_skipped = await _load_skill_entries(publisher, base_url)
 
     entries = server_entries + agent_entries + skill_entries
+
+    # Self-reference: advertise the ARD Registry adapter (POST /api/ard/search,
+    # GET /api/ard/agents) as an application/ai-registry+json entry so crawlers
+    # can move from the Publisher half to the Registry half (issue #1295).
+    if settings.ard_registry_enabled:
+        registry_entry = _build_registry_self_entry(publisher, base_url)
+        if registry_entry is not None:
+            entries.append(registry_entry)
+
     elapsed_ms = (time.time() - start) * 1000
     logger.info(
         "Built ARD catalog: publisher=%s servers=%d agents=%d skills=%d skipped=%d elapsed_ms=%.1f",

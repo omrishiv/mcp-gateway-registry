@@ -175,19 +175,19 @@ variable "keycloak_log_level" {
 variable "registry_image_uri" {
   description = "Container image URI for registry service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/registry:1.24.7"
+  default     = "public.ecr.aws/p3v1o3c6/registry:1.25.0"
 }
 
 variable "auth_server_image_uri" {
   description = "Container image URI for auth server service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/auth-server:1.24.7"
+  default     = "public.ecr.aws/p3v1o3c6/auth-server:1.25.0"
 }
 
 variable "mcpgw_image_uri" {
   description = "Container image URI for mcpgw service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/mcpgw:1.24.7"
+  default     = "public.ecr.aws/p3v1o3c6/mcpgw:1.25.0"
 }
 
 variable "keycloak_image_uri" {
@@ -376,7 +376,7 @@ variable "documentdb_admin_password" {
   description = "DocumentDB Elastic Cluster admin password (minimum 8 characters). Only required when storage_backend is 'documentdb'."
   type        = string
   sensitive   = true
-  default     = "" # Not required when using file storage backend
+  default     = ""
 }
 
 variable "documentdb_shard_capacity" {
@@ -430,7 +430,6 @@ variable "storage_backend" {
     Storage backend selection. Must match the Python-side allowlist in
     registry/core/config.py ALLOWED_STORAGE_BACKENDS (issue #954). Accepted
     values:
-      "file"          - JSON files only. No AWS DocumentDB provisioned.
       "documentdb"    - Provision AWS DocumentDB cluster in this Terraform
                         state and use SCRAM-SHA-1 auth.
       "mongodb-ce"    - Connect to an externally-provisioned MongoDB CE via
@@ -448,10 +447,10 @@ variable "storage_backend" {
 
   validation {
     condition = contains(
-      ["file", "documentdb", "mongodb-ce", "mongodb", "mongodb-atlas"],
+      ["documentdb", "mongodb-ce", "mongodb", "mongodb-atlas"],
       var.storage_backend,
     )
-    error_message = "Storage backend must be one of: file, documentdb, mongodb-ce, mongodb, mongodb-atlas."
+    error_message = "Storage backend must be one of: documentdb, mongodb-ce, mongodb, mongodb-atlas."
   }
 }
 
@@ -913,6 +912,19 @@ variable "registration_webhook_timeout_seconds" {
   description = "Timeout for webhook HTTP calls in seconds."
   type        = number
   default     = 10
+}
+
+variable "registration_webhook_signing_secret" {
+  description = "Shared secret for HMAC-SHA256 signing of outbound webhook payloads (X-Registry-Signature). Leave empty to disable signing."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "registration_enforced_status" {
+  description = "When set (e.g. 'draft'), mandates the initial lifecycle status for new asset registrations; mismatched registrations fail with 4xx. Empty = default 'active'."
+  type        = string
+  default     = ""
 }
 
 # =============================================================================
