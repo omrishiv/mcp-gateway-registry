@@ -980,18 +980,26 @@ class TestInternalRouterGate:
         attribute.
         """
         collected: list[tuple[str, str]] = []
-        for route in server_module.app.routes:
-            path = getattr(route, "path", None)
-            methods = getattr(route, "methods", None)
-            if not path or not methods:
-                continue
-            if not path.startswith("/internal/"):
-                continue
-            for method in methods:
-                # HEAD/OPTIONS are auto-added and not interesting.
-                if method in ("HEAD", "OPTIONS"):
+
+        def _walk(routes) -> None:
+            for route in routes:
+                original_router = getattr(route, "original_router", None)
+                if original_router is not None:
+                    _walk(original_router.routes)
                     continue
-                collected.append((path, method))
+                path = getattr(route, "path", None)
+                methods = getattr(route, "methods", None)
+                if not path or not methods:
+                    continue
+                if not path.startswith("/internal/"):
+                    continue
+                for method in methods:
+                    # HEAD/OPTIONS are auto-added and not interesting.
+                    if method in ("HEAD", "OPTIONS"):
+                        continue
+                    collected.append((path, method))
+
+        _walk(server_module.app.routes)
         return collected
 
     def test_at_least_the_known_endpoints_are_present(self, auth_env_vars):

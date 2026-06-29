@@ -1298,6 +1298,15 @@ module "ecs_service_registry" {
           name  = "REGISTRATION_WEBHOOK_TIMEOUT_SECONDS"
           value = tostring(var.registration_webhook_timeout_seconds)
         },
+        # Lifecycle workflow webhooks (issue #1330)
+        {
+          name  = "REGISTRATION_WEBHOOK_SIGNING_SECRET"
+          value = var.registration_webhook_signing_secret
+        },
+        {
+          name  = "REGISTRATION_ENFORCED_STATUS"
+          value = var.registration_enforced_status
+        },
         # Agent batch API (issue #956)
         {
           name  = "BATCH_WORKER_ENABLED"
@@ -1427,6 +1436,21 @@ module "ecs_service_registry" {
         {
           name  = "OTEL_EXPORTER_OTLP_PROTOCOL"
           value = "grpc"
+        },
+        {
+          # Without an explicit service.name, the OTLP push path lands in AMP as
+          # job="unknown_service" and the Grafana panels/job filters miss it
+          # (issue #1326). Match the name used on Compose/Helm so all surfaces
+          # agree.
+          name  = "OTEL_SERVICE_NAME"
+          value = "mcp-gateway-registry"
+        },
+        {
+          # The ADOT sidecar pipeline is metrics-only, so exported traces are
+          # rejected with UNIMPLEMENTED (hundreds of errors/run). Disable the
+          # traces exporter; metrics still flow. Issue #1326.
+          name  = "OTEL_TRACES_EXPORTER"
+          value = "none"
         },
         # Service Connect namespace for FQDN alias injection in entrypoint.
         # Enables Python health checker to resolve both short names and FQDNs.
@@ -1981,6 +2005,19 @@ module "ecs_service_mcpgw" {
         {
           name  = "OTEL_EXPORTER_OTLP_PROTOCOL"
           value = "grpc"
+        },
+        {
+          # Without an explicit service.name, the OTLP push path lands in AMP as
+          # job="unknown_service" (issue #1326). Match the name used on
+          # Compose/Helm so all surfaces agree.
+          name  = "OTEL_SERVICE_NAME"
+          value = "mcp-mcpgw"
+        },
+        {
+          # The ADOT sidecar pipeline is metrics-only; exported traces are
+          # rejected with UNIMPLEMENTED. Disable the traces exporter. Issue #1326.
+          name  = "OTEL_TRACES_EXPORTER"
+          value = "none"
         }
         ],
         # Extra environment variables from user (Issue #1000)
