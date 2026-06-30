@@ -147,11 +147,16 @@ services:
       - AWS_SECRETS_REGION=${AWS_SECRETS_REGION:-}
       - SECRETS_MANAGER_KMS_KEY_ID=${SECRETS_MANAGER_KMS_KEY_ID:-}
       - SECRETS_MANAGER_PATH_PREFIX=${SECRETS_MANAGER_PATH_PREFIX:-mcp/egress}
-      - OPENBAO_ADDR=${OPENBAO_ADDR:-}
+      # Default to the in-stack OpenBao container (dev mode). Override for an
+      # external vault.
+      - OPENBAO_ADDR=${OPENBAO_ADDR:-http://openbao:8200}
       - OPENBAO_NAMESPACE=${OPENBAO_NAMESPACE:-}
       - OPENBAO_KV_MOUNT=${OPENBAO_KV_MOUNT:-secret}
       - OPENBAO_AUTH_METHOD=${OPENBAO_AUTH_METHOD:-token}
       - OPENBAO_ROLE=${OPENBAO_ROLE:-}
+      # Static token for OPENBAO_AUTH_METHOD=token; matches the dev OpenBao root
+      # token. Required for token auth (kubernetes auth is EKS-only).
+      - OPENBAO_TOKEN=${OPENBAO_TOKEN:-dev-root-token}
       - AUTH_SERVER_URL=${AUTH_SERVER_URL}
       - AUTH_SERVER_EXTERNAL_URL=${AUTH_SERVER_EXTERNAL_URL}
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
@@ -414,6 +419,8 @@ services:
         condition: service_healthy
       mongodb-init:
         condition: service_completed_successfully
+      openbao:
+        condition: service_healthy
     restart: unless-stopped
 
   # Metrics Collection Service

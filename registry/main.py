@@ -1085,6 +1085,11 @@ if settings.audit_log_enabled:
 # Register API routers with /api prefix
 app.include_router(system_router, tags=["System"])  # /api/version, /api/stats
 app.include_router(auth_router, prefix="/api/auth", tags=["Authentication"])
+# Egress credential vault routes MUST be registered before servers_router: the
+# servers_router has a greedy GET/PUT/PATCH "/servers/{path:path}" that would
+# otherwise shadow "/servers/{server_path}/egress-auth" (matching the egress
+# suffix as part of the server path and 404ing). First match wins in Starlette.
+app.include_router(egress_auth_router, prefix="/api")
 app.include_router(servers_router, prefix="/api", tags=["Server Management"])
 app.include_router(ans_router, prefix="/api", tags=["ANS Integration"])
 app.include_router(agent_router, prefix="/api", tags=["Agent Management"])
@@ -1099,8 +1104,9 @@ if settings.custom_entity_types_enabled:
     app.include_router(custom_entity_router, prefix="/api", tags=["custom-entities"])
     logger.info("Custom entity types feature enabled; registered custom-type/custom routes")
 app.include_router(internal_router, prefix="/api")
-# Egress credential vault: /api/internal/egress-token (internal vend path).
-app.include_router(egress_auth_router, prefix="/api")
+# Note: egress_auth_router is registered earlier (before servers_router) so its
+# /servers/{server_path}/egress-auth routes are not shadowed by the greedy
+# servers "/servers/{path:path}" route.
 if settings.egress_auth_enabled:
     app.include_router(egress_oauth_facade_router, tags=["Egress OAuth Facade"])
     logger.info("Egress OAuth AS facade enabled; registered /oauth2/egress/* routes")

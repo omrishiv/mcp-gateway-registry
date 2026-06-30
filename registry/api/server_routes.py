@@ -5723,6 +5723,11 @@ async def get_server_connect_config(
         "oauth_client_id": oauth_client_id,
         "oauth_callback_port": callback_port,
         "append_mcp_path": server_info.get("append_mcp_path"),
+        # Per-user egress credential vault mode. When "oauth_user", the gateway
+        # injects the user's vaulted upstream token on egress, so the Connect
+        # config must NOT emit a server Authorization/API-key header (the client
+        # sends none; a placeholder would be forwarded verbatim and break it).
+        "egress_auth_mode": server_info.get("egress_auth_mode", "none"),
         "decrypt_failures": decrypt_failures,
     }
 

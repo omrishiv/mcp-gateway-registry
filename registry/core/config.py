@@ -1002,7 +1002,12 @@ class Settings(BaseSettings):
     )
     egress_oauth_callback_base_url: str = Field(
         default="",
-        description="Public base URL for the egress OAuth callback ({base}/oauth2/egress/callback).",
+        description=(
+            "Public base URL for the egress OAuth callback "
+            "({base}/oauth2/egress/callback). Empty means derive from "
+            "registry_url; if neither is set, startup fails when "
+            "egress_auth_enabled."
+        ),
     )
     egress_token_refresh_skew_seconds: int = Field(
         default=300,
@@ -1329,11 +1334,23 @@ class Settings(BaseSettings):
                 f"{self.storage_backend!r}."
             )
 
-        if not self.egress_oauth_callback_base_url:
+        if not self.egress_oauth_callback_base_url and not self.registry_url:
             raise ValueError(
                 "EGRESS_AUTH_ENABLED=true requires EGRESS_OAUTH_CALLBACK_BASE_URL "
-                "(the public base URL for {base}/oauth2/egress/callback)."
+                "(the public base URL for {base}/oauth2/egress/callback), or a "
+                "REGISTRY_URL to derive it from; neither is set."
             )
+
+    @property
+    def egress_oauth_callback_base(self) -> str:
+        """Resolved public base URL for the egress OAuth callback.
+
+        Explicit egress_oauth_callback_base_url wins; otherwise fall back to
+        registry_url (the callback is served by the same host through nginx).
+        Both empty is rejected at startup by _validate_egress_auth_config when
+        egress is enabled, so a non-empty value is guaranteed there.
+        """
+        return self.egress_oauth_callback_base_url or self.registry_url
 
     @property
     def embeddings_model_dir(self) -> Path:

@@ -51,7 +51,7 @@ def _feature_enabled_or_404() -> None:
 
 
 def _callback_url() -> str:
-    return settings.egress_oauth_callback_base_url.rstrip("/") + "/oauth2/egress/callback"
+    return settings.egress_oauth_callback_base.rstrip("/") + "/oauth2/egress/callback"
 
 
 def _build_connect_url(server_path: str) -> str:
