@@ -2060,6 +2060,20 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
               )}
             </div>
 
+            {egressEnabled && (
+              <p className="text-xs text-gray-500 dark:text-gray-400 -mt-2 mb-4">
+                Some servers require per-user authentication (e.g. Slack, Atlassian).{' '}
+                <button
+                  type="button"
+                  onClick={() => navigate('/connected-accounts')}
+                  className="text-purple-600 dark:text-purple-400 underline hover:text-purple-700 dark:hover:text-purple-300 focus:outline-none"
+                >
+                  Click here to connect your accounts
+                </button>{' '}
+                before adding those servers to your coding assistant.
+              </p>
+            )}
+
             {serverTotalPages > 1 && (
               <div className="flex justify-center mb-4">
                 <Pagination

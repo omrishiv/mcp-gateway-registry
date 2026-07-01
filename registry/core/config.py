@@ -1021,6 +1021,17 @@ class Settings(BaseSettings):
         default=600,
         description="Lifetime of the signed+encrypted OAuth consent state.",
     )
+    egress_consent_use_elicitation: bool = Field(
+        default=False,
+        description=(
+            "How consent is delivered on a tools/call (etc.) for an unconnected "
+            "egress server. False (default, LLD baseline): a SUCCESSFUL tool "
+            "result with isError=true whose text carries the connect URL -- works "
+            "on every MCP client. True (enhancement): a -32042 "
+            "URLElicitationRequiredError -- cleaner UX but only on clients that "
+            "understand url-mode elicitation (others may swallow it)."
+        ),
+    )
     egress_registry_internal_url: str = Field(
         default="http://registry:8080",
         description=(

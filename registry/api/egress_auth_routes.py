@@ -405,6 +405,52 @@ async def get_egress_auth_config(
     return _egress_config_view(server)
 
 
+@router.get("/egress-auth/available-servers")
+async def list_available_egress_servers(
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+):
+    """List egress-enabled servers the current user can access (for the
+    Connected Accounts dropdown).
+
+    Returns only servers with ``egress_auth_mode == 'oauth_user'`` AND a valid
+    ``egress_oauth`` config, intersected with the user's accessible servers, so
+    a user is never offered a server they cannot reach. Tokens/secrets are never
+    included -- only path, display name, and provider.
+    """
+    _feature_enabled_or_404()
+
+    # Only per-user principals can connect an account; non-per-user callers
+    # (e.g. federation/network-trusted) get an empty list rather than an error.
+    auth_method = user_context.get("auth_method") or ""
+    if not is_per_user_auth_method(auth_method):
+        return []
+
+    # "*" in accessible_servers = unrestricted (admin); otherwise the user only
+    # sees servers whose path is explicitly granted. accessible_servers stores
+    # names WITHOUT a leading slash (e.g. "slack") while server paths carry one
+    # (e.g. "/slack"), so compare on the slash-stripped form.
+    accessible = user_context.get("accessible_servers") or []
+    unrestricted = "*" in accessible
+    accessible_norm = {s.lstrip("/") for s in accessible}
+    all_servers = await server_service.get_all_servers()
+    results: list[dict] = []
+    for path, server in all_servers.items():
+        if server.get("egress_auth_mode") != "oauth_user" or not server.get("egress_oauth"):
+            continue
+        if not unrestricted and str(path).lstrip("/") not in accessible_norm:
+            continue
+        eo = server.get("egress_oauth") or {}
+        results.append(
+            {
+                "server_path": path,
+                "server_name": server.get("server_name") or path,
+                "provider": eo.get("provider") or "custom",
+            }
+        )
+    results.sort(key=lambda r: r["server_name"].lower())
+    return results
+
+
 class InitiateRequest(BaseModel):
     server_path: str
 

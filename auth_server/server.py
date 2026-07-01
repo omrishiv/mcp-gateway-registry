@@ -4655,86 +4655,6 @@ _ELICITATION_PERMITTED_METHODS: frozenset[str] = frozenset(
     {"tools/call", "prompts/get", "resources/read"}
 )
 
-# Name of the synthetic "connect" tool the gateway advertises for an egress
-# server whose per-user token is not yet vaulted. The real upstream tool list
-# requires the third-party token (the upstream is an OAuth RS), so the gateway
-# cannot enumerate it for an unconnected user. Per the tools spec, tools/list
-# MUST return a result (it MAY be empty / MAY vary by authorization) -- it must
-# NOT error. So we surface a single tool the model can invoke to start consent;
-# calling it returns the url-mode elicitation. After the user connects, the
-# vend HITs and the real upstream tools are proxied (and the gateway can emit
-# notifications/tools/list_changed so the client re-fetches).
-_EGRESS_CONNECT_TOOL_NAME: str = "connect_account"
-
-
-def _egress_connect_tool(provider: str) -> dict:
-    """The synthetic connect tool advertised in tools/list before consent."""
-    return {
-        "name": _EGRESS_CONNECT_TOOL_NAME,
-        "title": f"Connect your {provider} account",
-        "description": (
-            f"Connect your {provider} account to use this server's tools. "
-            "Run this tool to start the one-time account connection; once "
-            "connected, this server's real tools become available."
-        ),
-        "inputSchema": {"type": "object", "additionalProperties": False},
-    }
-
-
-def _local_tools_list_response(req_id: object, provider: str):
-    """Answer tools/list LOCALLY with just the synthetic connect tool.
-
-    For an egress server with no vaulted token, the upstream tool list is not
-    reachable (it needs the token). Returning an error here dead-ends clients
-    (they mark the server failed and never call a tool). The tools spec requires
-    tools/list to return a result that MAY be empty / MAY vary by authorization,
-    so we return a single connect tool: a concrete affordance the model/user can
-    invoke to trigger the url-mode consent elicitation.
-    """
-    return JSONResponse(
-        status_code=200,
-        content={
-            "jsonrpc": "2.0",
-            "id": req_id,
-            "result": {"tools": [_egress_connect_tool(provider)]},
-        },
-    )
-
-
-def _connect_tool_success_response(req_id: object, provider: str):
-    """Answer a ``tools/call`` for the synthetic connect tool AFTER the token is
-    vaulted, without proxying to the upstream.
-
-    The synthetic ``connect_account`` tool only exists pre-consent (to give the
-    model something to invoke). Once the token is vaulted the vend HITs, but a
-    client that loops on ``connect_account`` (e.g. codex) would otherwise have the
-    gateway forward that synthetic name to the upstream, which rejects it with
-    ``-32602 unknown tool`` -- an infinite loop. Instead, return a success tool
-    result telling the model the account is connected and to use the real tools.
-    The ``tools/list`` it issues next now HITs and proxies the upstream's real
-    tools (the synthetic tool is gone), so the model can proceed.
-    """
-    return JSONResponse(
-        status_code=200,
-        content={
-            "jsonrpc": "2.0",
-            "id": req_id,
-            "result": {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": (
-                            f"Your {provider} account is connected. This server's "
-                            "tools are now available -- list tools again and call the "
-                            "one you need."
-                        ),
-                    }
-                ],
-                "isError": False,
-            },
-        },
-    )
-
 
 # Protocol version the gateway advertises when it answers `initialize` locally
 # (the fallback used if the client did not state one). The handshake is a
@@ -4744,7 +4664,12 @@ def _connect_tool_success_response(req_id: object, provider: str):
 _DEFAULT_PROTOCOL_VERSION: str = "2025-11-25"
 
 
-def _local_initialize_response(req_id: object, incoming_payload: object):
+def _local_initialize_response(
+    req_id: object,
+    incoming_payload: object,
+    connect_url: str = "",
+    provider: str = "the provider",
+):
     """Answer an MCP ``initialize`` locally, without proxying to the upstream.
 
     For an egress-configured server whose per-user token is NOT yet vaulted, the
@@ -4757,23 +4682,35 @@ def _local_initialize_response(req_id: object, incoming_payload: object):
 
     The protocol version echoes the client's requested version when present so
     the client does not see a version it did not ask for.
+
+    When a ``connect_url`` is supplied, the synthetic result also carries an
+    ``instructions`` string naming the provider and the connect URL. Per the MCP
+    lifecycle spec ``instructions`` is optional guidance the client MAY surface
+    to the user/model, so this gives a best-effort, connect-time hint of the
+    consent step (clients that ignore it still get consent on the first
+    tools/call). This is the gateway's own handshake response -- the upstream
+    cannot be reached pre-consent (it 401s) -- so adding the field rewrites
+    nothing of the provider's.
     """
     requested_version = _DEFAULT_PROTOCOL_VERSION
     if isinstance(incoming_payload, dict):
         params = incoming_payload.get("params")
         if isinstance(params, dict) and params.get("protocolVersion"):
             requested_version = params["protocolVersion"]
+    result = {
+        "protocolVersion": requested_version,
+        "capabilities": {"tools": {}},
+        "serverInfo": {"name": "mcp-gateway-registry", "version": "1.0.0"},
+    }
+    if connect_url:
+        result["instructions"] = (
+            f"This server requires connecting your {provider} account before its "
+            f"tools can be used. Open this URL in a browser, approve access, then "
+            f"use the server's tools:\n{connect_url}"
+        )
     return JSONResponse(
         status_code=200,
-        content={
-            "jsonrpc": "2.0",
-            "id": req_id,
-            "result": {
-                "protocolVersion": requested_version,
-                "capabilities": {"tools": {}},
-                "serverInfo": {"name": "mcp-gateway-registry", "version": "1.0.0"},
-            },
-        },
+        content={"jsonrpc": "2.0", "id": req_id, "result": result},
     )
 
 
@@ -4815,19 +4752,59 @@ def _egress_consent_response(
     # blew the elicitation URL past client length limits (kiro rejected it).
     elicitation_id = secrets.token_urlsafe(12)
 
+    # Thread the elicitationId into the connect URL so the connect route can
+    # correlate completion (and per spec, the connect URL is what enforces the
+    # same-user anti-phishing check, not the third-party endpoint).
+    sep = "&" if "?" in connect_url else "?"
+    url_with_id = (
+        f"{connect_url}{sep}{urllib.parse.urlencode({'elicitationId': elicitation_id})}"
+        if connect_url
+        else ""
+    )
+
+    # Baseline (LLD-mandated, default): on a tools/call (etc.) return a SUCCESSFUL
+    # JSON-RPC result with isError=true whose text carries the connect URL. This
+    # works on EVERY MCP client (no -32042 support needed); the human sees the URL
+    # in the tool output, connects, and re-runs. Elicitation below is the opt-in
+    # enhancement for clients that understand url-mode.
+    if (
+        not settings.egress_consent_use_elicitation
+        and incoming_method in _ELICITATION_PERMITTED_METHODS
+        and connect_url
+    ):
+        logger.info(
+            "mcp_proxy: egress consent required for server=%s method=%s; "
+            "returning isError=true tool result with connect URL (baseline)",
+            server_name,
+            incoming_method,
+        )
+        return JSONResponse(
+            status_code=200,
+            content={
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                f"{message}\n\nTo connect, open this URL in your "
+                                f"browser, approve access, then run this tool "
+                                f"again:\n{url_with_id}"
+                            ),
+                        }
+                    ],
+                    "isError": True,
+                },
+            },
+        )
+
     if incoming_method in _ELICITATION_PERMITTED_METHODS and connect_url:
         logger.info(
             "mcp_proxy: egress consent required for server=%s method=%s; "
             "returning URLElicitationRequiredError (-32042, url-mode)",
             server_name,
             incoming_method,
-        )
-        # Thread the elicitationId into the connect URL so the connect route can
-        # correlate completion (and per spec, the connect URL is what enforces
-        # the same-user anti-phishing check, not the third-party endpoint).
-        sep = "&" if "?" in connect_url else "?"
-        url_with_id = (
-            f"{connect_url}{sep}{urllib.parse.urlencode({'elicitationId': elicitation_id})}"
         )
         return JSONResponse(
             status_code=200,
@@ -4999,32 +4976,8 @@ async def mcp_proxy(
             server_first_segment = (server_name or "").split("/", 1)[0]
             vend = await _vend_egress_token(internal_proxy_token, server_first_segment)
             if vend and vend.get("access_token"):
-                # Token is vaulted (consent done). If the client is calling the
-                # SYNTHETIC connect tool (it only existed pre-consent), do NOT
-                # forward that name upstream -- the upstream would reject it with
-                # -32602 unknown tool, looping a client (codex) that keeps calling
-                # connect_account. Answer locally with a success result so the
-                # model lists tools again and gets the real, now-available set.
-                if incoming_method == "tools/call":
-                    _called_tool = ""
-                    if isinstance(incoming_payload, dict):
-                        _params = incoming_payload.get("params")
-                        if isinstance(_params, dict):
-                            _called_tool = _params.get("name") or ""
-                    if _called_tool == _EGRESS_CONNECT_TOOL_NAME:
-                        _req_id = (
-                            incoming_payload.get("id")
-                            if isinstance(incoming_payload, dict)
-                            else None
-                        )
-                        logger.info(
-                            "mcp_proxy: egress server=%s connected; short-circuiting "
-                            "synthetic connect_account call with success (token vaulted)",
-                            server_name,
-                        )
-                        return _connect_tool_success_response(
-                            _req_id, vend.get("provider") or "the provider"
-                        )
+                # Token is vaulted (consent done): strip the user's gateway
+                # credentials/identity and inject the vaulted upstream token.
                 forward_headers = {
                     k: v
                     for k, v in forward_headers.items()
@@ -5061,18 +5014,32 @@ async def mcp_proxy(
                         "initialize locally to complete the handshake",
                         server_name,
                     )
-                    return _local_initialize_response(req_id, incoming_payload)
+                    return _local_initialize_response(
+                        req_id,
+                        incoming_payload,
+                        connect_url=vend.get("connect_url") or vend.get("authorize_url") or "",
+                        provider=vend.get("provider") or "the provider",
+                    )
                 if incoming_method and incoming_method.startswith("notifications/"):
                     # Notifications have no result; ack with 202 and no body.
                     return Response(status_code=202)
                 if incoming_method == "tools/list":
+                    # No vaulted token yet: the upstream tool list needs the
+                    # token, and tools/list MUST NOT error (that dead-ends
+                    # clients). Return an EMPTY list. The user connects the
+                    # account out of band via the Registry "Connected Accounts"
+                    # page (the initialize `instructions` nudge points there);
+                    # once vaulted, the vend HITs and the real upstream tools are
+                    # proxied. A tools/call before connecting still gets the
+                    # consent nudge via _egress_consent_response below.
                     logger.info(
-                        "mcp_proxy: egress server=%s has no token; advertising the "
-                        "synthetic connect tool in tools/list",
+                        "mcp_proxy: egress server=%s has no token; returning EMPTY "
+                        "tools/list (connect via the Connected Accounts page)",
                         server_name,
                     )
-                    return _local_tools_list_response(
-                        req_id, vend.get("provider") or "the provider"
+                    return JSONResponse(
+                        status_code=200,
+                        content={"jsonrpc": "2.0", "id": req_id, "result": {"tools": []}},
                     )
                 return _egress_consent_response(
                     server_name=server_name,
