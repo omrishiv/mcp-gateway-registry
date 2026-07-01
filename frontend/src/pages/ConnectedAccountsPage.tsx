@@ -124,40 +124,26 @@ const ConnectedAccountsPage: React.FC = () => {
         behalf. Connect an account here before using a server that requires it.
       </p>
 
-      {/* Prominent callback URL: must be registered as the redirect/callback URL
-          in each third-party OAuth app (GitHub, Slack, Atlassian, …). */}
-      <div className="mb-6 p-4 rounded-lg border border-purple-200 dark:border-purple-800 bg-purple-50 dark:bg-purple-900/20">
-        <div className="text-sm font-medium text-gray-800 dark:text-gray-200 mb-1">
-          OAuth redirect / callback URL
-        </div>
-        <p className="text-xs text-gray-600 dark:text-gray-400 mb-2">
-          Register this exact URL as the redirect / callback URL in each third-party OAuth app
-          (GitHub, Slack, Atlassian, …) before connecting.
-        </p>
-        <div className="flex items-center gap-2">
-          <code className="flex-1 min-w-0 break-all px-3 py-2 rounded-md bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-sm text-purple-700 dark:text-purple-300">
-            {callbackUrl}
-          </code>
-          <button
-            type="button"
-            onClick={handleCopyCallback}
-            className="flex flex-shrink-0 items-center gap-1 px-3 py-2 rounded-md text-sm font-medium bg-purple-600 text-white hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500"
-            aria-label="Copy callback URL"
-          >
-            {copied ? (
-              <>
-                <CheckIcon className="h-4 w-4" />
-                <span>Copied</span>
-              </>
-            ) : (
-              <>
-                <ClipboardDocumentIcon className="h-4 w-4" />
-                <span>Copy</span>
-              </>
-            )}
-          </button>
-        </div>
-      </div>
+      {/* Callback URL: must be registered as the redirect/callback URL in each
+          third-party OAuth app (GitHub, Slack, Atlassian, …). Kept compact. */}
+      <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500 dark:text-gray-400 mb-6">
+        <span>OAuth redirect/callback URL (register in each provider's OAuth app):</span>
+        <code className="break-all text-purple-700 dark:text-purple-300">{callbackUrl}</code>
+        <button
+          type="button"
+          onClick={handleCopyCallback}
+          className="inline-flex items-center text-gray-400 hover:text-purple-600 dark:hover:text-purple-400 focus:outline-none"
+          aria-label="Copy callback URL"
+          title={copied ? 'Copied' : 'Copy'}
+        >
+          {copied ? (
+            <CheckIcon className="h-4 w-4 text-green-600 dark:text-green-400" />
+          ) : (
+            <ClipboardDocumentIcon className="h-4 w-4" />
+          )}
+        </button>
+        {copied && <span className="text-green-600 dark:text-green-400">Copied</span>}
+      </p>
 
       {error && (
         <div className="flex items-center space-x-2 mb-4 p-3 rounded-lg bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300">
