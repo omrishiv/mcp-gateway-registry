@@ -6,6 +6,8 @@ import {
   ExclamationTriangleIcon,
   ArrowTopRightOnSquareIcon,
   ArrowLeftIcon,
+  ClipboardDocumentIcon,
+  CheckIcon,
 } from '@heroicons/react/24/outline';
 
 import {
@@ -31,6 +33,29 @@ const ConnectedAccountsPage: React.FC = () => {
   const [error, setError] = useState<string>('');
   const [serverPath, setServerPath] = useState('');
   const [connecting, setConnecting] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  // The gateway callback (redirect) URL that must be registered in each
+  // third-party OAuth app. Served by this same host through nginx, so it is
+  // derived from the current origin.
+  const callbackUrl = `${window.location.origin}/oauth2/egress/callback`;
+
+  const handleCopyCallback = async () => {
+    try {
+      await navigator.clipboard.writeText(callbackUrl);
+    } catch {
+      // Clipboard API unavailable (e.g. non-HTTPS/older browser); fall back.
+      const ta = document.createElement('textarea');
+      ta.value = callbackUrl;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+    setCopied(true);
+    // "Copied" confirmation clears after 5 seconds.
+    window.setTimeout(() => setCopied(false), 5000);
+  };
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -98,6 +123,41 @@ const ConnectedAccountsPage: React.FC = () => {
         Link your third-party accounts (GitHub, Slack, Google, …) so MCP servers can act on your
         behalf. Connect an account here before using a server that requires it.
       </p>
+
+      {/* Prominent callback URL: must be registered as the redirect/callback URL
+          in each third-party OAuth app (GitHub, Slack, Atlassian, …). */}
+      <div className="mb-6 p-4 rounded-lg border border-purple-200 dark:border-purple-800 bg-purple-50 dark:bg-purple-900/20">
+        <div className="text-sm font-medium text-gray-800 dark:text-gray-200 mb-1">
+          OAuth redirect / callback URL
+        </div>
+        <p className="text-xs text-gray-600 dark:text-gray-400 mb-2">
+          Register this exact URL as the redirect / callback URL in each third-party OAuth app
+          (GitHub, Slack, Atlassian, …) before connecting.
+        </p>
+        <div className="flex items-center gap-2">
+          <code className="flex-1 min-w-0 break-all px-3 py-2 rounded-md bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-sm text-purple-700 dark:text-purple-300">
+            {callbackUrl}
+          </code>
+          <button
+            type="button"
+            onClick={handleCopyCallback}
+            className="flex flex-shrink-0 items-center gap-1 px-3 py-2 rounded-md text-sm font-medium bg-purple-600 text-white hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500"
+            aria-label="Copy callback URL"
+          >
+            {copied ? (
+              <>
+                <CheckIcon className="h-4 w-4" />
+                <span>Copied</span>
+              </>
+            ) : (
+              <>
+                <ClipboardDocumentIcon className="h-4 w-4" />
+                <span>Copy</span>
+              </>
+            )}
+          </button>
+        </div>
+      </div>
 
       {error && (
         <div className="flex items-center space-x-2 mb-4 p-3 rounded-lg bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300">
