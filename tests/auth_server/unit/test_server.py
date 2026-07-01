@@ -2799,10 +2799,12 @@ class TestMcpProxyEndpointHeaderPassthrough:
 
         assert response.status_code == 401
 
-    def test_egress_consent_emits_url_elicitation_required_error(self):
-        """When egress is on and the user has no token, a tools/call gets the
-        2025-11-25 URLElicitationRequiredError (-32042) whose data.elicitations[]
-        carries a mode:url elicitation with an elicitationId and the connect URL.
+    def test_egress_consent_emits_iserror_baseline_with_connect_url(self):
+        """DEFAULT consent delivery: when egress is on and the user has no token,
+        a tools/call gets a SUCCESSFUL JSON-RPC result with isError=true whose
+        text carries the connect URL. This baseline works on every MCP client
+        (no -32042 support needed). Elicitation (-32042) is opt-in via
+        egress_consent_use_elicitation (covered separately below).
         """
         import auth_server.server as server_module
 
@@ -2818,6 +2820,47 @@ class TestMcpProxyEndpointHeaderPassthrough:
 
         with (
             patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module.settings, "egress_consent_use_elicitation", False),
+            patch.object(server_module, "_vend_egress_token", _consent_vend),
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/github",
+                json={"jsonrpc": "2.0", "id": 7, "method": "tools/call"},
+                headers=_mcp_proxy_token_headers(server_name="github"),
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["id"] == 7
+        assert "error" not in body
+        result = body["result"]
+        assert result["isError"] is True
+        text = result["content"][0]["text"]
+        assert vend["connect_url"] in text
+        assert "github" in text.lower()
+
+    def test_egress_consent_emits_url_elicitation_when_enabled(self):
+        """With egress_consent_use_elicitation=True, a tools/call for a tokenless
+        egress server returns the 2025-11-25 URLElicitationRequiredError (-32042)
+        whose data.elicitations[] carries a mode:url elicitation with an
+        elicitationId and the connect URL.
+        """
+        import auth_server.server as server_module
+
+        vend = {
+            "consent_required": True,
+            "connect_url": "https://gw.example.com/oauth2/egress/connect?server=%2Fgithub",
+            "request_state": "AEAD-blob",
+            "provider": "github",
+        }
+
+        async def _consent_vend(token, server):
+            return vend
+
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module.settings, "egress_consent_use_elicitation", True),
             patch.object(server_module, "_vend_egress_token", _consent_vend),
         ):
             client = TestClient(server_module.app)
@@ -2917,12 +2960,13 @@ class TestMcpProxyEndpointHeaderPassthrough:
 
         assert response.status_code == 202
 
-    def test_egress_consent_tools_list_returns_synthetic_connect_tool(self):
-        """tools/list cannot carry an InputRequiredResult and must NOT error
-        (erroring dead-ends clients -- they mark the server failed and never call
-        a tool). The tools spec lets tools/list return an auth-dependent set, so
-        for a tokenless egress server the gateway answers LOCALLY with a single
-        synthetic connect tool the model can invoke to start consent.
+    def test_egress_consent_tools_list_returns_empty(self):
+        """tools/list must NOT error (erroring dead-ends clients -- they mark the
+        server failed and never call a tool). The upstream tool list needs the
+        token, so for a tokenless egress server the gateway answers LOCALLY with
+        an EMPTY tool list. The user connects out of band via the Connected
+        Accounts UI; once the token is vaulted, the vend HITs and the real
+        upstream tools are proxied.
         """
         import auth_server.server as server_module
 
@@ -2949,90 +2993,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
         assert response.status_code == 200
         body = response.json()
         assert "error" not in body
-        tools = body["result"]["tools"]
-        assert len(tools) == 1
-        assert tools[0]["name"] == server_module._EGRESS_CONNECT_TOOL_NAME
-        assert "github" in tools[0]["title"]
-        # input schema must be a valid empty-object schema (spec requirement)
-        assert tools[0]["inputSchema"]["type"] == "object"
-
-    def test_egress_consent_tools_call_on_connect_tool_elicits(self):
-        """Calling the synthetic connect tool returns the -32042
-        URLElicitationRequiredError, which is the whole point of advertising it."""
-        import auth_server.server as server_module
-
-        vend = {
-            "consent_required": True,
-            "connect_url": "https://gw.example.com/oauth2/egress/connect?server=%2Fgithub",
-            "request_state": "AEAD-blob",
-            "provider": "github",
-        }
-
-        async def _consent_vend(token, server):
-            return vend
-
-        with (
-            patch.object(server_module.settings, "egress_auth_enabled", True),
-            patch.object(server_module, "_vend_egress_token", _consent_vend),
-        ):
-            client = TestClient(server_module.app)
-            response = client.post(
-                "/mcp-proxy/github",
-                json={
-                    "jsonrpc": "2.0",
-                    "id": 5,
-                    "method": "tools/call",
-                    "params": {"name": server_module._EGRESS_CONNECT_TOOL_NAME, "arguments": {}},
-                },
-                headers=_mcp_proxy_token_headers(server_name="github"),
-            )
-
-        assert response.status_code == 200
-        err = response.json()["error"]
-        assert err["code"] == -32042
-        e = err["data"]["elicitations"][0]
-        assert e["mode"] == "url"
-        assert e["url"].startswith(vend["connect_url"])
-
-    def test_egress_connect_tool_short_circuits_after_token_vaulted(self):
-        """After consent (vend HITs), a client that loops on the synthetic
-        connect_account tool must NOT have that name proxied upstream (the upstream
-        404s it -> -32602 -> loop). The gateway returns a success tool result so
-        the model lists tools again and uses the real, now-available ones.
-        """
-        import auth_server.server as server_module
-
-        # vend HIT: token present
-        vend = {"access_token": "gho_real_token", "provider": "github"}
-
-        async def _hit_vend(token, server):
-            return vend
-
-        # If this proxied upstream, the test would need a mocked httpx; it must NOT
-        # reach there. No _patch_httpx_async_client -> any upstream call would error.
-        with (
-            patch.object(server_module.settings, "egress_auth_enabled", True),
-            patch.object(server_module, "_vend_egress_token", _hit_vend),
-        ):
-            client = TestClient(server_module.app)
-            response = client.post(
-                "/mcp-proxy/github",
-                json={
-                    "jsonrpc": "2.0",
-                    "id": 11,
-                    "method": "tools/call",
-                    "params": {"name": server_module._EGRESS_CONNECT_TOOL_NAME, "arguments": {}},
-                },
-                headers=_mcp_proxy_token_headers(server_name="github"),
-            )
-
-        assert response.status_code == 200
-        body = response.json()
-        assert body["id"] == 11
-        assert "error" not in body
-        result = body["result"]
-        assert result["isError"] is False
-        assert "connected" in result["content"][0]["text"].lower()
+        assert body["result"]["tools"] == []
 
     def test_set_cookie_and_location_dropped_end_to_end(self):
         """End-to-end regression: even if an upstream MCP server emits
