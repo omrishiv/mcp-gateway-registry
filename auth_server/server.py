@@ -44,6 +44,7 @@ from internal_request_token import (
     mint_generic_proxy_token,
     mint_mcp_proxy_token,
     mint_registry_ui_token,
+    verify_cross_gateway_token,
     verify_generic_proxy_token,
     verify_mcp_proxy_token,
 )
@@ -5099,6 +5100,213 @@ async def reload_scopes(caller_identity: str = Depends(validate_internal_auth)):
     except Exception as e:
         logger.error(f"Failed to reload scopes configuration: {e}")
         raise HTTPException(status_code=500, detail="Failed to reload scopes configuration")
+
+
+# --------------------------------------------------------------------------- #
+# Cross-gateway proxy endpoint
+# --------------------------------------------------------------------------- #
+
+
+@app.api_route(
+    "/cross-gateway-proxy/{peer_id}/{path:path}",
+    methods=["GET", "POST", "PUT", "DELETE"],
+    dependencies=[Depends(verify_cross_gateway_token)],
+)
+async def cross_gateway_proxy(
+    peer_id: str,
+    path: str,
+    request: Request,
+):
+    """Proxy a request to a federated peer gateway with appropriate credentials.
+
+    nginx routes here after /validate succeeds for a federated-routable resource.
+    The verify_cross_gateway_token dependency has already verified the internal
+    token and stashed claims on request.state.cross_gateway_claims.
+
+    Security:
+    - Token audience 'cross-gateway' prevents replay from other paths
+    - peer_id from the token is verified against the route parameter
+    - SSRF guard validates the resolved target URL before making the call
+    - Caller's inbound credentials are NEVER forwarded (stripped entirely)
+    - Peer credential resolved server-side via CrossGatewayCredentialProvider
+    - Response body size bounded; timeouts enforced
+    - Fails closed on any error (no partial/unauthenticated forwarding)
+    """
+    import httpx
+
+    from registry.services.cross_gateway_credential import (
+        CrossGatewayCredentialError,
+        StaticTokenCredentialProvider,
+    )
+    from registry.services.peer_federation_service import get_peer_federation_service
+    from registry.utils.url_guard import FEDERATION_PROFILE, validate_url
+
+    claims = request.state.cross_gateway_claims
+
+    # Verify the token's peer_id matches the route (prevents path manipulation)
+    if claims.get("peer_id") != peer_id:
+        logger.warning(
+            "cross_gateway_proxy: token peer_id does not match route (token=%s, route=%s)",
+            claims.get("peer_id"),
+            peer_id,
+        )
+        raise HTTPException(
+            401,
+            detail="Cross-gateway token peer binding mismatch",
+        )
+
+    # Feature gate: cross-gateway proxy must be explicitly enabled
+    cross_gw_enabled = os.environ.get("CROSS_GATEWAY_PROXY_ENABLED", "false").lower() == "true"
+    if not cross_gw_enabled:
+        raise HTTPException(
+            403,
+            detail="Cross-gateway proxy is not enabled",
+        )
+
+    # Load peer config to get gateway_endpoint
+    peer_config = None
+    federation_service = get_peer_federation_service()
+    if federation_service:
+        peer_config = federation_service.registered_peers.get(peer_id)
+
+    if not peer_config:
+        logger.warning("cross_gateway_proxy: peer '%s' not found in configuration", peer_id)
+        raise HTTPException(
+            502,
+            detail="Peer not found",
+        )
+
+    gateway_endpoint = getattr(peer_config, "gateway_endpoint", None)
+    if not gateway_endpoint or not getattr(peer_config, "gateway_enabled", False):
+        logger.warning("cross_gateway_proxy: peer '%s' not configured for cross-gateway", peer_id)
+        raise HTTPException(
+            502,
+            detail="Peer not configured for cross-gateway routing",
+        )
+
+    # Build the target URL (peer gateway + resource path)
+    target_url = f"{gateway_endpoint.rstrip('/')}/{path.lstrip('/')}"
+
+    # SSRF guard: validate the resolved target URL before attaching credentials.
+    # Uses FEDERATION_PROFILE (strictest: no private bypass, no allowlist).
+    try:
+        validate_url(target_url, profile=FEDERATION_PROFILE, require_https=True, resolve=True)
+    except Exception as e:
+        logger.warning(
+            "cross_gateway_proxy: target URL failed SSRF validation for peer '%s'",
+            peer_id,
+        )
+        raise HTTPException(
+            502,
+            detail="Peer gateway target failed security validation",
+        ) from e
+
+    # Resolve peer credential via the pluggable provider (fail closed)
+    credential_provider = StaticTokenCredentialProvider(
+        peer_config_loader=lambda pid: federation_service.registered_peers.get(pid)
+    )
+    try:
+        credential_headers = await credential_provider.get_headers_for_peer(
+            peer_id=peer_id,
+            target_path=f"/{path}",
+            calling_subject=claims.get("sub", ""),
+            calling_auth_method=claims.get("auth_method", ""),
+            calling_scopes=claims.get("scopes", []),
+        )
+    except CrossGatewayCredentialError as e:
+        logger.warning(
+            "cross_gateway_proxy: cannot resolve credential for peer '%s': %s",
+            peer_id,
+            e.reason,
+        )
+        raise HTTPException(
+            502,
+            detail="Cannot resolve credential for peer",
+        ) from e
+
+    # Read the incoming body (bounded)
+    max_body = int(os.environ.get("CROSS_GATEWAY_PROXY_MAX_BODY_BYTES", "10485760"))
+    try:
+        request_body = await request.body()
+        if len(request_body) > max_body:
+            raise HTTPException(
+                413,
+                detail="Request body exceeds cross-gateway proxy limit",
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("cross_gateway_proxy: failed to read request body: %s", exc)
+        raise HTTPException(400, detail="Invalid request body") from exc
+
+    # Build outbound headers — NEVER forward the caller's inbound credentials.
+    # Only forward safe content-type headers + the resolved peer credential.
+    outbound_headers = {
+        "Content-Type": request.headers.get("content-type", "application/json"),
+        "Accept": request.headers.get("accept", "application/json"),
+    }
+    outbound_headers.update(credential_headers)
+
+    # Make the outbound call with timeout and TLS config
+    timeout = float(os.environ.get("CROSS_GATEWAY_PROXY_TIMEOUT_SECONDS", "30"))
+
+    # TLS CA cert for the peer (if configured, for non-Web-PKI peers)
+    ssl_verify: bool | str = True
+    peer_ca_cert = getattr(peer_config, "peer_tls_ca_cert", None)
+    if peer_ca_cert:
+        import tempfile
+
+        # Write CA cert to a temp file for httpx (it needs a path, not a string)
+        ca_file = tempfile.NamedTemporaryFile(suffix=".pem", delete=False)  # noqa: SIM115
+        ca_file.write(peer_ca_cert.encode())
+        ca_file.flush()
+        ssl_verify = ca_file.name
+
+    try:
+        async with httpx.AsyncClient(verify=ssl_verify, timeout=timeout) as client:
+            response = await client.request(
+                method=request.method,
+                url=target_url,
+                headers=outbound_headers,
+                content=request_body if request.method in ("POST", "PUT") else None,
+            )
+    except httpx.TimeoutException:
+        logger.warning("cross_gateway_proxy: timeout calling peer '%s'", peer_id)
+        raise HTTPException(
+            504,
+            detail="Peer gateway did not respond in time",
+        )
+    except httpx.ConnectError as e:
+        logger.warning(
+            "cross_gateway_proxy: connection error to peer '%s': %s", peer_id, type(e).__name__
+        )
+        raise HTTPException(
+            502,
+            detail="Cannot connect to peer gateway",
+        )
+    except Exception as e:
+        logger.error(
+            "cross_gateway_proxy: unexpected error calling peer '%s': %s", peer_id, type(e).__name__
+        )
+        raise HTTPException(
+            502,
+            detail="Error communicating with peer gateway",
+        )
+    finally:
+        # Clean up temp CA cert file
+        if isinstance(ssl_verify, str) and ssl_verify != "True":
+            import pathlib
+
+            pathlib.Path(ssl_verify).unlink(missing_ok=True)
+
+    # Return the peer's response to the caller (bounded)
+    from starlette.responses import Response
+
+    return Response(
+        content=response.content,
+        status_code=response.status_code,
+        media_type=response.headers.get("content-type", "application/json"),
+    )
 
 
 # Mount the /internal/* router. All routes registered on
