@@ -354,9 +354,7 @@ class PeerRegistryConfig(BaseModel):
 
         # Reject userinfo in URL (credentials in URL are a security anti-pattern)
         if parsed.username or parsed.password:
-            raise ValueError(
-                "gateway_endpoint must not contain credentials in the URL"
-            )
+            raise ValueError("gateway_endpoint must not contain credentials in the URL")
 
         # SSRF guard: reject private, loopback, link-local, metadata IPs.
         # Use the federation profile (strictest: empty allowlist, no private bypass).
@@ -372,9 +370,7 @@ class PeerRegistryConfig(BaseModel):
                 resolve=False,
             )
         except Exception as e:
-            raise ValueError(
-                f"gateway_endpoint failed security validation: {e}"
-            )
+            raise ValueError(f"gateway_endpoint failed security validation: {e}")
 
         return v
 
@@ -388,9 +384,7 @@ class PeerRegistryConfig(BaseModel):
         is rejected, not silently ignored.
         """
         if self.gateway_enabled and not self.gateway_endpoint:
-            raise ValueError(
-                "gateway_enabled=True requires gateway_endpoint to be set"
-            )
+            raise ValueError("gateway_enabled=True requires gateway_endpoint to be set")
         return self
 
     @model_validator(mode="after")

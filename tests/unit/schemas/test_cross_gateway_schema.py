@@ -27,92 +27,116 @@ class TestGatewayEndpointValidation:
 
     def test_valid_https_endpoint(self):
         """Accept a valid HTTPS gateway endpoint."""
-        config = PeerRegistryConfig(**self._base_config(
-            gateway_endpoint="https://gateway.example.com",
-            gateway_enabled=True,
-        ))
+        config = PeerRegistryConfig(
+            **self._base_config(
+                gateway_endpoint="https://gateway.example.com",
+                gateway_enabled=True,
+            )
+        )
         assert config.gateway_endpoint == "https://gateway.example.com"
         assert config.gateway_enabled is True
 
     def test_none_endpoint_allowed(self):
         """None gateway_endpoint is valid (feature not configured)."""
-        config = PeerRegistryConfig(**self._base_config(
-            gateway_endpoint=None,
-            gateway_enabled=False,
-        ))
+        config = PeerRegistryConfig(
+            **self._base_config(
+                gateway_endpoint=None,
+                gateway_enabled=False,
+            )
+        )
         assert config.gateway_endpoint is None
 
     def test_http_rejected(self):
         """Reject HTTP — credentials would be sent in cleartext."""
         with pytest.raises(ValueError, match="must use HTTPS"):
-            PeerRegistryConfig(**self._base_config(
-                gateway_endpoint="http://gateway.example.com",
-            ))
+            PeerRegistryConfig(
+                **self._base_config(
+                    gateway_endpoint="http://gateway.example.com",
+                )
+            )
 
     def test_no_scheme_rejected(self):
         """Reject URLs without a scheme."""
         with pytest.raises(ValueError):
-            PeerRegistryConfig(**self._base_config(
-                gateway_endpoint="gateway.example.com",
-            ))
+            PeerRegistryConfig(
+                **self._base_config(
+                    gateway_endpoint="gateway.example.com",
+                )
+            )
 
     def test_userinfo_in_url_rejected(self):
         """Reject URLs with credentials embedded (security anti-pattern)."""
         with pytest.raises(ValueError, match="must not contain credentials"):
-            PeerRegistryConfig(**self._base_config(
-                gateway_endpoint="https://user:pass@gateway.example.com",
-            ))
+            PeerRegistryConfig(
+                **self._base_config(
+                    gateway_endpoint="https://user:pass@gateway.example.com",
+                )
+            )
 
     def test_empty_string_becomes_none(self):
         """Empty/whitespace-only string treated as None."""
-        config = PeerRegistryConfig(**self._base_config(
-            gateway_endpoint="   ",
-            gateway_enabled=False,
-        ))
+        config = PeerRegistryConfig(
+            **self._base_config(
+                gateway_endpoint="   ",
+                gateway_enabled=False,
+            )
+        )
         assert config.gateway_endpoint is None
 
     def test_trailing_slash_stripped(self):
         """Trailing slash normalized away."""
-        config = PeerRegistryConfig(**self._base_config(
-            gateway_endpoint="https://gateway.example.com/",
-        ))
+        config = PeerRegistryConfig(
+            **self._base_config(
+                gateway_endpoint="https://gateway.example.com/",
+            )
+        )
         assert config.gateway_endpoint == "https://gateway.example.com"
 
     def test_gateway_enabled_without_endpoint_rejected(self):
         """Fail closed: gateway_enabled=True requires gateway_endpoint."""
         with pytest.raises(ValueError, match="requires gateway_endpoint"):
-            PeerRegistryConfig(**self._base_config(
-                gateway_endpoint=None,
-                gateway_enabled=True,
-            ))
+            PeerRegistryConfig(
+                **self._base_config(
+                    gateway_endpoint=None,
+                    gateway_enabled=True,
+                )
+            )
 
     def test_private_ip_rejected(self):
         """Reject private/internal IPs — SSRF guard (literal IP check)."""
         with pytest.raises(ValueError, match="security validation"):
-            PeerRegistryConfig(**self._base_config(
-                gateway_endpoint="https://10.0.0.1:8443",
-            ))
+            PeerRegistryConfig(
+                **self._base_config(
+                    gateway_endpoint="https://10.0.0.1:8443",
+                )
+            )
 
     def test_loopback_rejected(self):
         """Reject loopback — SSRF guard."""
         with pytest.raises(ValueError, match="security validation"):
-            PeerRegistryConfig(**self._base_config(
-                gateway_endpoint="https://127.0.0.1:8443",
-            ))
+            PeerRegistryConfig(
+                **self._base_config(
+                    gateway_endpoint="https://127.0.0.1:8443",
+                )
+            )
 
     def test_metadata_ip_rejected(self):
         """Reject cloud metadata endpoint — never allowlistable."""
         with pytest.raises(ValueError, match="security validation"):
-            PeerRegistryConfig(**self._base_config(
-                gateway_endpoint="https://169.254.169.254",
-            ))
+            PeerRegistryConfig(
+                **self._base_config(
+                    gateway_endpoint="https://169.254.169.254",
+                )
+            )
 
     def test_link_local_rejected(self):
         """Reject link-local addresses."""
         with pytest.raises(ValueError, match="security validation"):
-            PeerRegistryConfig(**self._base_config(
-                gateway_endpoint="https://169.254.1.1",
-            ))
+            PeerRegistryConfig(
+                **self._base_config(
+                    gateway_endpoint="https://169.254.1.1",
+                )
+            )
 
 
 class TestPeerTlsCaCertWriteOnly:
