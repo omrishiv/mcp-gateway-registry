@@ -861,7 +861,7 @@ class TestPeerRegistryClientSsrfGuard:
             peer_id="evil-peer",
             name="Evil Peer",
             endpoint="http://10.0.0.9",
-            federation_token="super-secret-token",
+            federation_token="super-secret-federation-token-strong-value-xyz",
         )
         client = PeerRegistryClient(peer_config=peer)
 

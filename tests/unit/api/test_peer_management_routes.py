@@ -118,7 +118,7 @@ def sample_peer_config():
         enabled=True,
         sync_mode="all",
         sync_interval_minutes=60,
-        federation_token="original-token-abc123",
+        federation_token="original-federation-token-strong-value-abc123",
     )
 
 
@@ -146,7 +146,7 @@ class TestUpdatePeerToken:
 
         # Mock service to return updated peer
         updated_peer = sample_peer_config.model_copy()
-        updated_peer.federation_token = "new-token-xyz789"
+        updated_peer.federation_token = "new-federation-token-strong-value-xyz789abc123"
         mock_peer_federation_service.get_peer_by_id.return_value = sample_peer_config
         mock_peer_federation_service.update_peer.return_value = updated_peer
 
@@ -157,7 +157,7 @@ class TestUpdatePeerToken:
             # Act
             response = client.patch(
                 f"/api/peers/{sample_peer_config.peer_id}/token",
-                json={"federation_token": "new-token-xyz789"},
+                json={"federation_token": "new-federation-token-strong-value-xyz789abc123"},
             )
 
             # Assert
@@ -169,7 +169,7 @@ class TestUpdatePeerToken:
             # Verify service was called correctly
             mock_peer_federation_service.update_peer.assert_called_once_with(
                 sample_peer_config.peer_id,
-                {"federation_token": "new-token-xyz789"},
+                {"federation_token": "new-federation-token-strong-value-xyz789abc123"},
             )
 
     @pytest.mark.asyncio
@@ -197,7 +197,7 @@ class TestUpdatePeerToken:
             # Act
             response = client.patch(
                 "/api/peers/nonexistent-peer/token",
-                json={"federation_token": "new-token"},
+                json={"federation_token": "new-federation-token-strong-value-xyz789"},
             )
 
             # Assert
@@ -222,7 +222,7 @@ class TestUpdatePeerToken:
             # Act
             response = client.patch(
                 "/api/peers/test-peer/token",
-                json={"federation_token": "new-token"},
+                json={"federation_token": "new-federation-token-strong-value-xyz789"},
             )
 
             # Assert
@@ -320,7 +320,7 @@ class TestUpdatePeerToken:
             # Act
             response = client.patch(
                 "/api/peers/test-peer/token",
-                json={"federation_token": "new-token"},
+                json={"federation_token": "new-federation-token-strong-value-xyz789"},
             )
 
             # Assert
@@ -363,7 +363,7 @@ class TestFederationTokenNeverSerialized:
 
         assert response.status_code == status.HTTP_200_OK
         body = response.text
-        assert "original-token-abc123" not in body
+        assert "original-federation-token-strong-value-abc123" not in body
         data = response.json()
         assert "federation_token" not in data[0]
         # Presence is surfaced as a non-sensitive boolean instead of the value.
@@ -390,7 +390,7 @@ class TestFederationTokenNeverSerialized:
             response = client.get(f"/api/peers/{sample_peer_config.peer_id}")
 
         assert response.status_code == status.HTTP_200_OK
-        assert "original-token-abc123" not in response.text
+        assert "original-federation-token-strong-value-abc123" not in response.text
         data = response.json()
         assert "federation_token" not in data
         assert data["has_federation_token"] is True
@@ -446,12 +446,12 @@ class TestFederationTokenNeverSerialized:
                     "peer_id": "test-peer",
                     "name": "Test Peer Registry",
                     "endpoint": "https://peer.example.com",
-                    "federation_token": "original-token-abc123",
+                    "federation_token": "original-federation-token-strong-value-abc123",
                 },
             )
 
         assert response.status_code == status.HTTP_201_CREATED
-        assert "original-token-abc123" not in response.text
+        assert "original-federation-token-strong-value-abc123" not in response.text
         data = response.json()
         assert "federation_token" not in data
         assert data["has_federation_token"] is True
@@ -479,7 +479,7 @@ class TestFederationTokenNeverSerialized:
             )
 
         assert response.status_code == status.HTTP_200_OK
-        assert "original-token-abc123" not in response.text
+        assert "original-federation-token-strong-value-abc123" not in response.text
         assert "federation_token" not in response.json()
 
 

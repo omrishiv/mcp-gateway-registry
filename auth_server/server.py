@@ -41,6 +41,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 # Import metrics middleware
 from internal_request_token import (
+    mint_cross_gateway_token,
     mint_generic_proxy_token,
     mint_mcp_proxy_token,
     mint_registry_ui_token,
@@ -578,6 +579,42 @@ def _generic_write_csrf_refused(
     if (http_verb or "").upper() in _SAFE_HTTP_VERBS:
         return False
     return _is_cookie_auth_method(auth_method)
+
+
+def _attach_cross_gateway_token(
+    request: "Request",
+    response: "JSONResponse",
+    subject: str,
+    scopes: list[str],
+    auth_method: str = "",
+) -> None:
+    """Mint and attach the X-Internal-Token for the cross-gateway proxy hop.
+
+    Only mints when nginx forwarded cross-gateway routing headers
+    (``X-Cross-Gateway-Peer`` + ``X-Cross-Gateway-Target``) into this /validate
+    subrequest — i.e. this validation backs a cross-gateway federated resource
+    request. The token binds the peer and target so the proxy endpoint can verify
+    the routing is authorized. Uses the same X-Internal-Token header as mcp-proxy
+    (the nginx location only sets one or the other, never both — they are mutually
+    exclusive paths).
+
+    If minting fails (e.g. empty subject/peer/target), no token is attached:
+    the proxy endpoint then rejects (fail-closed).
+    """
+    peer_id = request.headers.get("X-Cross-Gateway-Peer", "")
+    target_path = request.headers.get("X-Cross-Gateway-Target", "")
+    if not peer_id or not target_path:
+        return
+    try:
+        response.headers["X-Internal-Token"] = mint_cross_gateway_token(
+            subject=subject,
+            scopes=scopes,
+            peer_id=peer_id,
+            target_path=target_path,
+            auth_method=auth_method,
+        )
+    except ValueError as exc:
+        logger.error(f"/validate: could not mint cross-gateway token: {exc}")
 
 
 def _read_mcp_proxy_max_body_bytes() -> int:
@@ -3462,6 +3499,16 @@ async def validate_request(request: Request):
                     auth_method="federation-static",
                     client_id="federation-static",
                 )
+                # Cross-gateway proxy token: minted when this /validate backs a
+                # cross-gateway nginx route (X-Cross-Gateway-Peer header present).
+                # Binds the peer_id + target_path from the nginx-set headers.
+                _attach_cross_gateway_token(
+                    request,
+                    response,
+                    subject="federation-peer",
+                    scopes=federation_scopes,
+                    auth_method="federation-static",
+                )
 
                 return response
 
@@ -5173,13 +5220,24 @@ async def cross_gateway_proxy(
     # Verify the token's peer_id matches the route (prevents path manipulation)
     if claims.get("peer_id") != peer_id:
         logger.warning(
-            "cross_gateway_proxy: token peer_id does not match route (token=%s, route=%s)",
-            claims.get("peer_id"),
-            peer_id,
+            "cross_gateway_proxy: token peer_id does not match route (token=%.50s, route=%.50s)",
+            (claims.get("peer_id") or "")[:50],
+            peer_id[:50],
         )
         raise HTTPException(
             401,
             detail="Cross-gateway token peer binding mismatch",
+        )
+
+    # Verify the token's target_path matches the actual route path.
+    # Without this, an attacker could manipulate the path after token minting
+    # to access a different resource on the peer than what /validate authorized.
+    expected_target = (claims.get("target_path") or "").strip("/")
+    if path.strip("/") != expected_target:
+        logger.warning("cross_gateway_proxy: token target_path does not match route")
+        raise HTTPException(
+            401,
+            detail="Cross-gateway token target binding mismatch",
         )
 
     # Feature gate: cross-gateway proxy must be explicitly enabled
@@ -5275,6 +5333,10 @@ async def cross_gateway_proxy(
     outbound_headers.update(credential_headers)
 
     # Make the outbound call with timeout and TLS config
+    # SECURITY: Use the guarded async client (pinned transport) to defeat DNS
+    # rebinding. The validate_url() call above is defense-in-depth; the guarded
+    # transport re-validates and pins the resolved IP on every connect/redirect,
+    # closing the TOCTOU window between DNS check and TCP connect.
     timeout = float(os.environ.get("CROSS_GATEWAY_PROXY_TIMEOUT_SECONDS", "30"))
 
     # TLS CA cert for the peer (if configured, for non-Web-PKI peers)
@@ -5290,12 +5352,20 @@ async def cross_gateway_proxy(
         ssl_verify = ca_file.name
 
     try:
-        async with httpx.AsyncClient(verify=ssl_verify, timeout=timeout) as client:
+        from registry.utils.url_guard import FEDERATION_PROFILE, guarded_async_client
+
+        async with guarded_async_client(
+            profile=FEDERATION_PROFILE,
+            timeout=timeout,
+            verify=ssl_verify,  # type: ignore[arg-type]
+        ) as client:
             response = await client.request(
                 method=request.method,
                 url=target_url,
                 headers=outbound_headers,
-                content=request_body if request.method in ("POST", "PUT") else None,
+                content=request_body
+                if request.method in ("POST", "PUT", "DELETE", "PATCH")
+                else None,
             )
     except httpx.TimeoutException:
         logger.warning("cross_gateway_proxy: timeout calling peer '%s'", peer_id)
@@ -5326,11 +5396,24 @@ async def cross_gateway_proxy(
 
             pathlib.Path(ssl_verify).unlink(missing_ok=True)
 
-    # Return the peer's response to the caller (bounded)
+    # Return the peer's response to the caller (bounded).
+    # SECURITY: Bound response body to prevent OOM from a malicious peer
+    # returning an arbitrarily large payload.
     from starlette.responses import Response
 
+    response_body = response.content
+    if len(response_body) > max_body:
+        logger.warning(
+            "cross_gateway_proxy: peer '%s' response exceeds size limit (%d bytes)",
+            peer_id[:50],
+            len(response_body),
+        )
+        raise HTTPException(502, detail="Peer response exceeds size limit")
+
+    # SECURITY: Only forward content-type from peer response — never Set-Cookie,
+    # Authorization, or X-Internal-* headers (prevents header injection from peer).
     return Response(
-        content=response.content,
+        content=response_body,
         status_code=response.status_code,
         media_type=response.headers.get("content-type", "application/json"),
     )

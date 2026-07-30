@@ -307,6 +307,41 @@ class PeerRegistryConfig(BaseModel):
         """Validate peer ID format."""
         return _validate_peer_id(v)
 
+    @field_validator("federation_token")
+    @classmethod
+    def _validate_federation_token_strength(
+        cls,
+        v: str | None,
+    ) -> str | None:
+        """Validate federation_token for minimum strength when present.
+
+        Security: a weak or placeholder federation token is a privilege-granting
+        credential that bypasses IdP validation. It must meet the same strength
+        bar as any signing secret. An absent token (None) is acceptable — it
+        simply means no static token is configured for this peer.
+        """
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
+        # Reject tokens shorter than 32 characters (stripped)
+        if len(v) < 32:
+            raise ValueError(
+                "federation_token must be at least 32 characters "
+                '(generate with: python3 -c "import secrets; print(secrets.token_urlsafe(32))")'
+            )
+        # Reject known-weak placeholder values (case-insensitive substring match)
+        _weak_markers = ["change-me", "replace-me", "changeme", "placeholder", "example"]
+        v_lower = v.lower()
+        for marker in _weak_markers:
+            if marker in v_lower:
+                raise ValueError(
+                    f"federation_token contains a placeholder marker ('{marker}') — "
+                    "set a strong random value"
+                )
+        return v
+
     @field_validator("endpoint")
     @classmethod
     def _validate_endpoint_field(
@@ -315,6 +350,33 @@ class PeerRegistryConfig(BaseModel):
     ) -> str:
         """Validate endpoint URL format."""
         return _validate_endpoint_url(v)
+
+    @field_validator("peer_tls_ca_cert")
+    @classmethod
+    def _validate_peer_tls_ca_cert(
+        cls,
+        v: str | None,
+    ) -> str | None:
+        """Validate peer_tls_ca_cert format and size when present.
+
+        Security: an unbounded or non-PEM value would be written to a temp file
+        on every cross-gateway request. Validate at the source to prevent
+        accidental misuse (e.g., storing megabytes of non-cert data).
+        """
+        if v is None:
+            return None
+        if len(v) > 65536:
+            raise ValueError("peer_tls_ca_cert exceeds maximum size (64KB)")
+        if "-----BEGIN CERTIFICATE-----" not in v:
+            raise ValueError(
+                "peer_tls_ca_cert must be PEM-encoded "
+                "(expected '-----BEGIN CERTIFICATE-----' header)"
+            )
+        if "-----END CERTIFICATE-----" not in v:
+            raise ValueError(
+                "peer_tls_ca_cert must be PEM-encoded (expected '-----END CERTIFICATE-----' footer)"
+            )
+        return v
 
     @field_validator("gateway_endpoint")
     @classmethod

@@ -2584,9 +2584,12 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         safe_peer_id = self._sanitize_for_nginx_set(peer_id)
         safe_original_path = self._sanitize_for_nginx_set(original_path.strip("/"))
 
-        # Route to auth-server's cross-gateway-proxy endpoint
+        # Route to auth-server's cross-gateway-proxy endpoint.
+        # Defense-in-depth: sanitize auth_server_url even though it's admin-controlled
+        # — a misconfigured value with nginx metacharacters must not inject directives.
+        safe_auth_server_url = self._sanitize_for_nginx_set(settings.auth_server_url)
         cross_gw_target = (
-            f"{settings.auth_server_url}/cross-gateway-proxy/{safe_peer_id}/{safe_original_path}/"
+            f"{safe_auth_server_url}/cross-gateway-proxy/{safe_peer_id}/{safe_original_path}/"
         )
 
         return f"""
@@ -2597,6 +2600,14 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         # Rate limiting at the edge
         limit_req zone=mcp_gateway_edge burst=100 nodelay;
         limit_conn mcp_gateway_conn 100;
+
+        # Set cross-gateway variables (read by /validate's proxy_set_header).
+        # SECURITY: These override the map defaults ("") for this location only,
+        # so /validate sees non-empty values exclusively when the request arrived
+        # through a legitimate cross-gateway nginx route — not from a client
+        # injecting X-Cross-Gateway-* headers directly.
+        set $cross_gw_peer "{safe_peer_id}";
+        set $cross_gw_target "{safe_original_path}";
 
         # Authenticate request
         auth_request /validate;
@@ -2616,10 +2627,6 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
 
         # Pass the internal token (cross-gateway audience)
         proxy_set_header X-Internal-Token $auth_internal_token;
-
-        # Cross-gateway routing metadata (for /validate to mint the right token)
-        proxy_set_header X-Cross-Gateway-Peer "{safe_peer_id}";
-        proxy_set_header X-Cross-Gateway-Target "{safe_original_path}";
 
         # Timeout: cross-gateway calls are bounded by the proxy endpoint
         proxy_connect_timeout 10s;

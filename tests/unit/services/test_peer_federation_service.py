@@ -261,7 +261,7 @@ class TestPeerFederationServiceCRUD:
                 enabled=True,
                 sync_mode="all",
                 sync_interval_minutes=60,
-                federation_token="secret-token-abc123",
+                federation_token="test-federation-token-strong-value-abcdef123456",
             )
 
             # Mock repository to return peer with token before update
@@ -305,7 +305,7 @@ class TestPeerFederationServiceCRUD:
                 enabled=True,
                 sync_mode="all",
                 sync_interval_minutes=60,
-                federation_token="old-token",
+                federation_token="old-federation-token-strong-value-abcdef123456",
             )
 
             mock_repository.get_peer.return_value = peer_config
@@ -593,7 +593,7 @@ class TestPeerEndpointSsrfGuard:
             peer_id="evil-peer",
             name="Evil Peer",
             endpoint="http://169.254.169.254",
-            federation_token="super-secret-token",
+            federation_token="super-secret-federation-token-strong-value-xyz",
         )
 
     @pytest.mark.asyncio
@@ -616,7 +616,7 @@ class TestPeerEndpointSsrfGuard:
             peer_id="internal-peer",
             name="Internal Peer",
             endpoint="http://10.0.0.5:8080",
-            federation_token="super-secret-token",
+            federation_token="super-secret-federation-token-strong-value-xyz",
         )
         with patch(
             "registry.services.peer_federation_service.get_peer_federation_repository",
@@ -679,7 +679,7 @@ class TestPeerEndpointSsrfGuard:
             name="Stored Evil",
             endpoint="http://169.254.169.254",
             enabled=True,
-            federation_token="super-secret-token",
+            federation_token="super-secret-federation-token-strong-value-xyz",
         )
         with (
             patch(
@@ -742,7 +742,7 @@ class TestPeerEndpointSsrfGuard:
             peer_id="allowlist-abuse",
             name="Allowlist Abuse",
             endpoint="https://github.com",
-            federation_token="super-secret-token",
+            federation_token="super-secret-federation-token-strong-value-xyz",
         )
         private_addr_info = [(2, 1, 6, "", ("10.0.0.7", 443))]
         with (
