@@ -704,6 +704,22 @@ ard_trust_mismatch_total = _meter.create_counter(
 )
 
 
+# Cross-gateway proxy (registry/core/metrics.py)
+_cross_gateway_requests_counter = _meter.create_counter(
+    name="cross_gateway_requests_total",
+    description="Total cross-gateway proxy requests by peer_id and status",
+    unit="1",
+)
+cross_gateway_requests_total = _CounterAdapter(_cross_gateway_requests_counter)
+
+_cross_gateway_errors_counter = _meter.create_counter(
+    name="cross_gateway_errors_total",
+    description="Total cross-gateway proxy errors by peer_id and error_type",
+    unit="1",
+)
+cross_gateway_errors_total = _CounterAdapter(_cross_gateway_errors_counter)
+
+
 # =============================================================================
 # Public helpers
 # =============================================================================
