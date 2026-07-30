@@ -3352,9 +3352,29 @@ async def validate_request(request: Request):
 
         # Federation static token auth: scoped access to federation/peer endpoints only
         # Check this BEFORE the full admin static token
+        # When FEDERATION_EXECUTE_SCOPE_ENABLED=true, also accept the federation
+        # token on ANY path (not just /api/federation/) so cross-gateway peers
+        # can invoke MCP resources through this gateway. On non-federation paths,
+        # only attempt the check if a Bearer token is present (don't reject users
+        # who authenticate via other means).
+        #
+        # Security: on non-federation paths, the token is ONLY accepted when the
+        # X-Cross-Gateway-Peer header is present — nginx sets this exclusively on
+        # cross-gateway location blocks. This prevents the federation token from
+        # being used to access arbitrary MCP servers directly; it can only
+        # authenticate requests that arrived through a cross-gateway nginx route.
+        _federation_execute_enabled = (
+            os.environ.get("FEDERATION_EXECUTE_SCOPE_ENABLED", "false").lower() == "true"
+        )
+        _is_federation_path = _is_federation_api_request(original_url)
+        _has_bearer = bool(authorization and authorization.startswith("Bearer "))
+        _has_cross_gw_header = bool(request.headers.get("X-Cross-Gateway-Peer"))
         if (
             FEDERATION_STATIC_TOKEN_AUTH_ENABLED
-            and _is_federation_api_request(original_url)
+            and (
+                _is_federation_path
+                or (_federation_execute_enabled and _has_bearer and _has_cross_gw_header)
+            )
             and not has_session_cookie
         ):
             if not authorization:
@@ -3391,9 +3411,16 @@ async def validate_request(request: Request):
                 # privileged operation and must be driven by a real admin
                 # credential, not this static token, so "federation/peers" is
                 # deliberately NOT granted here.
+                #
+                # When FEDERATION_EXECUTE_SCOPE_ENABLED=true, also grant
+                # "federation/execute" so authenticated peers can invoke resources
+                # through cross-gateway routing (not just sync metadata). This is
+                # opt-in because it expands the blast radius of a leaked token.
                 federation_scopes = [
                     "federation/read",
                 ]
+                if os.environ.get("FEDERATION_EXECUTE_SCOPE_ENABLED", "false").lower() == "true":
+                    federation_scopes.append("federation/execute")
                 response_data: dict[str, Any] = {
                     "valid": True,
                     "username": "federation-peer",
