@@ -252,6 +252,25 @@ class PeerRegistryConfig(BaseModel):
         description="Expected token issuer URL (for cross-tenant validation)",
     )
 
+    # Cross-gateway runtime routing
+    gateway_endpoint: str | None = Field(
+        default=None,
+        description="Peer's gateway URL for runtime cross-gateway calls. "
+        "Must be HTTPS. When set together with gateway_enabled=True, "
+        "federated resources from this peer can be invoked through our gateway.",
+    )
+    gateway_enabled: bool = Field(
+        default=False,
+        description="Enable runtime cross-gateway routing for this peer's resources. "
+        "Requires gateway_endpoint to be set. Disabled by default.",
+    )
+    peer_tls_ca_cert: str | None = Field(
+        default=None,
+        description="PEM-encoded CA certificate to trust for TLS connections "
+        "to this peer's gateway. If None, uses system trust store (Web PKI). "
+        "Write-only: never included in API responses.",
+    )
+
     # Metadata (set by service, not user input)
     created_at: datetime | None = Field(
         default=None,
@@ -296,6 +315,83 @@ class PeerRegistryConfig(BaseModel):
     ) -> str:
         """Validate endpoint URL format."""
         return _validate_endpoint_url(v)
+
+    @field_validator("gateway_endpoint")
+    @classmethod
+    def _validate_gateway_endpoint_field(
+        cls,
+        v: str | None,
+    ) -> str | None:
+        """Validate gateway_endpoint: HTTPS required, SSRF-safe, no private IPs.
+
+        Security: fail closed on any validation failure. The gateway_endpoint
+        is a target for outbound calls carrying credentials — it MUST be
+        SSRF-safe and HTTPS-only to prevent credential exfiltration to
+        private/metadata addresses over cleartext.
+        """
+        if v is None:
+            return None
+
+        v = v.strip().rstrip("/")
+        if not v:
+            return None
+
+        from urllib.parse import urlparse
+
+        try:
+            parsed = urlparse(v)
+        except Exception as e:
+            raise ValueError(f"gateway_endpoint is not a valid URL: {e}")
+
+        # HTTPS required — credentials will be sent to this endpoint
+        if parsed.scheme != "https":
+            raise ValueError(
+                "gateway_endpoint must use HTTPS (credentials are sent to this endpoint)"
+            )
+
+        if not parsed.hostname:
+            raise ValueError("gateway_endpoint must include a valid hostname")
+
+        # Reject userinfo in URL (credentials in URL are a security anti-pattern)
+        if parsed.username or parsed.password:
+            raise ValueError(
+                "gateway_endpoint must not contain credentials in the URL"
+            )
+
+        # SSRF guard: reject private, loopback, link-local, metadata IPs.
+        # Use the federation profile (strictest: empty allowlist, no private bypass).
+        # resolve=False at registration time (the pinned transport at fetch time
+        # is the authoritative rebinding defense).
+        try:
+            from ..utils.url_guard import FEDERATION_PROFILE, validate_url
+
+            validate_url(
+                v,
+                profile=FEDERATION_PROFILE,
+                require_https=True,
+                resolve=False,
+            )
+        except Exception as e:
+            raise ValueError(
+                f"gateway_endpoint failed security validation: {e}"
+            )
+
+        return v
+
+    @model_validator(mode="after")
+    def _validate_gateway_config(
+        self,
+    ) -> "PeerRegistryConfig":
+        """Validate cross-gateway routing configuration.
+
+        Security: fail closed — gateway_enabled without a valid gateway_endpoint
+        is rejected, not silently ignored.
+        """
+        if self.gateway_enabled and not self.gateway_endpoint:
+            raise ValueError(
+                "gateway_enabled=True requires gateway_endpoint to be set"
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_sync_mode_config(
@@ -350,6 +446,14 @@ class PeerRegistryConfigResponse(BaseModel):
     )
     expected_client_id: str | None = None
     expected_issuer: str | None = None
+    # Cross-gateway routing (non-sensitive fields only)
+    gateway_endpoint: str | None = None
+    gateway_enabled: bool = False
+    has_peer_tls_ca_cert: bool = Field(
+        default=False,
+        description="Whether a custom TLS CA cert is configured for this peer's "
+        "gateway (the cert value itself is never returned).",
+    )
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -383,6 +487,9 @@ class PeerRegistryConfigResponse(BaseModel):
             has_federation_token=config.federation_token is not None,
             expected_client_id=config.expected_client_id,
             expected_issuer=config.expected_issuer,
+            gateway_endpoint=config.gateway_endpoint,
+            gateway_enabled=config.gateway_enabled,
+            has_peer_tls_ca_cert=config.peer_tls_ca_cert is not None,
             created_at=config.created_at,
             updated_at=config.updated_at,
         )
