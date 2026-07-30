@@ -40,6 +40,12 @@ MCP_REGISTRY_UI_TOKEN_USE: str = "mcp-registry-ui"
 # has no tool-list filtering) or the registry API, or vice-versa.
 GENERIC_PROXY_AUDIENCE: str = "generic-proxy"
 GENERIC_PROXY_TOKEN_USE: str = "generic-proxy"
+# Audience for the cross-gateway proxy hop. Distinct from all other audiences so a
+# cross-gateway token cannot be replayed against /mcp-proxy, /api/, or internal
+# service-to-service paths. Carries peer_id + target_path + caller identity for
+# the outbound egress call to a federated peer gateway.
+CROSS_GATEWAY_AUDIENCE: str = "cross-gateway"
+CROSS_GATEWAY_TOKEN_USE: str = "cross-gateway"
 
 # TTL is clamped to this floor so a misconfigured TTL of 0/negative cannot
 # combine with the leeway into a confusing always-valid window.
@@ -301,6 +307,48 @@ def mint_registry_ui_token(
     )
 
 
+# --------------------------------------------------------------------------- #
+# cross-gateway wrapper (pin audience; carry peer routing claims)
+# --------------------------------------------------------------------------- #
+
+
+def mint_cross_gateway_token(
+    subject: str,
+    scopes: list[str],
+    peer_id: str,
+    target_path: str,
+    auth_method: str = "",
+) -> str:
+    """Mint the per-request cross-gateway proxy token in /validate's 200 path.
+
+    Carries the authenticated caller identity + the target peer/path so the
+    cross-gateway-proxy endpoint can verify the routing is authorized and
+    resolve the appropriate egress credential.
+
+    Security:
+    - Distinct audience prevents replay against /mcp-proxy or /api/ paths.
+    - peer_id and target_path are bound at mint time (from nginx headers set
+      by the generated route) — the proxy endpoint rejects mismatches.
+    - Short TTL (default 30s) limits replay window.
+    - Empty peer_id or target_path is rejected (fail closed).
+    """
+    if not peer_id:
+        raise ValueError("Cannot mint cross-gateway token with empty peer_id")
+    if not target_path:
+        raise ValueError("Cannot mint cross-gateway token with empty target_path")
+    return _mint_internal_token(
+        audience=CROSS_GATEWAY_AUDIENCE,
+        subject=subject,
+        scopes=scopes,
+        extra_claims={
+            "peer_id": peer_id,
+            "target_path": target_path,
+            "auth_method": auth_method or "",
+            "token_use": CROSS_GATEWAY_TOKEN_USE,
+        },
+    )
+
+
 async def verify_mcp_proxy_token(request: Request) -> None:
     """FastAPI dependency on mcp_proxy.
 
@@ -445,3 +493,65 @@ async def verify_generic_proxy_token(request: Request) -> None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Entity path claim/path mismatch")
 
     request.state.generic_proxy_claims = claims
+
+
+async def verify_cross_gateway_token(request: Request) -> None:
+    """FastAPI dependency for the cross-gateway proxy endpoint.
+
+    Fail-closed: a request to /cross-gateway-proxy must carry a valid
+    /validate-minted ``X-Internal-Token`` with audience ``cross-gateway``.
+    On success the verified claims are stashed on
+    ``request.state.cross_gateway_claims``. Any failure raises 401.
+
+    Security checks:
+    - Token must be present and valid (signature, expiry, issuer, audience)
+    - token_use must be "cross-gateway" (prevents replay from other audiences)
+    - peer_id must be non-empty (bound at mint time from nginx route)
+    - target_path must be non-empty (bound at mint time from nginx route)
+    """
+    try:
+        _get_secret_key()
+    except ValueError:
+        logger.error("SECRET_KEY not set, cannot verify cross-gateway token")
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server configuration error",
+        )
+
+    token = request.headers.get("X-Internal-Token")
+    if not token:
+        logger.warning("cross_gateway: missing X-Internal-Token (rejecting)")
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED, detail="Missing internal cross-gateway token"
+        )
+
+    try:
+        claims = _decode_internal_token(token, audience=CROSS_GATEWAY_AUDIENCE)
+    except pyjwt.ExpiredSignatureError:
+        logger.warning("cross_gateway: expired internal token")
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED, detail="Internal cross-gateway token expired"
+        )
+    except pyjwt.InvalidTokenError as exc:
+        logger.warning(f"cross_gateway: invalid internal token: {exc}")
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED, detail="Invalid internal cross-gateway token"
+        )
+
+    if claims.get("token_use") != CROSS_GATEWAY_TOKEN_USE:
+        logger.warning("cross_gateway: wrong token_use in internal token")
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED, detail="Invalid internal cross-gateway token"
+        )
+    if not claims.get("peer_id"):
+        logger.warning("cross_gateway: internal token missing peer_id binding")
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED, detail="Cross-gateway token missing peer binding"
+        )
+    if not claims.get("target_path"):
+        logger.warning("cross_gateway: internal token missing target_path binding")
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED, detail="Cross-gateway token missing target binding"
+        )
+
+    request.state.cross_gateway_claims = claims
