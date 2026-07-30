@@ -1090,6 +1090,22 @@ class NginxConfigService:
                     if server_info.get("deployment") == DeploymentType.LOCAL:
                         logger.debug(f"Skipping local server {path} from nginx config")
                         continue
+
+                    # Cross-gateway federated resources route through the
+                    # cross-gateway-proxy endpoint on auth-server, NOT directly
+                    # to the remote server URL.
+                    sync_metadata = server_info.get("sync_metadata") or {}
+                    if sync_metadata.get("is_federated") and sync_metadata.get("gateway_routable"):
+                        cross_gw_block = self._generate_cross_gateway_location_block(
+                            path, server_info, sync_metadata
+                        )
+                        if cross_gw_block:
+                            location_blocks.append(cross_gw_block)
+                            logger.debug(
+                                f"Added cross-gateway location block for federated service: {path}"
+                            )
+                        continue
+
                     proxy_pass_url = server_info.get("proxy_pass_url")
                     if proxy_pass_url:
                         # Check if server is healthy (including auth-expired which is still reachable)
@@ -2522,6 +2538,100 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         proxy_buffering off;
         proxy_set_header Accept $http_accept;
 
+        error_page 401 = @auth_error;
+        error_page 403 = @forbidden_error;
+    }}"""
+
+    def _generate_cross_gateway_location_block(
+        self,
+        path: str,
+        server_info: dict[str, Any],
+        sync_metadata: dict[str, Any],
+    ) -> str | None:
+        """Generate an nginx location block that routes to the cross-gateway proxy.
+
+        Instead of proxying directly to the remote server URL, this routes the
+        request through auth-server's /cross-gateway-proxy/{peer_id}/{original_path}
+        endpoint, which handles peer credential resolution and the outbound call.
+
+        Security:
+        - The /validate auth_request fires first (authenticates the agent/user)
+        - /validate mints a cross-gateway internal token (audience='cross-gateway')
+        - The proxy_pass target is the local auth-server (not the remote URL)
+        - All path components are sanitized against nginx directive injection
+        """
+        # Validate required metadata
+        peer_id = sync_metadata.get("source_peer_id", "")
+        original_path = sync_metadata.get("original_path", "")
+        if not peer_id or not original_path:
+            logger.warning(
+                "Skipping cross-gateway location block for %s: "
+                "missing source_peer_id or original_path in sync_metadata",
+                path,
+            )
+            return None
+
+        # Empty/slashes-only path guard (same as _generate_transport_location_blocks)
+        if not path or not path.strip("/"):
+            logger.error(
+                "Skipping cross-gateway location block for server with empty path %r",
+                path,
+            )
+            return None
+
+        # Sanitize all interpolated values against nginx directive injection
+        safe_path = self._sanitize_for_nginx_set(path)
+        safe_peer_id = self._sanitize_for_nginx_set(peer_id)
+        safe_original_path = self._sanitize_for_nginx_set(original_path.strip("/"))
+
+        # Route to auth-server's cross-gateway-proxy endpoint
+        cross_gw_target = (
+            f"{settings.auth_server_url}/cross-gateway-proxy/{safe_peer_id}/{safe_original_path}/"
+        )
+
+        return f"""
+    location {{{{ROOT_PATH}}}}{safe_path}/ {{
+        # Cross-gateway federated resource (from peer: {safe_peer_id})
+        # Routes through auth-server cross-gateway-proxy, NOT directly to remote.
+
+        # Rate limiting at the edge
+        limit_req zone=mcp_gateway_edge burst=100 nodelay;
+        limit_conn mcp_gateway_conn 100;
+
+        # Authenticate request
+        auth_request /validate;
+
+        # Capture auth server response headers
+        auth_request_set $auth_user $upstream_http_x_user;
+        auth_request_set $auth_scopes $upstream_http_x_scopes;
+        auth_request_set $auth_internal_token $upstream_http_x_internal_token;
+
+        # Proxy to auth-server cross-gateway-proxy endpoint
+        proxy_pass {cross_gw_target};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Pass the internal token (cross-gateway audience)
+        proxy_set_header X-Internal-Token $auth_internal_token;
+
+        # Cross-gateway routing metadata (for /validate to mint the right token)
+        proxy_set_header X-Cross-Gateway-Peer "{safe_peer_id}";
+        proxy_set_header X-Cross-Gateway-Target "{safe_original_path}";
+
+        # Timeout: cross-gateway calls are bounded by the proxy endpoint
+        proxy_connect_timeout 10s;
+        proxy_send_timeout 35s;
+        proxy_read_timeout 35s;
+
+        # Do NOT forward caller's auth headers to the cross-gateway proxy
+        # (the internal token is the sole identity assertion)
+        proxy_set_header Authorization "";
+        proxy_set_header Cookie "";
+
+        # Handle auth errors
         error_page 401 = @auth_error;
         error_page 403 = @forbidden_error;
     }}"""
