@@ -683,7 +683,7 @@ class PeerFederationService:
             )
 
             # Store fetched items
-            servers_stored = await self._store_synced_servers(peer_id, servers)
+            servers_stored = await self._store_synced_servers(peer_id, servers, peer_config)
             agents_stored = await self._store_synced_agents(peer_id, agents)
             scans_stored = await self._store_synced_security_scans(peer_id, security_scans)
 
@@ -1426,6 +1426,7 @@ class PeerFederationService:
         self,
         peer_id: str,
         servers: list[dict[str, Any]],
+        peer_config: PeerRegistryConfig | None = None,
     ) -> int:
         """
         Store servers fetched from a peer.
@@ -1433,6 +1434,7 @@ class PeerFederationService:
         Args:
             peer_id: Source peer identifier
             servers: List of server data dictionaries
+            peer_config: Peer configuration (used to determine gateway routability)
 
         Returns:
             Number of servers stored/updated
@@ -1463,6 +1465,13 @@ class PeerFederationService:
                     "synced_at": datetime.now(UTC).isoformat(),
                     "is_federated": True,
                     "original_path": original_path,
+                    # Cross-gateway routing: mark routable only when peer has
+                    # both gateway_enabled AND a validated gateway_endpoint.
+                    "gateway_routable": bool(
+                        peer_config
+                        and getattr(peer_config, "gateway_enabled", False)
+                        and getattr(peer_config, "gateway_endpoint", None)
+                    ),
                 }
 
                 # Create a copy to avoid modifying original, and STRIP any
