@@ -3458,13 +3458,35 @@ async def validate_request(request: Request):
                 ]
                 if os.environ.get("FEDERATION_EXECUTE_SCOPE_ENABLED", "false").lower() == "true":
                     federation_scopes.append("federation/execute")
+
+                # Resolve peer_groups for the calling peer (if identifiable).
+                # On cross-gateway routes, X-Cross-Gateway-Peer identifies the peer;
+                # on sync routes, the peer is anonymous (empty groups = public only).
+                federation_groups: list[str] = []
+                cross_gw_peer_id = request.headers.get("X-Cross-Gateway-Peer", "")
+                if cross_gw_peer_id:
+                    try:
+                        from registry.services.peer_federation_service import (
+                            get_peer_federation_service,
+                        )
+
+                        fed_svc = get_peer_federation_service()
+                        if fed_svc:
+                            peer_cfg = fed_svc.registered_peers.get(cross_gw_peer_id)
+                            if peer_cfg:
+                                federation_groups = list(
+                                    getattr(peer_cfg, "peer_groups", None) or []
+                                )
+                    except Exception:
+                        pass  # Fail closed: no groups = no group-restricted access
+
                 response_data: dict[str, Any] = {
                     "valid": True,
                     "username": "federation-peer",
                     "client_id": "federation-static",
                     "scopes": federation_scopes,
                     "method": "federation-static",
-                    "groups": [],
+                    "groups": federation_groups,
                     "server_name": None,
                     "tool_name": None,
                 }
@@ -3475,7 +3497,9 @@ async def validate_request(request: Request):
                 response.headers["X-Client-Id"] = "federation-static"
                 response.headers["X-Scopes"] = " ".join(federation_scopes)
                 response.headers["X-Auth-Method"] = "federation-static"
+                response.headers["X-Groups"] = " ".join(federation_groups)
                 response.headers["X-Server-Name"] = ""
+                response.headers["X-Tool-Name"] = ""
                 response.headers["X-Tool-Name"] = ""
 
                 _attach_mcp_proxy_token(

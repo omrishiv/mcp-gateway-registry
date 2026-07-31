@@ -271,6 +271,15 @@ class PeerRegistryConfig(BaseModel):
         "Write-only: never included in API responses.",
     )
 
+    # Groups assigned to this peer for access control (runtime authorization)
+    peer_groups: list[str] = Field(
+        default_factory=list,
+        description="Groups assigned to this federation peer for runtime access "
+        "control. When this peer authenticates for cross-gateway calls, these "
+        "groups are checked against the target resource's allowed_groups. "
+        "Empty = peer can only access visibility:public resources.",
+    )
+
     # Metadata (set by service, not user input)
     created_at: datetime | None = Field(
         default=None,
@@ -510,6 +519,7 @@ class PeerRegistryConfigResponse(BaseModel):
         description="Whether a custom TLS CA cert is configured for this peer's "
         "gateway (the cert value itself is never returned).",
     )
+    peer_groups: list[str] = Field(default_factory=list)
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -546,6 +556,7 @@ class PeerRegistryConfigResponse(BaseModel):
             gateway_endpoint=config.gateway_endpoint,
             gateway_enabled=config.gateway_enabled,
             has_peer_tls_ca_cert=config.peer_tls_ca_cert is not None,
+            peer_groups=config.peer_groups,
             created_at=config.created_at,
             updated_at=config.updated_at,
         )
