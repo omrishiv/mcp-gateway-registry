@@ -283,3 +283,40 @@ class TestServerMetaFailClosed:
         with patch("auth_server.server.httpx.AsyncClient", return_value=cm):
             m = await srv._fetch_server_meta("ghost/mcp")
         assert m is None
+
+
+class TestCimdClientIdPassthrough:
+    """#993 (Option Y): the token proxy forwards the client_id verbatim to the
+    IdP -- including a CIMD-URL client_id -- since the upstream IdP is the party
+    that fetches and validates the CIMD document, not the registry."""
+
+    def test_forwards_cimd_client_id_to_idp(self, auth_env_vars):
+        provider = MagicMock()
+        provider.token_url = "https://idp.example.com/token"
+        idp_resp = MagicMock(status_code=200)
+        idp_resp.json.return_value = {"access_token": "AT"}
+        posted: dict = {}
+
+        async def _post(url, content=None, headers=None):
+            posted["content"] = content
+            return idp_resp
+
+        cm = AsyncMock()
+        cm.__aenter__.return_value.post = _post
+        cimd = "https://client.example/.well-known/mcp-client-metadata"
+        with (
+            patch.object(srv.settings, "mcp_token_proxy_enabled", True),
+            patch.object(srv.settings, "mcp_idp_signed_tokens", False),
+            patch("auth_server.server.get_auth_provider", return_value=provider),
+            patch("registry.utils.url_guard.validate_url"),
+            patch("registry.utils.url_guard.guarded_async_client", return_value=cm),
+        ):
+            client = TestClient(srv.app)
+            r = client.post(
+                "/oauth/token",
+                data={"grant_type": "refresh_token", "refresh_token": "R", "client_id": cimd},
+            )
+        assert r.status_code == 200
+        from urllib.parse import parse_qs
+
+        assert parse_qs(posted["content"])["client_id"] == [cimd]
