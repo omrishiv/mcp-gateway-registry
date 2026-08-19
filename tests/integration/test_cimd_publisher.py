@@ -107,3 +107,25 @@ def test_field_order_is_stable(monkeypatch):
         "token_endpoint_auth_method",
         "scope",
     ]
+
+
+def test_client_id_path_matches_actual_router_mount():
+    """The client_id constant must equal (router mount prefix + the route's own
+    path), so a future prefix change or route rename can't silently break
+    client_id / served-URL parity -- the drift the in-process tests above (which
+    hardcode the prefix) would otherwise miss."""
+    import re
+    from pathlib import Path
+
+    from registry.api.wellknown_routes import router
+    from registry.auth.oauth_metadata import WELLKNOWN_CIMD_PATH
+
+    route_paths = [
+        r.path for r in router.routes if getattr(r, "name", "") == "get_mcp_client_metadata"
+    ]
+    assert route_paths == ["/mcp-client-metadata"]
+
+    main_src = (Path(__file__).resolve().parents[2] / "registry" / "main.py").read_text()
+    m = re.search(r"include_router\(\s*wellknown_router\s*,\s*prefix=\"([^\"]+)\"", main_src)
+    assert m, "wellknown_router mount prefix not found in registry/main.py"
+    assert m.group(1) + route_paths[0] == WELLKNOWN_CIMD_PATH

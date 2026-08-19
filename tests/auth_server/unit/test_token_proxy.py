@@ -320,3 +320,35 @@ class TestCimdClientIdPassthrough:
         from urllib.parse import parse_qs
 
         assert parse_qs(posted["content"])["client_id"] == [cimd]
+
+    def test_client_id_is_never_dereferenced(self, auth_env_vars):
+        """The gateway must never fetch/validate the client_id as a URL -- only
+        the config-derived token_url is guarded -- so an attacker-chosen CIMD URL
+        (even one at a metadata IP) creates no gateway-side SSRF."""
+        provider = MagicMock()
+        provider.token_url = "https://idp.example.com/token"
+        idp_resp = MagicMock(status_code=200)
+        idp_resp.json.return_value = {"access_token": "AT"}
+        cm = AsyncMock()
+        cm.__aenter__.return_value.post = AsyncMock(return_value=idp_resp)
+        validated: list = []
+        cimd = "https://169.254.169.254/.well-known/mcp-client-metadata"
+        with (
+            patch.object(srv.settings, "mcp_token_proxy_enabled", True),
+            patch.object(srv.settings, "mcp_idp_signed_tokens", False),
+            patch("auth_server.server.get_auth_provider", return_value=provider),
+            patch(
+                "registry.utils.url_guard.validate_url",
+                side_effect=lambda url, **kw: validated.append(url),
+            ),
+            patch("registry.utils.url_guard.guarded_async_client", return_value=cm),
+        ):
+            client = TestClient(srv.app)
+            r = client.post(
+                "/oauth/token",
+                data={"grant_type": "authorization_code", "code": "x", "client_id": cimd},
+            )
+        assert r.status_code == 200
+        # Only the config token_url is ever validated/guarded; client_id is not.
+        assert validated == ["https://idp.example.com/token"]
+        assert cimd not in validated
