@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { MagnifyingGlassIcon, PlusIcon, XMarkIcon, ArrowPathIcon, CheckCircleIcon, ExclamationCircleIcon } from '@heroicons/react/24/outline';
 import { useServerStats } from '../hooks/useServerStats';
@@ -293,6 +293,13 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     auth_scheme: 'none',
     auth_credential: '',
     auth_header_name: 'X-API-Key',
+    // Backend OAuth (client_credentials) config (auth_scheme === 'oauth').
+    oauth_token_url: '',
+    oauth_client_id: '',
+    oauth_client_secret: '',  // write-only; blank on edit keeps the stored one
+    oauth_scopes: '',  // comma/space separated
+    oauth_token_auth_style: 'post_body',
+    oauth_resource: '',
     status: 'active' as 'active' | 'draft' | 'deprecated' | 'beta',
     // Local-server fields
     deployment: 'remote' as 'remote' | 'local',
@@ -316,7 +323,21 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     egress_custom_token_auth_style: '',  // '' = backend default (post_body)
     egress_custom_resource: '',  // RFC 8707 resource indicator (optional)
     egress_target_audience: '',
+    // Discovery Identity (OAuth 2.1) — self-contained under Backend Auth.
+    oauth_discovery_enabled: false,
+    oauth_discovery_provider: '',
+    oauth_discovery_client_id: '',
+    oauth_discovery_client_secret: '',  // write-only; blank on edit keeps the stored one
+    oauth_discovery_scopes: '',  // comma/space separated
+    oauth_discovery_custom_authorize_url: '',
+    oauth_discovery_custom_token_url: '',
+    oauth_discovery_custom_scope_separator: '',
+    oauth_discovery_custom_token_auth_style: '',
+    oauth_discovery_custom_resource: '',
   });
+  // Tracks whether the server had discovery identity enabled when the edit modal
+  // opened, so save only DELETEs /oauth-discovery when it was previously enabled.
+  const discoveryWasEnabledRef = useRef(false);
   const [egressEnabled, setEgressEnabled] = useState(false);
   // Per-server egress connect state (card icon + connect-modal callout). Keyed by
   // server path; empty when the feature is off or the caller is not per-user.
@@ -1278,6 +1299,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
       const localRuntimeRaw = serverDetails.local_runtime || server.local_runtime;
 
       setEditingServer(server);
+      discoveryWasEnabledRef.current = serverDetails.oauth_discovery?.enabled === true;
       setEditForm({
         name: serverDetails.server_name || server.name,
         path: server.path,
@@ -1291,6 +1313,12 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         auth_scheme: serverDetails.auth_scheme || 'none',
         auth_credential: '',
         auth_header_name: serverDetails.auth_header_name || 'X-API-Key',
+        oauth_token_url: serverDetails.backend_oauth?.token_url || '',
+        oauth_client_id: serverDetails.backend_oauth?.client_id || '',
+        oauth_client_secret: '',  // never round-trip the secret
+        oauth_scopes: (serverDetails.backend_oauth?.scopes || []).join(', '),
+        oauth_token_auth_style: serverDetails.backend_oauth?.token_auth_style || 'post_body',
+        oauth_resource: serverDetails.backend_oauth?.resource || '',
         status: serverDetails.status || 'active',
         deployment,
         local_runtime: buildLocalRuntimeForm(localRuntimeRaw),
@@ -1305,11 +1333,22 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         egress_custom_token_auth_style: serverDetails.egress_oauth?.custom_token_auth_style || '',
         egress_custom_resource: serverDetails.egress_oauth?.custom_resource || '',
         egress_target_audience: serverDetails.egress_oauth?.target_audience || '',
+        oauth_discovery_enabled: serverDetails.oauth_discovery?.enabled === true,
+        oauth_discovery_provider: serverDetails.oauth_discovery?.oauth?.provider || '',
+        oauth_discovery_client_id: serverDetails.oauth_discovery?.oauth?.client_id || '',
+        oauth_discovery_client_secret: '',  // never round-trip the secret
+        oauth_discovery_scopes: (serverDetails.oauth_discovery?.oauth?.scopes || []).join(', '),
+        oauth_discovery_custom_authorize_url: serverDetails.oauth_discovery?.oauth?.custom_authorize_url || '',
+        oauth_discovery_custom_token_url: serverDetails.oauth_discovery?.oauth?.custom_token_url || '',
+        oauth_discovery_custom_scope_separator: serverDetails.oauth_discovery?.oauth?.custom_scope_separator || '',
+        oauth_discovery_custom_token_auth_style: serverDetails.oauth_discovery?.oauth?.custom_token_auth_style || '',
+        oauth_discovery_custom_resource: serverDetails.oauth_discovery?.oauth?.custom_resource || '',
       });
     } catch (error) {
       console.error('Failed to fetch server details:', error);
       // Fallback to basic server data
       const deployment = (server.deployment || 'remote') as 'remote' | 'local';
+      discoveryWasEnabledRef.current = false;
       setEditingServer(server);
       setEditForm({
         name: server.name,
@@ -1324,6 +1363,12 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         auth_scheme: server.auth_scheme || 'none',
         auth_credential: '',
         auth_header_name: server.auth_header_name || 'X-API-Key',
+        oauth_token_url: '',
+        oauth_client_id: '',
+        oauth_client_secret: '',
+        oauth_scopes: '',
+        oauth_token_auth_style: 'post_body',
+        oauth_resource: '',
         status: (server as any).status || 'active',
         deployment,
         local_runtime: buildLocalRuntimeForm(server.local_runtime),
@@ -1338,6 +1383,16 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         egress_custom_token_auth_style: '',
         egress_custom_resource: '',
         egress_target_audience: '',
+        oauth_discovery_enabled: false,
+        oauth_discovery_provider: '',
+        oauth_discovery_client_id: '',
+        oauth_discovery_client_secret: '',
+        oauth_discovery_scopes: '',
+        oauth_discovery_custom_authorize_url: '',
+        oauth_discovery_custom_token_url: '',
+        oauth_discovery_custom_scope_separator: '',
+        oauth_discovery_custom_token_auth_style: '',
+        oauth_discovery_custom_resource: '',
       });
     }
   }, []);
@@ -1511,6 +1566,41 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         },
       });
 
+      // Backend OAuth (client_credentials) config — separate admin endpoint,
+      // mirrors the egress pattern. Only when the backend auth scheme is oauth.
+      if (!isLocal && editForm.auth_scheme === 'oauth') {
+        try {
+          const csrf = await axios.get('/api/auth/csrf-token');
+          const csrfHeaders: Record<string, string> = {};
+          if (csrf.data?.csrf_token) csrfHeaders['X-CSRF-Token'] = csrf.data.csrf_token;
+          const oauthScopes = editForm.oauth_scopes
+            .split(/[,\s]+/)
+            .map(s => s.trim())
+            .filter(Boolean);
+          await axios.put(
+            `/api/servers${editingServer.path}/oauth-config`,
+            {
+              token_url: editForm.oauth_token_url.trim(),
+              client_id: editForm.oauth_client_id.trim(),
+              // Blank secret on edit keeps the stored one (backend semantics).
+              client_secret: editForm.oauth_client_secret || undefined,
+              scopes: oauthScopes,
+              token_auth_style: editForm.oauth_token_auth_style || 'post_body',
+              resource: editForm.oauth_resource.trim() || undefined,
+            },
+            { headers: csrfHeaders }
+          );
+        } catch (oauthErr: unknown) {
+          let detail: string | undefined;
+          if (axios.isAxiosError(oauthErr)) {
+            detail = oauthErr.response?.data?.error || oauthErr.response?.data?.detail || oauthErr.message;
+          } else if (oauthErr instanceof Error) {
+            detail = oauthErr.message;
+          }
+          showToast(`Server saved, but OAuth config failed: ${detail || 'unknown error'}`, 'error');
+        }
+      }
+
       // Per-user egress credential vault (separate admin endpoint; the server
       // must exist first, which it does on edit). Only when the feature is on.
       if (egressEnabled) {
@@ -1572,6 +1662,54 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
           // Surface but don't lose the successful server edit.
           const d = egressErr.response?.data?.detail;
           showToast(`Server saved, but egress config failed: ${d || egressErr.message}`, 'error');
+        }
+      }
+
+      // Discovery Identity (OAuth 2.1). Self-contained under Backend Auth and
+      // orthogonal to auth_scheme/egress: the registry borrows THIS admin's
+      // connected account for its own headless health checks / tool discovery
+      // against an OAuth 2.1 server. Decoupled from the egress feature flag.
+      if (!isLocal) {
+        try {
+          const csrf = await axios.get('/api/auth/csrf-token');
+          const csrfHeaders: Record<string, string> = {};
+          if (csrf.data?.csrf_token) csrfHeaders['X-CSRF-Token'] = csrf.data.csrf_token;
+          if (editForm.oauth_discovery_enabled) {
+            const discoveryScopes = editForm.oauth_discovery_scopes
+              .split(/[,\s]+/)
+              .map(s => s.trim())
+              .filter(Boolean);
+            await axios.put(
+              `/api/servers${editingServer.path}/oauth-discovery`,
+              {
+                provider: editForm.oauth_discovery_provider.trim(),
+                client_id: editForm.oauth_discovery_client_id.trim(),
+                // Blank secret on edit keeps the stored one (backend semantics).
+                client_secret: editForm.oauth_discovery_client_secret || undefined,
+                scopes: discoveryScopes,
+                custom_authorize_url: editForm.oauth_discovery_custom_authorize_url || undefined,
+                custom_token_url: editForm.oauth_discovery_custom_token_url || undefined,
+                custom_scope_separator: editForm.oauth_discovery_custom_scope_separator || undefined,
+                custom_token_auth_style: editForm.oauth_discovery_custom_token_auth_style || undefined,
+                custom_resource: editForm.oauth_discovery_custom_resource || undefined,
+              },
+              { headers: csrfHeaders }
+            );
+          } else if (discoveryWasEnabledRef.current) {
+            await axios.delete(
+              `/api/servers${editingServer.path}/oauth-discovery`,
+              { headers: csrfHeaders }
+            );
+          }
+        } catch (discoveryErr: unknown) {
+          // Surface but don't lose the successful server edit.
+          let detail: string | undefined;
+          if (axios.isAxiosError(discoveryErr)) {
+            detail = discoveryErr.response?.data?.detail || discoveryErr.response?.data?.error || discoveryErr.message;
+          } else if (discoveryErr instanceof Error) {
+            detail = discoveryErr.message;
+          }
+          showToast(`Server saved, but discovery identity config failed: ${detail || 'unknown error'}`, 'error');
         }
       }
 

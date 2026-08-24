@@ -150,3 +150,8 @@ class OAuthState(BaseModel):
     pkce_verifier: str | None = None
     nonce: str
     issued_at: str
+    # Consent purpose: "egress" (per-user egress vault, default) or "discovery"
+    # (backend-auth headless discovery borrow). The callback branches on this to
+    # resolve the right server config and skip the egress feature gate for
+    # discovery. Default-valued so pre-existing state blobs decode as "egress".
+    purpose: str = "egress"

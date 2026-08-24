@@ -262,6 +262,7 @@ class EgressAuthService:
         session_id: str,
         server_path: str,
         egress_oauth: dict,
+        purpose: str = "egress",
     ) -> str:
         """Build the provider authorize URL with an AEAD-encrypted, single-use state."""
         cfg = resolve_provider(egress_oauth)
@@ -277,6 +278,7 @@ class EgressAuthService:
             pkce_verifier=verifier,
             nonce=secrets.token_urlsafe(16),
             issued_at=datetime.now(UTC).isoformat(),
+            purpose=purpose,
         )
         return oauth_engine.build_authorize_url(
             cfg=cfg,

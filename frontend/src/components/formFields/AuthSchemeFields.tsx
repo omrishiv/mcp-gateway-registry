@@ -2,7 +2,7 @@ import React from 'react';
 import FormField from './FormField';
 import { fieldClass, FIELD_FOCUS } from './formClasses';
 
-export type AuthScheme = 'none' | 'bearer' | 'api_key';
+export type AuthScheme = 'none' | 'bearer' | 'api_key' | 'oauth';
 
 interface AuthSchemeFieldsProps {
   scheme: AuthScheme;
@@ -57,10 +57,11 @@ const AuthSchemeFields: React.FC<AuthSchemeFieldsProps> = ({
             <option value="none">None</option>
             <option value="bearer">Bearer Token</option>
             <option value="api_key">API Key</option>
+            <option value="oauth">OAuth 2.0 (client credentials)</option>
           </select>
         </FormField>
 
-        {scheme !== 'none' && (
+        {(scheme === 'bearer' || scheme === 'api_key') && (
           <FormField
             label={scheme === 'bearer' ? 'Bearer Token' : 'API Key'}
             hint="Leave blank to keep the existing credential unchanged."

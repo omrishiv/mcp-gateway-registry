@@ -201,3 +201,62 @@ class TestConnectRoute:
         )
         assert r.status_code == 302
         assert r.headers["location"].startswith("https://github.com/login/oauth/authorize")
+
+
+@pytest.mark.unit
+class TestConnectDiscovery:
+    """purpose=discovery: the backend-auth headless borrow. Decoupled from the
+    egress feature flag; reads the server's OWN oauth_discovery.oauth; owner or
+    admin only."""
+
+    def _disc_server(self, **over) -> dict:
+        base = {
+            "path": "/tableau",
+            "registered_by": "alice",  # matches USER.username -> owner
+            "oauth_discovery": {
+                "enabled": True,
+                "oauth": {
+                    "provider": "custom",
+                    "client_id": "cid",
+                    "client_secret_encrypted": "enc",
+                    "scopes": ["tableau:content:read"],
+                    "custom_authorize_url": "https://sso.example.com/authorize",
+                    "custom_token_url": "https://sso.example.com/token",
+                },
+            },
+        }
+        base.update(over)
+        return base
+
+    def test_discovery_connect_redirects_to_provider(self, client):
+        c = client(server=self._disc_server())
+        r = c.get(
+            "/oauth2/egress/connect",
+            params={"server": "/tableau", "purpose": "discovery"},
+        )
+        assert r.status_code == 302
+        assert r.headers["location"].startswith("https://github.com/login/oauth/authorize")
+
+    def test_discovery_connect_works_when_feature_disabled(self, client):
+        c = client(server=self._disc_server(), enabled=False)
+        r = c.get(
+            "/oauth2/egress/connect",
+            params={"server": "/tableau", "purpose": "discovery"},
+        )
+        assert r.status_code == 302
+
+    def test_discovery_connect_no_config_400(self, client):
+        c = client(server={"path": "/tableau", "registered_by": "alice"})
+        r = c.get(
+            "/oauth2/egress/connect",
+            params={"server": "/tableau", "purpose": "discovery"},
+        )
+        assert r.status_code == 400
+
+    def test_discovery_connect_non_owner_denied(self, client):
+        c = client(server=self._disc_server(registered_by="someone-else"))
+        r = c.get(
+            "/oauth2/egress/connect",
+            params={"server": "/tableau", "purpose": "discovery"},
+        )
+        assert r.status_code == 403

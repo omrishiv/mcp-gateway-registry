@@ -30,6 +30,14 @@ export interface ServerEditForm {
   auth_scheme: string;
   auth_credential: string;
   auth_header_name: string;
+  // Backend OAuth (client_credentials) config, used when auth_scheme === 'oauth'.
+  // The registry acquires a token from these and injects it on health/tool-list.
+  oauth_token_url: string;
+  oauth_client_id: string;
+  oauth_client_secret: string; // write-only; blank on edit keeps the stored one
+  oauth_scopes: string; // comma/space separated
+  oauth_token_auth_style: string; // 'post_body' | 'basic_header' | 'none'
+  oauth_resource: string; // RFC 8707 resource indicator (optional)
   status: 'active' | 'draft' | 'deprecated' | 'beta';
   deployment: 'remote' | 'local';
   local_runtime: LocalRuntimeFormData;
@@ -48,6 +56,21 @@ export interface ServerEditForm {
   egress_custom_resource: string; // RFC 8707 resource indicator (optional)
   // obo_exchange (same-IdP OBO hop 1) field:
   egress_target_audience: string;
+  // Discovery Identity (OAuth 2.1): borrow a connected admin account for the
+  // registry's OWN headless health checks / tool discovery against an OAuth 2.1
+  // server. Orthogonal to auth_scheme and egress; self-contained
+  // under Backend Authentication. Saved via PUT/DELETE /servers/{path}/oauth-discovery.
+  oauth_discovery_enabled: boolean;
+  oauth_discovery_provider: string; // provider key; 'custom' for OAuth 2.1 servers
+  oauth_discovery_client_id: string;
+  oauth_discovery_client_secret: string; // write-only; blank on edit keeps the stored one
+  oauth_discovery_scopes: string; // comma/space separated
+  oauth_discovery_custom_authorize_url: string;
+  oauth_discovery_custom_token_url: string;
+  oauth_discovery_custom_scope_separator: string;
+  // 'post_body' | 'basic_header' | 'none' — 'none' is a public client (PKCE only)
+  oauth_discovery_custom_token_auth_style: string;
+  oauth_discovery_custom_resource: string; // RFC 8707 resource indicator (optional)
   // pat inject header config (admin). Blank = server defaults (Authorization / Bearer).
 }
 
@@ -220,6 +243,303 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
             />
           )}
 
+          {/* Backend OAuth (client_credentials) config. The registry acquires a
+              token from these and injects it as Authorization: Bearer on its own
+              health checks and tool-list fetches — works in registry-only mode too
+              (no gateway involved). Saved via PUT /servers/{path}/oauth-config. */}
+          {form.deployment === 'remote' && form.auth_scheme === 'oauth' && (
+            <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
+              <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-2">
+                OAuth Client Credentials
+              </h4>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+                The registry authenticates to this server as an OAuth2 client
+                (client_credentials grant) for health checks and tool discovery.
+              </p>
+              <div className="space-y-3">
+                <div>
+                  <label className={LABEL}>Token URL</label>
+                  <input
+                    type="text"
+                    value={form.oauth_token_url}
+                    onChange={(e) =>
+                      setForm((prev) => ({ ...prev, oauth_token_url: e.target.value }))
+                    }
+                    placeholder="https://idp.example/oauth2/token"
+                    className={FIELD}
+                  />
+                </div>
+                <div>
+                  <label className={LABEL}>Client ID</label>
+                  <input
+                    type="text"
+                    value={form.oauth_client_id}
+                    onChange={(e) =>
+                      setForm((prev) => ({ ...prev, oauth_client_id: e.target.value }))
+                    }
+                    className={FIELD}
+                  />
+                </div>
+                <div>
+                  <label className={LABEL}>Token Endpoint Authentication</label>
+                  <select
+                    value={form.oauth_token_auth_style || 'post_body'}
+                    onChange={(e) =>
+                      setForm((prev) => ({ ...prev, oauth_token_auth_style: e.target.value }))
+                    }
+                    className={FIELD}
+                  >
+                    <option value="post_body">Client secret in POST body</option>
+                    <option value="basic_header">Client secret in Basic header</option>
+                    <option value="none">None — public client (no secret)</option>
+                  </select>
+                </div>
+                {form.oauth_token_auth_style !== 'none' && (
+                  <div>
+                    <label className={LABEL}>Client Secret</label>
+                    <input
+                      type="password"
+                      value={form.oauth_client_secret}
+                      onChange={(e) =>
+                        setForm((prev) => ({ ...prev, oauth_client_secret: e.target.value }))
+                      }
+                      placeholder="leave blank to keep current"
+                      autoComplete="new-password"
+                      className={FIELD}
+                    />
+                  </div>
+                )}
+                <div>
+                  <label className={LABEL}>Scopes</label>
+                  <input
+                    type="text"
+                    value={form.oauth_scopes}
+                    onChange={(e) =>
+                      setForm((prev) => ({ ...prev, oauth_scopes: e.target.value }))
+                    }
+                    placeholder="api:read, api:write"
+                    className={FIELD}
+                  />
+                </div>
+                <div>
+                  <label className={LABEL}>Resource (RFC 8707, optional)</label>
+                  <input
+                    type="text"
+                    value={form.oauth_resource}
+                    onChange={(e) =>
+                      setForm((prev) => ({ ...prev, oauth_resource: e.target.value }))
+                    }
+                    placeholder="https://api.example.com"
+                    className={FIELD}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+          {/* Discovery Identity (OAuth 2.1). Orthogonal to auth_scheme and egress:
+              the registry borrows a designated admin's connected account for its
+              OWN headless health checks / tool discovery against an OAuth 2.1
+              server that has no machine grant. Self-contained under
+              Backend Authentication. Saved via PUT/DELETE /servers/{path}/oauth-discovery. */}
+          {form.deployment === 'remote' && (
+            <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
+              <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-2">
+                Discovery Identity (OAuth 2.1)
+              </h4>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+                For OAuth 2.1 servers with no machine grant, the
+                registry borrows a connected admin account for its own health
+                checks and tool discovery.
+              </p>
+              <div className="space-y-3">
+                <label className="flex items-start gap-2 text-xs text-gray-600 dark:text-gray-300">
+                  <input
+                    type="checkbox"
+                    checked={form.oauth_discovery_enabled}
+                    onChange={(e) =>
+                      setForm((prev) => ({ ...prev, oauth_discovery_enabled: e.target.checked }))
+                    }
+                    className="mt-0.5"
+                  />
+                  <span>
+                    <strong>Use a connected account for headless discovery.</strong> The
+                    registry borrows THIS admin&apos;s connected account for its own health
+                    checks and tool discovery against an OAuth 2.1 server. Discovery
+                    reflects that account&apos;s visibility and pauses if the token expires.
+                    Saving designates you; no egress required.
+                  </span>
+                </label>
+                {form.oauth_discovery_enabled && (
+                  <>
+                    <div>
+                      <label className={LABEL}>Provider</label>
+                      <select
+                        value={form.oauth_discovery_provider}
+                        onChange={(e) =>
+                          setForm((prev) => ({ ...prev, oauth_discovery_provider: e.target.value }))
+                        }
+                        className={FIELD}
+                      >
+                        <option value="">Select…</option>
+                        <option value="github">GitHub</option>
+                        <option value="google">Google</option>
+                        <option value="atlassian">Atlassian</option>
+                        <option value="microsoft">Microsoft</option>
+                        <option value="slack">Slack</option>
+                        <option value="custom">Custom (OAuth 2.1)</option>
+                      </select>
+                    </div>
+                    {form.oauth_discovery_provider && (
+                      <>
+                        <div>
+                          <label className={LABEL}>Client ID</label>
+                          <input
+                            type="text"
+                            value={form.oauth_discovery_client_id}
+                            onChange={(e) =>
+                              setForm((prev) => ({ ...prev, oauth_discovery_client_id: e.target.value }))
+                            }
+                            className={FIELD}
+                          />
+                        </div>
+                        {/* A public client (custom provider, token auth 'none') has no
+                            secret by design — hide the field so nothing stale is sent. */}
+                        {!(
+                          form.oauth_discovery_provider === 'custom' &&
+                          form.oauth_discovery_custom_token_auth_style === 'none'
+                        ) && (
+                          <div>
+                            <label className={LABEL}>Client Secret</label>
+                            <input
+                              type="password"
+                              value={form.oauth_discovery_client_secret}
+                              onChange={(e) =>
+                                setForm((prev) => ({ ...prev, oauth_discovery_client_secret: e.target.value }))
+                              }
+                              placeholder="leave blank to keep current"
+                              autoComplete="new-password"
+                              className={FIELD}
+                            />
+                          </div>
+                        )}
+                        <div>
+                          <label className={LABEL}>Scopes</label>
+                          <input
+                            type="text"
+                            value={form.oauth_discovery_scopes}
+                            onChange={(e) =>
+                              setForm((prev) => ({ ...prev, oauth_discovery_scopes: e.target.value }))
+                            }
+                            placeholder="repo, read:user"
+                            className={FIELD}
+                          />
+                        </div>
+                        {form.oauth_discovery_provider === 'custom' && (
+                          <>
+                            <div>
+                              <label className={LABEL}>Authorize URL</label>
+                              <input
+                                type="text"
+                                value={form.oauth_discovery_custom_authorize_url}
+                                onChange={(e) =>
+                                  setForm((prev) => ({
+                                    ...prev,
+                                    oauth_discovery_custom_authorize_url: e.target.value,
+                                  }))
+                                }
+                                placeholder="https://idp.example/authorize"
+                                className={FIELD}
+                              />
+                            </div>
+                            <div>
+                              <label className={LABEL}>Token URL</label>
+                              <input
+                                type="text"
+                                value={form.oauth_discovery_custom_token_url}
+                                onChange={(e) =>
+                                  setForm((prev) => ({
+                                    ...prev,
+                                    oauth_discovery_custom_token_url: e.target.value,
+                                  }))
+                                }
+                                placeholder="https://idp.example/token"
+                                className={FIELD}
+                              />
+                            </div>
+                            <div>
+                              <label className={LABEL}>Scope Separator</label>
+                              <input
+                                type="text"
+                                value={form.oauth_discovery_custom_scope_separator}
+                                onChange={(e) =>
+                                  setForm((prev) => ({
+                                    ...prev,
+                                    oauth_discovery_custom_scope_separator: e.target.value,
+                                  }))
+                                }
+                                placeholder="space (default) or comma"
+                                className={FIELD}
+                              />
+                            </div>
+                            <div>
+                              <label className={LABEL}>Token Endpoint Authentication</label>
+                              <select
+                                value={form.oauth_discovery_custom_token_auth_style || 'post_body'}
+                                onChange={(e) =>
+                                  setForm((prev) => ({
+                                    ...prev,
+                                    oauth_discovery_custom_token_auth_style: e.target.value,
+                                  }))
+                                }
+                                className={FIELD}
+                              >
+                                <option value="post_body">Client secret in POST body</option>
+                                <option value="basic_header">Client secret in Basic header</option>
+                                <option value="none">None — public client (PKCE only)</option>
+                              </select>
+                            </div>
+                            <div>
+                              <label className={LABEL}>Resource (RFC 8707, optional)</label>
+                              <input
+                                type="text"
+                                value={form.oauth_discovery_custom_resource}
+                                onChange={(e) =>
+                                  setForm((prev) => ({
+                                    ...prev,
+                                    oauth_discovery_custom_resource: e.target.value,
+                                  }))
+                                }
+                                placeholder="https://mcp.example.com/mcp"
+                                className={FIELD}
+                              />
+                            </div>
+                          </>
+                        )}
+                      </>
+                    )}
+                    <div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          window.open(
+                            `${window.location.origin}/oauth2/egress/connect?server=${encodeURIComponent(form.path)}&purpose=discovery`,
+                            '_blank',
+                            'noopener,noreferrer'
+                          )
+                        }
+                        className="text-sm text-purple-600 hover:text-purple-800 dark:text-purple-400"
+                      >
+                        Connect account for discovery
+                      </button>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                        One-time consent that vaults your token for this server.
+                      </p>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
           {/* Per-user egress credential vault (admin config) */}
           {egressEnabled && form.deployment !== 'local' && (
             <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">

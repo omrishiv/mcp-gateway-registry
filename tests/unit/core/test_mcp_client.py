@@ -309,6 +309,65 @@ class TestBuildHeadersSecretDestinationGuard:
         mock_decrypt_custom.assert_not_called()
 
 
+@pytest.mark.unit
+class TestBuildHeadersOAuthScheme:
+    """auth_scheme == 'oauth' attaches the pre-resolved backend OAuth bearer
+    (stashed by backend_oauth.with_bearer) as Authorization: Bearer, gated on the
+    same destination re-validation as the static schemes."""
+
+    from registry.core.backend_oauth import RESOLVED_BEARER_KEY
+
+    def _server(self, **extra):
+        si = {"service_path": "/oauth-srv", "auth_scheme": "oauth"}
+        si.update(extra)
+        return si
+
+    def test_bearer_attached_when_destination_safe(self):
+        with patch("registry.core.mcp_client._assert_mcp_url_fetchable", return_value=True):
+            headers = _build_headers_for_server(
+                self._server(**{self.RESOLVED_BEARER_KEY: "cc-token"}),
+                destination_url="https://public.example.com/mcp",
+            )
+        assert headers["Authorization"] == "Bearer cc-token"
+
+    def test_custom_header_name_used(self):
+        with patch("registry.core.mcp_client._assert_mcp_url_fetchable", return_value=True):
+            headers = _build_headers_for_server(
+                self._server(auth_header_name="X-Auth", **{self.RESOLVED_BEARER_KEY: "t"}),
+                destination_url="https://public.example.com/mcp",
+            )
+        assert headers["X-Auth"] == "Bearer t"
+        assert "Authorization" not in headers
+
+    def test_no_token_omits_header(self):
+        # Acquisition failed upstream -> no stashed token -> no auth header.
+        with patch("registry.core.mcp_client._assert_mcp_url_fetchable", return_value=True):
+            headers = _build_headers_for_server(
+                self._server(),
+                destination_url="https://public.example.com/mcp",
+            )
+        assert "Authorization" not in headers
+
+    def test_bearer_withheld_when_destination_unsafe(self):
+        with patch("registry.core.mcp_client._assert_mcp_url_fetchable", return_value=False):
+            headers = _build_headers_for_server(
+                self._server(**{self.RESOLVED_BEARER_KEY: "cc-token"}),
+                destination_url="http://169.254.169.254/latest/meta-data/",
+            )
+        assert "Authorization" not in headers
+        assert "Accept" in headers
+
+    def test_discovery_bearer_attached_when_scheme_none(self):
+        # A borrowed discovery token is stashed while auth_scheme stays
+        # 'none'; the generalized builder must still attach it (gated on safety).
+        with patch("registry.core.mcp_client._assert_mcp_url_fetchable", return_value=True):
+            headers = _build_headers_for_server(
+                {"service_path": "/t", "auth_scheme": "none", self.RESOLVED_BEARER_KEY: "disc-tok"},
+                destination_url="https://mcp.tableau.com/",
+            )
+        assert headers["Authorization"] == "Bearer disc-tok"
+
+
 # =============================================================================
 # DETECT_SERVER_TRANSPORT TESTS
 # =============================================================================

@@ -19,6 +19,8 @@ from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamablehttp_client
 
 from ..common.log_redaction import redact_url
+from .backend_oauth import RESOLVED_BEARER_KEY as _BACKEND_OAUTH_TOKEN_KEY
+from .backend_oauth import with_bearer as _with_backend_oauth
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +146,7 @@ def _build_headers_for_server(
             server_info.get("auth_scheme", "none") != "none"
             and server_info.get("auth_credential_encrypted")
         )
+        or server_info.get(_BACKEND_OAUTH_TOKEN_KEY)
     )
     destination_safe = bool(destination_url) and _assert_mcp_url_fetchable(
         destination_url,
@@ -175,6 +178,17 @@ def _build_headers_for_server(
             f"Merged encrypted custom headers into MCP request count={len(decrypted):d} names={sorted(entry['name'] for entry in decrypted)}",
         )
 
+    # A pre-resolved OAuth bearer wins over any static scheme: it is set by the
+    # async caller (backend_oauth.with_bearer) for BOTH client_credentials
+    # (auth_scheme == 'oauth') and a borrowed per-user discovery-identity token
+    # (auth_scheme stays 'none'). This builder is synchronous, so the token must
+    # already be resolved+stashed. Gated by the same destination check above.
+    resolved_bearer = server_info.get(_BACKEND_OAUTH_TOKEN_KEY)
+    if resolved_bearer:
+        header_name = server_info.get("auth_header_name") or "Authorization"
+        headers[header_name] = f"Bearer {resolved_bearer}"
+        logger.debug("Added resolved OAuth bearer header to MCP request")
+        return headers
     auth_scheme = server_info.get("auth_scheme", "none")
     encrypted_credential = server_info.get("auth_credential_encrypted")
     if auth_scheme != "none" and encrypted_credential:
@@ -648,6 +662,10 @@ async def get_tools_from_server_with_server_info(
         logger.error("MCP Check Error: Base URL is empty.")
         return None
 
+    # Resolve+cache an OAuth2 client_credentials bearer (no-op unless
+    # auth_scheme == 'oauth') so the synchronous header builder can attach it.
+    server_info = await _with_backend_oauth(server_info) if server_info else server_info
+
     # Use transport-aware detection
     transport = await detect_server_transport_aware(base_url, server_info)
 
@@ -705,6 +723,10 @@ async def get_mcp_connection_result(
         return None
     if explicit_sse_endpoint and not _assert_mcp_url_fetchable(explicit_sse_endpoint, server_info):
         return None
+
+    # Resolve+cache an OAuth2 client_credentials bearer (no-op unless
+    # auth_scheme == 'oauth') so the synchronous header builder can attach it.
+    server_info = await _with_backend_oauth(server_info) if server_info else server_info
 
     # Use transport-aware detection
     transport = await detect_server_transport_aware(base_url, server_info)

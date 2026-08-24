@@ -722,3 +722,54 @@ class TestPerServerOAuthProtectedResource:
             client = TestClient(_make_oauth_discovery_app(fake_provider))
             client.get("/.well-known/oauth-protected-resource/obo-echo/mcp")
             assert seen["path"] == "/obo-echo"
+
+
+# =============================================================================
+# CLIENT ID METADATA DOCUMENT (CIMD) — GET /.well-known/oauth-client
+# =============================================================================
+
+
+@pytest.mark.unit
+class TestClientIdMetadataDocument:
+    """The CIMD is the OAuth ``client_id`` for authorization servers that fetch a
+    URL client_id. Public, unauthenticated, public-client shape."""
+
+    def _client(self, base: str) -> TestClient:
+        from types import SimpleNamespace
+
+        s = SimpleNamespace(
+            egress_oauth_callback_base_url=base,
+            registry_url=base,
+            registry_name="AI Registry",
+        )
+        app_client = TestClient(_make_oauth_discovery_app(None))
+        self._patch = patch("registry.api.wellknown_routes.settings", s)
+        self._patch.start()
+        return app_client
+
+    def test_document_shape(self):
+        client = self._client("https://reg.example.com")
+        try:
+            resp = client.get("/.well-known/oauth-client")
+        finally:
+            self._patch.stop()
+        assert resp.status_code == 200
+        doc = resp.json()
+        # client_id MUST equal this document's own URL (CIMD contract).
+        assert doc["client_id"] == "https://reg.example.com/.well-known/oauth-client"
+        assert doc["redirect_uris"] == ["https://reg.example.com/oauth2/egress/callback"]
+        # Public client: PKCE is the proof of possession, no secret.
+        assert doc["token_endpoint_auth_method"] == "none"
+        assert doc["grant_types"] == ["authorization_code", "refresh_token"]
+        assert doc["response_types"] == ["code"]
+        assert resp.headers.get("Cache-Control") == "no-store"
+
+    def test_trailing_slash_base_normalized(self):
+        client = self._client("https://reg.example.com/")
+        try:
+            resp = client.get("/.well-known/oauth-client")
+        finally:
+            self._patch.stop()
+        doc = resp.json()
+        assert doc["client_id"] == "https://reg.example.com/.well-known/oauth-client"
+        assert doc["redirect_uris"] == ["https://reg.example.com/oauth2/egress/callback"]
