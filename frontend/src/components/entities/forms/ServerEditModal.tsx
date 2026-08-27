@@ -56,11 +56,10 @@ export interface ServerEditForm {
   egress_custom_resource: string; // RFC 8707 resource indicator (optional)
   // obo_exchange (same-IdP OBO hop 1) field:
   egress_target_audience: string;
-  // Discovery Identity (OAuth 2.1): borrow a connected admin account for the
-  // registry's OWN headless health checks / tool discovery against an OAuth 2.1
-  // server. Orthogonal to auth_scheme and egress; self-contained
-  // under Backend Authentication. Saved via PUT/DELETE /servers/{path}/oauth-discovery.
-  oauth_discovery_enabled: boolean;
+  // Discovery Identity (OAuth 2.1): the registry borrows a connected admin
+  // account for its OWN headless health checks / tool discovery against an
+  // OAuth 2.1 server. Selected via auth_scheme === 'oauth2_1' (not a separate
+  // flag). Saved via PUT/DELETE /servers/{path}/oauth-discovery.
   oauth_discovery_provider: string; // provider key; 'custom' for OAuth 2.1 servers
   oauth_discovery_client_id: string;
   oauth_discovery_client_secret: string; // write-only; blank on edit keeps the stored one
@@ -82,6 +81,8 @@ interface ServerEditModalProps {
   loading: boolean;
   /** Whether the per-user egress credential vault feature is enabled (gates the egress section). */
   egressEnabled: boolean;
+  /** True only in with-gateway deployment mode; egress auth requires a gateway. */
+  withGateway: boolean;
   onSave: () => Promise<void> | void;
   onClose: () => void;
 }
@@ -97,9 +98,34 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
   setForm,
   loading,
   egressEnabled,
+  withGateway,
   onSave,
   onClose,
 }) => {
+  // The "Connect account for discovery" flow runs against the SERVER-SIDE saved
+  // oauth-discovery config (the backend reads the stored provider/client, not
+  // this form). So Connect is only safe once the shown config is persisted:
+  // snapshot it at open and disable Connect while there are unsaved discovery
+  // edits — covers a freshly-selected OAuth 2.1 scheme (nothing saved yet, would
+  // 400) and an edited existing config (would silently consent against the stale
+  // saved client). The modal closes on save, so a reopen re-snapshots the saved
+  // state and re-enables Connect.
+  const discoverySnapshot = (f: ServerEditForm): string =>
+    JSON.stringify([
+      f.auth_scheme,
+      f.oauth_discovery_provider,
+      f.oauth_discovery_client_id,
+      f.oauth_discovery_client_secret,
+      f.oauth_discovery_scopes,
+      f.oauth_discovery_custom_authorize_url,
+      f.oauth_discovery_custom_token_url,
+      f.oauth_discovery_custom_scope_separator,
+      f.oauth_discovery_custom_token_auth_style,
+      f.oauth_discovery_custom_resource,
+    ]);
+  const [savedDiscoverySnapshot] = React.useState(() => discoverySnapshot(form));
+  const discoveryDirty = discoverySnapshot(form) !== savedDiscoverySnapshot;
+  const discoveryConnectable = !discoveryDirty && !!form.oauth_discovery_provider;
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
       <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -336,41 +362,23 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
               </div>
             </div>
           )}
-          {/* Discovery Identity (OAuth 2.1). Orthogonal to auth_scheme and egress:
-              the registry borrows a designated admin's connected account for its
-              OWN headless health checks / tool discovery against an OAuth 2.1
-              server that has no machine grant. Self-contained under
-              Backend Authentication. Saved via PUT/DELETE /servers/{path}/oauth-discovery. */}
-          {form.deployment === 'remote' && (
+          {/* Discovery Identity (OAuth 2.1) — the backend-auth scheme for OAuth 2.1
+              servers with no machine grant: the registry borrows a designated admin's
+              connected account for its OWN headless health checks / tool discovery.
+              Shown when the Backend Authentication scheme is OAuth 2.1. Works in
+              registry-only mode (no gateway). Saved via PUT/DELETE /servers/{path}/oauth-discovery. */}
+          {form.deployment === 'remote' && form.auth_scheme === 'oauth2_1' && (
             <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
               <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-2">
                 Discovery Identity (OAuth 2.1)
               </h4>
               <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
-                For OAuth 2.1 servers with no machine grant, the
-                registry borrows a connected admin account for its own health
-                checks and tool discovery.
+                For OAuth 2.1 servers with no machine grant, the registry borrows
+                THIS admin&apos;s connected account for its own headless health checks
+                and tool discovery. Discovery reflects that account&apos;s visibility and
+                pauses if the token expires. Saving designates you; no egress required.
               </p>
               <div className="space-y-3">
-                <label className="flex items-start gap-2 text-xs text-gray-600 dark:text-gray-300">
-                  <input
-                    type="checkbox"
-                    checked={form.oauth_discovery_enabled}
-                    onChange={(e) =>
-                      setForm((prev) => ({ ...prev, oauth_discovery_enabled: e.target.checked }))
-                    }
-                    className="mt-0.5"
-                  />
-                  <span>
-                    <strong>Use a connected account for headless discovery.</strong> The
-                    registry borrows THIS admin&apos;s connected account for its own health
-                    checks and tool discovery against an OAuth 2.1 server. Discovery
-                    reflects that account&apos;s visibility and pauses if the token expires.
-                    Saving designates you; no egress required.
-                  </span>
-                </label>
-                {form.oauth_discovery_enabled && (
-                  <>
                     <div>
                       <label className={LABEL}>Provider</label>
                       <select
@@ -520,28 +528,36 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
                     <div>
                       <button
                         type="button"
-                        onClick={() =>
+                        disabled={!discoveryConnectable}
+                        onClick={() => {
+                          if (!discoveryConnectable) return;
                           window.open(
                             `${window.location.origin}/oauth2/egress/connect?server=${encodeURIComponent(form.path)}&purpose=discovery`,
                             '_blank',
                             'noopener,noreferrer'
-                          )
-                        }
-                        className="text-sm text-purple-600 hover:text-purple-800 dark:text-purple-400"
+                          );
+                        }}
+                        className={`text-sm ${
+                          discoveryConnectable
+                            ? 'text-purple-600 hover:text-purple-800 dark:text-purple-400'
+                            : 'text-gray-400 cursor-not-allowed dark:text-gray-500'
+                        }`}
                       >
                         Connect account for discovery
                       </button>
                       <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                        One-time consent that vaults your token for this server.
+                        {discoveryDirty
+                          ? 'Save your changes first — Connect uses the saved configuration.'
+                          : !form.oauth_discovery_provider
+                            ? 'Select a provider and save before connecting.'
+                            : 'One-time consent that vaults your token for this server.'}
                       </p>
                     </div>
-                  </>
-                )}
               </div>
             </div>
           )}
           {/* Per-user egress credential vault (admin config) */}
-          {egressEnabled && form.deployment !== 'local' && (
+          {egressEnabled && withGateway && form.deployment !== 'local' && (
             <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
               <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-2">
                 Egress Auth

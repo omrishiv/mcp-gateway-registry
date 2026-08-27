@@ -324,7 +324,6 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     egress_custom_resource: '',  // RFC 8707 resource indicator (optional)
     egress_target_audience: '',
     // Discovery Identity (OAuth 2.1) — self-contained under Backend Auth.
-    oauth_discovery_enabled: false,
     oauth_discovery_provider: '',
     oauth_discovery_client_id: '',
     oauth_discovery_client_secret: '',  // write-only; blank on edit keeps the stored one
@@ -1310,7 +1309,9 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         num_tools: serverDetails.num_tools || 0,
         mcp_endpoint: serverDetails.mcp_endpoint || '',
         metadata: serverDetails.metadata ? JSON.stringify(serverDetails.metadata, null, 2) : '',
-        auth_scheme: serverDetails.auth_scheme || 'none',
+        auth_scheme: serverDetails.oauth_discovery?.enabled === true
+          ? 'oauth2_1'
+          : (serverDetails.auth_scheme || 'none'),
         auth_credential: '',
         auth_header_name: serverDetails.auth_header_name || 'X-API-Key',
         oauth_token_url: serverDetails.backend_oauth?.token_url || '',
@@ -1333,7 +1334,6 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         egress_custom_token_auth_style: serverDetails.egress_oauth?.custom_token_auth_style || '',
         egress_custom_resource: serverDetails.egress_oauth?.custom_resource || '',
         egress_target_audience: serverDetails.egress_oauth?.target_audience || '',
-        oauth_discovery_enabled: serverDetails.oauth_discovery?.enabled === true,
         oauth_discovery_provider: serverDetails.oauth_discovery?.oauth?.provider || '',
         oauth_discovery_client_id: serverDetails.oauth_discovery?.oauth?.client_id || '',
         oauth_discovery_client_secret: '',  // never round-trip the secret
@@ -1383,7 +1383,6 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         egress_custom_token_auth_style: '',
         egress_custom_resource: '',
         egress_target_audience: '',
-        oauth_discovery_enabled: false,
         oauth_discovery_provider: '',
         oauth_discovery_client_id: '',
         oauth_discovery_client_secret: '',
@@ -1536,7 +1535,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         if (editForm.mcp_endpoint) {
           params.append('mcp_endpoint', editForm.mcp_endpoint);
         }
-        if (editForm.auth_scheme !== 'none') {
+        if (editForm.auth_scheme !== 'none' && editForm.auth_scheme !== 'oauth2_1') {
           params.append('auth_scheme', editForm.auth_scheme);
           if (editForm.auth_credential) {
             params.append('auth_credential', editForm.auth_credential);
@@ -1674,7 +1673,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
           const csrf = await axios.get('/api/auth/csrf-token');
           const csrfHeaders: Record<string, string> = {};
           if (csrf.data?.csrf_token) csrfHeaders['X-CSRF-Token'] = csrf.data.csrf_token;
-          if (editForm.oauth_discovery_enabled) {
+          if (editForm.auth_scheme === 'oauth2_1') {
             const discoveryScopes = editForm.oauth_discovery_scopes
               .split(/[,\s]+/)
               .map(s => s.trim())
@@ -3095,6 +3094,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
           setForm={setEditForm}
           loading={editLoading}
           egressEnabled={egressEnabled}
+          withGateway={registryConfig?.deployment_mode === 'with-gateway'}
           onSave={handleSaveEdit}
           onClose={handleCloseEdit}
         />

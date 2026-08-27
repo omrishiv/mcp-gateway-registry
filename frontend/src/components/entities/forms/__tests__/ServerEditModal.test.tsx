@@ -42,7 +42,6 @@ const baseForm: ServerEditForm = {
   egress_custom_token_auth_style: '',
   egress_custom_resource: '',
   egress_target_audience: '',
-  oauth_discovery_enabled: false,
   oauth_discovery_provider: '',
   oauth_discovery_client_id: '',
   oauth_discovery_client_secret: '',
@@ -61,12 +60,14 @@ function Harness({
   onClose = jest.fn(),
   loading = false,
   egressEnabled = false,
+  withGateway = true,
 }: {
   initial?: ServerEditForm;
   onSave?: () => void;
   onClose?: () => void;
   loading?: boolean;
   egressEnabled?: boolean;
+  withGateway?: boolean;
 }) {
   const [form, setForm] = useState<ServerEditForm>(initial);
   return (
@@ -76,6 +77,7 @@ function Harness({
       setForm={setForm}
       loading={loading}
       egressEnabled={egressEnabled}
+      withGateway={withGateway}
       onSave={onSave}
       onClose={onClose}
     />
@@ -151,6 +153,51 @@ describe('ServerEditModal', () => {
   it('hides the egress section for local deployments even when enabled', () => {
     render(<Harness initial={{ ...baseForm, deployment: 'local' }} egressEnabled />);
     expect(screen.queryByText('Egress Auth')).not.toBeInTheDocument();
+  });
+
+  it('hides the egress section in registry-only mode even when the feature is enabled', () => {
+    render(<Harness egressEnabled withGateway={false} />);
+    expect(screen.queryByText('Egress Auth')).not.toBeInTheDocument();
+  });
+
+  it('hides the discovery-identity block for non-OAuth-2.1 schemes', () => {
+    render(<Harness />);
+    expect(screen.queryByText('Discovery Identity (OAuth 2.1)')).not.toBeInTheDocument();
+  });
+
+  it('reveals the discovery-identity block for the OAuth 2.1 scheme', () => {
+    render(<Harness initial={{ ...baseForm, auth_scheme: 'oauth2_1' }} />);
+    expect(screen.getByText('Discovery Identity (OAuth 2.1)')).toBeInTheDocument();
+  });
+
+  it('disables discovery Connect when no provider is selected', () => {
+    render(<Harness initial={{ ...baseForm, auth_scheme: 'oauth2_1' }} />);
+    expect(
+      screen.getByRole('button', { name: 'Connect account for discovery' }),
+    ).toBeDisabled();
+  });
+
+  it('enables discovery Connect for a saved config but disables it on unsaved edits', () => {
+    render(
+      <Harness
+        initial={{
+          ...baseForm,
+          auth_scheme: 'oauth2_1',
+          oauth_discovery_provider: 'github',
+          oauth_discovery_client_id: 'abc',
+        }}
+      />,
+    );
+    expect(
+      screen.getByRole('button', { name: 'Connect account for discovery' }),
+    ).toBeEnabled();
+    // Editing a discovery field diverges from the saved snapshot -> Connect
+    // disabled until the change is saved (it would otherwise consent against
+    // the stale saved client).
+    fireEvent.change(screen.getByDisplayValue('abc'), { target: { value: 'xyz' } });
+    expect(
+      screen.getByRole('button', { name: 'Connect account for discovery' }),
+    ).toBeDisabled();
   });
 
   it('shows the target audience field only in obo_exchange mode', () => {

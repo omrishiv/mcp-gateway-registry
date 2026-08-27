@@ -2,7 +2,7 @@ import React from 'react';
 import FormField from './FormField';
 import { fieldClass, FIELD_FOCUS } from './formClasses';
 
-export type AuthScheme = 'none' | 'bearer' | 'api_key' | 'oauth';
+export type AuthScheme = 'none' | 'bearer' | 'api_key' | 'oauth' | 'oauth2_1';
 
 interface AuthSchemeFieldsProps {
   scheme: AuthScheme;
@@ -58,6 +58,7 @@ const AuthSchemeFields: React.FC<AuthSchemeFieldsProps> = ({
             <option value="bearer">Bearer Token</option>
             <option value="api_key">API Key</option>
             <option value="oauth">OAuth 2.0 (client credentials)</option>
+            <option value="oauth2_1">OAuth 2.1 (delegated / discovery)</option>
           </select>
         </FormField>
 
