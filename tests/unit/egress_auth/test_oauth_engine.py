@@ -450,9 +450,10 @@ class TestQuirkParsers:
             token_endpoint_auth_style="basic_header",
         )
         data, headers = oauth_engine._build_token_request(cfg, "cid", "sec", {"grant_type": "x"})
-        assert headers["Authorization"].startswith("Basic ")
-        assert "client_secret" not in data  # secret is in the header, not the body
-        assert data["client_id"] == "cid"
+        expected = base64.b64encode(b"cid:sec").decode()
+        assert headers["Authorization"] == f"Basic {expected}"
+        assert "client_id" not in data
+        assert "client_secret" not in data
 
     def test_post_body_auth_style_default(self):
         cfg = PROVIDER_REGISTRY["github"]

@@ -214,7 +214,6 @@ def _build_token_request(
     if cfg.token_endpoint_auth_style == TokenEndpointAuthStyle.BASIC_HEADER:
         basic = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
         headers["Authorization"] = f"Basic {basic}"
-        data["client_id"] = client_id
     else:  # POST_BODY (default)
         data["client_id"] = client_id
         data["client_secret"] = client_secret
