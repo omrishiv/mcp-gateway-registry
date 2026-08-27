@@ -74,4 +74,19 @@ describe('RegisterPage', () => {
     expect(screen.getByText('Quick Form')).toBeInTheDocument();
     expect(screen.getByText('JSON Upload')).toBeInTheDocument();
   });
+
+  it('offers OAuth 2.0 and OAuth 2.1 backend auth schemes', () => {
+    renderPage();
+    expect(screen.getByText('OAuth 2.0 (client credentials)')).toBeInTheDocument();
+    expect(screen.getByText('OAuth 2.1 (delegated / discovery)')).toBeInTheDocument();
+  });
+
+  it('reveals the OAuth 2.1 discovery config when that scheme is selected', () => {
+    renderPage();
+    const schemeSelect = screen
+      .getByText('OAuth 2.1 (delegated / discovery)')
+      .closest('select') as HTMLSelectElement;
+    fireEvent.change(schemeSelect, { target: { value: 'oauth2_1' } });
+    expect(screen.getByText('Discovery Identity (OAuth 2.1)')).toBeInTheDocument();
+  });
 });
