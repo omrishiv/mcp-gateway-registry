@@ -54,6 +54,7 @@ from registry.api.skill_routes import router as skill_router
 from registry.api.system_routes import router as system_router
 from registry.api.system_routes import set_server_start_time
 from registry.api.virtual_server_routes import router as virtual_server_router
+from registry.api.wellknown_routes import cimd_router
 from registry.api.wellknown_routes import router as wellknown_router
 
 # Import audit logging
@@ -175,6 +176,13 @@ def _log_startup_configuration() -> None:
 
     logger.info("=" * 60)
 
+    # Nudge operators about recommended-but-optional settings left unset (e.g. the
+    # egress credential encryption key when the vault is enabled). Same source of
+    # truth as the recommended-config metric and the System Config UI badge.
+    from registry.core.recommended_config import log_recommended_config_warnings
+
+    log_recommended_config_warnings(settings)
+
 
 def _initialize_deployment_metrics() -> None:
     """Initialize deployment mode Prometheus metrics.
@@ -268,6 +276,7 @@ async def _sync_agentcore_on_startup(
         get_skill_repository,
     )
     from registry.schemas.agent_models import AgentCard
+    from registry.schemas.proxy_mixin import strip_proxy_fields
     from registry.schemas.skill_models import SkillCard
     from registry.services.agent_service import agent_service
     from registry.services.federation.agentcore_client import (
@@ -299,6 +308,8 @@ async def _sync_agentcore_on_startup(
     server_count = 0
     for server_data in records["servers"]:
         try:
+            # Peer content: strip proxy fields (no proxying federated entities).
+            server_data = strip_proxy_fields(server_data)
             server_path = server_data.get("path")
             if not server_path:
                 continue
@@ -325,6 +336,7 @@ async def _sync_agentcore_on_startup(
     agent_count = 0
     for agent_data in records["agents"]:
         try:
+            agent_data = strip_proxy_fields(agent_data)  # peer content: no proxying
             agent_path = agent_data.get("path")
             if not agent_path:
                 continue
@@ -348,6 +360,7 @@ async def _sync_agentcore_on_startup(
     skill_repo = get_skill_repository()
     for skill_data in records["skills"]:
         try:
+            skill_data = strip_proxy_fields(skill_data)  # peer content: no proxying
             skill_path = skill_data.get("path")
             if not skill_path:
                 continue
@@ -643,9 +656,13 @@ async def lifespan(app: FastAPI):
                             )
 
                             # Register servers
+                            from registry.schemas.proxy_mixin import strip_proxy_fields
+
                             synced_count = 0
                             for server_data in servers:
                                 try:
+                                    # Peer content: strip proxy fields (no proxying federated entities).
+                                    server_data = strip_proxy_fields(server_data)
                                     server_path = server_data.get("path")
                                     if not server_path:
                                         continue
@@ -1197,6 +1214,11 @@ app.include_router(registry_router, prefix="/api/registry", tags=["Registry Card
 # Register well-known discovery router
 app.include_router(wellknown_router, prefix="/.well-known", tags=["Discovery"])
 
+# CIMD (Client ID Metadata Document) publisher at /oauth/client-metadata.json.
+# Root-mounted (NOT under /.well-known): a CIMD is a client-published resource,
+# and the document URL is the registry's OAuth client_id.
+app.include_router(cimd_router, tags=["Discovery"])
+
 # Register ARD Registry adapter (POST /api/ard/search, GET /api/ard/agents, issue #1295)
 from fastapi.exceptions import RequestValidationError  # noqa: E402
 from starlette.exceptions import HTTPException as StarletteHTTPException  # noqa: E402
@@ -1416,11 +1438,8 @@ async def serve_rum_js():
 if FRONTEND_BUILD_PATH.exists():
     # Build the cached HTML at import time
     _CACHED_INDEX_HTML = _build_cached_index_html()
-    # Mount static files - path depends on ROOT_PATH
-    # When ROOT_PATH is set, FastAPI automatically handles the prefix for routes,
-    # but we need to explicitly mount static files at the root level
-    # The <base> tag in HTML will make browsers request /registry/static/*
-    # which FastAPI will handle correctly with root_path
+    # Mount static files at the unprefixed path; nginx's own ROOT_PATH-prefixed
+    # static location handles the prefixed request and never reaches this app.
     app.mount("/static", StaticFiles(directory=FRONTEND_BUILD_PATH / "static"), name="static")
 
     # Serve React app for all other routes (SPA)
