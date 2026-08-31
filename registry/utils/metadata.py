@@ -254,7 +254,9 @@ def parse_and_validate_metadata_fields(
         return parsed
     except ValueError as e:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            # starlette 1.6.0 defines HTTP_422_UNPROCESSABLE_CONTENT (ENTITY is
+            # deprecated); mypy's status stub is stale, so ignore attr-defined here.
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,  # type: ignore[attr-defined]
             detail=f"Invalid metadata_fields: {e}",
         ) from e
 

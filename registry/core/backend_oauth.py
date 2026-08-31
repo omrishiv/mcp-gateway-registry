@@ -225,12 +225,18 @@ async def resolve_discovery_bearer(server_info: dict) -> str | None:
     server_path = _server_path(server_info)
     try:
         from registry.egress_auth.factory import get_egress_auth_service
+        from registry.egress_auth.upstream_binding import base_url
 
+        # The vaulted token is destination-bound (issue: newer egress upstream
+        # binding). Discovery hits this server's own endpoint, so bind the borrow
+        # to the server's registered upstream base. A mismatch simply yields None
+        # (discovery degrades), never a cross-upstream credential leak.
         token = await get_egress_auth_service().get_valid_token(
             auth_method=auth_method,
             user_id=user_id,
             server_path=server_path,
             egress_oauth=oauth_cfg,
+            requested_upstream=base_url(server_info.get("proxy_pass_url") or ""),
         )
     except Exception as exc:  # egress/vault/refresh failure -> degrade, don't crash discovery
         logger.warning(

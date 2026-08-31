@@ -156,6 +156,9 @@ def _disc_server_info(**overrides) -> dict:
         "auth_scheme": "none",
         "service_path": "/tableau-hosted",
         "path": "/tableau-hosted",
+        # Registered upstream: the discovery borrow binds the vaulted token to
+        # this server's own endpoint base (destination binding).
+        "proxy_pass_url": "https://tableau.example.com/mcp",
         # Self-contained backend-auth discovery config (no top-level egress_oauth).
         "oauth_discovery": {
             "enabled": True,
@@ -174,8 +177,10 @@ class _FakeEgressSvc:
         self._raises = raises
         self.calls = []
 
-    async def get_valid_token(self, *, auth_method, user_id, server_path, egress_oauth):
-        self.calls.append((auth_method, user_id, server_path))
+    async def get_valid_token(
+        self, *, auth_method, user_id, server_path, egress_oauth, requested_upstream
+    ):
+        self.calls.append((auth_method, user_id, server_path, requested_upstream))
         if self._raises:
             raise RuntimeError("vault down")
         return self._token
@@ -192,7 +197,7 @@ class TestDiscoveryBorrow:
         svc = _FakeEgressSvc(token="BORROWED")
         self._patch_svc(monkeypatch, svc)
         assert await backend_oauth.resolve_discovery_bearer(_disc_server_info()) == "BORROWED"
-        assert svc.calls == [("oauth2", "u-1", "/tableau-hosted")]
+        assert svc.calls == [("oauth2", "u-1", "/tableau-hosted", "https://tableau.example.com")]
 
     async def test_disabled_returns_none_without_calling(self, monkeypatch):
         svc = _FakeEgressSvc(token="X")

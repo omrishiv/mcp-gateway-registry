@@ -48,34 +48,6 @@ OAUTH_DISCOVERY_CACHE_HEADERS: dict[str, str] = {
 }
 
 
-@router.get("/oauth-client")
-async def get_client_id_metadata_document(request: Request) -> JSONResponse:
-    """Client ID Metadata Document (CIMD).
-
-    Authorization servers that advertise ``client_id_metadata_document_supported``
-    accept a URL as the OAuth ``client_id`` and fetch that URL to learn the client's
-    redirect URIs and auth method. This IS that document, and its own URL is the ``client_id`` the
-    registry uses for the per-user egress consent flow against such servers.
-
-    Public + unauthenticated by design (the AS fetches it server-side with no
-    credentials). Served via the nginx ``^~ /.well-known/`` location, which has
-    no ``auth_request``. Public client: ``token_endpoint_auth_method=none`` (PKCE
-    is the proof of possession).
-    """
-    base = (settings.egress_oauth_callback_base_url or settings.registry_url or "").rstrip("/")
-    client_id = f"{base}/.well-known/oauth-client"
-    doc = {
-        "client_id": client_id,
-        "client_name": settings.registry_name or "MCP Gateway Registry",
-        "client_uri": base or None,
-        "redirect_uris": [f"{base}/oauth2/egress/callback"],
-        "token_endpoint_auth_method": "none",
-        "grant_types": ["authorization_code", "refresh_token"],
-        "response_types": ["code"],
-    }
-    return JSONResponse(content=doc, headers=OAUTH_DISCOVERY_CACHE_HEADERS)
-
-
 @router.get("/ai-catalog.json")
 async def get_ai_catalog(
     request: Request,
