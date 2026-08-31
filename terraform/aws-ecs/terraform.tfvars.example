@@ -1104,6 +1104,7 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # GET /oauth/client-metadata.json so external CIMD-aware IdPs can describe the
 # registry as an OAuth client. Disabled by default (404 when off).
 # cimd_publisher_enabled = false
+# cimd_consumer_enabled = false
 # cimd_cache_ttl         = 3600
 # cimd_client_name       = "AI Registry Tools"
 # cimd_redirect_uris     = ""

@@ -343,6 +343,7 @@ app:
   # serves GET /oauth/client-metadata.json describing itself as an OAuth client
   # for external CIMD-aware IdPs. Default off; non-secret.
   cimdPublisherEnabled: false
+  cimdConsumerEnabled: false
   cimdCacheTtl: 3600
   cimdClientName: "AI Registry Tools"
   cimdRedirectUris: ""

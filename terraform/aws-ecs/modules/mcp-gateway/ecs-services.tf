@@ -1531,6 +1531,10 @@ module "ecs_service_registry" {
           value = tostring(var.cimd_publisher_enabled)
         },
         {
+          name  = "CIMD_CONSUMER_ENABLED"
+          value = tostring(var.cimd_consumer_enabled)
+        },
+        {
           name  = "CIMD_CACHE_TTL"
           value = tostring(var.cimd_cache_ttl)
         },

@@ -207,6 +207,7 @@ services:
       - SSRF_ALLOWED_CIDRS=${SSRF_ALLOWED_CIDRS:-}
       # CIMD (Client ID Metadata Document) publisher -- registry-consumed; default off.
       - CIMD_PUBLISHER_ENABLED=${CIMD_PUBLISHER_ENABLED:-false}
+      - CIMD_CONSUMER_ENABLED=${CIMD_CONSUMER_ENABLED:-false}
       - CIMD_CACHE_TTL=${CIMD_CACHE_TTL:-3600}
       - CIMD_CLIENT_NAME=${CIMD_CLIENT_NAME:-AI Registry Tools}
       - CIMD_REDIRECT_URIS=${CIMD_REDIRECT_URIS:-}

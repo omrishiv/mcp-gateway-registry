@@ -370,6 +370,7 @@ module "mcp_gateway" {
 
   # CIMD (Client ID Metadata Document) publisher
   cimd_publisher_enabled = var.cimd_publisher_enabled
+  cimd_consumer_enabled  = var.cimd_consumer_enabled
   cimd_cache_ttl         = var.cimd_cache_ttl
   cimd_client_name       = var.cimd_client_name
   cimd_redirect_uris     = var.cimd_redirect_uris

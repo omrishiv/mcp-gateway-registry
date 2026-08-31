@@ -1758,6 +1758,12 @@ variable "cimd_publisher_enabled" {
   default     = false
 }
 
+variable "cimd_consumer_enabled" {
+  description = "Advertise client_id_metadata_document_supported in the registry's RFC 8414 authorization-server metadata, signalling that the upstream IdP accepts a CIMD URL as client_id. Registry is not the AS; the IdP performs the fetch/validate. Default off; enable only when the configured IdP supports CIMD."
+  type        = bool
+  default     = false
+}
+
 variable "cimd_cache_ttl" {
   description = "Public Cache-Control max-age (seconds) for the CIMD document."
   type        = number

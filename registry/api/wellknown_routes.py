@@ -479,4 +479,12 @@ async def get_oauth_authorization_server() -> JSONResponse:
             detail="Could not fetch authorization server metadata",
         ) from exc
 
+    # CIMD consumer signal (issue #993). The registry is not the authorization
+    # server; it advertises the upstream IdP's metadata. When the operator has
+    # confirmed that IdP accepts CIMD URLs as client_id, surface the capability
+    # so MCP clients present their CIMD client_id to the IdP. The IdP performs
+    # the fetch/validate/cache; the registry adds only this boolean.
+    if settings.cimd_consumer_enabled and isinstance(document, dict):
+        document["client_id_metadata_document_supported"] = True
+
     return JSONResponse(content=document, headers=OAUTH_DISCOVERY_CACHE_HEADERS)

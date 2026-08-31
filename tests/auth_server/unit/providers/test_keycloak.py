@@ -128,12 +128,20 @@ class TestKeycloakProviderInit:
 class TestKeycloakJWKS:
     """Tests for JWKS retrieval and caching."""
 
+    @staticmethod
+    def _clear_shared_cache():
+        # get_jwks now delegates to the process-singleton _KEYCLOAK_JWKS, which
+        # persists across tests; clear it so each test is deterministic.
+        from auth_server.providers.keycloak import _KEYCLOAK_JWKS
+
+        _KEYCLOAK_JWKS._entries.clear()
+
     @patch("auth_server.providers.keycloak.requests.get")
     def test_get_jwks_success(self, mock_get, mock_jwks_response):
-        """Test successful JWKS retrieval."""
+        """get_jwks returns the fetched JWKS (via the shared cache)."""
+        self._clear_shared_cache()
         from auth_server.providers.keycloak import KeycloakProvider
 
-        # Arrange
         mock_response = MagicMock()
         mock_response.json.return_value = mock_jwks_response
         mock_response.raise_for_status.return_value = None
@@ -146,21 +154,20 @@ class TestKeycloakJWKS:
             client_secret="test-secret",
         )
 
-        # Act
         jwks = provider.get_jwks()
 
-        # Assert
         assert "keys" in jwks
         assert len(jwks["keys"]) == 2
-        mock_get.assert_called_once()
         assert "/protocol/openid-connect/certs" in mock_get.call_args[0][0]
 
     @patch("auth_server.providers.keycloak.requests.get")
-    def test_get_jwks_caching(self, mock_get, mock_jwks_response):
-        """Test that JWKS is cached and not fetched repeatedly."""
+    def test_get_jwks_uses_shared_cache(self, mock_get, mock_jwks_response):
+        """Repeated get_jwks for the same URL fetches upstream once (shared-cache
+        dedup). TTL/expiration/negative-cache behavior is owned by jwks_cache and
+        covered in test_jwks_cache.py; keycloak only delegates to it now."""
+        self._clear_shared_cache()
         from auth_server.providers.keycloak import KeycloakProvider
 
-        # Arrange
         mock_response = MagicMock()
         mock_response.json.return_value = mock_jwks_response
         mock_response.raise_for_status.return_value = None
@@ -173,55 +180,17 @@ class TestKeycloakJWKS:
             client_secret="test-secret",
         )
 
-        # Act - call multiple times
-        jwks1 = provider.get_jwks()
-        jwks2 = provider.get_jwks()
-        jwks3 = provider.get_jwks()
+        first, second, third = provider.get_jwks(), provider.get_jwks(), provider.get_jwks()
 
-        # Assert - should only call once due to caching
         assert mock_get.call_count == 1
-        assert jwks1 == jwks2 == jwks3
-
-    @patch("auth_server.providers.keycloak.requests.get")
-    @patch("auth_server.providers.keycloak.time.time")
-    def test_get_jwks_cache_expiration(self, mock_time, mock_get, mock_jwks_response):
-        """Test that JWKS cache expires after TTL."""
-        from auth_server.providers.keycloak import KeycloakProvider
-
-        # Arrange
-        mock_response = MagicMock()
-        mock_response.json.return_value = mock_jwks_response
-        mock_response.raise_for_status.return_value = None
-        mock_get.return_value = mock_response
-
-        provider = KeycloakProvider(
-            keycloak_url="http://localhost:8080",
-            realm="test-realm",
-            client_id="test-client",
-            client_secret="test-secret",
-        )
-
-        # First call
-        mock_time.return_value = 1000
-        provider.get_jwks()
-
-        # Second call - cache should still be valid
-        mock_time.return_value = 1100
-        provider.get_jwks()
-
-        # Third call - cache should be expired (TTL is 3600 seconds)
-        mock_time.return_value = 5000
-        provider.get_jwks()
-
-        # Assert
-        assert mock_get.call_count == 2  # First call + after expiration
+        assert first == second == third
 
     @patch("auth_server.providers.keycloak.requests.get")
     def test_get_jwks_network_error(self, mock_get):
-        """Test JWKS retrieval with network error."""
+        """An unrecoverable fetch with no usable cache surfaces as ValueError."""
+        self._clear_shared_cache()
         from auth_server.providers.keycloak import KeycloakProvider
 
-        # Arrange
         mock_get.side_effect = requests.RequestException("Network error")
 
         provider = KeycloakProvider(
@@ -231,7 +200,6 @@ class TestKeycloakJWKS:
             client_secret="test-secret",
         )
 
-        # Act & Assert
         with pytest.raises(ValueError, match="Cannot retrieve JWKS"):
             provider.get_jwks()
 

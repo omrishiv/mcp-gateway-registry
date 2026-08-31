@@ -489,7 +489,8 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
         "title": "CIMD Publisher",
         "order": 30,
         "fields": [
-            ("cimd_publisher_enabled", "Enabled", False),
+            ("cimd_publisher_enabled", "Publisher Enabled", False),
+            ("cimd_consumer_enabled", "Consumer Enabled", False),
             ("cimd_cache_ttl", "Cache TTL (s)", False),
             ("cimd_client_name", "Client Name", False),
             ("cimd_redirect_uris", "Redirect URIs", False),

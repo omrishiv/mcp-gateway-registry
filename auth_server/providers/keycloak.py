@@ -2,7 +2,6 @@
 
 import logging
 import os
-import time
 from functools import lru_cache
 from typing import Any
 from urllib.parse import urlencode
@@ -11,6 +10,7 @@ import jwt
 import requests
 
 from .base import AuthProvider
+from .jwks_cache import JwksCache
 
 # Constants for self-signed token validation
 JWT_ISSUER = os.environ.get("JWT_ISSUER", "mcp-auth-server")
@@ -28,6 +28,13 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+# Shared hardened JWKS cache: coalesced fetch, one refetch per unknown kid
+# (key rotation), negative-cached unknown kids, bounded stale-on-failure.
+# Process singleton so every /validate call shares one cache + lock. Also
+# validates CIMD-issued tokens, whose client_id (azp) is a URL rather than a
+# registered client id (issue #993 consumer path).
+_KEYCLOAK_JWKS = JwksCache("keycloak")
 
 
 class KeycloakProvider(AuthProvider):
@@ -62,11 +69,6 @@ class KeycloakProvider(AuthProvider):
         self.m2m_client_id = m2m_client_id or client_id
         self.m2m_client_secret = m2m_client_secret or client_secret
 
-        # Cache for JWKS and configuration
-        self._jwks_cache: dict[str, Any] | None = None
-        self._jwks_cache_time: float = 0
-        self._jwks_cache_ttl: int = 3600  # 1 hour
-
         # Keycloak endpoints - use internal URL for server-to-server, external for browser redirects
         self.realm_url = f"{self.keycloak_url}/realms/{realm}"
         self.external_realm_url = f"{self.keycloak_external_url}/realms/{realm}"
@@ -97,27 +99,14 @@ class KeycloakProvider(AuthProvider):
             except Exception as e:
                 logger.debug(f"Not a self-signed token: {e}")
 
-            # Get JWKS for validation
-            jwks = self.get_jwks()
-
-            # Decode token header to get key ID
+            # Resolve the signing key via the shared hardened JWKS cache. It
+            # coalesces concurrent fetches, refetches once per unknown kid (key
+            # rotation), negative-caches unknown kids, and serves a bounded
+            # stale cache on upstream failure. Raises on a missing/unresolvable kid.
             unverified_header = jwt.get_unverified_header(token)
-            kid = unverified_header.get("kid")
-
-            if not kid:
-                raise ValueError("Token missing 'kid' in header")
-
-            # Find matching key
-            signing_key = None
-            for key in jwks.get("keys", []):
-                if key.get("kid") == kid:
-                    from jwt import PyJWK
-
-                    signing_key = PyJWK(key).key
-                    break
-
-            if not signing_key:
-                raise ValueError(f"No matching key found for kid: {kid}")
+            signing_key = _KEYCLOAK_JWKS.get_signing_key(
+                self.jwks_url, unverified_header.get("kid")
+            )
 
             # Validate and decode token - accept multiple valid issuers
             valid_issuers = [
@@ -310,28 +299,8 @@ class KeycloakProvider(AuthProvider):
             raise ValueError(f"Self-signed token validation failed: {e}")
 
     def get_jwks(self) -> dict[str, Any]:
-        """Get JSON Web Key Set from Keycloak with caching."""
-        current_time = time.time()
-
-        # Check if cache is still valid
-        if self._jwks_cache and (current_time - self._jwks_cache_time) < self._jwks_cache_ttl:
-            logger.debug("Using cached JWKS")
-            return self._jwks_cache
-
-        try:
-            logger.debug(f"Fetching JWKS from {self.jwks_url}")
-            response = requests.get(self.jwks_url, timeout=10)
-            response.raise_for_status()
-
-            self._jwks_cache = response.json()
-            self._jwks_cache_time = current_time
-
-            logger.debug("JWKS fetched and cached successfully")
-            return self._jwks_cache
-
-        except Exception as e:
-            logger.error(f"Failed to retrieve JWKS from Keycloak: {e}")
-            raise ValueError(f"Cannot retrieve JWKS: {e}")
+        """Return Keycloak's JWKS via the shared hardened cache."""
+        return _KEYCLOAK_JWKS.get_jwks(self.jwks_url)
 
     def exchange_code_for_token(self, code: str, redirect_uri: str) -> dict[str, Any]:
         """Exchange authorization code for access token."""

@@ -481,6 +481,17 @@ class Settings(BaseSettings):
     cimd_logo_uri: str = ""  # optional; omitted from the document when empty
     cimd_contacts: str = ""  # CSV operator contact emails; optional
 
+    # CIMD consumer (issue #993). Default OFF. When enabled, the registry
+    # advertises `client_id_metadata_document_supported: true` in its RFC 8414
+    # authorization-server metadata, signalling that the upstream IdP the
+    # registry fronts accepts a CIMD URL as `client_id`. The registry is NOT the
+    # authorization server -- it advertises the IdP's endpoints and stays out of
+    # the token path -- so the IdP performs the CIMD fetch/validate/cache. Only
+    # enable when the configured IdP actually supports CIMD (e.g. Entra;
+    # Keycloak 26.6+ experimental); enabling it against a non-CIMD IdP would
+    # advertise a capability clients then fail to use.
+    cimd_consumer_enabled: bool = False
+
     # ARD Catalog Publisher settings (issue #1294)
     # Publishes /.well-known/ai-catalog.json per the Agentic Resource Discovery spec.
     ard_catalog_enabled: bool = Field(
