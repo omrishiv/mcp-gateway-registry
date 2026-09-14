@@ -259,3 +259,210 @@ class TestDiscoveryBorrow:
         out = await backend_oauth.with_bearer(si)
         assert out[backend_oauth.RESOLVED_BEARER_KEY] == "CC-TOKEN"
         assert disc_svc.calls == []
+
+
+def _obo_server_info(**overrides) -> dict:
+    si = {
+        "auth_scheme": "none",
+        "service_path": "/obo-echo",
+        "path": "/obo-echo",
+        "egress_auth_mode": "obo_exchange",
+        "egress_oauth": {"target_audience": "api://internal-mcp", "scopes": []},
+    }
+    si.update(overrides)
+    return si
+
+
+@pytest.fixture
+def _entra_gateway(monkeypatch):
+    """Configure the gateway's own Entra IdP client + egress feature on."""
+    for attr, val in (
+        ("egress_auth_enabled", True),
+        ("auth_provider", "entra"),
+        ("entra_client_id", "gw-client"),
+        ("entra_client_secret", "gw-secret"),
+        ("entra_tenant_id", "tenant-1"),
+        ("entra_login_base_url", "https://login.microsoftonline.com"),
+        # No operator allowlist -> shape heuristic accepts api:// targets.
+        ("egress_obo_allowed_audiences", ""),
+    ):
+        monkeypatch.setattr(backend_oauth.settings, attr, val, raising=False)
+
+
+@pytest.mark.unit
+class TestResolveOboDiscoveryBearer:
+    async def test_mints_cc_token_audienced_to_target(self, monkeypatch, _entra_gateway):
+        captured = {}
+
+        async def fake_grant(cfg, client_id, secret, scopes):
+            captured["token_url"] = cfg.token_url
+            captured["client_id"] = client_id
+            captured["secret"] = secret
+            captured["scopes"] = scopes
+            return _token(access="OBO-DISC")
+
+        monkeypatch.setattr(oauth_engine, "client_credentials_token", fake_grant)
+        assert await backend_oauth.resolve_obo_discovery_bearer(_obo_server_info()) == "OBO-DISC"
+        assert captured["client_id"] == "gw-client"
+        assert captured["secret"] == "gw-secret"
+        assert captured["scopes"] == ["api://internal-mcp/.default"]
+        assert (
+            captured["token_url"] == "https://login.microsoftonline.com/tenant-1/oauth2/v2.0/token"
+        )
+
+    async def test_egress_disabled_returns_none(self, monkeypatch, _entra_gateway):
+        monkeypatch.setattr(backend_oauth.settings, "egress_auth_enabled", False, raising=False)
+        called = False
+
+        async def fake_grant(*a, **k):
+            nonlocal called
+            called = True
+            return _token()
+
+        monkeypatch.setattr(oauth_engine, "client_credentials_token", fake_grant)
+        assert await backend_oauth.resolve_obo_discovery_bearer(_obo_server_info()) is None
+        assert called is False
+
+    async def test_non_obo_mode_returns_none(self, monkeypatch, _entra_gateway):
+        called = False
+
+        async def fake_grant(*a, **k):
+            nonlocal called
+            called = True
+            return _token()
+
+        monkeypatch.setattr(oauth_engine, "client_credentials_token", fake_grant)
+        si = _obo_server_info(egress_auth_mode="oauth_user")
+        assert await backend_oauth.resolve_obo_discovery_bearer(si) is None
+        assert called is False
+
+    async def test_missing_target_returns_none(self, monkeypatch, _entra_gateway):
+        monkeypatch.setattr(oauth_engine, "client_credentials_token", lambda *a, **k: _token())
+        si = _obo_server_info(egress_oauth={"target_audience": "", "scopes": []})
+        assert await backend_oauth.resolve_obo_discovery_bearer(si) is None
+
+    async def test_disallowed_first_party_target_returns_none(self, monkeypatch, _entra_gateway):
+        called = False
+
+        async def fake_grant(*a, **k):
+            nonlocal called
+            called = True
+            return _token()
+
+        monkeypatch.setattr(oauth_engine, "client_credentials_token", fake_grant)
+        # A shared first-party resource URL is rejected by the audience control.
+        si = _obo_server_info(
+            egress_oauth={"target_audience": "https://graph.microsoft.com", "scopes": []}
+        )
+        assert await backend_oauth.resolve_obo_discovery_bearer(si) is None
+        assert called is False
+
+    async def test_gateway_client_unconfigured_returns_none(self, monkeypatch, _entra_gateway):
+        monkeypatch.setattr(backend_oauth.settings, "entra_client_secret", "", raising=False)
+        called = False
+
+        async def fake_grant(*a, **k):
+            nonlocal called
+            called = True
+            return _token()
+
+        monkeypatch.setattr(oauth_engine, "client_credentials_token", fake_grant)
+        assert await backend_oauth.resolve_obo_discovery_bearer(_obo_server_info()) is None
+        assert called is False
+
+    async def test_second_call_uses_cache(self, monkeypatch, _entra_gateway):
+        calls = {"n": 0}
+
+        async def fake_grant(*a, **k):
+            calls["n"] += 1
+            return _token(access=f"t{calls['n']}")
+
+        monkeypatch.setattr(oauth_engine, "client_credentials_token", fake_grant)
+        first = await backend_oauth.resolve_obo_discovery_bearer(_obo_server_info())
+        second = await backend_oauth.resolve_obo_discovery_bearer(_obo_server_info())
+        assert first == second == "t1"
+        assert calls["n"] == 1
+
+    async def test_target_change_reacquires(self, monkeypatch, _entra_gateway):
+        calls = {"n": 0}
+
+        async def fake_grant(*a, **k):
+            calls["n"] += 1
+            return _token(access=f"t{calls['n']}")
+
+        monkeypatch.setattr(oauth_engine, "client_credentials_token", fake_grant)
+        await backend_oauth.resolve_obo_discovery_bearer(_obo_server_info())
+        changed = await backend_oauth.resolve_obo_discovery_bearer(
+            _obo_server_info(egress_oauth={"target_audience": "api://other-mcp", "scopes": []})
+        )
+        assert changed == "t2"
+        assert calls["n"] == 2
+
+    async def test_engine_failure_returns_none(self, monkeypatch, _entra_gateway):
+        async def fake_grant(*a, **k):
+            raise oauth_engine.OAuthEngineError("token endpoint unreachable")
+
+        monkeypatch.setattr(oauth_engine, "client_credentials_token", fake_grant)
+        assert await backend_oauth.resolve_obo_discovery_bearer(_obo_server_info()) is None
+
+    async def test_keycloak_sends_no_default_scope(self, monkeypatch, _entra_gateway):
+        # Keycloak binds audience via a server-side mapper (follow-on): no .default
+        # scope is sent, and the token endpoint is the realm token URL.
+        for attr, val in (
+            ("auth_provider", "keycloak"),
+            ("keycloak_url", "https://kc.example.com"),
+            ("keycloak_realm", "mcp-gateway"),
+            ("keycloak_client_id", "kc-client"),
+            ("keycloak_client_secret", "kc-secret"),
+        ):
+            monkeypatch.setattr(backend_oauth.settings, attr, val, raising=False)
+        captured = {}
+
+        async def fake_grant(cfg, client_id, secret, scopes):
+            captured["token_url"] = cfg.token_url
+            captured["scopes"] = scopes
+            return _token(access="KC")
+
+        monkeypatch.setattr(oauth_engine, "client_credentials_token", fake_grant)
+        assert await backend_oauth.resolve_obo_discovery_bearer(_obo_server_info()) == "KC"
+        assert captured["scopes"] == []
+        assert (
+            captured["token_url"]
+            == "https://kc.example.com/realms/mcp-gateway/protocol/openid-connect/token"
+        )
+
+    async def test_with_bearer_uses_obo_discovery_for_obo_server(self, monkeypatch, _entra_gateway):
+        # Pure obo server: no auth_scheme=oauth, no oauth_discovery -> falls through
+        # to the machine client_credentials path.
+        async def fake_grant(*a, **k):
+            return _token(access="OBO-DISC")
+
+        monkeypatch.setattr(oauth_engine, "client_credentials_token", fake_grant)
+        si = await backend_oauth.with_bearer(_obo_server_info())
+        assert si[backend_oauth.RESOLVED_BEARER_KEY] == "OBO-DISC"
+
+    async def test_discovery_borrow_precedence_over_obo(self, monkeypatch, _entra_gateway):
+        # A server configured with BOTH a connected discovery identity and
+        # obo_exchange resolves via the borrowed vault token; the machine CC path
+        # is not consulted.
+        import registry.egress_auth.factory as factory
+
+        monkeypatch.setattr(
+            factory, "get_egress_auth_service", lambda: _FakeEgressSvc(token="BORROWED")
+        )
+
+        async def fail_grant(*a, **k):
+            raise AssertionError("obo discovery CC must not run when the borrow succeeds")
+
+        monkeypatch.setattr(oauth_engine, "client_credentials_token", fail_grant)
+        si = _obo_server_info(
+            proxy_pass_url="https://internal.example.com/mcp",
+            oauth_discovery={
+                "enabled": True,
+                "oauth": {"provider": "custom", "client_id": "x"},
+                "auth_method": "oauth2",
+                "user_id": "u-1",
+            },
+        )
+        out = await backend_oauth.with_bearer(si)
+        assert out[backend_oauth.RESOLVED_BEARER_KEY] == "BORROWED"
