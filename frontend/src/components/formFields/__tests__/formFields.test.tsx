@@ -145,4 +145,33 @@ describe('AuthSchemeFields', () => {
     expect(document.querySelector('input[type="password"]')).toBeInTheDocument();
     expect(screen.getByText('Header Name')).toBeInTheDocument();
   });
+
+  it('shows the obo discovery panel for an obo server with scheme none', () => {
+    render(
+      <AuthSchemeFields
+        scheme="none"
+        {...base}
+        oboDiscoveryActive
+        oboTargetAudience="api://internal-mcp"
+      />,
+    );
+    expect(
+      screen.getByText(/discovery uses a gateway machine token/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText('api://internal-mcp')).toBeInTheDocument();
+  });
+
+  it('hides the obo discovery panel once an explicit scheme is selected', () => {
+    render(
+      <AuthSchemeFields
+        scheme="bearer"
+        {...base}
+        oboDiscoveryActive
+        oboTargetAudience="api://internal-mcp"
+      />,
+    );
+    expect(
+      screen.queryByText(/discovery uses a gateway machine token/i),
+    ).not.toBeInTheDocument();
+  });
 });

@@ -322,7 +322,13 @@ async def resolve_obo_discovery_bearer(server_info: dict) -> str | None:
     credential is the gateway's existing IdP client secret -- no per-user token, no
     vault, no interactive connect. The Entra app must be granted an application
     permission (app role) on the target server's app, admin-consented, so
-    ``<target>/.default`` yields a token (see docs/backend-discovery-auth.md).
+    ``<target>/.default`` yields a token (see docs/obo-token-exchange.md).
+
+    Precedence: this is the FALLBACK backend discovery credential for an obo
+    server. It fires only when the operator configured no explicit backend
+    ``auth_scheme`` -- an ``auth_scheme`` of ``bearer``/``api_key`` (scan token),
+    ``oauth`` (client_credentials), or ``oauth2_1`` (discovery identity) always
+    wins and is never shadowed by this derived token.
 
     Returns None (not raises) on any misconfiguration/failure so the caller omits
     the header -- discovery then records the server unhealthy, the correct signal.
@@ -332,6 +338,12 @@ async def resolve_obo_discovery_bearer(server_info: dict) -> str | None:
     if not settings.egress_auth_enabled:
         return None
     if server_info.get("egress_auth_mode") != "obo_exchange":
+        return None
+    # Fallback only: an explicit backend discovery credential (any auth_scheme
+    # other than none) is the operator's chosen credential and MUST win. Without
+    # this, a static bearer/api_key scan token would be silently shadowed because
+    # the resolved-bearer key takes precedence in the sync header builders.
+    if (server_info.get("auth_scheme") or "none") != "none":
         return None
     eo = server_info.get("egress_oauth") or {}
     target = (eo.get("target_audience") or "").strip()

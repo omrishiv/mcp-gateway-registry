@@ -466,3 +466,29 @@ class TestResolveOboDiscoveryBearer:
         )
         out = await backend_oauth.with_bearer(si)
         assert out[backend_oauth.RESOLVED_BEARER_KEY] == "BORROWED"
+
+    async def test_explicit_auth_scheme_bows_out(self, monkeypatch, _entra_gateway):
+        # An operator-configured backend discovery credential (e.g. a bearer scan
+        # token) must win; the derived machine token is only a fallback.
+        called = False
+
+        async def fake_grant(*a, **k):
+            nonlocal called
+            called = True
+            return _token()
+
+        monkeypatch.setattr(oauth_engine, "client_credentials_token", fake_grant)
+        si = _obo_server_info(auth_scheme="bearer")
+        assert await backend_oauth.resolve_obo_discovery_bearer(si) is None
+        assert called is False
+
+    async def test_with_bearer_does_not_shadow_static_scheme(self, monkeypatch, _entra_gateway):
+        # obo server + a static bearer: with_bearer must NOT stash a resolved
+        # bearer, so the sync header builder uses the operator's static credential.
+        async def fail_grant(*a, **k):
+            raise AssertionError("obo discovery CC must not run when a scheme is set")
+
+        monkeypatch.setattr(oauth_engine, "client_credentials_token", fail_grant)
+        si = _obo_server_info(auth_scheme="bearer", auth_credential_encrypted="enc")
+        out = await backend_oauth.with_bearer(si)
+        assert backend_oauth.RESOLVED_BEARER_KEY not in out

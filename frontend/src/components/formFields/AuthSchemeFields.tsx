@@ -15,6 +15,16 @@ interface AuthSchemeFieldsProps {
   /** When true, the credential placeholder reflects "keep existing" (edit mode). */
   editing?: boolean;
   accent?: keyof typeof FIELD_FOCUS;
+  /**
+   * True when this server uses On-Behalf-Of egress (egress_auth_mode ===
+   * 'obo_exchange'). Backend discovery for such a server has no per-server
+   * credential -- it is derived (a gateway machine token). When set and the
+   * scheme is 'none', an informational panel explains the derived behavior and
+   * the Entra prerequisite.
+   */
+  oboDiscoveryActive?: boolean;
+  /** The obo target audience, shown in the derived-discovery panel. */
+  oboTargetAudience?: string;
 }
 
 /**
@@ -36,6 +46,8 @@ const AuthSchemeFields: React.FC<AuthSchemeFieldsProps> = ({
   onHeaderNameChange,
   editing = false,
   accent = 'purple',
+  oboDiscoveryActive = false,
+  oboTargetAudience = '',
 }) => {
   return (
     <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
@@ -89,6 +101,28 @@ const AuthSchemeFields: React.FC<AuthSchemeFieldsProps> = ({
               placeholder="X-API-Key"
             />
           </FormField>
+        )}
+
+        {oboDiscoveryActive && scheme === 'none' && (
+          <div className="rounded-md border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 p-3 text-xs text-blue-800 dark:text-blue-300">
+            <p className="font-semibold mb-1">
+              On-Behalf-Of server — discovery uses a gateway machine token
+            </p>
+            <p>
+              Health checks and tool discovery authenticate as the gateway&apos;s
+              own IdP app (client_credentials) audienced to{' '}
+              <code className="font-mono break-all">
+                {oboTargetAudience || 'this server\u2019s target audience'}
+              </code>
+              . No per-server credential is needed here.
+            </p>
+            <p className="mt-1">
+              On Entra: grant the gateway app an application permission (app role)
+              on the target server&apos;s app and admin-consent it; the internal
+              server must accept app-only tokens for discovery. Selecting a scheme
+              above overrides discovery with an explicit credential.
+            </p>
+          </div>
         )}
       </div>
     </div>

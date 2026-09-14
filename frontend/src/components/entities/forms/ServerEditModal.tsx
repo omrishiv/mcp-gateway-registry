@@ -253,6 +253,8 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
               credential={form.auth_credential}
               headerName={form.auth_header_name}
               editing
+              oboDiscoveryActive={form.egress_auth_mode === 'obo_exchange'}
+              oboTargetAudience={form.egress_target_audience}
               onSchemeChange={(newScheme) =>
                 setForm((prev) => ({
                   ...prev,
