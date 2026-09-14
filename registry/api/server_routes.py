@@ -243,20 +243,20 @@ async def _build_scan_auth_headers(server_info: dict) -> str | None:
     """Build scanner auth headers, preferring a resolved OAuth bearer.
 
     The MCP scanner subprocess extracts the bearer from an ``X-Authorization``
-    header and sends it as ``Authorization: Bearer`` to the target. For an
-    OAuth 2.1 server this must be the SAME credential the registry uses for
-    health/tool-discovery: a client_credentials token (``auth_scheme == 'oauth'``)
-    or a borrowed per-user discovery-identity token (``oauth_discovery``). Falls
-    back to the static ``bearer``/``api_key`` header for those schemes. Returns
-    None (unauthenticated scan) only when nothing is configured.
+    header and sends it as ``Authorization: Bearer`` to the target. The scanner
+    MUST authenticate with the SAME credential the registry uses for
+    health/tool-discovery, so this delegates to :func:`backend_oauth.with_bearer`
+    -- the single resolver chain, so the scan path can never drift from
+    discovery. That chain resolves, in order: OAuth 2.0 client_credentials
+    (``auth_scheme == 'oauth'``), a borrowed OAuth 2.1 discovery identity
+    (``oauth_discovery``), then an ``obo_exchange`` machine token. Falls back to
+    the static ``bearer``/``api_key`` header. Returns None (unauthenticated scan)
+    only when nothing is configured.
     """
     from ..core import backend_oauth
 
-    token = None
-    if server_info.get("auth_scheme") == "oauth":
-        token = await backend_oauth.resolve_bearer(server_info)
-    if token is None:
-        token = await backend_oauth.resolve_discovery_bearer(server_info)
+    resolved = await backend_oauth.with_bearer(server_info)
+    token = resolved.get(backend_oauth.RESOLVED_BEARER_KEY)
     if token:
         # Fail closed: only attach the token to a destination that passes the
         # same SSRF re-validation as the static-credential path.
