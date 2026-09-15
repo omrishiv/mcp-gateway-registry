@@ -33,6 +33,8 @@ from enum import Enum
 from typing import Any, Final
 from urllib.parse import unquote
 
+from ..utils.sync_ownership import caller_owns_record
+
 logger = logging.getLogger(__name__)
 
 # Collapse runs of consecutive '/' into a single slash. Defense-in-depth
@@ -506,7 +508,11 @@ async def validate_user_can_bind_resource(
         if agent_card.visibility == "public":
             return True
         if agent_card.visibility == "private":
-            return agent_card.registered_by == user_context.get("username")
+            # Fail closed on empty-vs-empty: a peer-synced record stores
+            # registered_by = "", and a token without `sub` yields username "".
+            return caller_owns_record(
+                {"registered_by": agent_card.registered_by}, user_context.get("username")
+            )
         if agent_card.visibility == "group-restricted":
             user_groups = set(user_context.get("groups") or [])
             return bool(set(agent_card.allowed_groups) & user_groups)

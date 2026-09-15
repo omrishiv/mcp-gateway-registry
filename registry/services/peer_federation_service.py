@@ -38,6 +38,7 @@ from ..schemas.peer_federation_schema import (
     SyncResult,
 )
 from ..schemas.proxy_mixin import strip_proxy_fields
+from ..utils.sync_ownership import is_locally_detached
 from .agent_service import agent_service
 from .federation.peer_registry_client import PeerRegistryClient
 from .server_service import server_service
@@ -1143,6 +1144,21 @@ class PeerFederationService:
 
         return orphaned_servers, orphaned_agents
 
+    @staticmethod
+    def _orphan_metadata(sync_metadata: dict[str, Any] | None) -> dict[str, Any]:
+        """Return sync_metadata marked orphaned, without mutating the input.
+
+        Args:
+            sync_metadata: The record's current sync_metadata, if any.
+
+        Returns:
+            A copy carrying ``is_orphaned`` and ``orphaned_at``.
+        """
+        updated = dict(sync_metadata or {})
+        updated["is_orphaned"] = True
+        updated["orphaned_at"] = datetime.now(UTC).isoformat()
+        return updated
+
     async def mark_item_as_orphaned(
         self,
         item_path: str,
@@ -1159,24 +1175,21 @@ class PeerFederationService:
             True if marked successfully
         """
         try:
+            # Field-minimal writes: get_server_info strips credentials at every
+            # depth and the repository persists with a top-level $set, so writing
+            # a read-back document blanks stored secrets (e.g.
+            # egress_oauth.client_secret_encrypted). Same reason as
+            # set_local_override.
             if item_type == "server":
                 existing_server = await server_service.get_server_info(item_path)
                 if not existing_server:
                     logger.warning(f"Server not found for orphan marking: {item_path}")
                     return False
 
-                # get_server_info returns a dict
-                server_dict = existing_server
-
-                # Update sync_metadata
-                sync_metadata = server_dict.get("sync_metadata") or {}
-                sync_metadata["is_orphaned"] = True
-                sync_metadata["orphaned_at"] = datetime.now(UTC).isoformat()
-
-                server_dict["sync_metadata"] = sync_metadata
-
-                # Update server
-                success = await server_service.update_server(item_path, server_dict)
+                sync_metadata = self._orphan_metadata(existing_server.get("sync_metadata"))
+                success = await server_service.update_server(
+                    item_path, {"sync_metadata": sync_metadata}
+                )
                 if success:
                     logger.info(f"Marked server as orphaned: {item_path}")
                 return success
@@ -1187,18 +1200,10 @@ class PeerFederationService:
                     logger.warning(f"Agent not found for orphan marking: {item_path}")
                     return False
 
-                # get_agent_info returns an AgentCard Pydantic model, convert to dict
-                agent_dict = existing_agent.model_dump()
-
-                # Update sync_metadata
-                sync_metadata = agent_dict.get("sync_metadata") or {}
-                sync_metadata["is_orphaned"] = True
-                sync_metadata["orphaned_at"] = datetime.now(UTC).isoformat()
-
-                agent_dict["sync_metadata"] = sync_metadata
-
-                # Update agent
-                updated_agent = await agent_service.update_agent(item_path, agent_dict)
+                sync_metadata = self._orphan_metadata(existing_agent.sync_metadata)
+                updated_agent = await agent_service.update_agent(
+                    item_path, {"sync_metadata": sync_metadata}
+                )
                 if updated_agent:
                     logger.info(f"Marked agent as orphaned: {item_path}")
                     return True
@@ -1284,6 +1289,73 @@ class PeerFederationService:
 
         return handled_count
 
+    @staticmethod
+    async def get_sync_state(
+        item_path: str,
+        item_type: Literal["server", "agent"],
+    ) -> tuple[bool, bool]:
+        """Report whether an item exists and whether it came from a peer sync.
+
+        Reads the RAW ``sync_metadata`` flags, deliberately ignoring
+        ``local_overrides``: a record an operator already detached is still a
+        synced record, so it stays a valid target for re-attaching (or for an
+        idempotent re-detach). Contrast ``utils.sync_ownership.peer_owned_source``,
+        which answers the different question "may this be mutated locally".
+
+        Args:
+            item_path: Path of the item.
+            item_type: "server" or "agent".
+
+        Returns:
+            ``(exists, is_synced)``.
+        """
+        exists = False
+        sync_metadata: dict[str, Any] = {}
+        if item_type == "server":
+            server = await server_service.get_server_info(item_path)
+            if server:
+                exists = True
+                sync_metadata = server.get("sync_metadata") or {}
+        else:
+            agent = await agent_service.get_agent_info(item_path)
+            if agent:
+                exists = True
+                sync_metadata = agent.sync_metadata or {}
+        if not exists:
+            return False, False
+        return True, bool(sync_metadata.get("is_federated") or sync_metadata.get("is_read_only"))
+
+    @staticmethod
+    def _detach_payload(
+        sync_metadata: dict[str, Any],
+        existing: dict[str, Any],
+        override: bool,
+    ) -> dict[str, Any]:
+        """Build the minimal update payload for a local-override change.
+
+        Detaching a record also CLEARS ``registered_by``. Detachment stops the
+        federation reject from firing, leaving ownership as the only object-level
+        gate -- so a peer-supplied username left on the record would become a
+        local authorization key, which is exactly what ingest clears. A record
+        synced by an older build still carries the peer's username (sync skips an
+        overridden record from then on, so ingest would never rewrite it), and no
+        backfill migration exists; clearing here covers that history.
+
+        ``""`` (not a key removal) because the repository persists with ``$set``.
+
+        Args:
+            sync_metadata: The already-updated sync_metadata to persist.
+            existing: The stored record, read for its current ``registered_by``.
+            override: True when detaching, False when re-attaching to the peer.
+
+        Returns:
+            The field-minimal payload to persist.
+        """
+        payload: dict[str, Any] = {"sync_metadata": sync_metadata}
+        if override and existing.get("registered_by"):
+            payload["registered_by"] = ""
+        return payload
+
     async def set_local_override(
         self,
         item_path: str,
@@ -1293,7 +1365,16 @@ class PeerFederationService:
         """
         Set or clear local override flag for a synced item.
 
-        When override=True, sync will skip this item to preserve local changes.
+        When override=True, sync will skip this item (see
+        :meth:`is_locally_overridden`) so local changes survive, and the mutation
+        routes stop treating it as peer-owned (``utils.sync_ownership``): the two
+        halves of one operator decision to take the record over locally.
+
+        Writes ONLY the ``sync_metadata`` field. A read-modify-write of the whole
+        document would be destructive: ``get_server_info`` strips credentials at
+        every depth, and the repository persists with a top-level ``$set``, so
+        writing the read-back document would blank stored secrets such as
+        ``egress_oauth.client_secret_encrypted``.
 
         Args:
             item_path: Path of the item
@@ -1310,17 +1391,12 @@ class PeerFederationService:
                     logger.warning(f"Server not found for local override: {item_path}")
                     return False
 
-                # get_server_info returns a dict
-                server_dict = existing_server
-
-                # Update sync_metadata
-                sync_metadata = server_dict.get("sync_metadata") or {}
+                sync_metadata = dict(existing_server.get("sync_metadata") or {})
                 sync_metadata["local_overrides"] = override
 
-                server_dict["sync_metadata"] = sync_metadata
-
-                # Update server
-                success = await server_service.update_server(item_path, server_dict)
+                success = await server_service.update_server(
+                    item_path, self._detach_payload(sync_metadata, existing_server, override)
+                )
                 if success:
                     logger.info(f"Set local override to {override} for server: {item_path}")
                 return success
@@ -1331,17 +1407,19 @@ class PeerFederationService:
                     logger.warning(f"Agent not found for local override: {item_path}")
                     return False
 
-                # get_agent_info returns an AgentCard Pydantic model, convert to dict
-                agent_dict = existing_agent.model_dump()
-
-                # Update sync_metadata
-                sync_metadata = agent_dict.get("sync_metadata") or {}
+                sync_metadata = dict(existing_agent.sync_metadata or {})
                 sync_metadata["local_overrides"] = override
 
-                agent_dict["sync_metadata"] = sync_metadata
-
-                # Update agent
-                updated_agent = await agent_service.update_agent(item_path, agent_dict)
+                # update_agent merges onto the REPOSITORY record, so a minimal
+                # payload cannot drop fields the read omitted.
+                updated_agent = await agent_service.update_agent(
+                    item_path,
+                    self._detach_payload(
+                        sync_metadata,
+                        {"registered_by": existing_agent.registered_by},
+                        override,
+                    ),
+                )
                 if updated_agent:
                     logger.info(f"Set local override to {override} for agent: {item_path}")
                     return True
@@ -1365,14 +1443,19 @@ class PeerFederationService:
         """
         Check if an item has local override flag set.
 
+        Sync SKIPS an overridden item. That is one half of an operator's decision
+        to take a synced record over locally; the other half is that the mutation
+        routes stop rejecting it (``utils.sync_ownership.peer_owned_source``). Both
+        halves read the flag through the same rule so they cannot disagree about
+        the same record.
+
         Args:
             item: Server or agent data dict
 
         Returns:
             True if item has local override
         """
-        sync_metadata = item.get("sync_metadata") or {}
-        return sync_metadata.get("local_overrides", False)
+        return is_locally_detached(item)
 
     async def _index_server_for_search(
         self,
@@ -1465,6 +1548,17 @@ class PeerFederationService:
                     "original_path": original_path,
                 }
 
+                # registered_by is a LOCAL authorization key: the ownership
+                # checks in registry/api/server_routes.py compare it against the
+                # caller's local username. A peer registry is a foreign identity
+                # realm (possibly hostile, or merely using colliding usernames),
+                # so it must never get to name which local user owns a row. Keep
+                # the peer's value for provenance only, under a key nothing
+                # authorizes on.
+                peer_registered_by = server.get("registered_by")
+                if peer_registered_by:
+                    sync_metadata["source_registered_by"] = peer_registered_by
+
                 # Create a copy to avoid modifying original, and STRIP any
                 # proxy fields the peer sent: a federated entity is never a local
                 # gateway route (owner decision), and this prevents a peer from
@@ -1474,6 +1568,14 @@ class PeerFederationService:
                 server_data = strip_proxy_fields(server.copy())
                 server_data["path"] = prefixed_path
                 server_data["sync_metadata"] = sync_metadata
+                # A synced row is therefore ownerless locally: only an admin (or
+                # a row explicitly detached via sync_metadata.local_overrides)
+                # may mutate it. Cleared to "" rather than deleted because the
+                # repository persists updates with a per-key $set
+                # (registry/repositories/documentdb/server_repository.py), so an
+                # omitted key would leave a peer value written by an earlier sync
+                # in place on re-sync.
+                server_data["registered_by"] = ""
 
                 # Ensure UUID id field exists - use from peer if present, generate if not
                 if "id" not in server_data or not server_data["id"]:
@@ -1575,6 +1677,14 @@ class PeerFederationService:
                     "original_path": original_path,
                 }
 
+                # Same reasoning as _store_synced_servers: registered_by is a
+                # LOCAL authorization key (agent ownership checks live in
+                # registry/api/agent_routes.py), so the peer's value is kept for
+                # provenance only and never as a local owner.
+                peer_registered_by = agent.get("registered_by")
+                if peer_registered_by:
+                    sync_metadata["source_registered_by"] = peer_registered_by
+
                 # Create a copy to avoid modifying original, and STRIP any proxy
                 # fields the peer sent (see _store_synced_servers for rationale:
                 # federated entities are never local gateway routes; strip, not
@@ -1582,6 +1692,10 @@ class PeerFederationService:
                 agent_data = strip_proxy_fields(agent.copy())
                 agent_data["path"] = prefixed_path
                 agent_data["sync_metadata"] = sync_metadata
+                # Ownerless locally (admin-only mutation unless detached), and
+                # cleared to "" rather than deleted so a per-key $set update
+                # overwrites a peer value written by an earlier sync.
+                agent_data["registered_by"] = ""
 
                 # Ensure UUID id field exists - use from peer if present, generate if not
                 if "id" not in agent_data or not agent_data["id"]:

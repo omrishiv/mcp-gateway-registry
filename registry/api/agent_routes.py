@@ -80,6 +80,7 @@ from ..utils.metadata import (
     project_metadata,
 )
 from ..utils.request_utils import get_client_ip
+from ..utils.sync_ownership import caller_owns_record, peer_owned_source
 from ..utils.url_guard import PROXY_PROFILE, guarded_async_client, validate_agent_url
 from ._etag_utils import (
     parse_if_match,
@@ -798,6 +799,92 @@ def _check_agent_permission(
         )
 
 
+def _agent_synced_source_peer(agent_card) -> str | None:
+    """Return the source peer id when this agent is owned by a peer registry.
+
+    Agent-side spelling of ``peer_owned_source``: the rule lives in
+    ``registry.utils.sync_ownership`` so the server family, the agent family and
+    non-API writers cannot drift apart. AgentCard is a Pydantic model rather than
+    a stored dict, so the two fields the rule reads are handed over as a mapping
+    instead of dumping the whole card on every mutation request.
+
+    Args:
+        agent_card: The stored AgentCard.
+
+    Returns:
+        The source peer id for a peer-owned record, else ``None``.
+    """
+    return peer_owned_source({"sync_metadata": agent_card.sync_metadata})
+
+
+def _reject_federated_agent(
+    agent_card: AgentCard,
+    path: str,
+    user_context: dict[str, Any],
+    *,
+    verb: str = "modified",
+) -> None:
+    """Reject a local mutation of an agent synced from a peer registry.
+
+    Args:
+        agent_card: The stored AgentCard.
+        path: Agent path, used for the 403 detail and log line.
+        user_context: Authenticated user context.
+        verb: Past-tense verb naming the refused operation
+            ("updated"/"patched"/"deleted"). It drives BOTH halves of the message,
+            so a refused DELETE is never told to go and update the record
+            upstream.
+
+    Raises:
+        HTTPException: 403 if the agent is federated or read-only.
+    """
+    source_peer = _agent_synced_source_peer(agent_card)
+    if source_peer:
+        logger.warning(
+            f"User {user_context.get('username')} attempted to {verb.rstrip('d')} "
+            f"federated agent {path} from {source_peer}"
+        )
+        # Present tense for the remedy: "deleted" -> "delete it at the source".
+        remedy_verb = {"updated": "update", "patched": "patch", "deleted": "delete"}.get(
+            verb, "change"
+        )
+        # No privileged endpoint named in a detail that reaches every
+        # authenticated caller; see _reject_federated_server.
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Agent '{path}' is synced from {source_peer} and cannot be "
+                f"{verb} locally. {remedy_verb.capitalize()} it at the source "
+                f"registry, or ask an operator to detach it from that peer."
+            ),
+        )
+
+
+def _caller_may_mutate_owned_agent(agent_card, user_context: dict[str, Any]) -> bool:
+    """Return True when the caller is an admin or the registrant of this agent.
+
+    Fail-closed twin of ``server_routes._caller_may_mutate_owned``, sharing its
+    identity comparison via ``caller_owns_record``: ownership must be POSITIVELY
+    established, so a blank stored ``registered_by`` or a blank caller
+    ``username`` denies a non-admin. Federation ingest deliberately stores
+    ``registered_by = ""`` on a synced record (a peer must not name local owners),
+    which makes such a record ownerless -- two empty identities must never compare
+    equal and unlock it.
+
+    Args:
+        agent_card: The stored AgentCard.
+        user_context: Authenticated user context.
+
+    Returns:
+        True if the caller may mutate the record on ownership grounds.
+    """
+    if user_context.get("is_admin"):
+        return True
+    return caller_owns_record(
+        {"registered_by": agent_card.registered_by}, user_context.get("username")
+    )
+
+
 def _check_agent_lifecycle_status_permission(
     existing_agent,
     merged_agent,
@@ -873,7 +960,9 @@ def _filter_agents_by_access(
             continue
 
         if agent.visibility == "private":
-            if agent.registered_by == username:
+            # Fail closed: a synced record stores registered_by = "" and a token
+            # minted without `sub` yields username "" -- two blanks must not match.
+            if caller_owns_record({"registered_by": agent.registered_by}, username):
                 accessible.append(agent)
             continue
 
@@ -1663,7 +1752,12 @@ async def toggle_agent(
     # accessible_agents, or be its owner).
     if not user_context.get("is_admin", False):
         accessible_agents = user_context.get("accessible_agents", [])
-        owns_agent = agent_card.registered_by == user_context.get("username")
+        # Ownership as an ACCESS grant here, so it must be positively established:
+        # "" == "" would hand every ownerless (synced) agent to a blank-username
+        # caller.
+        owns_agent = caller_owns_record(
+            {"registered_by": agent_card.registered_by}, user_context.get("username")
+        )
         if "all" not in accessible_agents and path not in accessible_agents and not owns_agent:
             logger.warning(
                 f"User {user_context.get('username')} attempted to toggle agent "
@@ -2007,22 +2101,19 @@ async def pull_agent_card(
             detail=f"Agent not found at path '{path}'",
         )
 
-    # 2. Check permissions (modify_service + owner or admin)
+    # 2. Reject a peer-owned record BEFORE anything else: it is immutable locally
+    # regardless of who asks (a synced record is ownerless, so the ownership check
+    # below could never admit a non-admin anyway -- but an admin must be stopped
+    # too).
+    _reject_federated_agent(existing_agent, path, user_context, verb="updated")
+
+    # 3. Permissions (modify_agent + owner-or-admin, fail closed)
     _check_agent_permission("modify", existing_agent.name, user_context)
 
-    if not user_context["is_admin"] and existing_agent.registered_by != user_context["username"]:
+    if not _caller_may_mutate_owned_agent(existing_agent, user_context):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only pull card updates for agents you registered",
-        )
-
-    # 3. Block federated/read-only agents
-    sync_metadata = existing_agent.sync_metadata or {}
-    if sync_metadata.get("is_federated") or sync_metadata.get("is_read_only"):
-        source_peer = sync_metadata.get("source_peer_id", "unknown peer registry")
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Agent '{path}' is synced from {source_peer} and cannot be updated locally.",
         )
 
     # 4. Check agent has a valid URL and is A2A protocol
@@ -2274,11 +2365,19 @@ async def update_agent(
             detail=f"Agent not found at path '{path}'",
         )
 
+    # Federated read-only guard. PUT was the one agent-mutation route without it
+    # (PATCH and DELETE had it), so a synced agent could be rewritten locally by
+    # whoever matched its registered_by -- a value the PEER used to supply.
+    _reject_federated_agent(existing_agent, path, user_context, verb="updated")
+
+    # Ownership fails closed: a blank stored registered_by -- which every synced
+    # record now has -- denies a non-admin, so two empty identities can never
+    # compare equal and unlock the record.
     _check_agent_permission("modify", existing_agent.name, user_context)
 
-    if not user_context["is_admin"] and existing_agent.registered_by != user_context["username"]:
+    if not _caller_may_mutate_owned_agent(existing_agent, user_context):
         logger.warning(
-            f"User {user_context['username']} attempted to update agent {path} "
+            f"User {user_context.get('username')} attempted to update agent {path} "
             f"owned by {existing_agent.registered_by}"
         )
         raise HTTPException(
@@ -2450,24 +2549,14 @@ async def patch_agent(
         )
 
     # Federated read-only guard (parity with DELETE)
-    sync_metadata = existing_agent.sync_metadata or {}
-    if sync_metadata.get("is_federated") or sync_metadata.get("is_read_only"):
-        source_peer = sync_metadata.get("source_peer_id", "unknown peer registry")
-        logger.warning(
-            f"User {user_context['username']} attempted to patch federated agent {path} "
-            f"from {source_peer}"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Agent '{path}' is synced from {source_peer} and cannot be patched locally. "
-            f"Patch this agent at its source registry, or remove the peer federation.",
-        )
+    _reject_federated_agent(existing_agent, path, user_context, verb="patched")
 
-    # Authorization (parity with PUT)
+    # Authorization (parity with PUT). Ownership fails closed: a blank stored
+    # registered_by -- which every synced record now has -- denies a non-admin.
     _check_agent_permission("modify", existing_agent.name, user_context)
-    if not user_context["is_admin"] and existing_agent.registered_by != user_context["username"]:
+    if not _caller_may_mutate_owned_agent(existing_agent, user_context):
         logger.warning(
-            f"User {user_context['username']} attempted to patch agent {path} "
+            f"User {user_context.get('username')} attempted to patch agent {path} "
             f"owned by {existing_agent.registered_by}"
         )
         raise HTTPException(
@@ -2619,18 +2708,7 @@ async def delete_agent(
         )
 
     # Block deletion of federated (read-only) agents from peer registries
-    sync_metadata = existing_agent.sync_metadata or {}
-    if sync_metadata.get("is_federated") or sync_metadata.get("is_read_only"):
-        source_peer = sync_metadata.get("source_peer_id", "unknown peer registry")
-        logger.warning(
-            f"User {user_context['username']} attempted to delete federated agent {path} "
-            f"from {source_peer}"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Agent '{path}' is synced from {source_peer} and cannot be deleted locally. "
-            f"Delete this agent from its source registry, or remove the peer federation.",
-        )
+    _reject_federated_agent(existing_agent, path, user_context, verb="deleted")
 
     # Strict dual gate, uniform with server/skill/custom-entity delete: the caller
     # must hold the delete_agent scope AND be an admin or the agent's owner.
@@ -2638,15 +2716,12 @@ async def delete_agent(
     # without the delete_agent grant -- the lone outlier among the asset families.
     # The scope half routes through the canonical helper keyed on the agent NAME
     # (matching modify/toggle and the batch path); the ownership check below
-    # (skipped for admins) supplies the AND-owner half.
+    # (skipped for admins) supplies the AND-owner half, and fails closed.
     _check_agent_permission("delete", existing_agent.name, user_context)
 
-    if (
-        not user_context.get("is_admin", False)
-        and existing_agent.registered_by != user_context["username"]
-    ):
+    if not _caller_may_mutate_owned_agent(existing_agent, user_context):
         logger.warning(
-            f"User {user_context['username']} attempted to delete agent {path} "
+            f"User {user_context.get('username')} attempted to delete agent {path} "
             f"owned by {existing_agent.registered_by}"
         )
         raise HTTPException(

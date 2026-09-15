@@ -31,7 +31,7 @@ from ..auth.csrf import (
     verify_csrf_token_header_only,
 )
 from ..auth.dependencies import enhanced_auth, nginx_proxied_auth
-from ..auth.internal import validate_internal_auth
+from ..auth.internal import validate_internal_auth, validate_internal_service
 from ..auth.tool_filter import filter_tools_for_user
 from ..common.log_redaction import redact_mapping, redact_url
 from ..constants import VALID_AUTH_SCHEMES, DeploymentType, HealthStatus
@@ -73,6 +73,7 @@ from ..utils.metadata import (
     parse_and_validate_metadata_fields,
     project_metadata,
 )
+from ..utils.sync_ownership import caller_owns_record, peer_owned_source
 from ._etag_utils import parse_if_match, updated_ms, weak_etag_for_timestamp
 
 logger = logging.getLogger(__name__)
@@ -1042,6 +1043,19 @@ async def toggle_service_route(
 
     service_name = server_info["server_name"]
 
+    # A synced row's is_enabled belongs to its source registry and is re-$set on
+    # every sync, so a local toggle both diverges from the source and is silently
+    # reverted later -- while immediately tearing down (or standing up) the nginx
+    # route below. Reject it, like every other local mutation of a synced server.
+    _reject_federated_server(server_info, service_path, user_context)
+
+    # Toggling deliberately does NOT require ownership, unlike the rest of the
+    # mutation family: enable/disable is an operational action gated by the
+    # separate, per-server `toggle_service` grant plus the path-access check
+    # below, so an operator can grant "may take this server in and out of
+    # service" without granting "may rewrite it". Adding _caller_may_mutate_owned
+    # here would be a scope-model change, not a bug fix.
+
     # Check if user has toggle_service permission for this specific service
     if not user_has_asset_permission("server", "toggle", service_name, user_context):
         logger.warning(
@@ -1269,6 +1283,52 @@ def _check_server_permission(
         )
 
 
+def _synced_source_peer(server_info: dict[str, Any]) -> str | None:
+    """Return the source peer id when this row is owned by a peer registry.
+
+    Server-route spelling of ``peer_owned_source``; the rule itself lives in
+    ``registry.utils.sync_ownership`` because non-API writers (the health
+    monitor's tool refresh) must ask it identically. Kept as a named local
+    helper because ~12 call sites read better against it.
+
+    Args:
+        server_info: The stored server document.
+
+    Returns:
+        The source peer id (or a placeholder when the peer id was not stored)
+        for a peer-owned row; ``None`` when the row is locally owned.
+    """
+    return peer_owned_source(server_info)
+
+
+def _caller_may_mutate_owned(
+    server_info: dict[str, Any],
+    user_context: dict[str, Any],
+) -> bool:
+    """Return True when the caller is an admin or the registrant of this server.
+
+    Single gate for the object-level ownership rule, so every mutation route
+    (whichever error shape it returns) decides identically. The identity
+    comparison is ``caller_owns_record``, which fails closed: a stored
+    ``registered_by`` or a caller ``username`` that is missing/empty denies a
+    non-admin, so two absent identities can never compare equal. A synced row is
+    ownerless by construction -- federation ingest clears ``registered_by``
+    because a peer must not name local owners -- so this denies every non-admin
+    on such a row. The admin bypass stays here: it is this family's policy, not
+    part of the ownership question.
+
+    Args:
+        server_info: The stored server document.
+        user_context: Authenticated user context.
+
+    Returns:
+        True if the caller may mutate the record on ownership grounds.
+    """
+    if user_context.get("is_admin"):
+        return True
+    return caller_owns_record(server_info, user_context.get("username"))
+
+
 def _reject_federated_server(
     server_info: dict[str, Any],
     path: str,
@@ -1290,19 +1350,22 @@ def _reject_federated_server(
     Raises:
         HTTPException: 403 if the server is federated or read-only.
     """
-    sync_metadata = server_info.get("sync_metadata") or {}
-    if sync_metadata.get("is_federated") or sync_metadata.get("is_read_only"):
-        source_peer = sync_metadata.get("source_peer_id", "unknown peer registry")
+    source_peer = _synced_source_peer(server_info)
+    if source_peer:
         logger.warning(
             f"User {user_context.get('username')} attempted to modify federated "
             f"server {path} from {source_peer}"
         )
+        # The remedy names no privileged endpoint: this reject runs before any
+        # ownership or admin determination, so the detail reaches every
+        # authenticated caller who touches a synced row. Operators find the
+        # detach procedure in the federation guide.
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=(
                 f"Server '{path}' is synced from {source_peer} and cannot be "
-                f"modified locally. Update at the source registry, or remove "
-                f"the peer federation."
+                f"modified locally. Update it at the source registry, or ask an "
+                f"operator to detach it from that peer."
             ),
         )
 
@@ -1317,20 +1380,19 @@ def _authorize_server_mutation(
     """Enforce the full authorization gate shared by every server-mutation route.
 
     Runs the four checks that guard any local mutation of a registered server
-    (the legacy ``POST /edit`` form, ``PUT``/``PATCH /servers/{path}`` and
-    ``PATCH .../auth-credential``), in order and fail-closed, so the endpoints
-    cannot drift apart and re-open an ownership or federation hole:
+    (the legacy ``GET``/``POST /edit`` form, ``PUT``/``PATCH /servers/{path}``,
+    ``PATCH .../auth-credential``, the version routes and ``/servers/remove``),
+    in order and fail-closed, so the endpoints cannot drift apart and re-open an
+    ownership or federation hole:
 
     1. Existence -- a missing server (``None``) denies with 404.
     2. Federated / read-only reject -- a server synced from a peer registry
        must be changed at its source, never locally, regardless of ownership
-       or admin status.
-    3. Modify scope -- the caller must hold the ``action`` permission for the
+       or admin status (see :func:`_synced_source_peer`).
+    3. Action scope -- the caller must hold the ``action`` permission for the
        server (delegated to :func:`_check_server_permission`).
-    4. Owner-or-admin -- a non-admin may only mutate a server they registered.
-       Ownership must be positively established: a missing ``registered_by`` or
-       a missing caller ``username`` denies a non-admin (never let two absent
-       identities compare equal -> fail closed).
+    4. Owner-or-admin -- a non-admin may only mutate a server they registered
+       (delegated to :func:`_caller_may_mutate_owned`, which fails closed).
 
     Args:
         server_info: The stored server document, or ``None`` if not found.
@@ -1353,19 +1415,15 @@ def _authorize_server_mutation(
 
     _check_server_permission(action, server_info.get("server_name", path), user_context)
 
-    if not user_context.get("is_admin"):
-        registered_by = server_info.get("registered_by")
-        username = user_context.get("username")
-        # Positive ownership match required: absent identity on either side
-        # denies (two missing values must never compare equal).
-        if not registered_by or not username or registered_by != username:
-            logger.warning(
-                f"User {username} attempted to modify server {path} owned by {registered_by}"
-            )
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You can only modify servers you registered",
-            )
+    if not _caller_may_mutate_owned(server_info, user_context):
+        logger.warning(
+            f"User {user_context.get('username')} attempted to {action} server {path} "
+            f"owned by {server_info.get('registered_by')}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only modify servers you registered",
+        )
 
 
 def _check_lifecycle_status_permission(
@@ -1684,6 +1742,26 @@ async def register_service(
                 detail="Invalid JSON in metadata field",
             )
 
+    # Object-level guards for the case where this "registration" actually mutates
+    # an EXISTING record: register_server auto-creates a new version when the path
+    # already exists with a different version (server_service.register_server ->
+    # add_server_version), so without these two checks a register_service grant
+    # would let any caller attach a version -- with its own proxy_pass_url -- to
+    # somebody else's server, or to a peer-synced one. Same rules and same order
+    # as POST /api/servers/register. Fails closed.
+    existing_server = await server_service.get_server_info(path)
+    if existing_server:
+        _reject_federated_server(existing_server, path, user_context)
+        if not _caller_may_mutate_owned(existing_server, user_context):
+            logger.warning(
+                f"REGISTER: User {user_context.get('username')} attempted to add a "
+                f"version to server {path} owned by {existing_server.get('registered_by')}"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only modify servers you registered",
+            )
+
     # Registration gate check (admission control, issue #809)
     # Called BEFORE credential encryption so sanitize() can strip plaintext fields
     gate_result = await check_registration_gate(
@@ -1855,7 +1933,11 @@ async def register_service(
 @router.post("/internal/register")
 async def internal_register_service(
     request: Request,
-    caller: Annotated[str, Depends(validate_internal_auth)],
+    # validate_internal_service, not validate_internal_auth: this handler PERSISTS
+    # the caller identity as registered_by, and `sub` is "<service>@<instance_id>"
+    # -- a per-replica value that cannot be compared later. Both dependencies run
+    # the same gate; only one may run per request (single-use jti).
+    caller: Annotated[str, Depends(validate_internal_service)],
     name: Annotated[str, Form()],
     description: Annotated[str, Form()],
     path: Annotated[str, Form()],
@@ -2057,8 +2139,29 @@ async def internal_register_service(
             },
         )
 
+    # Ownership: this endpoint has no end-user identity, so stamp the internal
+    # caller as the registrant. Without it the stored row is OWNERLESS and, under
+    # the fail-closed ownership rule, permanently un-editable by anyone but an
+    # admin.
+    server_entry["registered_by"] = caller
+
+    if existing_server:
+        # A synced row is owned by its source registry: the internal secret
+        # authenticates a trusted component, it does not make a peer's record
+        # locally writable. Same rule as every user-facing mutation route.
+        _reject_federated_server(existing_server, path, {"username": caller})
+
+        # Overwriting must not reassign someone else's server to the internal
+        # caller; keep the STORED registrant, including a deliberate empty one.
+        # Presence, not truthiness: "" is the ownerless sentinel that federation
+        # ingest writes, so `or caller` would hand a detached peer record to the
+        # internal caller.
+        if "registered_by" in existing_server:
+            server_entry["registered_by"] = existing_server["registered_by"]
+
     # Register the server (this will overwrite if server exists and overwrite=True)
     logger.debug("INTERNAL REGISTER: Calling server_service.register_server")
+    result: dict[str, Any] = {}
     if existing_server and overwrite:
         logger.debug(f"INTERNAL REGISTER: Overwriting existing server at path {path}")
         success = await server_service.update_server(path, server_entry)
@@ -2448,28 +2551,21 @@ async def edit_server_form(
     service_path: str,
     user_context: Annotated[dict, Depends(enhanced_auth)],
 ):
-    """Show edit form for a service (requires modify_service UI permission)."""
+    """Show edit form for a service (same gate as the POST that submits it)."""
 
     if not service_path.startswith("/"):
         service_path = "/" + service_path
 
     server_info = await server_service.get_server_info(service_path)
-    if not server_info:
-        raise HTTPException(status_code=404, detail="Service path not found")
 
-    service_name = server_info["server_name"]
+    # The form is only useful to a caller who can actually submit it, so it runs
+    # the identical mutation gate as POST /edit/{path}: existence, federated /
+    # read-only reject, modify scope, owner-or-admin. Rendering it for anyone
+    # else hands out an editable form whose every submission 403s.
+    _authorize_server_mutation(server_info, service_path, user_context)
 
-    # Check if user has modify_service permission for this specific service
-    if not user_has_asset_permission("server", "modify", service_name, user_context):
-        logger.warning(
-            f"User {user_context['username']} attempted to access edit form for {service_name} without modify_service permission"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"You do not have permission to modify {service_name}",
-        )
-
-    # For non-admin users, check if they have access to this specific server
+    # Non-admins must also be able to reach the server through their granted
+    # paths (discovery scope), not only own it.
     if not user_context["is_admin"]:
         if not await server_service.user_can_access_server_path(
             service_path, user_context["accessible_servers"]
@@ -2541,12 +2637,10 @@ async def edit_server_submit(
     if not service_path.startswith("/"):
         service_path = "/" + service_path
 
-    # Check if the server exists and get service name
+    # Check if the server exists
     server_info = await server_service.get_server_info(service_path)
     if not server_info:
-        raise HTTPException(status_code=404, detail="Service path not found")
-
-    service_name = server_info["server_name"]
+        raise HTTPException(status_code=404, detail=f"Server not found at path '{service_path}'")
 
     # Validate deployment value if provided.
     if deployment is not None and deployment not in ("remote", "local"):
@@ -2593,6 +2687,22 @@ async def edit_server_submit(
         # /execute scope) is not sufficient, matching PUT/PATCH /servers/{path}
         # and PATCH .../auth-credential. Fails closed.
         _authorize_server_mutation(server_info, service_path, user_context)
+
+        # Plus the discovery-scope check, so this endpoint is neither stricter nor
+        # looser than the GET that renders its form: owning a server does not by
+        # itself put its path in the caller's granted set.
+        if not user_context["is_admin"]:
+            if not await server_service.user_can_access_server_path(
+                service_path, user_context["accessible_servers"]
+            ):
+                logger.warning(
+                    f"User {user_context['username']} attempted to edit service "
+                    f"{service_path} without access"
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You do not have access to edit this server",
+                )
 
     # Shape validation + local_runtime parsing are shared with /register.
     validate_deployment_shape(
@@ -3128,7 +3238,17 @@ async def get_service_tools(
         new_tool_count = len(tool_list)
         current_tool_count = server_info.get("num_tools", 0)
 
-        if current_tool_count != new_tool_count or server_info.get("tool_list") != tool_list:
+        # This is a read-triggered cache write, so it deliberately carries no
+        # modify scope or ownership check -- but it MUST NOT touch a peer-owned
+        # row: the stored tool_list of a synced server belongs to its source
+        # registry, and overwriting it here would let any reader replace
+        # peer-synced content with whatever the peer-controlled upstream
+        # currently answers, with no scope at all.
+        source_peer = _synced_source_peer(server_info)
+        stale = current_tool_count != new_tool_count or server_info.get("tool_list") != tool_list
+        if stale and source_peer:
+            logger.debug(f"Not caching live tools for {service_path}: synced from {source_peer}")
+        elif stale:
             logger.info(f"Updating tool list for {service_path}. New count: {new_tool_count}")
 
             # Update server info with fresh tools
@@ -4313,6 +4433,72 @@ async def register_service_api(
         if external_tags_list:
             server_entry["external_tags"] = external_tags_list
 
+    existing_server = await server_service.get_server_info(path)
+
+    # Object-level guards on an EXISTING path. Registering at a fresh path needs
+    # only the register scope; re-registering over a stored server is a mutation
+    # of someone else's record, so it runs the same two object rules as the rest
+    # of the mutation family (shared helpers, this endpoint's error shape). The
+    # register scope -- not modify -- deliberately remains the scope gate here:
+    # this is still the registration API, and ownership is what stops a hijack.
+    if existing_server:
+        # A synced row is owned by its source registry. update_server persists
+        # with $set, so an overwrite would keep sync_metadata (the record stays
+        # "federated") while silently repointing proxy_pass_url and rewriting the
+        # credential -- the exact divergence _reject_federated_server prevents on
+        # /edit, PUT, PATCH and auth-credential.
+        source_peer = _synced_source_peer(existing_server)
+        if source_peer:
+            logger.warning(
+                f"SERVERS REGISTER: User {user_context.get('username')} attempted to "
+                f"overwrite federated server {path} from {source_peer}"
+            )
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "error": "Service registration failed",
+                    "reason": (
+                        f"Server '{path}' is synced from {source_peer} and cannot be "
+                        f"overwritten locally"
+                    ),
+                    "detail": (
+                        "Register it at the source registry, or ask an operator to "
+                        "detach it from that peer"
+                    ),
+                },
+            )
+
+        # Ownership guard: overwriting (or auto-versioning) an existing server
+        # replaces another user's registration and can redirect its traffic. Only
+        # the original owner (registered_by) or an admin may do so. Without this,
+        # any user with registration permission could hijack any server by
+        # re-registering at the same path. _caller_may_mutate_owned fails closed:
+        # a missing registered_by or username denies a non-admin.
+        if not _caller_may_mutate_owned(existing_server, user_context):
+            logger.warning(
+                f"SERVERS REGISTER: User {user_context.get('username')} attempted to "
+                f"overwrite server {path} owned by {existing_server.get('registered_by')}"
+            )
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "error": "Service registration failed",
+                    "reason": "You can only overwrite servers you registered",
+                    "detail": f"Server at path '{path}' is owned by another user",
+                },
+            )
+
+        # Ownership is NOT transferred by an overwrite. An admin may overwrite a
+        # server they do not own (above), but restamping registered_by with the
+        # admin's username would orphan the real owner: registered_by is
+        # registrant-only and re-pinned on PUT/PATCH (SERVER_REGISTRANT_ONLY_FIELDS),
+        # and there is no ownership-transfer endpoint, so the original owner would
+        # permanently lose /edit, PUT, PATCH, auth-credential, the version routes
+        # and remove. Presence, not truthiness: "" is the ownerless sentinel that
+        # federation ingest writes and must survive too.
+        if "registered_by" in existing_server:
+            server_entry["registered_by"] = existing_server["registered_by"]
+
     # Registration gate check (admission control, issue #809)
     gate_result = await check_registration_gate(
         asset_type="server",
@@ -4370,32 +4556,6 @@ async def register_service_api(
                     "detail": "Provide metadata as a JSON string",
                 },
             )
-
-    # Check if server exists and handle overwrite/version logic
-    existing_server = await server_service.get_server_info(path)
-
-    # Ownership guard: overwriting (or auto-versioning) an existing server
-    # replaces another user's registration and can redirect its traffic. Only
-    # the original owner (registered_by) or an admin may do so. Without this,
-    # any user with registration permission could hijack any server by
-    # re-registering at the same path. Mirrors the guard on the dedicated
-    # update endpoint. Fails closed when ownership can't be established.
-    if existing_server and (
-        not user_context.get("is_admin")
-        and existing_server.get("registered_by") != user_context.get("username")
-    ):
-        logger.warning(
-            f"SERVERS REGISTER: User {user_context.get('username')} attempted to "
-            f"overwrite server {path} owned by {existing_server.get('registered_by')}"
-        )
-        return JSONResponse(
-            status_code=403,
-            content={
-                "error": "Service registration failed",
-                "reason": "You can only overwrite servers you registered",
-                "detail": f"Server at path '{path}' is owned by another user",
-            },
-        )
 
     # If server exists with a different version, register_server will auto-create new version
     # Only reject if overwrite=False AND it's the same version (or no version specified)
@@ -4523,15 +4683,10 @@ async def update_server_auth_credential(
         server_path = "/" + server_path
 
     # Look up the server first so the permission check can use its display name.
+    # Every failure on this route answers with the FastAPI {"detail": ...} shape
+    # (the shared mutation gate raises HTTPException), so the endpoint has one
+    # error contract instead of two.
     existing_server = await server_service.get_server_info(server_path, include_credentials=True)
-    if not existing_server:
-        return JSONResponse(
-            status_code=404,
-            content={
-                "error": "Server not found",
-                "reason": f"No server registered at path '{server_path}'",
-            },
-        )
 
     # Authorization: rewriting a backend credential is a server modification and
     # can hijack the upstream connection, so it runs the full mutation gate --
@@ -4543,22 +4698,16 @@ async def update_server_auth_credential(
 
     # Validate auth_scheme
     if body.auth_scheme not in VALID_AUTH_SCHEMES:
-        return JSONResponse(
-            status_code=400,
-            content={
-                "error": "Invalid auth_scheme",
-                "reason": f"auth_scheme must be one of: {VALID_AUTH_SCHEMES}",
-            },
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"auth_scheme must be one of: {VALID_AUTH_SCHEMES}",
         )
 
     # Require credential when scheme is not 'none'
     if body.auth_scheme != "none" and not body.auth_credential:
-        return JSONResponse(
-            status_code=400,
-            content={
-                "error": "Missing credential",
-                "reason": "auth_credential is required when auth_scheme is not 'none'",
-            },
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="auth_credential is required when auth_scheme is not 'none'",
         )
 
     # Build update dict
@@ -4581,22 +4730,17 @@ async def update_server_auth_credential(
             encrypt_credential_in_server_dict(existing_server)
         except ValueError as e:
             logger.error(f"Credential encryption failed type={type(e).__name__}")
-            return JSONResponse(
-                status_code=500,
-                content={
-                    "error": "Credential encryption failed. Please ensure SECRET_KEY is configured.",
-                },
-            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=("Credential encryption failed. Please ensure SECRET_KEY is configured."),
+            ) from e
 
     # Save updated server
     success = await server_service.update_server(server_path, existing_server)
     if not success:
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": "Update failed",
-                "reason": "Failed to save updated server credentials",
-            },
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to save updated server credentials",
         )
 
     logger.info(
@@ -4668,8 +4812,11 @@ async def toggle_service_api(
         raise HTTPException(status_code=404, detail="Service path not registered")
 
     # Authorization: mirror the legacy UI toggle route (toggle_service_route).
-    # Require the toggle_service UI permission for this service, then a
-    # per-server access check for non-admin callers.
+    # Reject a peer-owned row first (its is_enabled is re-$set on every sync, so a
+    # local toggle diverges and is silently reverted), then require the
+    # toggle_service UI permission for this service, then a per-server access
+    # check for non-admin callers.
+    _reject_federated_server(server_info, path, user_context)
 
     service_name = server_info["server_name"]
 
@@ -4812,10 +4959,12 @@ async def remove_service_api(
             },
         )
 
-    # Block deletion of federated (read-only) servers from peer registries
-    sync_metadata = server_info.get("sync_metadata", {})
-    if sync_metadata.get("is_federated") or sync_metadata.get("is_read_only"):
-        source_peer = sync_metadata.get("source_peer_id", "unknown peer registry")
+    # Federated / read-only reject -- one shared rule (_synced_source_peer),
+    # this endpoint's own error shape. A synced row is owned by its source
+    # registry: deleting the local copy would just be re-created by the next
+    # sync, so it must be deleted there (or detached locally first).
+    source_peer = _synced_source_peer(server_info)
+    if source_peer:
         logger.warning(
             f"User {user_context.get('username')} attempted to delete federated server {path} "
             f"from {source_peer}"
@@ -4825,7 +4974,10 @@ async def remove_service_api(
             content={
                 "error": "Cannot delete federated server",
                 "reason": f"Server '{path}' is synced from {source_peer} and cannot be deleted locally",
-                "suggestion": "Delete this server from its source registry, or remove the peer federation",
+                "suggestion": (
+                    "Delete this server from its source registry, or ask an operator "
+                    "to detach it from that peer"
+                ),
             },
         )
 
@@ -4853,9 +5005,9 @@ async def remove_service_api(
         # matching PUT /servers/{path} and PATCH .../auth-credential. Permission
         # AND ownership are both required (defense in depth) so the whole
         # mutation family is consistent; a delete_service grant alone is not
-        # sufficient. Fails closed when ownership cannot be established
-        # (missing registered_by -> deny for a non-admin).
-        if server_info.get("registered_by") != user_context.get("username"):
+        # sufficient. _caller_may_mutate_owned fails closed when ownership
+        # cannot be established (missing registered_by or username -> deny).
+        if not _caller_may_mutate_owned(server_info, user_context):
             logger.warning(
                 f"User {user_context.get('username')} attempted to delete server "
                 f"'{service_name}' ({path}) owned by {server_info.get('registered_by')}"
@@ -5931,35 +6083,13 @@ async def remove_server_version(
     """
     decoded_path = "/" + service_path if not service_path.startswith("/") else service_path
 
-    # Authorization: removing a version mutates the server, so require the same
-    # modify_service permission as PUT/PATCH /servers/{path}. nginx_proxied_auth
-    # only authenticates; it does not authorize.
+    # Full mutation gate: existence, federated/read-only reject, modify scope,
+    # and owner-or-admin. Removing a version mutates the server and can break
+    # its routing, so it is gated exactly like PUT/PATCH /servers/{path} --
+    # including the federation reject, since a synced server's versions are
+    # owned by its source registry. Fails closed.
     existing_server = await server_service.get_server_info(decoded_path)
-    if not existing_server:
-        raise HTTPException(status_code=404, detail="Service path not registered")
-    _check_server_permission(
-        "modify",
-        existing_server.get("server_name", decoded_path),
-        user_context,
-    )
-
-    # Ownership guard: removing a version mutates another user's server and can
-    # break its routing, so only the owner (registered_by) or an admin may do
-    # it -- matching PUT /servers/{path}. modify_service alone (any /execute
-    # scope) is not sufficient. Fails closed when ownership cannot be
-    # established.
-    if not user_context.get("is_admin") and existing_server.get(
-        "registered_by"
-    ) != user_context.get("username"):
-        logger.warning(
-            f"User {user_context.get('username')} attempted to remove version "
-            f"{version} from server {decoded_path} owned by "
-            f"{existing_server.get('registered_by')}"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You can only modify servers you registered",
-        )
+    _authorize_server_mutation(existing_server, decoded_path, user_context)
 
     try:
         result = await server_service.remove_server_version(path=decoded_path, version=version)
@@ -5997,34 +6127,13 @@ async def set_default_version(
     """
     decoded_path = "/" + service_path if not service_path.startswith("/") else service_path
 
-    # Authorization: changing the default version mutates the server, so require
-    # the same modify_service permission as PUT/PATCH /servers/{path}.
-    # nginx_proxied_auth only authenticates; it does not authorize.
+    # Full mutation gate: existence, federated/read-only reject, modify scope,
+    # and owner-or-admin. Changing the default version reroutes live traffic, so
+    # it is gated exactly like PUT/PATCH /servers/{path} -- including the
+    # federation reject, since a synced server's versions are owned by its
+    # source registry. Fails closed.
     existing_server = await server_service.get_server_info(decoded_path)
-    if not existing_server:
-        raise HTTPException(status_code=404, detail="Service path not registered")
-    _check_server_permission(
-        "modify",
-        existing_server.get("server_name", decoded_path),
-        user_context,
-    )
-
-    # Ownership guard: changing the default version reroutes another user's
-    # server, so only the owner (registered_by) or an admin may do it --
-    # matching PUT /servers/{path}. modify_service alone (any /execute scope) is
-    # not sufficient. Fails closed when ownership cannot be established.
-    if not user_context.get("is_admin") and existing_server.get(
-        "registered_by"
-    ) != user_context.get("username"):
-        logger.warning(
-            f"User {user_context.get('username')} attempted to set default "
-            f"version for server {decoded_path} owned by "
-            f"{existing_server.get('registered_by')}"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You can only modify servers you registered",
-        )
+    _authorize_server_mutation(existing_server, decoded_path, user_context)
 
     try:
         result = await server_service.set_default_version(

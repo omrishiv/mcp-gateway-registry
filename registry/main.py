@@ -309,6 +309,12 @@ async def _sync_agentcore_on_startup(
         try:
             # Peer content: strip proxy fields (no proxying federated entities).
             server_data = strip_proxy_fields(server_data)
+            # registered_by is a LOCAL authorization key (see
+            # utils.sync_ownership.caller_owns_record). An upstream catalog is a
+            # foreign identity realm and must never name a local owner, so the row
+            # is stored ownerless -- explicit "" because the repository persists
+            # with $set, where an omitted key would keep an earlier value.
+            server_data["registered_by"] = ""
             server_path = server_data.get("path")
             if not server_path:
                 continue
@@ -662,6 +668,11 @@ async def lifespan(app: FastAPI):
                                 try:
                                     # Peer content: strip proxy fields (no proxying federated entities).
                                     server_data = strip_proxy_fields(server_data)
+                                    # Upstream catalog is a foreign identity realm:
+                                    # never let it name a local owner (registered_by
+                                    # is the local authorization key). Explicit ""
+                                    # because the repository persists with $set.
+                                    server_data["registered_by"] = ""
                                     server_path = server_data.get("path")
                                     if not server_path:
                                         continue

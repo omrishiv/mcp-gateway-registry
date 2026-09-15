@@ -14,6 +14,7 @@ from ..common.log_redaction import redact_url
 from ..core.config import settings
 from ..core.endpoint_utils import get_endpoint_url_from_server_info
 from ..exceptions import UrlValidationError
+from ..utils.sync_ownership import peer_owned_source
 from ..utils.url_guard import (
     BUILTIN_AIREGISTRY_TOOLS_PROFILE,
     PROXY_PROFILE,
@@ -1217,8 +1218,22 @@ class HealthMonitoringService:
                 new_tool_count = len(tool_list)
                 current_server_info = await server_service.get_server_info(service_path)
                 if current_server_info:
-                    current_tool_count = current_server_info.get("num_tools", 0)
+                    # A record synced from a peer registry is content-owned by its
+                    # source. Persisting a locally-fetched tool list over it would
+                    # replace peer-synced content with whatever the peer-controlled
+                    # upstream currently answers -- and push those tool names into
+                    # the local scope config -- with no scope check at all, from a
+                    # background task or from POST /api/refresh. The health STATUS
+                    # below is local operational data and still updates.
+                    source_peer = peer_owned_source(current_server_info)
+                    if source_peer:
+                        logger.debug(
+                            f"Not persisting fetched tools for {service_path}: "
+                            f"synced from {source_peer}"
+                        )
+                        return
 
+                    current_tool_count = current_server_info.get("num_tools", 0)
                     # Update if count changed OR if we have no tool details yet
                     current_tool_list = current_server_info.get("tool_list", [])
 

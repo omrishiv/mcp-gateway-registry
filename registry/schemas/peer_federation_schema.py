@@ -132,9 +132,17 @@ class SyncMetadata(BaseModel):
         default=None,
         description="Timestamp when item was marked as orphaned",
     )
-    local_overrides: dict[str, Any] = Field(
-        default_factory=dict,
-        description="Fields that have been locally customized",
+    local_overrides: bool | dict[str, Any] = Field(
+        default_factory=lambda: {},
+        description=(
+            "Operator detach marker. Any truthy value means the record is locally "
+            "owned: sync SKIPS it (PeerFederationService.is_locally_overridden) and "
+            "the mutation routes stop rejecting it "
+            "(utils.sync_ownership.peer_owned_source). POST /api/peers/local-override "
+            "writes a bool; a non-empty dict of locally customized fields is also "
+            "accepted and carries the same whole-record meaning. Falsy (False, {}) "
+            "means the record is still attached to its peer."
+        ),
     )
     is_read_only: bool = Field(
         default=True,

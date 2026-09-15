@@ -431,9 +431,59 @@ curl -X PATCH https://registry.com/api/peers/<peer-id>/token \
 
 **Expected behavior:** Federated items cannot be modified locally.
 
+This is enforced on every route that writes a stored record, not just the
+obvious ones: `POST /api/edit/{path}`, `PUT`/`PATCH /api/servers/{path}`,
+`PATCH /api/servers/{path}/auth-credential`, the version routes
+(`DELETE .../versions/{version}`, `PUT .../versions/default`), both toggle
+routes, `POST /api/servers/register` with `overwrite=true`, `POST /api/register`
+(which auto-versions an existing path), `POST /api/internal/register`, and
+`POST /api/servers/remove`. Reads that refresh a cache (`GET /api/tools/{path}`)
+return live data but do not persist it over a synced row. Admin status does not
+bypass the rule — a local write would diverge from the source and be reverted by
+the next sync.
+
 If you need to modify a synced item:
 1. Modify it on the source registry
 2. Wait for next sync or trigger manual sync
+
+Or, to take a record over locally (the record stops tracking the peer):
+
+```bash
+curl -X POST https://registry.com/api/peers/local-override \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <admin-token>" \
+  -d '{
+    "item_path": "/<peer-id>/<item-path>",
+    "item_type": "server"
+  }'
+```
+
+Sync then SKIPS that item, so local edits are durable and the mutation routes
+accept it. Send `"override": false` to re-attach it; the next sync overwrites
+the local copy from the peer. Requires admin or the `federation/peers` scope.
+
+Two consequences of detaching, both intentional:
+
+- The record is excluded from **all** future sync, including orphan detection. If
+  the peer later deletes or corrects it upstream, the local copy stays as-is —
+  re-attach it (`"override": false`) to resume tracking.
+- The record keeps its `sync_metadata.is_federated` / `source_peer_id`
+  provenance, so the UI still shows which peer it came from even though its
+  content is now locally owned.
+
+Note that a synced record is **ownerless** locally. Peer sync clears
+`registered_by` (keeping the peer's value as `sync_metadata.source_registered_by`
+for provenance), and the AgentCore / Anthropic catalog imports store `""`, because
+an upstream registry must not be able to name which local user owns — and may
+therefore mutate — a record. Detaching also clears it, so a record synced by an
+older build cannot keep a peer-supplied owner. ASOR agent imports are the one
+exception: they are stamped `registered_by: "asor-federation"`, a value no local
+user can match, so they behave the same way in practice (admin-only).
+
+A non-admin therefore cannot edit a synced record even after it is detached,
+until an admin re-registers it with an owner (`POST /api/servers/register` with
+`overwrite=true` preserves an existing owner, so it only assigns one where the
+record had none).
 
 ### Orphaned Items
 

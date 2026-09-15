@@ -107,3 +107,87 @@ class TestFederationManagementAuthz:
 
         # federation/peers scope passes the gate (matches peer management).
         assert resp.status_code != 403
+
+
+@pytest.mark.unit
+class TestCatalogImportRespectsPeerOwnership:
+    """An external-catalog sync must not write over a peer-synced record, and
+    must not let the upstream catalog name a local owner.
+
+    Both reach ``server_service.register_server`` / ``update_server`` directly,
+    so without these two rules the catalog import is a way around the guards on
+    every server-mutation route.
+    """
+
+    def _run_sync(self, existing_server, catalog_server):
+        from unittest.mock import MagicMock, patch
+
+        config = MagicMock()
+        config.anthropic.enabled = True
+        config.anthropic.endpoint = "https://registry.example.com"
+        config.anthropic.servers = ["srv"]
+        config.asor.enabled = False
+        config.aws_registry.enabled = False
+
+        repo = AsyncMock()
+        repo.get_config = AsyncMock(return_value=config)
+
+        server_service = MagicMock()
+        server_service.get_server_info = AsyncMock(return_value=existing_server)
+        server_service.register_server = AsyncMock(
+            return_value={"success": True, "is_new_version": False}
+        )
+        server_service.update_server = AsyncMock(return_value=True)
+        server_service.toggle_service = AsyncMock(return_value=True)
+
+        client_cls = MagicMock()
+        client_cls.return_value.fetch_all_servers.return_value = [catalog_server]
+
+        _override(_admin_ctx(), repo)
+        try:
+            with (
+                patch("registry.api.federation_routes._validate_federation_endpoints"),
+                patch("registry.services.server_service.server_service", server_service),
+                patch(
+                    "registry.services.federation.anthropic_client.AnthropicFederationClient",
+                    client_cls,
+                ),
+            ):
+                resp = TestClient(app).post("/api/federation/sync?source=anthropic")
+        finally:
+            _clear()
+        return resp, server_service
+
+    def test_skips_a_path_already_synced_from_a_peer(self):
+        resp, server_service = self._run_sync(
+            existing_server={
+                "path": "/srv",
+                "server_name": "Peer Server",
+                "sync_metadata": {"is_federated": True, "source_peer_id": "peer-x"},
+            },
+            catalog_server={
+                "path": "/srv",
+                "server_name": "Catalog Server",
+                "proxy_pass_url": "http://catalog-upstream:9000",
+            },
+        )
+
+        assert resp.status_code == 200
+        server_service.register_server.assert_not_awaited()
+        server_service.update_server.assert_not_awaited()
+
+    def test_clears_an_upstream_supplied_owner(self):
+        resp, server_service = self._run_sync(
+            existing_server=None,
+            catalog_server={
+                "path": "/srv",
+                "server_name": "Catalog Server",
+                "proxy_pass_url": "http://catalog-upstream:9000",
+                # A foreign identity realm must not name a local owner.
+                "registered_by": "admin",
+            },
+        )
+
+        assert resp.status_code == 200
+        persisted = server_service.register_server.await_args.args[0]
+        assert persisted["registered_by"] == ""

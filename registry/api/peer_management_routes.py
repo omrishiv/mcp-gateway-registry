@@ -12,10 +12,11 @@ parameter from shadowing the specific paths.
 
 import logging
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 
+from ..audit.context import set_audit_action
 from ..auth.csrf import verify_csrf_token_flexible
 from ..auth.dependencies import nginx_proxied_auth
 from ..common.log_redaction import redact_mapping
@@ -214,6 +215,98 @@ async def sync_all_peers(
     )
 
     return results
+
+
+@router.post("/local-override")
+async def set_local_override(
+    request: Request,
+    item_path: Annotated[str, Body(embed=True)],
+    item_type: Annotated[Literal["server", "agent"], Body(embed=True)],
+    override: Annotated[bool, Body(embed=True)] = True,
+    user_context: dict = Depends(nginx_proxied_auth),
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
+) -> dict[str, Any]:
+    """
+    Detach a synced item from its peer, or re-attach it.
+
+    A synced (federated / read-only) record is immutable locally: every server
+    and agent mutation route rejects it, because the source registry owns its
+    content and the next sync would overwrite any local change. This endpoint is
+    the supported way out. With ``override=True`` sync SKIPS the item from then
+    on, so local edits are durable and cannot silently diverge -- and the
+    mutation routes therefore accept it (``_synced_source_peer`` treats
+    ``sync_metadata.local_overrides`` as "locally owned"). ``override=False``
+    re-attaches the item, and the next sync overwrites it from the peer.
+
+    Requires the same authorization as the rest of peer management: an admin, or
+    a federation token holding the ``federation/peers`` scope -- the identities
+    that can already add, sync and remove peers.
+
+    Args:
+        item_path: Local (peer-prefixed) path of the synced item, e.g.
+            ``/peer-central/my-server``
+        item_type: ``"server"`` or ``"agent"``
+        override: True to detach from sync, False to re-attach
+        user_context: Authenticated user context
+
+    Returns:
+        The item path, type, and the resulting override state
+
+    Raises:
+        HTTPException: 403 without peer-management authorization; 404 if no such
+            item exists; 409 if the item is not a synced record
+
+    Example:
+        POST /api/peers/local-override
+        {"item_path": "/peer-central/my-server", "item_type": "server"}
+    """
+    # This is the one action that turns a peer-owned (locally immutable) record
+    # into a locally mutable one, so it MUST leave an audit event naming the
+    # affected resource -- like every server-mutation route.
+    set_audit_action(
+        request,
+        "update",
+        f"{item_type}_local_override",
+        resource_id=item_path,
+        description=f"{'Detach' if override else 'Re-attach'} synced {item_type} {item_path}",
+        metadata={"override": override},
+    )
+
+    _check_peer_management_scope(user_context)
+    logger.info(
+        f"User '{user_context.get('username')}' setting local override "
+        f"{override} for {item_type} '{item_path}'"
+    )
+
+    service = get_peer_federation_service()
+
+    # Only a SYNCED record may be detached. Without this the endpoint is a
+    # generic "write sync_metadata onto any record" primitive: it would stamp a
+    # meaningless flag on a locally-registered server and, worse, hand a
+    # federation/peers holder a write on records federation has nothing to do
+    # with. `is_read_only`/`is_federated` are only set by ingest.
+    exists, is_synced = await service.get_sync_state(item_path, item_type)
+    if not exists:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No {item_type} found at path '{item_path}'",
+        )
+    if not is_synced:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"{item_type.capitalize()} '{item_path}' is not synced from a peer "
+                f"registry, so it has nothing to detach"
+            ),
+        )
+
+    if not await service.set_local_override(item_path, item_type, override):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update local override for '{item_path}'",
+        )
+
+    return {"item_path": item_path, "item_type": item_type, "local_overrides": override}
 
 
 @router.get("/connections/all", response_model=list[FederationConnectionLog])

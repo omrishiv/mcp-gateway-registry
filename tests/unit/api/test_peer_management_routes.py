@@ -13,6 +13,8 @@ import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
 
+from registry.auth.csrf import generate_csrf_token
+from registry.core.config import settings
 from registry.schemas.peer_federation_schema import PeerRegistryConfig
 
 logger = logging.getLogger(__name__)
@@ -532,3 +534,366 @@ class TestUpdatePeerLogRedaction:
         assert "federation_token" in combined
         # The redaction marker appears in the DEBUG payload dump.
         assert "[REDACTED]" in combined
+
+
+# =============================================================================
+# POST /api/peers/local-override Tests
+# =============================================================================
+
+
+@pytest.mark.unit
+class TestSetLocalOverride:
+    """POST /api/peers/local-override detaches a synced item from its peer.
+
+    This is the supported way to make a federated record locally mutable: every
+    server/agent mutation route rejects a synced row, and sync SKIPS an
+    overridden one, so a local edit is durable instead of silently reverted.
+    """
+
+    @pytest.mark.asyncio
+    async def test_detach_server_sets_override(
+        self,
+        mock_auth_admin,
+        mock_peer_federation_service,
+    ):
+        from registry.main import app
+
+        client = TestClient(app)
+        mock_peer_federation_service.get_sync_state.return_value = (True, True)
+        mock_peer_federation_service.set_local_override.return_value = True
+
+        with patch(
+            "registry.api.peer_management_routes.get_peer_federation_service",
+            return_value=mock_peer_federation_service,
+        ):
+            response = client.post(
+                "/api/peers/local-override",
+                json={"item_path": "/peer-central/my-server", "item_type": "server"},
+            )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json() == {
+            "item_path": "/peer-central/my-server",
+            "item_type": "server",
+            "local_overrides": True,
+        }
+        mock_peer_federation_service.set_local_override.assert_awaited_once_with(
+            "/peer-central/my-server", "server", True
+        )
+
+    @pytest.mark.asyncio
+    async def test_reattach_clears_override(
+        self,
+        mock_auth_admin,
+        mock_peer_federation_service,
+    ):
+        from registry.main import app
+
+        client = TestClient(app)
+        mock_peer_federation_service.get_sync_state.return_value = (True, True)
+        mock_peer_federation_service.set_local_override.return_value = True
+
+        with patch(
+            "registry.api.peer_management_routes.get_peer_federation_service",
+            return_value=mock_peer_federation_service,
+        ):
+            response = client.post(
+                "/api/peers/local-override",
+                json={
+                    "item_path": "/peer-central/my-agent",
+                    "item_type": "agent",
+                    "override": False,
+                },
+            )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["local_overrides"] is False
+        mock_peer_federation_service.set_local_override.assert_awaited_once_with(
+            "/peer-central/my-agent", "agent", False
+        )
+
+    @pytest.mark.asyncio
+    async def test_unknown_item_returns_404(
+        self,
+        mock_auth_admin,
+        mock_peer_federation_service,
+    ):
+        from registry.main import app
+
+        client = TestClient(app)
+        mock_peer_federation_service.get_sync_state.return_value = (False, False)
+
+        with patch(
+            "registry.api.peer_management_routes.get_peer_federation_service",
+            return_value=mock_peer_federation_service,
+        ):
+            response = client.post(
+                "/api/peers/local-override",
+                json={"item_path": "/nope", "item_type": "server"},
+            )
+
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    @pytest.mark.asyncio
+    async def test_requires_peer_management_authorization(
+        self,
+        mock_auth_regular,
+        mock_peer_federation_service,
+    ):
+        """Detaching a record is peer management: a plain user cannot do it."""
+        from registry.main import app
+
+        client = TestClient(app)
+
+        with patch(
+            "registry.api.peer_management_routes.get_peer_federation_service",
+            return_value=mock_peer_federation_service,
+        ):
+            response = client.post(
+                "/api/peers/local-override",
+                json={"item_path": "/peer-central/my-server", "item_type": "server"},
+            )
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        mock_peer_federation_service.set_local_override.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rejects_unknown_item_type(
+        self,
+        mock_auth_admin,
+        mock_peer_federation_service,
+    ):
+        from registry.main import app
+
+        client = TestClient(app)
+
+        with patch(
+            "registry.api.peer_management_routes.get_peer_federation_service",
+            return_value=mock_peer_federation_service,
+        ):
+            response = client.post(
+                "/api/peers/local-override",
+                json={"item_path": "/peer-central/x", "item_type": "skill"},
+            )
+
+        assert response.status_code == 422
+        mock_peer_federation_service.set_local_override.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_synced_item_returns_409(
+        self,
+        mock_auth_admin,
+        mock_peer_federation_service,
+    ):
+        """The endpoint must not become a generic "write sync_metadata onto any
+        record" primitive: a locally-registered server has nothing to detach."""
+        from registry.main import app
+
+        client = TestClient(app)
+        mock_peer_federation_service.get_sync_state.return_value = (True, False)
+
+        with patch(
+            "registry.api.peer_management_routes.get_peer_federation_service",
+            return_value=mock_peer_federation_service,
+        ):
+            response = client.post(
+                "/api/peers/local-override",
+                json={"item_path": "/my-local-server", "item_type": "server"},
+            )
+
+        assert response.status_code == status.HTTP_409_CONFLICT
+        mock_peer_federation_service.set_local_override.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_already_detached_item_can_be_reattached(
+        self,
+        mock_auth_admin,
+        mock_peer_federation_service,
+    ):
+        """A detached record is still a synced record, so re-attaching it must
+        not 409 (get_sync_state reads the raw flags, ignoring local_overrides)."""
+        from registry.main import app
+
+        client = TestClient(app)
+        mock_peer_federation_service.get_sync_state.return_value = (True, True)
+        mock_peer_federation_service.set_local_override.return_value = True
+
+        with patch(
+            "registry.api.peer_management_routes.get_peer_federation_service",
+            return_value=mock_peer_federation_service,
+        ):
+            response = client.post(
+                "/api/peers/local-override",
+                json={
+                    "item_path": "/peer-central/my-server",
+                    "item_type": "server",
+                    "override": False,
+                },
+            )
+
+        assert response.status_code == status.HTTP_200_OK
+        mock_peer_federation_service.set_local_override.assert_awaited_once_with(
+            "/peer-central/my-server", "server", False
+        )
+
+    @pytest.mark.asyncio
+    async def test_write_failure_is_not_reported_as_404(
+        self,
+        mock_auth_admin,
+        mock_peer_federation_service,
+    ):
+        """The item exists and is synced, so a failed write is a 500 -- not the
+        "not found" answer the first version conflated it with."""
+        from registry.main import app
+
+        client = TestClient(app)
+        mock_peer_federation_service.get_sync_state.return_value = (True, True)
+        mock_peer_federation_service.set_local_override.return_value = False
+
+        with patch(
+            "registry.api.peer_management_routes.get_peer_federation_service",
+            return_value=mock_peer_federation_service,
+        ):
+            response = client.post(
+                "/api/peers/local-override",
+                json={"item_path": "/peer-central/my-server", "item_type": "server"},
+            )
+
+        assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+
+
+# =============================================================================
+# POST /api/peers/local-override CSRF Tests
+# =============================================================================
+
+
+_CSRF_SESSION_ID = "peer-local-override-session-id"
+
+
+@pytest.mark.unit
+@pytest.mark.api
+class TestSetLocalOverrideCsrf:
+    """The detach endpoint must fail closed against a cross-site browser POST.
+
+    ``local-override`` is the one call that turns a peer-owned (locally
+    immutable) record into a locally mutable one, so a forged same-session POST
+    would hand an attacker a durable write on every synced record. The other
+    tests in this file build a cookie-less TestClient, which takes
+    ``verify_csrf_token_flexible``'s non-browser bypass and never exercises the
+    dependency; these drive it as a real browser session instead.
+
+    Harness copied from tests/unit/api/test_server_routes_csrf.py: resolve any
+    non-empty session cookie to a fixed session id so the flexible dependency
+    treats the request as a browser session.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _resolve_session(self, monkeypatch):
+        async def _fake_resolve(cookie_value: str):
+            return {"session_id": _CSRF_SESSION_ID, "username": "admin"}
+
+        monkeypatch.setattr("registry.auth.csrf.resolve_session_from_cookie", _fake_resolve)
+
+    @pytest.fixture
+    def browser_client(self, mock_auth_admin):
+        """Admin-authenticated client carrying a resolvable session cookie.
+
+        ``mock_auth_admin`` overrides only ``nginx_proxied_auth``, so
+        ``verify_csrf_token_flexible`` stays a live dependency.
+        """
+        from registry.main import app
+
+        yield TestClient(app, cookies={settings.session_cookie_name: "browser-session-cookie"})
+
+    def test_rejects_browser_post_without_csrf_token(
+        self,
+        browser_client,
+        mock_peer_federation_service,
+    ):
+        """A session-cookie POST with no CSRF token never reaches the write."""
+        mock_peer_federation_service.get_sync_state.return_value = (True, True)
+        mock_peer_federation_service.set_local_override.return_value = True
+
+        with patch(
+            "registry.api.peer_management_routes.get_peer_federation_service",
+            return_value=mock_peer_federation_service,
+        ):
+            response = browser_client.post(
+                "/api/peers/local-override",
+                json={"item_path": "/peer-central/my-server", "item_type": "server"},
+            )
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert "CSRF" in response.json()["detail"]
+        mock_peer_federation_service.set_local_override.assert_not_called()
+
+    def test_rejects_browser_post_with_invalid_csrf_token(
+        self,
+        browser_client,
+        mock_peer_federation_service,
+    ):
+        """A token that is not a valid signature for this session is rejected."""
+        mock_peer_federation_service.get_sync_state.return_value = (True, True)
+        mock_peer_federation_service.set_local_override.return_value = True
+
+        with patch(
+            "registry.api.peer_management_routes.get_peer_federation_service",
+            return_value=mock_peer_federation_service,
+        ):
+            response = browser_client.post(
+                "/api/peers/local-override",
+                json={"item_path": "/peer-central/my-server", "item_type": "server"},
+                headers={"X-CSRF-Token": "not-a-signed-token"},
+            )
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert "CSRF" in response.json()["detail"]
+        mock_peer_federation_service.set_local_override.assert_not_called()
+
+    def test_rejects_csrf_token_bound_to_another_session(
+        self,
+        browser_client,
+        mock_peer_federation_service,
+    ):
+        """A well-signed token minted for a different session must not pass."""
+        mock_peer_federation_service.get_sync_state.return_value = (True, True)
+        mock_peer_federation_service.set_local_override.return_value = True
+
+        with patch(
+            "registry.api.peer_management_routes.get_peer_federation_service",
+            return_value=mock_peer_federation_service,
+        ):
+            response = browser_client.post(
+                "/api/peers/local-override",
+                json={"item_path": "/peer-central/my-server", "item_type": "server"},
+                headers={"X-CSRF-Token": generate_csrf_token("some-other-session-id")},
+            )
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert "CSRF" in response.json()["detail"]
+        mock_peer_federation_service.set_local_override.assert_not_called()
+
+    def test_accepts_browser_post_with_valid_csrf_token(
+        self,
+        browser_client,
+        mock_peer_federation_service,
+    ):
+        """The rejections above are the CSRF gate, not a broken harness: the
+        same request with a session-bound token detaches the record."""
+        mock_peer_federation_service.get_sync_state.return_value = (True, True)
+        mock_peer_federation_service.set_local_override.return_value = True
+
+        with patch(
+            "registry.api.peer_management_routes.get_peer_federation_service",
+            return_value=mock_peer_federation_service,
+        ):
+            response = browser_client.post(
+                "/api/peers/local-override",
+                json={"item_path": "/peer-central/my-server", "item_type": "server"},
+                headers={"X-CSRF-Token": generate_csrf_token(_CSRF_SESSION_ID)},
+            )
+
+        assert response.status_code == status.HTTP_200_OK
+        mock_peer_federation_service.set_local_override.assert_awaited_once_with(
+            "/peer-central/my-server", "server", True
+        )

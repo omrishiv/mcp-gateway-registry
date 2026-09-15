@@ -1273,6 +1273,130 @@ class TestSetLocalOverride:
 
                     assert result is False
 
+    @pytest.mark.asyncio
+    async def test_persists_only_sync_metadata_not_the_whole_document(
+        self,
+        mock_repository,
+        mock_server_service,
+        mock_agent_service,
+    ):
+        """The write must be field-minimal.
+
+        ``get_server_info`` strips credentials at every depth and the repository
+        persists with a top-level ``$set``, so writing the read-back document
+        would blank stored secrets such as
+        ``egress_oauth.client_secret_encrypted``.
+        """
+        with (
+            patch(
+                "registry.services.peer_federation_service.get_peer_federation_repository",
+                return_value=mock_repository,
+            ),
+            patch(
+                "registry.services.peer_federation_service.server_service",
+                mock_server_service,
+            ),
+            patch(
+                "registry.services.peer_federation_service.agent_service",
+                mock_agent_service,
+            ),
+        ):
+            # What a credential-stripped read looks like: egress_oauth present,
+            # but its secret removed.
+            mock_server_service.get_server_info.return_value = {
+                "path": "/peer-test/server1",
+                "server_name": "Peer Server",
+                "sync_metadata": {"is_federated": True, "source_peer_id": "peer-test"},
+                "egress_oauth": {"client_id": "abc", "token_url": "https://idp/token"},
+            }
+
+            service = PeerFederationService()
+            result = await service.set_local_override("/peer-test/server1", "server", True)
+            assert result is True
+            payload = mock_server_service.update_server.call_args.args[1]
+            # No stored owner on this fixture, so there is nothing to clear.
+            assert set(payload) == {"sync_metadata"}
+            assert "egress_oauth" not in payload
+            assert payload["sync_metadata"]["local_overrides"] is True
+            # Provenance preserved: detaching does not erase where it came from.
+            assert payload["sync_metadata"]["source_peer_id"] == "peer-test"
+
+    @pytest.mark.asyncio
+    async def test_detaching_clears_a_peer_supplied_owner(
+        self,
+        mock_repository,
+        mock_server_service,
+        mock_agent_service,
+    ):
+        """Detach stops the federation reject, leaving ownership as the only
+        object gate -- so a username an older build copied from the peer must not
+        survive as a local authorization key."""
+        with (
+            patch(
+                "registry.services.peer_federation_service.get_peer_federation_repository",
+                return_value=mock_repository,
+            ),
+            patch(
+                "registry.services.peer_federation_service.server_service",
+                mock_server_service,
+            ),
+            patch(
+                "registry.services.peer_federation_service.agent_service",
+                mock_agent_service,
+            ),
+        ):
+            mock_server_service.get_server_info.return_value = {
+                "path": "/peer-test/server1",
+                "registered_by": "peer-chosen-username",
+                "sync_metadata": {"is_federated": True, "source_peer_id": "peer-test"},
+            }
+
+            service = PeerFederationService()
+            await service.set_local_override("/peer-test/server1", "server", True)
+
+            payload = mock_server_service.update_server.call_args.args[1]
+            assert payload["registered_by"] == ""
+
+    @pytest.mark.asyncio
+    async def test_reattaching_does_not_touch_ownership(
+        self,
+        mock_repository,
+        mock_server_service,
+        mock_agent_service,
+    ):
+        """Re-attaching restores peer control of the content; it is not the place
+        to rewrite a local owner."""
+        with (
+            patch(
+                "registry.services.peer_federation_service.get_peer_federation_repository",
+                return_value=mock_repository,
+            ),
+            patch(
+                "registry.services.peer_federation_service.server_service",
+                mock_server_service,
+            ),
+            patch(
+                "registry.services.peer_federation_service.agent_service",
+                mock_agent_service,
+            ),
+        ):
+            mock_server_service.get_server_info.return_value = {
+                "path": "/peer-test/server1",
+                "registered_by": "local-admin",
+                "sync_metadata": {
+                    "is_federated": True,
+                    "source_peer_id": "peer-test",
+                    "local_overrides": True,
+                },
+            }
+
+            service = PeerFederationService()
+            await service.set_local_override("/peer-test/server1", "server", False)
+
+            payload = mock_server_service.update_server.call_args.args[1]
+            assert set(payload) == {"sync_metadata"}
+            assert payload["sync_metadata"]["local_overrides"] is False
+
 
 @pytest.mark.unit
 class TestIsLocallyOverridden:
@@ -1451,3 +1575,167 @@ class TestFederationIdConflict:
                 )
         assert stored == 1
         assert mock_agent_service.register_agent.await_count == 2
+
+
+@pytest.mark.unit
+class TestSyncedRegisteredByIsNotLocalOwnership:
+    """A peer must not name the LOCAL owner of a synced row.
+
+    registered_by is the local authorization key used by the ownership checks in
+    registry/api/server_routes.py and registry/api/agent_routes.py. A peer is a
+    foreign identity realm, so its value is kept only as provenance under
+    sync_metadata.source_registered_by and the stored row is left ownerless.
+    """
+
+    @staticmethod
+    def _patches(mock_repository, mock_server_service, mock_agent_service):
+        return (
+            patch(
+                "registry.services.peer_federation_service.get_peer_federation_repository",
+                return_value=mock_repository,
+            ),
+            patch(
+                "registry.services.peer_federation_service.server_service",
+                mock_server_service,
+            ),
+            patch(
+                "registry.services.peer_federation_service.agent_service",
+                mock_agent_service,
+            ),
+        )
+
+    @pytest.mark.asyncio
+    async def test_new_server_stores_empty_registered_by_with_provenance(
+        self, mock_repository, mock_server_service, mock_agent_service
+    ):
+        repo_patch, server_patch, agent_patch = self._patches(
+            mock_repository, mock_server_service, mock_agent_service
+        )
+        with repo_patch, server_patch, agent_patch:
+            service = PeerFederationService()
+            with patch.object(service, "_index_server_for_search", new=AsyncMock()):
+                stored = await service._store_synced_servers(
+                    "peer-x",
+                    [{"path": "/s1", "server_name": "S1", "registered_by": "peer-user"}],
+                )
+
+        assert stored == 1
+        server_data = mock_server_service.register_server.call_args[0][0]
+        assert server_data["registered_by"] == ""
+        assert server_data["sync_metadata"]["source_registered_by"] == "peer-user"
+
+    @pytest.mark.asyncio
+    async def test_server_without_peer_registered_by_has_no_provenance_key(
+        self, mock_repository, mock_server_service, mock_agent_service
+    ):
+        repo_patch, server_patch, agent_patch = self._patches(
+            mock_repository, mock_server_service, mock_agent_service
+        )
+        with repo_patch, server_patch, agent_patch:
+            service = PeerFederationService()
+            with patch.object(service, "_index_server_for_search", new=AsyncMock()):
+                await service._store_synced_servers(
+                    "peer-x", [{"path": "/s1", "server_name": "S1"}]
+                )
+
+        server_data = mock_server_service.register_server.call_args[0][0]
+        assert server_data["registered_by"] == ""
+        assert "source_registered_by" not in server_data["sync_metadata"]
+
+    @pytest.mark.asyncio
+    async def test_resync_over_existing_server_clears_registered_by(
+        self, mock_repository, mock_server_service, mock_agent_service
+    ):
+        # The repository persists updates with a per-key $set, so the update
+        # payload must carry registered_by="" to overwrite a peer value written
+        # by an earlier sync rather than silently leaving it in place.
+        mock_server_service.get_server_info = AsyncMock(
+            return_value={
+                "path": "/peer-x/s1",
+                "server_name": "S1",
+                "registered_by": "peer-user",
+                "sync_metadata": {"source_peer_id": "peer-x", "is_federated": True},
+            }
+        )
+        repo_patch, server_patch, agent_patch = self._patches(
+            mock_repository, mock_server_service, mock_agent_service
+        )
+        with repo_patch, server_patch, agent_patch:
+            service = PeerFederationService()
+            with patch.object(service, "_index_server_for_search", new=AsyncMock()):
+                stored = await service._store_synced_servers(
+                    "peer-x",
+                    [{"path": "/s1", "server_name": "S1", "registered_by": "peer-user"}],
+                )
+
+        assert stored == 1
+        path, server_data = mock_server_service.update_server.call_args[0]
+        assert path == "/peer-x/s1"
+        assert server_data["registered_by"] == ""
+        assert server_data["sync_metadata"]["source_registered_by"] == "peer-user"
+
+    @pytest.mark.asyncio
+    async def test_new_agent_stores_empty_registered_by_with_provenance(
+        self, mock_repository, mock_server_service, mock_agent_service
+    ):
+        repo_patch, server_patch, agent_patch = self._patches(
+            mock_repository, mock_server_service, mock_agent_service
+        )
+        with repo_patch, server_patch, agent_patch:
+            service = PeerFederationService()
+            with patch.object(service, "_index_agent_for_search", new=AsyncMock()):
+                stored = await service._store_synced_agents(
+                    "peer-x",
+                    [
+                        {
+                            "path": "/a1",
+                            "name": "A",
+                            "version": "1.0.0",
+                            "description": "d",
+                            "url": "https://example.com/a",
+                            "registered_by": "peer-user",
+                        }
+                    ],
+                )
+
+        assert stored == 1
+        agent_card = mock_agent_service.register_agent.call_args[0][0]
+        assert agent_card.registered_by == ""
+        assert agent_card.sync_metadata["source_registered_by"] == "peer-user"
+
+    @pytest.mark.asyncio
+    async def test_resync_over_existing_agent_clears_registered_by(
+        self, mock_repository, mock_server_service, mock_agent_service
+    ):
+        existing = MagicMock(spec=AgentCard)
+        existing.model_dump.return_value = {
+            "path": "/peer-x/a1",
+            "registered_by": "peer-user",
+            "sync_metadata": {"source_peer_id": "peer-x", "is_federated": True},
+        }
+        mock_agent_service.get_agent_info = AsyncMock(return_value=existing)
+        repo_patch, server_patch, agent_patch = self._patches(
+            mock_repository, mock_server_service, mock_agent_service
+        )
+        with repo_patch, server_patch, agent_patch:
+            service = PeerFederationService()
+            with patch.object(service, "_index_agent_for_search", new=AsyncMock()):
+                stored = await service._store_synced_agents(
+                    "peer-x",
+                    [
+                        {
+                            "path": "/a1",
+                            "name": "A",
+                            "version": "1.0.0",
+                            "description": "d",
+                            "url": "https://example.com/a",
+                            "registered_by": "peer-user",
+                        }
+                    ],
+                )
+
+        assert stored == 1
+        path, agent_data = mock_agent_service.update_agent.call_args[0]
+        assert path == "/peer-x/a1"
+        assert agent_data["registered_by"] == ""
+        assert agent_data["sync_metadata"]["source_registered_by"] == "peer-user"

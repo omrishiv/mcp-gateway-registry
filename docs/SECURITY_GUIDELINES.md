@@ -288,6 +288,30 @@ sanitizer that isn't called) is equivalent to no check.
   Combine permission and ownership (defense in depth) uniformly, and fail closed
   when ownership cannot be established (a missing `registered_by` denies a
   non-admin).
+- **The mutation family has TWO object-level rules, and both must be shared: is
+  the caller the owner, AND is the record locally owned at all.** A record synced
+  from a peer registry must be rejected on every write path; the reject that only
+  exists on `PUT`/`PATCH` is silently absent from the version routes, the toggle
+  routes, register-with-`overwrite`, the legacy register that auto-versions an
+  existing path, and internal/secret-authenticated registration — all of which
+  reach the same repository `$set`, which keeps the sync markers while rewriting
+  the target. Factor both rules into shared predicates (one for "peer-owned",
+  one for "owner-or-admin") and call them from every route, whatever error shape
+  the route returns; a hand-rolled copy is how the family drifts apart again.
+- **A cache refresh triggered by a GET is still a write.** A read handler that
+  persists what it fetched (a tool list) must not do so for a record another
+  authority owns: it hands any reader a no-scope write primitive over
+  peer-controlled content. Return the live data; skip the persist.
+- **Never let a remote system supply a local authorization key.** Federation
+  ingest copying a peer's `registered_by` lets the peer choose which local
+  username owns — and may therefore mutate — the synced record. Store such
+  provenance under a separate, non-authoritative field and clear the real key
+  explicitly (with `$set` semantics an omitted field keeps the old value).
+- **An immutability rule needs a documented, authorized escape hatch.** If a
+  record cannot be edited locally, operators need one authorized way to detach it
+  (and the flag that suppresses the sync must be reachable through an endpoint,
+  not just present in the service layer) — otherwise the "correct" answer is a
+  direct database write.
 - **`getattr(a_dict, "key", None)` always returns None** (dicts don't expose keys
   as attributes) — the guard becomes dead code that never denies. Use
   `dict.get("key")`; watch for dict-vs-Pydantic-model confusion.

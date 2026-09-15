@@ -22,6 +22,7 @@ from ..schemas.federation_schema import (
     FederationConfig,
 )
 from ..schemas.proxy_mixin import strip_proxy_fields
+from ..utils.sync_ownership import peer_owned_source
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1070,6 +1071,22 @@ async def sync_federation(
                         )
                         continue
 
+                    # An upstream catalog must not overwrite a record another
+                    # authority owns: if this path is already held by a peer-synced
+                    # row, the peer registry owns its content (utils.sync_ownership).
+                    existing = await server_service.get_server_info(server_path)
+                    if peer_owned_source(existing):
+                        logger.warning(
+                            f"Skipping catalog server {server_path}: already synced from "
+                            f"{peer_owned_source(existing)}"
+                        )
+                        continue
+
+                    # registered_by is a LOCAL authorization key; an upstream
+                    # catalog is a foreign identity realm and must not name a local
+                    # owner. Explicit "" because the repository persists with $set.
+                    server_data["registered_by"] = ""
+
                     # Ensure UUID id field exists for federation sync
                     if "id" not in server_data or not server_data["id"]:
                         server_data["id"] = str(uuid4())
@@ -1206,6 +1223,18 @@ async def sync_federation(
                     srv_path = srv.get("path")
                     if not srv_path:
                         continue
+                    # Same two rules as the Anthropic import above: never overwrite
+                    # a peer-owned record, and never let an upstream catalog name a
+                    # local owner.
+                    existing = await server_service.get_server_info(srv_path)
+                    synced_from = peer_owned_source(existing)
+                    if synced_from:
+                        logger.warning(
+                            f"Skipping AgentCore server {srv_path}: already synced from "
+                            f"{synced_from}"
+                        )
+                        continue
+                    srv["registered_by"] = ""
                     if "id" not in srv or not srv["id"]:
                         srv["id"] = str(uuid4())
 
@@ -1226,6 +1255,9 @@ async def sync_federation(
             for agent_data in records["agents"]:
                 try:
                     agent_data = strip_proxy_fields(agent_data)  # peer content: no proxying
+                    # Same rule as the servers above: registered_by is a LOCAL
+                    # authorization key, so an upstream catalog never names an owner.
+                    agent_data["registered_by"] = ""
                     agent_path = agent_data.get("path")
                     if not agent_path:
                         continue
@@ -1246,6 +1278,10 @@ async def sync_federation(
             for skill_data in records["skills"]:
                 try:
                     skill_data = strip_proxy_fields(skill_data)  # peer content: no proxying
+                    # `owner` is the skill-side authorization key
+                    # (services.visibility.user_can_access_skill): an upstream
+                    # catalog must not name a local owner.
+                    skill_data["owner"] = ""
                     skill_path = skill_data.get("path")
                     if not skill_path:
                         continue

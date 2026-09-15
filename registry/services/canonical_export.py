@@ -164,7 +164,14 @@ def _build_internal_meta(
     truncated_full: str | None,
 ) -> dict:
     """Assemble the registry's own _meta block."""
-    internal: dict[str, Any] = {k: stored[k] for k in INTERNAL_FIELDS if k in stored}
+    # Copy by presence, EXCEPT for a blank registered_by: federation ingest stores
+    # "" to mean "no local registrant" (a peer must not name local owners), and
+    # emitting an empty string would read as an anonymous owner rather than none.
+    internal: dict[str, Any] = {
+        k: stored[k]
+        for k in INTERNAL_FIELDS
+        if k in stored and not (k == "registered_by" and not stored[k])
+    }
 
     lr = stored.get("local_runtime") or {}
     for extra_key in LOCAL_EXTRA_FIELDS:

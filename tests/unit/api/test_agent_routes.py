@@ -2268,3 +2268,192 @@ class TestRunSecurityScanOnRegistrationUpdatesViaUpdateAgent:
         service_mock.update_agent.assert_not_awaited()
         service_mock.register_agent.assert_not_awaited()
         service_mock.toggle_agent.assert_not_awaited()
+
+
+@pytest.mark.unit
+@pytest.mark.api
+@pytest.mark.agents
+class TestAgentMutationFederationAndOwnership:
+    """Agent mutations must reject a peer-owned record and fail closed on
+    ownership.
+
+    PUT was the one mutation route with no federation reject, and all four
+    ownership checks compared with a bare ``!=``. Federation ingest now stores
+    ``registered_by = ""`` on a synced record (a peer must not name local
+    owners), so a bare compare would admit any caller whose own username is
+    blank -- e.g. a token minted without ``sub``.
+    """
+
+    _UPDATE = {
+        "name": "synced-agent",
+        "description": "hijacked",
+        "url": "http://attacker.example:9000/agent",
+        "version": "2.0",
+        "tags": "test",
+        "supportedProtocol": "a2a",
+    }
+
+    @staticmethod
+    def _synced_agent() -> AgentCard:
+        return AgentCardFactory(
+            name="synced-agent",
+            path="/agents/peer-x/synced-agent",
+            url="http://peer-upstream:9000/agent",
+            registered_by="",
+            sync_metadata={"is_federated": True, "source_peer_id": "peer-x"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_put_rejects_federated_agent(self, test_app, mock_user_context):
+        with (
+            patch("registry.api.agent_routes.agent_service") as mock_agent_service,
+            patch(
+                "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
+            ),
+        ):
+            mock_agent_service.get_agent_info = AsyncMock(return_value=self._synced_agent())
+            mock_agent_service.update_agent = AsyncMock(return_value=True)
+
+            response = test_app.put("/agents/peer-x/synced-agent", json=self._UPDATE)
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert "peer-x" in response.json()["detail"]
+        mock_agent_service.update_agent.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_put_rejects_federated_agent_for_admin_too(
+        self, mock_admin_context, mock_search_repo
+    ):
+        """A synced record is immutable locally regardless of admin status."""
+        from fastapi import FastAPI
+
+        from registry.api.agent_routes import nginx_proxied_auth, router
+        from registry.auth.csrf import verify_csrf_token_flexible
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[nginx_proxied_auth] = lambda: mock_admin_context
+        app.dependency_overrides[verify_csrf_token_flexible] = lambda: None
+
+        with (
+            patch("registry.api.agent_routes.get_search_repository", return_value=mock_search_repo),
+            patch("registry.api.agent_routes.agent_service") as mock_agent_service,
+        ):
+            mock_agent_service.get_agent_info = AsyncMock(return_value=self._synced_agent())
+            mock_agent_service.update_agent = AsyncMock(return_value=True)
+
+            client = TestClient(app)
+            response = client.put("/agents/peer-x/synced-agent", json=self._UPDATE)
+
+        app.dependency_overrides.clear()
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        mock_agent_service.update_agent.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_put_denies_blank_owner_against_blank_username(
+        self, mock_search_repo, mock_user_context
+    ):
+        """Fail closed: a blank caller username must not match a blank owner."""
+        from fastapi import FastAPI
+
+        from registry.api.agent_routes import nginx_proxied_auth, router
+        from registry.auth.csrf import verify_csrf_token_flexible
+
+        blank_user = dict(mock_user_context, username="")
+        ownerless_local_agent = AgentCardFactory(
+            name="ownerless-agent",
+            path="/agents/ownerless-agent",
+            url="http://localhost:9000/agent",
+            registered_by="",
+        )
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[nginx_proxied_auth] = lambda: blank_user
+        app.dependency_overrides[verify_csrf_token_flexible] = lambda: None
+
+        with (
+            patch("registry.api.agent_routes.get_search_repository", return_value=mock_search_repo),
+            patch("registry.api.agent_routes.agent_service") as mock_agent_service,
+            patch(
+                "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
+            ),
+        ):
+            mock_agent_service.get_agent_info = AsyncMock(return_value=ownerless_local_agent)
+            mock_agent_service.update_agent = AsyncMock(return_value=True)
+
+            client = TestClient(app)
+            response = client.put("/agents/ownerless-agent", json=self._UPDATE)
+
+        app.dependency_overrides.clear()
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        mock_agent_service.update_agent.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_patch_rejects_federated_agent(self, test_app, mock_user_context):
+        with (
+            patch("registry.api.agent_routes.agent_service") as mock_agent_service,
+            patch(
+                "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
+            ),
+        ):
+            mock_agent_service.get_agent_info = AsyncMock(return_value=self._synced_agent())
+            mock_agent_service.update_agent = AsyncMock(return_value=True)
+
+            response = test_app.patch(
+                "/agents/peer-x/synced-agent", json={"description": "hijacked"}
+            )
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        mock_agent_service.update_agent.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_delete_rejects_federated_agent(self, test_app, mock_user_context):
+        with (
+            patch("registry.api.agent_routes.agent_service") as mock_agent_service,
+            patch(
+                "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
+            ),
+        ):
+            mock_agent_service.get_agent_info = AsyncMock(return_value=self._synced_agent())
+            mock_agent_service.remove_agent = AsyncMock(return_value=True)
+
+            response = test_app.delete("/agents/peer-x/synced-agent")
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        mock_agent_service.remove_agent.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_detached_agent_is_mutable_again(self, test_app, mock_user_context):
+        """local_overrides (POST /api/peers/local-override) detaches the record,
+        so the federation reject must stop firing for it."""
+        detached = AgentCardFactory(
+            name="synced-agent",
+            path="/agents/peer-x/synced-agent",
+            url="http://peer-upstream:9000/agent",
+            registered_by="testuser",
+            sync_metadata={
+                "is_federated": True,
+                "source_peer_id": "peer-x",
+                "local_overrides": True,
+            },
+        )
+
+        with (
+            patch("registry.api.agent_routes.agent_service") as mock_agent_service,
+            patch(
+                "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
+            ),
+            patch("registry.utils.agent_validator.agent_validator") as mock_validator,
+        ):
+            mock_agent_service.get_agent_info = AsyncMock(return_value=detached)
+            mock_agent_service.update_agent = AsyncMock(return_value=detached)
+            mock_agent_service.is_agent_enabled = AsyncMock(return_value=True)
+            mock_validation_result = MagicMock()
+            mock_validation_result.is_valid = True
+            mock_validator.validate_agent_card = AsyncMock(return_value=mock_validation_result)
+
+            response = test_app.put("/agents/peer-x/synced-agent", json=self._UPDATE)
+
+        assert response.status_code == status.HTTP_200_OK
+        mock_agent_service.update_agent.assert_awaited_once()

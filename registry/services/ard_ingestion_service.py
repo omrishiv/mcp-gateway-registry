@@ -274,6 +274,12 @@ class ArdIngestionService:
             # skill can never become a local gateway route. Matches the AgentCore
             # skill-ingest path; not relying on the mapper allowlist alone.
             skill_data = strip_proxy_fields(skill_data)
+            # `owner` is the skill-side authorization key
+            # (services.visibility.user_can_access_skill). A crawled catalog is a
+            # foreign identity realm, so it must never name a local owner --
+            # exactly why peer sync clears registered_by. Explicit "" so an
+            # earlier crawl's value cannot survive the update below.
+            skill_data["owner"] = ""
             path = skill_data["path"]
             try:
                 try:

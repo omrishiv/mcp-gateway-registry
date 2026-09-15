@@ -16,6 +16,7 @@ import logging
 from typing import Any
 
 from ..core.config import DeploymentMode, settings
+from ..utils.sync_ownership import caller_owns_record
 
 logger = logging.getLogger(__name__)
 
@@ -267,7 +268,11 @@ async def user_can_access_agent(
     if agent_card.visibility == "public":
         return True
     if agent_card.visibility == "private":
-        return agent_card.registered_by == user_context.get("username")
+        # Fail closed on empty-vs-empty; see the note in
+        # user_can_access_agent_from_doc.
+        return caller_owns_record(
+            {"registered_by": agent_card.registered_by}, user_context.get("username")
+        )
     if agent_card.visibility == "group-restricted":
         allowed_groups = set(agent_card.allowed_groups)
         user_groups = set(user_context.get("groups", []))
@@ -312,7 +317,10 @@ def user_can_access_agent_from_doc(
     if visibility == "public":
         return True
     if visibility == "private":
-        return registered_by == user_context.get("username")
+        # Fail closed: an ownerless record (every peer-synced row stores
+        # registered_by = "") must not be readable by a caller whose own username
+        # resolved to "" -- a token minted without `sub` yields exactly that.
+        return caller_owns_record({"registered_by": registered_by}, user_context.get("username"))
     if visibility == "group-restricted":
         user_groups = set(user_context.get("groups", []))
         return bool(set(allowed_groups) & user_groups)
@@ -337,7 +345,9 @@ async def user_can_access_skill(
     if visibility == "public":
         return True
     if visibility == "private":
-        return owner == user_context.get("username")
+        # Fail closed: a crawled/ingested record can carry a blank owner, and a
+        # token minted without `sub` yields a blank username.
+        return caller_owns_record({"registered_by": owner}, user_context.get("username"))
     if visibility == "group":
         user_groups = set(user_context.get("groups", []))
         skill_groups = set(allowed_groups or [])
@@ -364,7 +374,8 @@ async def user_can_access_custom_entity(
     if visibility == "public":
         return True
     if visibility == "private":
-        return owner == user_context.get("username")
+        # Fail closed: never let a blank owner match a blank caller username.
+        return caller_owns_record({"registered_by": owner}, user_context.get("username"))
     if visibility == "group-restricted":
         user_groups = set(user_context.get("groups", []) or [])
         return bool(user_groups & set(allowed_groups or []))

@@ -32,6 +32,7 @@ import { formatRelativeTime, formatTimeSince } from '../utils/dateUtils';
 import { normalizeHealthStatus } from '../utils/healthStatus';
 import { useAuth } from '../contexts/AuthContext';
 import { toScanSummary } from '../utils/securityScan';
+import { canEditServer, canToggleServer } from '../utils/permissions';
 import type { LocalRuntime } from '../types/server';
 import {
   CardShell,
@@ -94,6 +95,9 @@ interface SyncMetadata {
   is_read_only?: boolean;
   is_orphaned?: boolean;
   orphaned_at?: string;
+  // Set when an operator detaches a synced row (POST /api/peers/local-override)
+  // so local edits survive the next sync. Read by the edit gate.
+  local_overrides?: boolean | Record<string, unknown>;
 }
 
 export interface Server {
@@ -523,6 +527,19 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
   // Check if this server is orphaned (no longer exists on peer registry)
   const isOrphanedServer = server.sync_metadata?.is_orphaned === true;
 
+  // Edit is gated by the ui_permission (canModify) AND by the same ownership /
+  // federation rules the backend enforces on POST /api/edit — a peer-synced row
+  // or someone else's row always 403s, so the pencil stays hidden.
+  const canEdit = !!canModify && canEditServer(server, user);
+
+  // Toggling is gated by the ui_permission (canToggle) AND by the federation
+  // rule the backend enforces on POST /api/toggle — a peer-synced row's
+  // is_enabled is re-$set on every sync, so a local flip would tear down (or
+  // stand up) the nginx route and then be silently reverted. That route 403s,
+  // so the switch is hidden. No ownership requirement: unlike edit, the backend
+  // gates toggling on the toggle_service permission alone.
+  const canToggleEnabled = canToggle && canToggleServer(server, user);
+
   // Check if this is an ARD discovery-only import. The public ai-catalog.json
   // gives metadata only (no tools, no proxy URL), so these are read-only and
   // non-connectable. Detected via the 'ard' tag or the read-only sync flag.
@@ -643,7 +660,7 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
           }
           actions={
             <>
-            {canModify && !isArdDiscovery && (
+            {canEdit && !isArdDiscovery && (
               <button
                 className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg transition-all duration-200 flex-shrink-0"
                 onClick={() => onEdit?.(server)}
@@ -899,10 +916,11 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                 </button>
               )}
 
-              {/* Toggle Switch - only show if user has toggle_service permission.
-                  Hidden for ARD discovery-only imports — a read-only record
-                  shouldn't be toggleable. */}
-              {canToggle && !isArdDiscovery && (
+              {/* Toggle Switch - only show if user has toggle_service permission
+                  and the record is locally writable (canToggleEnabled). Hidden
+                  for ARD discovery-only imports — a read-only record shouldn't
+                  be toggleable. */}
+              {canToggleEnabled && !isArdDiscovery && (
                 <ToggleSwitch
                   checked={server.enabled}
                   onChange={(checked) => onToggle(server.path, checked)}
@@ -1073,7 +1091,10 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
         onRefreshServer={handleRefreshServerData}
         onShowToast={onShowToast}
         authToken={authToken}
-        canModify={canModify}
+        // "Set as default" issues PUT /api/servers/{path}/versions/default,
+        // which runs the full mutation gate (federation reject + owner-or-admin)
+        // — the same rule as the edit pencil, so reuse canEdit, not canModify.
+        canModify={canEdit}
       />
 
       <ServerDetailsModal

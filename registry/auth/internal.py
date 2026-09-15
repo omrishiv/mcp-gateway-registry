@@ -190,6 +190,32 @@ async def validate_internal_auth(request: Request) -> str:
     return caller
 
 
+async def validate_internal_service(request: Request) -> str:
+    """Validate internal auth and return the STABLE service identity.
+
+    Same gate as :func:`validate_internal_auth` (signature, audience, single-use
+    ``jti``), but returns the ``service`` claim instead of ``sub``. ``sub`` is
+    ``"<service>@<instance_id>"`` -- attributable per replica, which is what the
+    audit trail wants, but wrong for anything PERSISTED as an identity: a value
+    that differs per replica cannot be compared later. Use this when the caller
+    identity is stored on a record (e.g. ``registered_by`` on an internally
+    registered server).
+
+    Args:
+        request: The FastAPI request object
+
+    Returns:
+        The bare service identity (e.g. ``'mcpgw-server'``).
+
+    Raises:
+        HTTPException: 401 if authentication fails
+    """
+    caller, claims = _validate_authorization_header(request.headers.get("Authorization"))
+    await _enforce_single_use(claims)
+    # Fall back to sub only if an older token predates the `service` claim.
+    return claims.get("service") or caller
+
+
 async def _enforce_single_use(claims: dict) -> None:
     """Reject the token if its ``jti`` has already been consumed.
 

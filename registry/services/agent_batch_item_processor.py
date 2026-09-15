@@ -29,6 +29,7 @@ from ..schemas.agent_models import (
     _RegisterItem,
     _ReplaceItem,
 )
+from ..utils.sync_ownership import caller_owns_record, peer_owned_source
 from .agent_service import agent_service
 from .registration_gate_service import check_registration_gate
 from .webhook_service import send_registration_webhook
@@ -85,9 +86,14 @@ async def _authorize(
     if not existing:
         return False, f"agent not found at '{item.path}'"
 
-    sync_metadata = existing.sync_metadata or {}
-    if sync_metadata.get("is_federated") or sync_metadata.get("is_read_only"):
-        source_peer = sync_metadata.get("source_peer_id", "unknown peer registry")
+    # Same two object-level rules, and the same definitions, as the single-item
+    # agent routes: a peer-owned record is immutable locally (honoring an operator
+    # detach via local_overrides, so batch and PATCH cannot disagree about the
+    # same record), and ownership must be positively established.
+    source_peer = peer_owned_source(
+        {"sync_metadata": existing.sync_metadata, "registered_by": existing.registered_by}
+    )
+    if source_peer:
         return False, f"agent is synced from {source_peer} and cannot be modified locally"
 
     # Scope half: the canonical per-action agent scope for this specific agent.
@@ -97,7 +103,11 @@ async def _authorize(
         return False, f"{action}_agent permission required for {existing.name}"
 
     # Ownership half: admins bypass; otherwise the submitter must own the agent.
-    if not is_admin and existing.registered_by != submitted_by:
+    # Fail closed -- a blank stored owner (every synced record) or a blank
+    # submitter must never compare equal.
+    if not is_admin and not caller_owns_record(
+        {"registered_by": existing.registered_by}, submitted_by
+    ):
         verb = "delete" if item.op == BatchItemOp.delete else "modify"
         return False, f"you can only {verb} agents you registered"
 

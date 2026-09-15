@@ -1745,6 +1745,43 @@ class TestInternalRegister:
             assert response.status_code == 409
             assert "already exists" in response.json()["reason"].lower()
 
+    def test_internal_register_overwrite_update_failure_returns_409(
+        self, test_client_no_auth, mock_server_service, sample_server_info
+    ):
+        """The overwrite branch never assigns ``result``, so the shared failure
+        path below it must still be able to read ``result.get("message")``.
+
+        Existing server + overwrite=true + update_server returning False is the
+        only way to reach that log line with no register_server call in between:
+        without the ``result: dict[str, Any] = {}`` initialisation the handler
+        raises UnboundLocalError instead of answering 409.
+        """
+        mock_server_service.get_server_info.return_value = sample_server_info
+        mock_server_service.update_server.return_value = False
+
+        with (
+            patch.dict("os.environ", {"SECRET_KEY": "testpass"}),
+            patch("registry.utils.scopes_manager.update_server_scopes", new_callable=AsyncMock),
+        ):
+            token = generate_internal_token(subject="test-service", purpose="test")
+            response = test_client_no_auth.post(
+                "/api/internal/register",
+                data={
+                    "name": "Updated Server",
+                    "description": "Updated",
+                    "path": "/test-server",
+                    "proxy_pass_url": "http://localhost:9001",
+                    "overwrite": "true",
+                },
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        assert response.status_code == 409
+        assert response.json()["error"] == "Service registration failed"
+        mock_server_service.update_server.assert_called_once()
+        # The failure must be reported, not papered over as a success.
+        mock_server_service.toggle_service.assert_not_called()
+
     def test_internal_register_auto_enables_service(
         self, test_client_no_auth, mock_server_service, mock_nginx_service
     ):
@@ -1925,14 +1962,15 @@ class TestRemoveServiceOwnership:
         del server["registered_by"]
         mock_server_service.get_server_info.return_value = server
 
-        with patch(
-            "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
-        ):
+        with patch("registry.api.server_routes.user_has_asset_permission", return_value=True):
             response = test_client_regular.post(
                 "/api/servers/remove", data={"path": "/test-server"}
             )
 
         assert response.status_code == 403
+        # Pin the OWNERSHIP reason: with the scope granted above, a generic 403
+        # can no longer be a permission denial wearing an ownership costume.
+        assert response.json()["reason"] == "You can only delete servers you registered"
         mock_server_service.remove_server.assert_not_called()
 
 
@@ -2558,6 +2596,57 @@ class TestEditServerAuthorization:
         assert response.status_code == 403
         assert "peer-z" in response.json()["detail"]
         mock_server_service.update_server.assert_not_called()
+
+    def test_edit_form_denied_for_non_owner_with_scope(
+        self, test_client_regular, mock_server_service
+    ):
+        """GET /edit runs the same gate as the POST that submits it: rendering an
+        editable form for a caller whose every submission 403s is a dead end."""
+        mock_server_service.get_server_info.return_value = self._remote(
+            registered_by="victim-owner"
+        )
+        with patch("registry.api.server_routes.user_has_asset_permission", return_value=True):
+            response = test_client_regular.get("/api/edit/remote-srv")
+
+        assert response.status_code == 403
+        assert "only modify servers you registered" in response.json()["detail"]
+
+    def test_edit_form_denied_for_federated(self, test_client_admin, mock_server_service):
+        mock_server_service.get_server_info.return_value = self._remote(
+            registered_by="admin",
+            sync_metadata={"is_federated": True, "source_peer_id": "peer-x"},
+        )
+
+        response = test_client_admin.get("/api/edit/remote-srv")
+
+        assert response.status_code == 403
+        assert "peer-x" in response.json()["detail"]
+
+    def test_edit_form_allowed_for_owner(self, test_client_regular, mock_server_service):
+        """Positive control for the two rejects above: the legitimate owner still
+        gets the form. Without it, a gate that denies everyone looks correct."""
+        mock_server_service.get_server_info.return_value = self._remote(
+            registered_by="testuser"  # matches regular_user_context username
+        )
+        # Non-admins must also reach the path through their discovery scope.
+        mock_server_service.user_can_access_server_path.return_value = True
+
+        with patch("registry.api.server_routes.user_has_asset_permission", return_value=True):
+            response = test_client_regular.get("/api/edit/remote-srv")
+
+        assert response.status_code == 200
+        assert "Remote Srv" in response.text
+
+    def test_edit_form_unknown_path_returns_404_detail(
+        self, test_client_admin, mock_server_service
+    ):
+        """A missing server is the gate's 404, not a rendered form over None."""
+        mock_server_service.get_server_info.return_value = None
+
+        response = test_client_admin.get("/api/edit/nope")
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Server not found at path '/nope'"
 
 
 # =============================================================================
@@ -3757,8 +3846,11 @@ class TestServerModifyOwnership:
     ):
         """A non-owner with modify_service still cannot rewrite a credential."""
         mock_server_service.get_server_info.return_value = dict(self._VICTIM)
+        # Patch the helper the route actually consults (_check_server_permission ->
+        # user_has_asset_permission), so the modify scope really is granted and
+        # ownership is the only thing left that can deny.
         with patch(
-            "registry.auth.dependencies.user_has_ui_permission_for_service",
+            "registry.api.server_routes.user_has_asset_permission",
             return_value=True,
         ):
             response = test_client_regular.patch(
@@ -3766,6 +3858,7 @@ class TestServerModifyOwnership:
                 json={"auth_scheme": "bearer", "auth_credential": "stolen"},
             )
         assert response.status_code == 403
+        assert response.json()["detail"] == "You can only modify servers you registered"
         mock_server_service.update_server.assert_not_called()
 
     def test_auth_credential_allowed_for_owner(
@@ -3783,7 +3876,8 @@ class TestServerModifyOwnership:
                 "/api/servers/test-server/auth-credential",
                 json={"auth_scheme": "bearer", "auth_credential": "mine"},
             )
-        assert response.status_code != 403
+        assert response.status_code == 200
+        mock_server_service.update_server.assert_called_once()
 
     def test_auth_credential_allowed_for_admin(
         self,
@@ -3793,14 +3887,15 @@ class TestServerModifyOwnership:
         """An admin may rewrite a credential on a server owned by someone else."""
         mock_server_service.get_server_info.return_value = dict(self._VICTIM)
         with patch(
-            "registry.auth.dependencies.user_has_ui_permission_for_service",
+            "registry.api.server_routes.user_has_asset_permission",
             return_value=True,
         ):
             response = test_client_admin.patch(
                 "/api/servers/test-server/auth-credential",
                 json={"auth_scheme": "bearer", "auth_credential": "admin"},
             )
-        assert response.status_code != 403
+        assert response.status_code == 200
+        mock_server_service.update_server.assert_called_once()
 
     def test_set_default_version_rejects_non_owner_with_permission(
         self,
@@ -3810,7 +3905,7 @@ class TestServerModifyOwnership:
         """A non-owner with modify_service cannot change the default version."""
         mock_server_service.get_server_info.return_value = dict(self._VICTIM)
         with patch(
-            "registry.auth.dependencies.user_has_ui_permission_for_service",
+            "registry.api.server_routes.user_has_asset_permission",
             return_value=True,
         ):
             response = test_client_regular.put(
@@ -3818,6 +3913,7 @@ class TestServerModifyOwnership:
                 json={"version": "v2.0.0"},
             )
         assert response.status_code == 403
+        assert response.json()["detail"] == "You can only modify servers you registered"
         mock_server_service.set_default_version.assert_not_called()
 
     def test_remove_version_rejects_non_owner_with_permission(
@@ -3828,14 +3924,594 @@ class TestServerModifyOwnership:
         """A non-owner with modify_service cannot remove a version."""
         mock_server_service.get_server_info.return_value = dict(self._VICTIM)
         with patch(
-            "registry.auth.dependencies.user_has_ui_permission_for_service",
+            "registry.api.server_routes.user_has_asset_permission",
             return_value=True,
         ):
             response = test_client_regular.delete(
                 "/api/servers/test-server/versions/v1.0.0",
             )
         assert response.status_code == 403
+        assert response.json()["detail"] == "You can only modify servers you registered"
         mock_server_service.remove_server_version.assert_not_called()
+
+
+@pytest.mark.unit
+@pytest.mark.api
+@pytest.mark.servers
+class TestServerModifyErrorShapes:
+    """The auth-credential and version routes answer one error contract.
+
+    Every failure on these routes now comes from ``HTTPException`` -- either the
+    shared mutation gate or the route's own validation -- so the body is always
+    FastAPI's ``{"detail": ...}``. They previously mixed in hand-rolled
+    ``JSONResponse`` bodies keyed ``{"error", "reason"}``, which clients had to
+    branch on per status code.
+    """
+
+    _OWNED = {
+        "path": "/test-server",
+        "server_name": "My Service",
+        "registered_by": "admin",
+        "proxy_pass_url": "http://localhost:8080",
+    }
+
+    def test_auth_credential_unknown_path_returns_404_detail(
+        self, test_client_admin, mock_server_service
+    ):
+        mock_server_service.get_server_info.return_value = None
+
+        response = test_client_admin.patch(
+            "/api/servers/nope/auth-credential",
+            json={"auth_scheme": "bearer", "auth_credential": "x"},
+        )
+
+        assert response.status_code == 404
+        body = response.json()
+        assert body["detail"] == "Server not found at path '/nope'"
+        assert "reason" not in body
+        mock_server_service.update_server.assert_not_called()
+
+    def test_auth_credential_invalid_scheme_returns_400_detail(
+        self, test_client_admin, mock_server_service
+    ):
+        mock_server_service.get_server_info.return_value = dict(self._OWNED)
+
+        response = test_client_admin.patch(
+            "/api/servers/test-server/auth-credential",
+            json={"auth_scheme": "totally-bogus", "auth_credential": "x"},
+        )
+
+        assert response.status_code == 400
+        body = response.json()
+        assert "auth_scheme must be one of" in body["detail"]
+        assert "reason" not in body
+        mock_server_service.update_server.assert_not_called()
+
+    def test_auth_credential_missing_credential_returns_400_detail(
+        self, test_client_admin, mock_server_service
+    ):
+        mock_server_service.get_server_info.return_value = dict(self._OWNED)
+
+        response = test_client_admin.patch(
+            "/api/servers/test-server/auth-credential",
+            json={"auth_scheme": "bearer"},
+        )
+
+        assert response.status_code == 400
+        body = response.json()
+        assert "auth_credential is required" in body["detail"]
+        assert "reason" not in body
+        mock_server_service.update_server.assert_not_called()
+
+    def test_remove_version_unknown_path_returns_gate_404_detail(
+        self, test_client_admin, mock_server_service
+    ):
+        """The version routes answer the shared gate's 404, not their own
+        'Service path not registered' string."""
+        mock_server_service.get_server_info.return_value = None
+        mock_server_service.remove_server_version = AsyncMock(return_value=True)
+
+        response = test_client_admin.delete("/api/servers/nope/versions/v1.0.0")
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Server not found at path '/nope'"
+        mock_server_service.remove_server_version.assert_not_called()
+
+    def test_set_default_version_unknown_path_returns_gate_404_detail(
+        self, test_client_admin, mock_server_service
+    ):
+        mock_server_service.get_server_info.return_value = None
+        mock_server_service.set_default_version = AsyncMock(return_value=True)
+
+        response = test_client_admin.put(
+            "/api/servers/nope/versions/default",
+            json={"version": "v2.0.0"},
+        )
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Server not found at path '/nope'"
+        mock_server_service.set_default_version.assert_not_called()
+
+
+@pytest.mark.unit
+@pytest.mark.api
+@pytest.mark.servers
+class TestFederatedServerImmutability:
+    """Every route that writes a stored server document must reject a row synced
+    from a peer registry.
+
+    A synced record is owned by its source registry and is re-``$set`` on every
+    sync, so a local write either diverges silently or is reverted later. The
+    rule lived on /edit, PUT, PATCH and auth-credential only; these cover the
+    routes that reached the same ``server_service`` write sinks around it.
+    """
+
+    @staticmethod
+    def _synced(**extra) -> dict[str, Any]:
+        server = {
+            "server_name": "Synced Srv",
+            "path": "/peer-x/synced-srv",
+            "proxy_pass_url": "http://peer-upstream:9000",
+            # Federation ingest pins the registrant to "" -- a peer must not name
+            # local owners -- so a synced row is ownerless by construction.
+            "registered_by": "",
+            "sync_metadata": {"is_federated": True, "source_peer_id": "peer-x"},
+        }
+        server.update(extra)
+        return server
+
+    def test_set_default_version_rejects_federated(self, test_client_admin, mock_server_service):
+        """Repointing the default version reroutes live traffic on a peer's row."""
+        mock_server_service.get_server_info.return_value = self._synced()
+        mock_server_service.set_default_version = AsyncMock(return_value=True)
+
+        response = test_client_admin.put(
+            "/api/servers/peer-x/synced-srv/versions/default",
+            json={"version": "v2.0.0"},
+        )
+
+        assert response.status_code == 403
+        assert "peer-x" in response.json()["detail"]
+        mock_server_service.set_default_version.assert_not_called()
+
+    def test_remove_version_rejects_federated(self, test_client_admin, mock_server_service):
+        mock_server_service.get_server_info.return_value = self._synced()
+        mock_server_service.remove_server_version = AsyncMock(return_value=True)
+
+        response = test_client_admin.delete("/api/servers/peer-x/synced-srv/versions/v1.0.0")
+
+        assert response.status_code == 403
+        assert "peer-x" in response.json()["detail"]
+        mock_server_service.remove_server_version.assert_not_called()
+
+    def test_register_overwrite_rejects_federated(self, test_client_admin, mock_server_service):
+        """overwrite=true reaches update_server directly; $set would keep
+        sync_metadata while repointing the upstream."""
+        mock_server_service.get_server_info.return_value = self._synced()
+
+        response = test_client_admin.post(
+            "/api/servers/register",
+            data={
+                "name": "Synced Srv",
+                "description": "hijacked",
+                "path": "/peer-x/synced-srv",
+                "proxy_pass_url": "http://attacker.example:9000",
+                "overwrite": "true",
+            },
+        )
+
+        assert response.status_code == 403
+        assert "peer-x" in response.json()["reason"]
+        mock_server_service.update_server.assert_not_called()
+
+    def test_legacy_register_rejects_federated_path(self, test_client_admin, mock_server_service):
+        """register_server auto-versions an existing path -- not on a peer's row."""
+        mock_server_service.get_server_info.return_value = self._synced()
+
+        response = test_client_admin.post(
+            "/api/register",
+            data={
+                "name": "Synced Srv",
+                "description": "extra version",
+                "path": "/peer-x/synced-srv",
+                "proxy_pass_url": "http://attacker.example:9000",
+                "version": "v9.9.9",
+            },
+        )
+
+        assert response.status_code == 403
+        assert "peer-x" in response.json()["detail"]
+        mock_server_service.register_server.assert_not_called()
+
+    def test_toggle_ui_route_rejects_federated(
+        self, test_client_admin, mock_server_service, mock_nginx_reload_scheduler
+    ):
+        """Toggling tears down/stands up the nginx route for a peer's server."""
+        mock_server_service.get_server_info.return_value = self._synced()
+
+        response = test_client_admin.post("/api/toggle/peer-x/synced-srv", data={"enabled": "off"})
+
+        assert response.status_code == 403
+        mock_server_service.toggle_service.assert_not_called()
+
+    def test_toggle_api_route_rejects_federated(self, test_client_admin, mock_server_service):
+        mock_server_service.get_server_info.return_value = self._synced()
+
+        response = test_client_admin.post(
+            "/api/servers/toggle",
+            data={"path": "/peer-x/synced-srv", "new_state": "false"},
+        )
+
+        assert response.status_code == 403
+        mock_server_service.toggle_service.assert_not_called()
+
+    def test_internal_register_rejects_federated_overwrite(
+        self, test_client_no_auth, mock_server_service
+    ):
+        """The internal secret authenticates a component; it does not make a
+        peer's record locally writable."""
+        mock_server_service.get_server_info.return_value = self._synced()
+
+        with patch("registry.utils.scopes_manager.update_server_scopes", new_callable=AsyncMock):
+            token = generate_internal_token(subject="test-service", purpose="test")
+            response = test_client_no_auth.post(
+                "/api/internal/register",
+                data={
+                    "name": "Synced Srv",
+                    "description": "hijacked",
+                    "path": "/peer-x/synced-srv",
+                    "proxy_pass_url": "http://attacker.example:9000",
+                    "overwrite": "true",
+                },
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        assert response.status_code == 403
+        mock_server_service.update_server.assert_not_called()
+
+    def test_get_tools_does_not_cache_over_federated_row(
+        self, test_client_admin, mock_server_service
+    ):
+        """GET /tools persists the fetched list; on a synced row that would let
+        any reader replace peer content with peer-upstream output, with no
+        modify scope at all. The tools are still returned."""
+        mock_server_service.get_server_info.return_value = self._synced(num_tools=0, tool_list=[])
+        live_tools = [{"name": "planted", "description": "from upstream", "inputSchema": {}}]
+
+        with (
+            patch(
+                "registry.core.mcp_client.mcp_client_service.get_tools_from_server_with_server_info",
+                new=AsyncMock(return_value=live_tools),
+            ),
+            patch(
+                "registry.api.server_routes.filter_tools_for_user",
+                side_effect=lambda *a, **k: a[1],
+            ),
+        ):
+            response = test_client_admin.get("/api/tools/peer-x/synced-srv")
+
+        assert response.status_code == 200
+        assert response.json()["tools"] == live_tools
+        mock_server_service.update_server.assert_not_called()
+
+    def test_get_tools_caches_fresh_list_over_local_row(
+        self, test_client_admin, mock_server_service
+    ):
+        """Positive twin of the reject above. On an ordinary row (no
+        ``sync_metadata``) a stale cache MUST still be refreshed: the guard is a
+        narrow carve-out for peer-owned rows, not a licence to stop persisting
+        discovered tools for every local server."""
+        local_server = {
+            "server_name": "Local Srv",
+            "path": "/local-srv",
+            "proxy_pass_url": "http://localhost:9000",
+            "registered_by": "admin",
+            "num_tools": 1,
+            "tool_list": [{"name": "stale", "description": "old", "inputSchema": {}}],
+        }
+        mock_server_service.get_server_info.return_value = local_server
+        live_tools = [
+            {"name": "fresh_a", "description": "new", "inputSchema": {}},
+            {"name": "fresh_b", "description": "new", "inputSchema": {}},
+        ]
+
+        with (
+            patch(
+                "registry.core.mcp_client.mcp_client_service.get_tools_from_server_with_server_info",
+                new=AsyncMock(return_value=live_tools),
+            ),
+            patch(
+                "registry.api.server_routes.filter_tools_for_user",
+                side_effect=lambda *a, **k: a[1],
+            ),
+        ):
+            response = test_client_admin.get("/api/tools/local-srv")
+
+        assert response.status_code == 200
+        assert response.json()["tools"] == live_tools
+        mock_server_service.update_server.assert_awaited_once()
+        persisted_path, persisted = mock_server_service.update_server.await_args.args
+        assert persisted_path == "/local-srv"
+        assert persisted["tool_list"] == live_tools
+        assert persisted["num_tools"] == 2
+
+    def test_remove_api_rejects_federated(self, test_client_admin, mock_server_service):
+        """Deleting the local copy of a peer's row is lossy and futile -- the next
+        sync re-creates it. This route keeps its own {error, reason, suggestion}
+        body rather than the gate's {"detail"}."""
+        mock_server_service.get_server_info.return_value = self._synced()
+
+        response = test_client_admin.post(
+            "/api/servers/remove", data={"path": "/peer-x/synced-srv"}
+        )
+
+        assert response.status_code == 403
+        body = response.json()
+        assert body["error"] == "Cannot delete federated server"
+        assert "peer-x" in body["reason"]
+        assert "detach" in body["suggestion"]
+        mock_server_service.remove_server.assert_not_called()
+
+    def test_remove_api_allows_locally_detached_owner(
+        self, test_client_regular, mock_server_service
+    ):
+        """Once detached, the row is an ordinary local record and its registrant
+        may delete it -- the escape hatch has to work on this route too."""
+        server = self._synced(registered_by="testuser")
+        server["sync_metadata"]["local_overrides"] = True
+        mock_server_service.get_server_info.return_value = server
+        mock_server_service.remove_server.return_value = True
+
+        with patch("registry.api.server_routes.user_has_asset_permission", return_value=True):
+            response = test_client_regular.post(
+                "/api/servers/remove", data={"path": "/peer-x/synced-srv"}
+            )
+
+        assert response.status_code == 200
+        mock_server_service.remove_server.assert_called_once_with("/peer-x/synced-srv")
+
+    def test_locally_detached_row_is_mutable_again(self, test_client_admin, mock_server_service):
+        """sync_metadata.local_overrides is the supported escape hatch: sync
+        SKIPS the row, so a local edit is durable and the gate must allow it."""
+        server = self._synced()
+        server["sync_metadata"]["local_overrides"] = True
+        mock_server_service.get_server_info.return_value = server
+        mock_server_service.set_default_version = AsyncMock(return_value=True)
+
+        response = test_client_admin.put(
+            "/api/servers/peer-x/synced-srv/versions/default",
+            json={"version": "v2.0.0"},
+        )
+
+        assert response.status_code == 200
+        mock_server_service.set_default_version.assert_called_once()
+
+    def test_locally_detached_row_stays_ownerless_for_non_admin(
+        self, test_client_regular, mock_server_service
+    ):
+        """A detach lifts the federation reject; it does NOT invent an owner.
+
+        Ingest stored ``registered_by = ""``, so the row is ownerless even after
+        local_overrides is set: the fail-closed ownership rule still denies every
+        non-admin, however broad their modify scope. Only an admin (or a
+        re-registration that stamps a registrant) can take it over."""
+        server = self._synced()
+        server["sync_metadata"]["local_overrides"] = True
+        mock_server_service.get_server_info.return_value = server
+
+        with patch("registry.api.server_routes.user_has_asset_permission", return_value=True):
+            response = test_client_regular.put(
+                "/api/servers/peer-x/synced-srv",
+                json={
+                    "server_name": "Synced Srv",
+                    "description": "hijacked",
+                    "proxy_pass_url": "http://attacker.example:9000",
+                },
+            )
+
+        assert response.status_code == 403
+        assert response.json()["detail"] == "You can only modify servers you registered"
+        mock_server_service.update_server.assert_not_called()
+
+
+@pytest.mark.unit
+@pytest.mark.api
+@pytest.mark.servers
+class TestRegistrationOwnershipFailsClosed:
+    """Re-registering over a stored server is a mutation of someone else's
+    record, so it must fail closed exactly like PUT/PATCH: a non-admin is denied
+    unless the stored registered_by and the caller username are both present and
+    equal."""
+
+    @staticmethod
+    def _existing(**extra) -> dict[str, Any]:
+        server = {
+            "server_name": "Victim Srv",
+            "path": "/victim-srv",
+            "proxy_pass_url": "http://victim:9000",
+            "version": "v1.0.0",
+        }
+        server.update(extra)
+        return server
+
+    def test_register_overwrite_denied_when_owner_unknown(
+        self, test_client_regular, mock_server_service, regular_user_context
+    ):
+        """No registered_by: ownership cannot be established -> deny a non-admin
+        (two absent identities must never compare equal)."""
+        regular_user_context["ui_permissions"]["register_service"] = ["all"]
+        mock_server_service.get_server_info.return_value = self._existing()
+
+        response = test_client_regular.post(
+            "/api/servers/register",
+            data={
+                "name": "Victim Srv",
+                "description": "hijacked",
+                "path": "/victim-srv",
+                "proxy_pass_url": "http://attacker.example:9000",
+                "overwrite": "true",
+            },
+        )
+
+        assert response.status_code == 403
+        assert "registered" in response.json()["reason"].lower()
+        mock_server_service.update_server.assert_not_called()
+
+    def test_legacy_register_version_denied_for_non_owner(
+        self, test_client_regular, mock_server_service, regular_user_context
+    ):
+        """A register_service grant must not let a non-owner attach a version --
+        with its own proxy_pass_url -- to another user's server."""
+        regular_user_context["ui_permissions"]["register_service"] = ["all"]
+        mock_server_service.get_server_info.return_value = self._existing(
+            registered_by="victim-owner"
+        )
+
+        response = test_client_regular.post(
+            "/api/register",
+            data={
+                "name": "Victim Srv",
+                "description": "extra version",
+                "path": "/victim-srv",
+                "proxy_pass_url": "http://attacker.example:9000",
+                "version": "v9.9.9",
+            },
+        )
+
+        assert response.status_code == 403
+        assert "only modify servers you registered" in response.json()["detail"]
+        mock_server_service.register_server.assert_not_called()
+
+    def test_legacy_register_new_path_still_allowed(
+        self, test_client_regular, mock_server_service, mock_nginx_service, regular_user_context
+    ):
+        """A fresh path is a registration, not a mutation: no ownership needed."""
+        regular_user_context["ui_permissions"]["register_service"] = ["all"]
+        mock_server_service.get_server_info.return_value = None
+
+        response = test_client_regular.post(
+            "/api/register",
+            data={
+                "name": "My New Srv",
+                "description": "mine",
+                "path": "/my-new-srv",
+                "proxy_pass_url": "http://localhost:9000",
+            },
+        )
+
+        assert response.status_code == 201
+        mock_server_service.register_server.assert_called_once()
+
+    def test_guards_run_before_the_outbound_registration_gate(
+        self, test_client_regular, mock_server_service, regular_user_context
+    ):
+        """check_registration_gate is not a local predicate: it makes an outbound
+        HTTP call (with retries) to the operator's admission endpoint. An
+        unauthorized caller must be rejected BEFORE that, or every denied attempt
+        is request amplification plus gate-log poisoning against a record the
+        caller has no authorization for."""
+        regular_user_context["ui_permissions"]["register_service"] = ["all"]
+        mock_server_service.get_server_info.return_value = self._existing(
+            registered_by="victim-owner"
+        )
+
+        with patch(
+            "registry.api.server_routes.check_registration_gate", new_callable=AsyncMock
+        ) as mock_gate:
+            response = test_client_regular.post(
+                "/api/servers/register",
+                data={
+                    "name": "Victim Srv",
+                    "description": "hijacked",
+                    "path": "/victim-srv",
+                    "proxy_pass_url": "http://attacker.example:9000",
+                    "overwrite": "true",
+                },
+            )
+
+        assert response.status_code == 403
+        mock_gate.assert_not_awaited()
+        mock_server_service.update_server.assert_not_called()
+
+    def test_legacy_register_guards_run_before_the_gate(
+        self, test_client_regular, mock_server_service, regular_user_context
+    ):
+        """Same ordering requirement on the legacy form endpoint."""
+        regular_user_context["ui_permissions"]["register_service"] = ["all"]
+        mock_server_service.get_server_info.return_value = self._existing(
+            registered_by="victim-owner"
+        )
+
+        with patch(
+            "registry.api.server_routes.check_registration_gate", new_callable=AsyncMock
+        ) as mock_gate:
+            response = test_client_regular.post(
+                "/api/register",
+                data={
+                    "name": "Victim Srv",
+                    "description": "extra version",
+                    "path": "/victim-srv",
+                    "proxy_pass_url": "http://attacker.example:9000",
+                    "version": "v9.9.9",
+                },
+            )
+
+        assert response.status_code == 403
+        mock_gate.assert_not_awaited()
+        mock_server_service.register_server.assert_not_called()
+
+
+@pytest.mark.unit
+@pytest.mark.api
+@pytest.mark.servers
+class TestInternalRegisterOwnership:
+    """/internal/register has no end-user identity. It must still stamp an owner,
+    or the stored row is ownerless and (under the fail-closed ownership rule)
+    permanently un-editable by anyone but an admin."""
+
+    def _post(self, client, mock_server_service, **extra):
+        with patch("registry.utils.scopes_manager.update_server_scopes", new_callable=AsyncMock):
+            token = generate_internal_token(subject="test-service", purpose="test")
+            data = {
+                "name": "Internal Srv",
+                "description": "Registered internally",
+                "path": "/internal-srv",
+                "proxy_pass_url": "http://localhost:9000",
+            }
+            data.update(extra)
+            return client.post(
+                "/api/internal/register",
+                data=data,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+    def test_registrant_stamped_from_internal_caller(
+        self, test_client_no_auth, mock_server_service
+    ):
+        response = self._post(test_client_no_auth, mock_server_service)
+
+        assert response.status_code == 201
+        persisted = mock_server_service.register_server.call_args.args[0]
+        # validate_internal_auth returns "<subject>@<host>" as the caller id.
+        assert persisted["registered_by"].startswith("test-service")
+
+    def test_overwrite_preserves_existing_registrant(
+        self, test_client_no_auth, mock_server_service
+    ):
+        """Overwriting must not reassign someone else's server to the internal
+        caller."""
+        mock_server_service.get_server_info.return_value = {
+            "server_name": "Internal Srv",
+            "path": "/internal-srv",
+            "proxy_pass_url": "http://localhost:9000",
+            "registered_by": "human-owner",
+        }
+
+        response = self._post(test_client_no_auth, mock_server_service, overwrite="true")
+
+        assert response.status_code == 201
+        persisted = mock_server_service.update_server.call_args.args[1]
+        assert persisted["registered_by"] == "human-owner"
 
 
 @pytest.mark.unit
