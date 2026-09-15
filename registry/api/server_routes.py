@@ -1269,6 +1269,105 @@ def _check_server_permission(
         )
 
 
+def _reject_federated_server(
+    server_info: dict[str, Any],
+    path: str,
+    user_context: dict[str, Any],
+) -> None:
+    """Reject a local mutation of a server synced from a peer registry.
+
+    A federated / read-only server is owned by its source registry and must be
+    changed there, never locally -- regardless of the caller's ownership or
+    admin status. Shared by every server-mutation route (including the
+    admin-only local-server edit branch) so the rule is enforced identically.
+    Fails closed.
+
+    Args:
+        server_info: The stored server document.
+        path: Server path, used for the 403 detail and log line.
+        user_context: Authenticated user context.
+
+    Raises:
+        HTTPException: 403 if the server is federated or read-only.
+    """
+    sync_metadata = server_info.get("sync_metadata") or {}
+    if sync_metadata.get("is_federated") or sync_metadata.get("is_read_only"):
+        source_peer = sync_metadata.get("source_peer_id", "unknown peer registry")
+        logger.warning(
+            f"User {user_context.get('username')} attempted to modify federated "
+            f"server {path} from {source_peer}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Server '{path}' is synced from {source_peer} and cannot be "
+                f"modified locally. Update at the source registry, or remove "
+                f"the peer federation."
+            ),
+        )
+
+
+def _authorize_server_mutation(
+    server_info: dict[str, Any] | None,
+    path: str,
+    user_context: dict[str, Any],
+    *,
+    action: str = "modify",
+) -> None:
+    """Enforce the full authorization gate shared by every server-mutation route.
+
+    Runs the four checks that guard any local mutation of a registered server
+    (the legacy ``POST /edit`` form, ``PUT``/``PATCH /servers/{path}`` and
+    ``PATCH .../auth-credential``), in order and fail-closed, so the endpoints
+    cannot drift apart and re-open an ownership or federation hole:
+
+    1. Existence -- a missing server (``None``) denies with 404.
+    2. Federated / read-only reject -- a server synced from a peer registry
+       must be changed at its source, never locally, regardless of ownership
+       or admin status.
+    3. Modify scope -- the caller must hold the ``action`` permission for the
+       server (delegated to :func:`_check_server_permission`).
+    4. Owner-or-admin -- a non-admin may only mutate a server they registered.
+       Ownership must be positively established: a missing ``registered_by`` or
+       a missing caller ``username`` denies a non-admin (never let two absent
+       identities compare equal -> fail closed).
+
+    Args:
+        server_info: The stored server document, or ``None`` if not found.
+        path: Server path, used for the 404 detail and log lines.
+        user_context: Authenticated user context.
+        action: Logical server action gating the scope check; defaults to
+            ``"modify"``.
+
+    Raises:
+        HTTPException: 404 when the server does not exist; 403 on a federated /
+            read-only server, a missing scope, or an ownership mismatch.
+    """
+    if not server_info:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Server not found at path '{path}'",
+        )
+
+    _reject_federated_server(server_info, path, user_context)
+
+    _check_server_permission(action, server_info.get("server_name", path), user_context)
+
+    if not user_context.get("is_admin"):
+        registered_by = server_info.get("registered_by")
+        username = user_context.get("username")
+        # Positive ownership match required: absent identity on either side
+        # denies (two missing values must never compare equal).
+        if not registered_by or not username or registered_by != username:
+            logger.warning(
+                f"User {username} attempted to modify server {path} owned by {registered_by}"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only modify servers you registered",
+            )
+
+
 def _check_lifecycle_status_permission(
     server_name: str,
     user_context: dict[str, Any],
@@ -2475,6 +2574,9 @@ async def edit_server_submit(
 
     # Permission check
     if is_local:
+        # A synced (federated/read-only) server is immutable locally regardless
+        # of admin status -- reject before the admin-only recipe edit.
+        _reject_federated_server(server_info, service_path, user_context)
         # Local edits distribute executable launch recipes — admin-only.
         if not user_context.get("is_admin"):
             logger.warning(
@@ -2486,30 +2588,11 @@ async def edit_server_submit(
                 detail="Editing local servers requires admin privileges",
             )
     else:
-        # Remote edit — standard modify_service permission check.
-        if not user_has_asset_permission("server", "modify", service_name, user_context):
-            logger.warning(
-                f"User {user_context['username']} attempted to edit service "
-                f"{service_name} without modify_service permission"
-            )
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"You do not have permission to modify {service_name}",
-            )
-
-        # For non-admin users, also check per-server access.
-        if not user_context["is_admin"]:
-            if not await server_service.user_can_access_server_path(
-                service_path, user_context["accessible_servers"]
-            ):
-                logger.warning(
-                    f"User {user_context['username']} attempted to edit service "
-                    f"{service_path} without access"
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="You do not have access to edit this server",
-                )
+        # Remote edit — full mutation gate: existence, federated/read-only
+        # reject, modify scope, and owner-or-admin. modify_service alone (any
+        # /execute scope) is not sufficient, matching PUT/PATCH /servers/{path}
+        # and PATCH .../auth-credential. Fails closed.
+        _authorize_server_mutation(server_info, service_path, user_context)
 
     # Shape validation + local_runtime parsing are shared with /register.
     validate_deployment_shape(
@@ -4450,34 +4533,13 @@ async def update_server_auth_credential(
             },
         )
 
-    # Authorization: rewriting a backend credential is a server modification, so
-    # require the same modify_service permission as PUT/PATCH /servers/{path}.
-    # nginx_proxied_auth only authenticates; it does not authorize.
-    _check_server_permission(
-        "modify",
-        existing_server.get("server_name", server_path),
-        user_context,
-    )
-
-    # Ownership guard: overwriting a backend credential can hijack the server's
-    # upstream connection, so only the original owner (registered_by) or an
-    # admin may do it -- matching PUT /servers/{path}. modify_service alone is
-    # granted to any user with an /execute scope and is not sufficient. Fails
+    # Authorization: rewriting a backend credential is a server modification and
+    # can hijack the upstream connection, so it runs the full mutation gate --
+    # existence, federated/read-only reject, modify scope, and owner-or-admin --
+    # identical to PUT/PATCH /servers/{path}. modify_service alone (any /execute
+    # scope) is not sufficient. nginx_proxied_auth only authenticates. Fails
     # closed when ownership cannot be established.
-    if not user_context.get("is_admin") and existing_server.get(
-        "registered_by"
-    ) != user_context.get("username"):
-        logger.warning(
-            f"User {username} attempted to update auth credential for server "
-            f"{server_path} owned by {existing_server.get('registered_by')}"
-        )
-        return JSONResponse(
-            status_code=403,
-            content={
-                "error": "Not authorized",
-                "reason": "You can only modify servers you registered",
-            },
-        )
+    _authorize_server_mutation(existing_server, server_path, user_context)
 
     # Validate auth_scheme
     if body.auth_scheme not in VALID_AUTH_SCHEMES:
@@ -6163,40 +6225,11 @@ async def update_server_endpoint(
         metadata={"had_if_match": if_match is not None},
     )
 
-    sync_metadata = existing.get("sync_metadata") or {}
-    if sync_metadata.get("is_federated") or sync_metadata.get("is_read_only"):
-        source_peer = sync_metadata.get("source_peer_id", "unknown peer registry")
-        logger.warning(
-            f"User {user_context['username']} attempted to update federated server {path} "
-            f"from {source_peer}"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                f"Server '{path}' is synced from {source_peer} and cannot be "
-                f"updated locally. Update at the source registry, or remove "
-                f"the peer federation."
-            ),
-        )
-
-    _check_server_permission(
-        "modify",
-        existing.get("server_name", path),
-        user_context,
-    )
-
-    if (
-        not user_context.get("is_admin")
-        and existing.get("registered_by") != user_context["username"]
-    ):
-        logger.warning(
-            f"User {user_context['username']} attempted to update server {path} "
-            f"owned by {existing.get('registered_by')}"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You can only update servers you registered",
-        )
+    # Full mutation gate: existence, federated/read-only reject, modify scope,
+    # and owner-or-admin. modify_service alone (any /execute scope) is not
+    # sufficient. Shared with the legacy /edit form, PATCH, and the
+    # auth-credential route so the checks cannot diverge. Fails closed.
+    _authorize_server_mutation(existing, path, user_context)
 
     client_ts = parse_if_match(if_match)
     if client_ts is not None:
@@ -6337,40 +6370,11 @@ async def patch_server_endpoint(
         metadata={"had_if_match": if_match is not None},
     )
 
-    sync_metadata = existing.get("sync_metadata") or {}
-    if sync_metadata.get("is_federated") or sync_metadata.get("is_read_only"):
-        source_peer = sync_metadata.get("source_peer_id", "unknown peer registry")
-        logger.warning(
-            f"User {user_context['username']} attempted to patch federated server {path} "
-            f"from {source_peer}"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                f"Server '{path}' is synced from {source_peer} and cannot be "
-                f"patched locally. Patch at the source registry, or remove "
-                f"the peer federation."
-            ),
-        )
-
-    _check_server_permission(
-        "modify",
-        existing.get("server_name", path),
-        user_context,
-    )
-
-    if (
-        not user_context.get("is_admin")
-        and existing.get("registered_by") != user_context["username"]
-    ):
-        logger.warning(
-            f"User {user_context['username']} attempted to patch server {path} "
-            f"owned by {existing.get('registered_by')}"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You can only patch servers you registered",
-        )
+    # Full mutation gate: existence, federated/read-only reject, modify scope,
+    # and owner-or-admin. modify_service alone (any /execute scope) is not
+    # sufficient. Shared with the legacy /edit form, PUT, and the
+    # auth-credential route so the checks cannot diverge. Fails closed.
+    _authorize_server_mutation(existing, path, user_context)
 
     client_ts = parse_if_match(if_match)
     if client_ts is not None:

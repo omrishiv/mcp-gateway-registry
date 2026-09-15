@@ -291,7 +291,7 @@ class TestServerPut:
             response = client.put("/servers/test-server", json=_valid_put_body())
 
         assert response.status_code == 403
-        assert "only update servers you registered" in response.json()["detail"]
+        assert "only modify servers you registered" in response.json()["detail"]
 
     def test_put_403_when_missing_modify_service_permission(self, client):
         existing = _existing()

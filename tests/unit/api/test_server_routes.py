@@ -2388,6 +2388,178 @@ class TestEditLocalServer:
         assert "proxy_pass_url is required" in response.json()["detail"]
 
 
+@pytest.mark.unit
+@pytest.mark.api
+@pytest.mark.servers
+class TestEditServerAuthorization:
+    """Legacy POST /api/edit/{path} must enforce the full mutation gate --
+    federated/read-only reject AND owner-or-admin -- identically to PUT/PATCH
+    /servers/{path}, not merely the modify scope.
+
+    Regression for a broken-object-authorization hole: any caller holding the
+    modify_service permission (granted by any /execute scope, and satisfiable
+    by a group grant) could edit -- and repoint the upstream of -- servers they
+    did not own, including federated servers synced from a peer registry.
+    """
+
+    @staticmethod
+    def _remote(registered_by="someone-else", sync_metadata=None):
+        info = {
+            "server_name": "Remote Srv",
+            "description": "http",
+            "path": "/remote-srv",
+            "deployment": "remote",
+            "proxy_pass_url": "http://upstream:9000",
+            "tags": [],
+            "auth_scheme": "none",
+            "registered_by": registered_by,
+        }
+        if sync_metadata is not None:
+            info["sync_metadata"] = sync_metadata
+        return info
+
+    @staticmethod
+    def _body():
+        # A non-owner repointing the upstream is the concrete attack.
+        return {
+            "name": "Remote Srv",
+            "description": "hijacked",
+            "proxy_pass_url": "http://attacker.example:9000",
+            "tags": "",
+        }
+
+    def test_edit_remote_non_owner_with_scope_denied(
+        self, test_client_regular, mock_server_service
+    ):
+        """Holding modify_service is NOT enough: a non-owner non-admin is 403."""
+        mock_server_service.get_server_info.return_value = self._remote(
+            registered_by="victim-owner"
+        )
+        # Grant the modify scope so ownership is the only thing that can deny.
+        with patch("registry.api.server_routes.user_has_asset_permission", return_value=True):
+            response = test_client_regular.post(
+                "/api/edit/remote-srv",
+                headers={"accept": "application/json"},
+                data=self._body(),
+            )
+        assert response.status_code == 403
+        assert "only modify servers you registered" in response.json()["detail"]
+        mock_server_service.update_server.assert_not_called()
+
+    def test_edit_remote_missing_registered_by_denied_for_non_admin(
+        self, test_client_regular, mock_server_service
+    ):
+        """Fail closed: ownership cannot be established -> a non-admin is denied."""
+        server = self._remote(registered_by="victim-owner")
+        del server["registered_by"]
+        mock_server_service.get_server_info.return_value = server
+        with patch("registry.api.server_routes.user_has_asset_permission", return_value=True):
+            response = test_client_regular.post(
+                "/api/edit/remote-srv",
+                headers={"accept": "application/json"},
+                data=self._body(),
+            )
+        assert response.status_code == 403
+        mock_server_service.update_server.assert_not_called()
+
+    def test_edit_remote_federated_denied_even_for_admin(
+        self, test_client_admin, mock_server_service
+    ):
+        """A synced (federated) server is read-only locally, even for an admin
+        owner -- it must be changed at the source registry."""
+        mock_server_service.get_server_info.return_value = self._remote(
+            registered_by="admin",
+            sync_metadata={"is_federated": True, "source_peer_id": "peer-x"},
+        )
+        response = test_client_admin.post(
+            "/api/edit/remote-srv",
+            headers={"accept": "application/json"},
+            data=self._body(),
+        )
+        assert response.status_code == 403
+        assert "peer-x" in response.json()["detail"]
+        mock_server_service.update_server.assert_not_called()
+
+    def test_edit_remote_read_only_denied(self, test_client_admin, mock_server_service):
+        """is_read_only sync metadata is rejected the same as is_federated."""
+        mock_server_service.get_server_info.return_value = self._remote(
+            registered_by="admin",
+            sync_metadata={"is_read_only": True, "source_peer_id": "peer-y"},
+        )
+        response = test_client_admin.post(
+            "/api/edit/remote-srv",
+            headers={"accept": "application/json"},
+            data=self._body(),
+        )
+        assert response.status_code == 403
+        mock_server_service.update_server.assert_not_called()
+
+    def test_edit_remote_owner_allowed(
+        self, test_client_regular, mock_server_service, mock_nginx_service
+    ):
+        """The owner with modify_service may edit their own remote server."""
+        mock_server_service.get_server_info.return_value = self._remote(
+            registered_by="testuser"  # matches regular_user_context username
+        )
+        mock_server_service.is_service_enabled.return_value = True
+        with patch("registry.api.server_routes.user_has_asset_permission", return_value=True):
+            response = test_client_regular.post(
+                "/api/edit/remote-srv",
+                headers={"accept": "application/json"},
+                data=self._body(),
+            )
+        assert response.status_code == 200
+        mock_server_service.update_server.assert_called_once()
+
+    def test_edit_remote_admin_non_owner_allowed(
+        self, test_client_admin, mock_server_service, mock_nginx_service
+    ):
+        """An admin may edit a remote server owned by someone else."""
+        mock_server_service.get_server_info.return_value = self._remote(
+            registered_by="someone-else"
+        )
+        mock_server_service.is_service_enabled.return_value = True
+        response = test_client_admin.post(
+            "/api/edit/remote-srv",
+            headers={"accept": "application/json"},
+            data=self._body(),
+        )
+        assert response.status_code == 200
+        mock_server_service.update_server.assert_called_once()
+
+    def test_edit_local_federated_denied_even_for_admin(
+        self, test_client_admin, mock_server_service
+    ):
+        """A synced (federated) local server is read-only locally: the
+        admin-only local-edit branch must also reject federation, before the
+        admin check, to match the remote branch and PUT/PATCH."""
+        mock_server_service.get_server_info.return_value = {
+            "server_name": "Local Srv",
+            "description": "stdio",
+            "path": "/local-srv",
+            "deployment": "local",
+            "local_runtime": {"type": "npx", "package": "@acme/mcp", "version": "1.0.0"},
+            "tags": [],
+            "auth_scheme": "none",
+            "registered_by": "admin",
+            "sync_metadata": {"is_federated": True, "source_peer_id": "peer-z"},
+        }
+        response = test_client_admin.post(
+            "/api/edit/local-srv",
+            headers={"accept": "application/json"},
+            data={
+                "name": "Local Srv",
+                "deployment": "local",
+                "local_runtime": json.dumps(
+                    {"type": "npx", "package": "@acme/mcp", "version": "1.1.0"}
+                ),
+            },
+        )
+        assert response.status_code == 403
+        assert "peer-z" in response.json()["detail"]
+        mock_server_service.update_server.assert_not_called()
+
+
 # =============================================================================
 # TEST POST /register and /edit input validation
 # =============================================================================

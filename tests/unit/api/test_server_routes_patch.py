@@ -253,7 +253,7 @@ class TestServerPatch:
             )
 
         assert response.status_code == 403
-        assert "only patch servers you registered" in response.json()["detail"]
+        assert "only modify servers you registered" in response.json()["detail"]
 
     def test_patch_403_when_missing_modify_service(self, client):
         existing = _existing()
