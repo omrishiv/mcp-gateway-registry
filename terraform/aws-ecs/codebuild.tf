@@ -254,8 +254,8 @@ phases:
         build_and_push mcp-gateway-currenttime docker/Dockerfile.mcp-server servers/currenttime &
         (docker build --cache-from $ECR_REGISTRY/mcp-gateway-mcpgw:latest \
           -t $ECR_REGISTRY/mcp-gateway-mcpgw:$IMAGE_TAG \
-          --build-arg SERVER_DIR=servers/mcpgw --build-arg BUILD_VERSION=$IMAGE_TAG \
-          -f docker/Dockerfile.mcp-server-cpu . && \
+          --build-arg BUILD_VERSION=$IMAGE_TAG \
+          -f docker/Dockerfile.mcpgw . && \
           docker tag $ECR_REGISTRY/mcp-gateway-mcpgw:$IMAGE_TAG $ECR_REGISTRY/mcp-gateway-mcpgw:latest && \
           docker push $ECR_REGISTRY/mcp-gateway-mcpgw:$IMAGE_TAG && \
           docker push $ECR_REGISTRY/mcp-gateway-mcpgw:latest && \

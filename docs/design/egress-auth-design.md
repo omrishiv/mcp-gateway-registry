@@ -197,9 +197,9 @@ The gateway **owns the authentication to every third-party MCP server**, which t
 
 ## The internal relay: airegistry-tools -> registry API (sequence)
 
-The one exception to "client auth headers are stripped on egress." `airegistry-tools` is the gateway's own bundled registry-tools MCP server (the `mcpgw` service). It is same-trust-domain, so a hardcoded constant (`_INTERNAL_INGRESS_RELAY_SERVERS = {"airegistry-tools"}` in `auth_server/server.py`) relays the ingress `Authorization` to it (never `X-Authorization`/`Cookie`). The mcpgw server then needs to call the **registry API** (list/search servers, agents, skills) — and it chooses which credential to present for that call, NOT the relayed one by default.
+The one exception to "client auth headers are stripped on egress." `airegistry-tools` is the gateway's own bundled registry-tools MCP server (the `mcpgw` service). It is same-trust-domain, so a hardcoded constant (`_INTERNAL_INGRESS_RELAY_SERVERS = {"airegistry-tools"}` in `auth_server/server.py`) relays the ingress `Authorization` to it (never `X-Authorization`/`Cookie`). mcpgw then calls the **registry API** (list/search servers, agents, skills) using that same relayed token: `caller_headers()` reads it straight back off the inbound request and forwards it as `X-Authorization` on the outbound call, so mcpgw always acts as the calling user, never as a service identity of its own.
 
-Key point: the relayed ingress `Authorization` lets mcpgw's FastMCP front door admit the MCP call when it is configured to validate a bearer (`OIDC_ENABLED=true`). For its OUTBOUND registry API calls, mcpgw's `_get_registry_headers` picks a credential by priority — static `REGISTRY_API_TOKEN`, else its own M2M token, else (fallback) the caller's bearer. So in the common deployment mcpgw reaches the registry as **itself** (M2M), not by forwarding the user's token again.
+Key point: mcpgw carries no service credential of its own. The relayed ingress `Authorization` both lets mcpgw's FastMCP front door admit the MCP call when it is configured to validate a bearer (`OIDC_ENABLED=true`) and supplies the only credential `caller_headers()` will ever present to the registry or the gateway. There is no static `REGISTRY_API_TOKEN` or M2M fallback in any deployment: an operator who still sets either one gets a startup warning and nothing else, and with `OIDC_ENABLED=true` every mcpgw tool refuses the call outright (`CallerIdentityError`, tracked in issue #895) rather than guess at an identity.
 
 ```mermaid
 sequenceDiagram
@@ -221,8 +221,8 @@ sequenceDiagram
     AS->>MCPGW: forward request with ingress Authorization bearer
     Note over MCPGW: FastMCP front door admits the call.<br/>When OIDC is enabled it validates this bearer<br/>(same Keycloak realm as the gateway).
 
-    MCPGW->>MCPGW: _get_registry_headers picks the credential for the registry call<br/>1. REGISTRY_API_TOKEN if set, 2. else its own M2M token, 3. else the caller bearer
-    MCPGW->>NGINX: GET /api registry call with the chosen credential
+    MCPGW->>MCPGW: caller_headers() reads the caller's own bearer straight off the inbound request<br/>(no static token, no M2M fallback, in any deployment)
+    MCPGW->>NGINX: GET /api registry call with the caller's own credential
     NGINX->>AS: auth_request /validate for that credential
     AS-->>NGINX: 200 plus identity
     NGINX->>REG: proxy_pass /api
@@ -234,8 +234,8 @@ sequenceDiagram
 What this shows:
 
 - **The relayed `Authorization` is only for reaching mcpgw's front door** (the internal same-trust hop). It is NOT forwarded onward to any third party.
-- **mcpgw calls the registry API as itself** (M2M) in the standard deployment, so the user's token is not chained through a second time; `REGISTRY_API_TOKEN` overrides that if an operator sets it. The caller-bearer fallback only applies when neither is configured.
-- **`X-Authorization` and `Cookie` are stripped even on this relay path** — only `Authorization` is relayed, and only for this one hardcoded internal server.
+- **mcpgw calls the registry API as the calling user, in every deployment.** `caller_headers()` reads the caller's bearer straight off this same relayed request and forwards it as `X-Authorization`; there is no static `REGISTRY_API_TOKEN` or M2M credential mcpgw can fall back to.
+- **`X-Authorization` and `Cookie` are stripped even on this relay path**: only `Authorization` is relayed, and only for this one hardcoded internal server.
 
 ### Operational note: SSRF guard and internal MCP hosts
 

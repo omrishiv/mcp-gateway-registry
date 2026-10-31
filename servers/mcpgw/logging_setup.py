@@ -5,10 +5,11 @@ auth-server. Does not depend on registry/* modules or MongoDB; configuration
 comes from environment variables (APP_LOG_DIR, APP_LOG_FILE_FORMAT, etc.).
 
 Why duplicate instead of importing registry.utils.logging_setup?
-The mcpgw image is built from docker/Dockerfile.mcp-server and does not copy
-the registry/ source tree. It also does not carry a MongoDB client. A small
-standalone module with the same schema keeps the container image minimal and
-avoids cross-service import paths.
+mcpgw's own Dockerfile (docker/Dockerfile.mcpgw) copies five files from
+registry/ for the egress guard, but still does not copy the registry source
+tree as a whole, and carries no MongoDB client. A small standalone module
+with the same schema keeps the container image minimal and avoids
+cross-service import paths for everything that isn't the guard.
 """
 
 import json
@@ -109,6 +110,28 @@ def _resolve_console_format() -> str:
     return raw
 
 
+class _SessionTerminationFilter(logging.Filter):
+    """Drop the mcp SDK's "Session termination failed" warning.
+
+    On session close the SDK sends DELETE when the backend issued a session
+    id; the gateway answers 403 or 405 for routes that don't support it, and
+    the SDK logs "Session termination failed: <status>" at warning (405 at
+    debug) without raising (mcp/client/streamable_http.py). That is expected
+    on every mcpgw-initiated session, not a signal of anything wrong, so it
+    is filtered here. Every other warning on this logger (reconnect, etc.)
+    still logs: only records whose message starts with the exact phrase are
+    dropped.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not record.getMessage().startswith("Session termination failed")
+
+
+def _install_session_termination_filter() -> None:
+    """Install the session-close filter on the mcp SDK's client logger."""
+    logging.getLogger("mcp.client.streamable_http").addFilter(_SessionTerminationFilter())
+
+
 def setup_mcpgw_logging() -> Path | None:
     """Configure root logger for mcpgw.
 
@@ -131,6 +154,7 @@ def setup_mcpgw_logging() -> Path | None:
 
     root = logging.getLogger()
     root.setLevel(log_level)
+    _install_session_termination_filter()
 
     for handler in root.handlers[:]:
         root.removeHandler(handler)

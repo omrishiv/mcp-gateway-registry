@@ -11,16 +11,37 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+
 # The mcpgw server depends on `fastmcp` which is not installed in the main
 # project venv. Stub it out before importing the server module.
 # FastMCP.tool() is a decorator — make it a passthrough so the original
 # async functions remain callable.
+class _ToolResultStub:
+    """Matches fastmcp.tools.ToolResult's constructor contract exactly, so
+    whichever mcpgw test module's sys.modules["fastmcp.tools"] stub wins the
+    cross-file install race behaves identically either way."""
+
+    def __init__(self, content=None, structured_content=None, meta=None, is_error=False):
+        if content is None and structured_content is None:
+            raise ValueError("Either content or structured_content must be provided")
+        self.content = content
+        self.structured_content = structured_content
+        self.meta = meta
+        self.is_error = is_error
+
+
 _fastmcp_stub = types.ModuleType("fastmcp")
 _fastmcp_stub.Context = type("Context", (), {})
 _mock_mcp = MagicMock()
 _mock_mcp.tool.return_value = lambda fn: fn  # decorator is a no-op
 _fastmcp_stub.FastMCP = MagicMock(return_value=_mock_mcp)
 sys.modules["fastmcp"] = _fastmcp_stub
+# server.py also does `from fastmcp.tools import ToolResult` at module scope
+# (the invoke_mcp_tool wrapper); register the submodule too.
+_fastmcp_tools_stub = types.ModuleType("fastmcp.tools")
+_fastmcp_tools_stub.ToolResult = _ToolResultStub
+_fastmcp_stub.tools = _fastmcp_tools_stub
+sys.modules["fastmcp.tools"] = _fastmcp_tools_stub
 
 # Force re-import of the server module with the stub in place
 sys.modules.pop("servers.mcpgw.server", None)
@@ -66,21 +87,30 @@ def _make_server_with_tools(n_tools, server_name="test-server", path="/test"):
 
 
 async def _call_with_mocked_registry(tool_func, mock_response, capture=None, **kwargs):
-    """Call a registry search tool with mocked HTTP client and token."""
+    """Call a registry search tool with mocked caller headers and egress."""
     captured_kwargs = {}
 
-    async def mock_post(url, **post_kwargs):
-        captured_kwargs.update(post_kwargs)
-        return mock_response
+    async def mock_request_json_bounded(
+        client, method, url, *, params=None, json_body=None, limit=None
+    ):
+        captured_kwargs["params"] = params
+        captured_kwargs["json"] = json_body
+        return mock_response.json()
 
     mock_client = AsyncMock()
-    mock_client.post = mock_post
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
     with (
-        patch("servers.mcpgw.server.httpx.AsyncClient", return_value=mock_client),
-        patch("servers.mcpgw.server._extract_bearer_token", return_value="test-token"),
+        patch(
+            "servers.mcpgw.server.caller_headers",
+            return_value={"X-Authorization": "Bearer test-token"},
+        ),
+        patch("servers.mcpgw.server.gateway_http_client", return_value=mock_client),
+        patch(
+            "servers.mcpgw.server.request_json_bounded",
+            AsyncMock(side_effect=mock_request_json_bounded),
+        ),
     ):
         result = await tool_func(**kwargs)
 

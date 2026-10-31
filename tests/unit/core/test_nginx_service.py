@@ -2387,6 +2387,60 @@ async def test_generated_virtual_server_block_is_rate_limited(nginx_service):
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("transport", ["streamable-http", "sse", "direct"])
+def test_create_location_block_sets_mcp_body_limits(nginx_service, transport):
+    """Every MCP location sets both body-size
+    directives to the same value, so any body nginx accepts is small enough to
+    stay in capture_body.lua's in-memory buffer (never silently uninspectable).
+    """
+    block = nginx_service._create_location_block("/test", "http://localhost:8000/mcp", transport)
+
+    assert f"client_max_body_size {nginx_module.MCP_REQUEST_BODY_LIMIT};" in block
+    assert f"client_body_buffer_size {nginx_module.MCP_REQUEST_BODY_LIMIT};" in block
+    # Must sit ahead of the lua capture so the directive always applies before
+    # nginx has to decide whether to spill the body to a temp file.
+    assert block.index("client_max_body_size") > block.index("capture_body.lua")
+
+
+@pytest.mark.unit
+def test_create_location_block_root_endpoint_bare_path_inherits_body_limits(nginx_service):
+    """The root-endpoint exact-match location reuses the same rendered body
+    (one block, rendered twice), so it inherits the body-size directives too."""
+    block = nginx_service._create_location_block(
+        "/aws-knowledge",
+        "https://knowledge-mcp.example.com",
+        "streamable-http",
+        {"append_mcp_path": False},
+    )
+
+    bodies = _location_bodies(block)
+    for body in bodies.values():
+        assert f"client_max_body_size {nginx_module.MCP_REQUEST_BODY_LIMIT};" in body
+        assert f"client_body_buffer_size {nginx_module.MCP_REQUEST_BODY_LIMIT};" in body
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_generated_virtual_server_block_sets_mcp_body_limits(nginx_service):
+    """Virtual-server blocks also get the same body-size directives."""
+
+    class _VS:
+        path = "/virtual/dev-essentials"
+        server_name = "Dev Essentials"
+
+    repo = MagicMock()
+    repo.list_enabled = AsyncMock(return_value=[_VS()])
+    with patch(
+        "registry.repositories.factory.get_virtual_server_repository",
+        return_value=repo,
+    ):
+        blocks = await nginx_service._generate_virtual_server_blocks()
+
+    assert f"client_max_body_size {nginx_module.MCP_REQUEST_BODY_LIMIT};" in blocks
+    assert f"client_body_buffer_size {nginx_module.MCP_REQUEST_BODY_LIMIT};" in blocks
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize("conf_path", [_HTTP_ONLY_CONF, _HTTP_AND_HTTPS_CONF])
 def test_conf_declares_rate_limit_zones(conf_path):
     """Both nginx conf templates must declare the rate-limit zones at http scope."""

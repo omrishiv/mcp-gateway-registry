@@ -35,6 +35,19 @@ The dynamic tool discovery process follows these steps:
 4. **Relevance Ranking**: Returns tools ranked by semantic similarity to the query
 5. **Tool Invocation**: Agent uses the discovered tool information to invoke the appropriate MCP tool
 
+Step 5 above assumes the agent already holds its own client connection and
+credentials for the target server, the pattern the `invoke_mcp_tool`
+helper in `agents/agent.py` and the examples below use. An MCP client that
+holds only a connection to AI Registry Tools (mcpgw) does not need that:
+once `search_registry` or `intelligent_tool_finder` returns a tool's
+`server_path`, `tool_name`, and `inputSchema`, mcpgw's own
+`invoke_mcp_tool` tool calls it through that same connection, as the
+calling user, with no change to the client's own configuration. This
+mcpgw tool exists only when an operator sets
+`MCPGW_INVOKE_TOOLS_ENABLED=true`; see [AI Registry
+Tools](ai-registry-tools.md#invoke_mcp_tool) for its arguments and return
+shape.
+
 
 ## Discovery Receipts and Context Budgets
 

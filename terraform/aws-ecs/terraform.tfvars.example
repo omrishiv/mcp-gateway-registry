@@ -841,6 +841,14 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # (they inherit nginx's 60s default).
 # mcp_proxy_timeout = 30
 
+# Master switch for mcpgw's three invocation tools (invoke_mcp_tool,
+# invoke_agent, get_agent_task). Off by default: mcpgw does not register
+# them at all, so no caller can bypass this regardless of registry/gateway
+# grants. (mcp_proxy_timeout above is also passed into the mcpgw container
+# unconditionally, so its own request deadline never drifts from the
+# auth-server's.)
+# mcpgw_invoke_tools_enabled = false
+
 # Log level for tool-pruning audit lines during the launch window.
 # Valid values: "DEBUG", "INFO", "WARNING". Default "INFO" during launch;
 # flip to "DEBUG" after two quiet weeks in production.

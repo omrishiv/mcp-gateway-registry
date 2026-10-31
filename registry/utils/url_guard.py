@@ -1166,6 +1166,49 @@ def _federation_allowlist() -> _Allowlist:
     return _Allowlist()
 
 
+def _mcpgw_gateway_allowlist() -> _Allowlist:
+    """Trust exactly the host of REGISTRY_BASE_URL for mcpgw's gateway traffic.
+
+    mcpgw has no registry Settings, so this reads REGISTRY_BASE_URL directly
+    from the environment, like _entra_graph_allowlist. Unlike that check this
+    accepts a path (Helm path routing appends ROOT_PATH to REGISTRY_BASE_URL),
+    but still rejects userinfo and a query string, and requires a hostname
+    rather than an IP literal, so the trusted name is always what resolves and
+    gets pinned. Raises, rather than falling back to an empty allowlist,
+    because mcpgw cannot reach the registry at all without this variable.
+    """
+    raw = os.environ.get("REGISTRY_BASE_URL", "")
+    if not raw:
+        raise UrlValidationError(raw, "REGISTRY_BASE_URL is not set")
+    parsed = urlsplit(raw)
+    if parsed.scheme not in ("http", "https"):
+        raise UrlValidationError(raw, "REGISTRY_BASE_URL must be http or https")
+    if parsed.username or parsed.password or parsed.query:
+        raise UrlValidationError(raw, "REGISTRY_BASE_URL must not carry userinfo or a query string")
+    host = parsed.hostname
+    if not host:
+        raise UrlValidationError(raw, "REGISTRY_BASE_URL has no hostname")
+    if coerce_ip_literal(host) is not None:
+        raise UrlValidationError(raw, "REGISTRY_BASE_URL must be a hostname, not an IP literal")
+    return _Allowlist(hosts=frozenset({host.lower()}))
+
+
+def _mcpgw_gateway_origin() -> str:
+    """Return scheme://host:port of REGISTRY_BASE_URL; any path is ignored.
+
+    Locks every mcpgw-gateway request to this one origin. Computed fresh (not
+    cached) on each call, so a missing/malformed REGISTRY_BASE_URL surfaces as
+    the same UrlValidationError _mcpgw_gateway_allowlist raises, rather than a
+    stale cached value outliving a configuration fix.
+    """
+    raw = os.environ.get("REGISTRY_BASE_URL", "")
+    if not raw:
+        raise UrlValidationError(raw, "REGISTRY_BASE_URL is not set")
+    parsed = urlsplit(raw)
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    return f"{parsed.scheme}://{parsed.hostname}:{port}"
+
+
 @dataclass(frozen=True)
 class _Profile:
     """A named validation profile and optional exact outbound identities."""
@@ -1183,6 +1226,12 @@ class _Profile:
     # header to the proxy in cleartext. A field rather than a check against
     # profile names, so a future profile has to make an explicit choice.
     credential_bearing: bool = False
+    # Locks every request under this profile to one exact origin (scheme, host,
+    # effective port). Computed fresh on each validate_url call rather than
+    # cached, so a configuration error (missing/malformed source URL) surfaces
+    # as the same UrlValidationError a caller already handles. None (default)
+    # means the profile imposes no origin restriction beyond its allowlist.
+    allowed_origin_factory: Callable[[], str] | None = None
 
 
 SKILL_PROFILE = _Profile(name="skill", allowlist_factory=_skill_allowlist)
@@ -1214,6 +1263,12 @@ EGRESS_UPSTREAM_PROFILE = _Profile(
     allowlist_factory=_egress_upstream_allowlist,
     allow_private=True,
     credential_bearing=True,  # carries the injected egress credential
+)
+MCPGW_GATEWAY_PROFILE = _Profile(
+    name="mcpgw-gateway",
+    allowlist_factory=_mcpgw_gateway_allowlist,
+    allowed_origin_factory=_mcpgw_gateway_origin,
+    credential_bearing=True,  # carries the caller's bearer token
 )
 
 
@@ -1405,6 +1460,22 @@ def validate_url(
     ):
         raise UrlValidationError(url, "URL does not match the selected exact outbound identity")
     parsed = urlparse(normalized)
+
+    # Origin lock: runs ahead of every later branch (scheme/hostname checks,
+    # the IP-literal early return, and the resolve=False early return) so a
+    # later refactor cannot skip it on one path. Computed fresh per call;
+    # allowed_origin_factory raising (e.g. REGISTRY_BASE_URL unset) propagates
+    # as the same UrlValidationError this function already raises elsewhere.
+    if profile.allowed_origin_factory is not None:
+        allowed_origin = urlparse(profile.allowed_origin_factory())
+        allowed_port = allowed_origin.port or (443 if allowed_origin.scheme == "https" else 80)
+        request_port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        if (
+            parsed.scheme != allowed_origin.scheme
+            or (parsed.hostname or "").lower() != (allowed_origin.hostname or "").lower()
+            or request_port != allowed_port
+        ):
+            raise UrlValidationError(url, f"URL is not on the allowed origin for '{profile.name}'")
 
     allowed_schemes = ("https",) if require_https or profile.require_https else ("http", "https")
     if parsed.scheme not in allowed_schemes:

@@ -21,10 +21,27 @@ from unittest.mock import MagicMock
 import pytest
 
 
+class _ToolResultStub:
+    """Matches fastmcp.tools.ToolResult's constructor contract exactly, so
+    whichever mcpgw test module's sys.modules["fastmcp.tools"] stub wins the
+    cross-file install race behaves identically either way."""
+
+    def __init__(self, content=None, structured_content=None, meta=None, is_error=False):
+        if content is None and structured_content is None:
+            raise ValueError("Either content or structured_content must be provided")
+        self.content = content
+        self.structured_content = structured_content
+        self.meta = meta
+        self.is_error = is_error
+
+
 @pytest.fixture
 def resolve_allowed_hosts():
     """Import _resolve_allowed_hosts under an isolated, restored module state."""
-    saved = {name: sys.modules.get(name) for name in ("fastmcp", "servers.mcpgw.server", "server")}
+    saved = {
+        name: sys.modules.get(name)
+        for name in ("fastmcp", "fastmcp.tools", "servers.mcpgw.server", "server")
+    }
 
     fastmcp_stub = types.ModuleType("fastmcp")
     fastmcp_stub.Context = type("Context", (), {})
@@ -32,6 +49,12 @@ def resolve_allowed_hosts():
     mock_mcp.tool.return_value = lambda fn: fn  # decorator no-op
     fastmcp_stub.FastMCP = MagicMock(return_value=mock_mcp)
     sys.modules["fastmcp"] = fastmcp_stub
+    # server.py also does `from fastmcp.tools import ToolResult` at module
+    # scope (the invoke_mcp_tool wrapper); register the submodule too.
+    fastmcp_tools_stub = types.ModuleType("fastmcp.tools")
+    fastmcp_tools_stub.ToolResult = _ToolResultStub
+    fastmcp_stub.tools = fastmcp_tools_stub
+    sys.modules["fastmcp.tools"] = fastmcp_tools_stub
     sys.modules.pop("servers.mcpgw.server", None)
 
     mcpgw_path = str(Path(__file__).resolve().parents[4] / "servers" / "mcpgw")

@@ -5,7 +5,12 @@ on:
     branches: [main]
     paths:
       - 'servers/mcpgw/**'
-      - 'docker/Dockerfile.mcp-server'
+      - 'docker/Dockerfile.mcpgw'
+      - 'registry/exceptions.py'
+      - 'registry/common/__init__.py'
+      - 'registry/common/log_redaction.py'
+      - 'registry/utils/__init__.py'
+      - 'registry/utils/url_guard.py'
       - '.github/workflows/build-mcpgw.yml'
   workflow_dispatch:
 
@@ -69,14 +74,13 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
-          file: docker/Dockerfile.mcp-server
+          file: docker/Dockerfile.mcpgw
           push: true
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             BUILD_VERSION=${{ github.sha }}
-            SERVER_DIR=servers/mcpgw
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

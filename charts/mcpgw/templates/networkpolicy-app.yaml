@@ -1,0 +1,54 @@
+{{- /*
+NetworkPolicy gating ingress to the mcpgw APPLICATION port ("Restricted
+ingress").
+
+mcpgw always calls the registry and gateway as the CALLING USER
+(servers/mcpgw/gateway_client.py), never a shared service credential. A
+caller who reaches mcpgw's own port directly skips the outer `tools/call`
+grant on `airegistry-tools` and any per-tool block configured there — the
+inner calls still run through the gateway with the caller's token, so the
+target's grants/audit/rate-limits still apply, but this direct path should
+be closed wherever the platform can enforce it. The MCPGW_INVOKE_TOOLS_ENABLED
+switch (off by default) is the kill switch no caller can reach; this policy
+is the network-layer control alongside it.
+
+Only the auth server's `/mcp-proxy` hop and the registry (health checks,
+security scans) legitimately call mcpgw's app port. Metrics scraping on 9464
+is covered separately by networkpolicy-metrics.yaml. The default admits pods
+labeled app.kubernetes.io/name: auth-server or registry — NetworkPolicy
+podSelector entries with no namespaceSelector are implicitly scoped to the
+policy's own namespace, i.e. this release's namespace.
+
+NetworkPolicy enforcement depends on the cluster's network plugin (e.g. the
+EKS VPC CNI network policy agent); where it is not enforced this policy is a
+no-op, same as networkpolicy-metrics.yaml today. See docs/ai-registry-tools.md.
+
+Opt-out via networkPolicy.app.enabled (default true). The admitted selectors
+are configurable via networkPolicy.app.fromPodSelectors.
+*/ -}}
+{{- if .Values.networkPolicy.app.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Values.app.name }}-app
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    app.kubernetes.io/name: {{ .Values.app.name }}
+    app.kubernetes.io/component: {{ .Values.app.name }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Values.app.name }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- range .Values.networkPolicy.app.fromPodSelectors }}
+        - podSelector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.app.port }}
+{{- end }}

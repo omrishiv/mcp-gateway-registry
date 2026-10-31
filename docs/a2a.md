@@ -271,6 +271,48 @@ curl -H "X-Authorization: Bearer $TOKEN" \
 
 ---
 
+## Invoking Agents from an MCP-Only Client
+
+`invoke_agent` and `get_agent_task` are tools on the AI Registry Tools
+(mcpgw) MCP server, not a new gateway route. They let a client that speaks
+MCP but not A2A, such as a coding assistant, call a registered A2A agent
+through the same `/agent/{path}/` reverse-proxy route described above, as
+the calling user. They exist only when an operator sets
+`MCPGW_INVOKE_TOOLS_ENABLED=true` on mcpgw.
+
+Both tools need [Reverse-Proxy
+Mode](#reverse-proxy-mode-routing-a2a-traffic-through-the-gateway) turned
+on: with `A2A_REVERSE_PROXY_ENABLED=false`, no `/agent/{path}/` route
+exists at all, and `invoke_agent` fails with a clear error naming the
+missing route instead of guessing at a direct backend URL.
+
+`invoke_agent` sends a message and polls briefly; it returns `status:
+"pending"` with a `task_id` if the agent is still working when the
+client's own request would time out. `get_agent_task` polls that task
+later. See [AI Registry Tools](ai-registry-tools.md#invoke_agent) for both
+tools' arguments and return shape.
+
+**Task ownership.** `get_agent_task` and `invoke_agent` with a `task_id`
+pass that id straight through; the gateway's `invoke_agent` grant checks
+who may call the agent at all, not who created a given task. A2A 1.0
+section 13.1 puts task ownership on the agent: Get Task "MUST verify the
+authenticated client has access to the requested task according to the
+agent's authorization model." The gateway forwards the verified caller in
+`X-User` and overwrites any value the client sent, so an agent author has
+a trustworthy identity to check. Scope every task to the `X-User` that
+created it, and refuse a get-task or follow-up send for a task owned by a
+different user.
+
+**Retries.** A client whose first send outcome was unclear, because of a
+timeout or a dropped connection, is expected to retry with the same
+`message_id` rather than send a new message. `invoke_agent` returns the
+`message_id` it used on every result, success or failure, so the client
+always has one to retry with. Deduplicate sends by `message_id` on the
+agent side too: the A2A spec does not require it, but it is the only way
+a retried send does not run twice.
+
+---
+
 ## Agent Card and Metadata
 
 An agent card is the JSON document you register. Minimal example:

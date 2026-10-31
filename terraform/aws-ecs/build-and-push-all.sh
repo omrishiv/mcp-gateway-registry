@@ -24,7 +24,7 @@ IMAGES=(
   "mcp-gateway-registry|docker/Dockerfile.registry|."
   "mcp-gateway-auth-server|docker/Dockerfile.auth|."
   "mcp-gateway-currenttime|docker/Dockerfile.mcp-server|servers/currenttime"
-  "mcp-gateway-mcpgw|docker/Dockerfile.mcp-server|servers/mcpgw"
+  "mcp-gateway-mcpgw|docker/Dockerfile.mcpgw|."
   "mcp-gateway-realserverfaketools|docker/Dockerfile.mcp-server|servers/realserverfaketools"
   "mcp-gateway-flight-booking-agent|agents/a2a/src/flight-booking-agent/Dockerfile|agents/a2a/src/flight-booking-agent"
   "mcp-gateway-travel-assistant-agent|agents/a2a/src/travel-assistant-agent/Dockerfile|agents/a2a/src/travel-assistant-agent"

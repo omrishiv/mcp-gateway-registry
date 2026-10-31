@@ -114,13 +114,12 @@ images:
   # MCPGW MCP Server
   mcpgw:
     repo_name: "mcp-gateway-mcpgw"
-    dockerfile: "docker/Dockerfile.mcp-server"
+    dockerfile: "docker/Dockerfile.mcpgw"
     context: "."
     description: "MCPGW MCP server with embeddings support"
     tags:
       - latest
-    build_args:
-      SERVER_DIR: "servers/mcpgw"
+    build_args: {}
 
   # Real Server Fake Tools MCP Server
   realserverfaketools:

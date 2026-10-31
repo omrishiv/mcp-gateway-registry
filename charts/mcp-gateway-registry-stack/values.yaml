@@ -14,6 +14,11 @@ global:
   chartVersion:
   # Domain configuration - update this to your actual domain
   domain: "DOMAIN"
+  # Timeout (seconds) for the /mcp-proxy hop's upstream MCP request. Shared
+  # between the auth server and mcpgw so the two never drift: both charts read
+  # global.mcpProxyTimeout | default .Values.app.mcpProxyTimeout. Leave
+  # empty to keep each subchart's own default ("30").
+  mcpProxyTimeout: ""
   # Security settings
   # secretKey: If not provided, a random 64-character key is auto-generated
   # and shared between auth-server and registry via a shared secret.
@@ -645,6 +650,9 @@ mcpgw:
   enabled: true # Set to true to deploy the MCPGW MCP server
   app:
     replicas: 1
+    # Registers invoke_mcp_tool, invoke_agent and get_agent_task. Off by
+    # default; see charts/mcpgw/values.yaml app.invokeToolsEnabled.
+    invokeToolsEnabled: false
     # Application Log Configuration — reuses the &appLogConfig anchor from
     # registry.app so all three services share the same logging settings.
     # mcpgw only consumes a subset (no MongoDB writer); extra keys merged in

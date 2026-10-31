@@ -176,6 +176,19 @@ _VS_BACKEND_STRIPPED_HEADERS: frozenset[str] = (
 # Credit: derivation approach contributed by @go-faustino (PR #1321).
 MCP_PROXY_NGINX_READ_TIMEOUT_BUFFER_SECONDS: int = 30
 
+# Request-body limit for every generated MCP
+# location that runs capture_body.lua. nginx can authorize a request only
+# while it holds the body in memory (client_body_buffer_size); a larger body
+# spills to a temp file and capture_body.lua marks it uninspectable, which
+# /validate then refuses. Setting client_max_body_size to the same value
+# means any body nginx accepts is always small enough to stay in the buffer,
+# so a request is either authorized or refused with a clear 413 -- never a
+# confusing 500 from an accepted-but-uninspectable body. 256k covers the
+# largest agent message this design accepts (32,000 characters, up to ~6
+# bytes/char JSON-escaped) with room to spare, at a quarter of nginx's 1 MiB
+# client_max_body_size default.
+MCP_REQUEST_BODY_LIMIT: str = "256k"
+
 
 # Minimum sane prefix length for a TRUSTED_REAL_IP_CIDRS entry. A prefix shorter
 # than this (e.g. 0.0.0.0/1, 10.0.0.0/4) trusts an implausibly large peer range
@@ -2106,6 +2119,10 @@ class NginxConfigService:
         auth_request_set $auth_username $upstream_http_x_username;
         auth_request_set $auth_method $upstream_http_x_auth_method;
         rewrite_by_lua_file /etc/nginx/lua/capture_body.lua;
+        # Body must fit nginx's in-memory buffer or capture_body.lua
+        # cannot read it and /validate refuses it as uninspectable.
+        client_max_body_size {MCP_REQUEST_BODY_LIMIT};
+        client_body_buffer_size {MCP_REQUEST_BODY_LIMIT};
         content_by_lua_file /etc/nginx/lua/virtual_router.lua;
 
         # Route 401s through @auth_error so the WWW-Authenticate header
@@ -3438,10 +3455,14 @@ class NginxConfigService:
 
         # Transport-specific settings
         if transport_type == "sse":
-            transport_settings = """
+            transport_settings = f"""
         # Capture request body for auth validation using Lua
         rewrite_by_lua_file /etc/nginx/lua/capture_body.lua;
         log_by_lua_file /etc/nginx/lua/emit_metrics.lua;
+        # Body must fit nginx's in-memory buffer or capture_body.lua
+        # cannot read it and /validate refuses it as uninspectable.
+        client_max_body_size {MCP_REQUEST_BODY_LIMIT};
+        client_body_buffer_size {MCP_REQUEST_BODY_LIMIT};
 
         # For SSE connections and WebSocket upgrades
         proxy_buffering off;
@@ -3453,10 +3474,14 @@ class NginxConfigService:
         chunked_transfer_encoding off;"""
 
         elif transport_type == "streamable-http":
-            transport_settings = """
+            transport_settings = f"""
         # Capture request body for auth validation using Lua
         rewrite_by_lua_file /etc/nginx/lua/capture_body.lua;
         log_by_lua_file /etc/nginx/lua/emit_metrics.lua;
+        # Body must fit nginx's in-memory buffer or capture_body.lua
+        # cannot read it and /validate refuses it as uninspectable.
+        client_max_body_size {MCP_REQUEST_BODY_LIMIT};
+        client_body_buffer_size {MCP_REQUEST_BODY_LIMIT};
 
         # HTTP transport configuration
         proxy_buffering off;
@@ -3465,10 +3490,14 @@ class NginxConfigService:
         proxy_set_header Accept $http_accept;"""
 
         else:  # direct
-            transport_settings = """
+            transport_settings = f"""
         # Capture request body for auth validation using Lua
         rewrite_by_lua_file /etc/nginx/lua/capture_body.lua;
         log_by_lua_file /etc/nginx/lua/emit_metrics.lua;
+        # Body must fit nginx's in-memory buffer or capture_body.lua
+        # cannot read it and /validate refuses it as uninspectable.
+        client_max_body_size {MCP_REQUEST_BODY_LIMIT};
+        client_body_buffer_size {MCP_REQUEST_BODY_LIMIT};
 
         # Generic transport configuration
         proxy_buffering off;

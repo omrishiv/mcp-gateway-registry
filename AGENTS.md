@@ -442,6 +442,13 @@ working in those areas.
   names from registry values must be injective encodings. A header only a NEW
   template sets/clears is forgeable behind an OLD one: honor it only with the
   marker under a new header name (`X-Validate-Binding-Secret`).
+- **Server-for-user identity:** a server that acts on behalf of users forwards
+  only the caller's own token, never a static or M2M service credential a
+  config variable could switch on; a server that trusts an upstream hop for
+  authorization also restricts who can reach it and keeps its enable/disable
+  switch in its own environment, not in anything a caller can send. See the
+  "Acting for the caller, not with a service credential" entry in
+  [docs/SECURITY_GUIDELINES.md](docs/SECURITY_GUIDELINES.md).
 - **After fixing a finding, grep the pattern repo-wide**, because findings usually have
   siblings the report didn't list.
 

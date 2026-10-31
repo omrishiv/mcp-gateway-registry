@@ -458,6 +458,9 @@ module "mcp_gateway" {
   auth_server_extra_env = var.auth_server_extra_env
   mcpgw_extra_env       = var.mcpgw_extra_env
 
+  # mcpgw invocation tools kill switch
+  mcpgw_invoke_tools_enabled = var.mcpgw_invoke_tools_enabled
+
   # Per-user egress credential vault (third-party OBO). secrets-manager backend
   # on ECS; IAM grants are added in the module when enabled.
   egress_auth_enabled                       = var.egress_auth_enabled

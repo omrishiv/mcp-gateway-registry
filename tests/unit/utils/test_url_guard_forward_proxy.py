@@ -593,7 +593,12 @@ class TestNoProxyAndSchemes:
 class TestProfileRulesAndFailClosed:
     @pytest.mark.parametrize(
         "profile_name",
-        ["FEDERATION_PROFILE", "EGRESS_UPSTREAM_PROFILE", "CREDENTIALED_OAUTH_PROFILE"],
+        [
+            "FEDERATION_PROFILE",
+            "EGRESS_UPSTREAM_PROFILE",
+            "CREDENTIALED_OAUTH_PROFILE",
+            "MCPGW_GATEWAY_PROFILE",
+        ],
     )
     def test_credential_bearing_profiles_are_marked(self, profile_name):
         assert getattr(url_guard, profile_name).credential_bearing is True

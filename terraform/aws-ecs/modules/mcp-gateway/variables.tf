@@ -2011,6 +2011,12 @@ variable "mcpgw_extra_env" {
   sensitive   = true
 }
 
+variable "mcpgw_invoke_tools_enabled" {
+  description = "Master switch for mcpgw's three invocation tools (invoke_mcp_tool, invoke_agent, get_agent_task). Off by default: mcpgw does not register them at all, so no caller — however authorized against the registry or gateway — can reach them. Enabling this does not relax any existing server/tool/agent grant; it only lets the already-granted calls happen through mcpgw instead of a direct client."
+  type        = bool
+  default     = false
+}
+
 # ---------------------------------------------------------------------------
 # Per-user egress credential vault (third-party OBO support).
 # On ECS the natural secret store is AWS Secrets Manager (OpenBao is the EKS

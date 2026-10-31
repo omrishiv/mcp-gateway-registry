@@ -437,6 +437,9 @@ services:
         condition: service_completed_successfully
       openbao:
         condition: service_healthy
+    networks:
+      - default
+      - mcpgw-net
     restart: unless-stopped
 
   # Metrics Collection Service
@@ -696,6 +699,9 @@ services:
         condition: service_healthy
       mongodb-init:
         condition: service_completed_successfully
+    networks:
+      - default
+      - mcpgw-net
     restart: unless-stopped
 
   # Current Time MCP Server
@@ -717,9 +723,8 @@ services:
   mcpgw-server:
     build:
       context: .
-      dockerfile: docker/Dockerfile.mcp-server
+      dockerfile: docker/Dockerfile.mcpgw
       args:
-        SERVER_DIR: servers/mcpgw
         BUILD_VERSION: ${BUILD_VERSION:-1.0.0}
     environment:
       - HOST=0.0.0.0
@@ -737,6 +742,11 @@ services:
       - OTEL_METRIC_EXPORT_INTERVAL_MS=${OTEL_METRIC_EXPORT_INTERVAL_MS:-15000}
       - OTEL_EXPORTER_PROMETHEUS_HOST=${OTEL_EXPORTER_PROMETHEUS_HOST:-0.0.0.0}
       - OTEL_EXPORTER_PROMETHEUS_PORT=${OTEL_EXPORTER_PROMETHEUS_PORT:-9464}
+      # Invocation tools (off by default; kill switch no caller can reach) and
+      # the shared gateway-hop deadline, read from the same source the auth
+      # server reads so the two can never drift.
+      - MCPGW_INVOKE_TOOLS_ENABLED=${MCPGW_INVOKE_TOOLS_ENABLED:-false}
+      - MCP_PROXY_TIMEOUT=${MCP_PROXY_TIMEOUT:-30}
     env_file:
       - path: ${MCP_EXTRA_ENV_DIR:-./extra_env}/mcpgw.env
         required: false
@@ -745,9 +755,12 @@ services:
       - ${HOME}/mcp-gateway/models:/app/registry/models
       # Application log file (bind mount to host for Splunk ingestion, Issue #987)
       - /var/log/containers/ai-registry:/var/log/containers/ai-registry
-    ports:
-      # Loopback-only: reached through the nginx front door in normal use.
-      - "${HOST_BIND_IP:-127.0.0.1}:8003:8003"
+    # Backend MCP server: reached only through the nginx/auth front door, from
+    # its own network (mcpgw-net), shared only with registry, auth-server and
+    # prometheus. No host port is published; for local direct access see
+    # docs/ai-registry-tools.md.
+    networks:
+      - mcpgw-net
     depends_on:
       - registry
     restart: unless-stopped
@@ -806,6 +819,9 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    networks:
+      - default
+      - mcpgw-net
     restart: unless-stopped
 
   # Grafana for metrics visualization
@@ -1030,3 +1046,11 @@ volumes:
   mongodb-data:
   mongodb-config:
   pingfederate-data:
+
+networks:
+  default: {}
+  # Dedicated network for mcpgw ingress restriction: only the auth server's
+  # /mcp-proxy hop, the registry's health
+  # checks, and metrics scraping legitimately reach mcpgw's app port.
+  mcpgw-net:
+    internal: true

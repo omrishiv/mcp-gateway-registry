@@ -1,0 +1,70 @@
+suite: app-port network policy (restricted ingress)
+templates:
+  - networkpolicy-app.yaml
+release:
+  name: test
+  namespace: default
+tests:
+  - it: renders an Ingress NetworkPolicy by default
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: NetworkPolicy
+      - equal:
+          path: spec.policyTypes[0]
+          value: Ingress
+      - equal:
+          path: spec.podSelector.matchLabels["app.kubernetes.io/name"]
+          value: mcpgw-server
+
+  - it: renders nothing when disabled
+    set:
+      networkPolicy.app.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: admits only the app port
+    asserts:
+      - equal:
+          path: spec.ingress[0].ports[0].protocol
+          value: TCP
+      - equal:
+          path: spec.ingress[0].ports[0].port
+          value: 8000
+
+  - it: tracks a custom app port
+    set:
+      app.port: 9999
+    asserts:
+      - equal:
+          path: spec.ingress[0].ports[0].port
+          value: 9999
+
+  - it: admits the auth server and registry by default
+    asserts:
+      - contains:
+          path: spec.ingress[0].from
+          content:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: auth-server
+      - contains:
+          path: spec.ingress[0].from
+          content:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: registry
+
+  - it: honors a custom fromPodSelectors list
+    set:
+      networkPolicy.app.fromPodSelectors:
+        - app.kubernetes.io/name: custom-caller
+    asserts:
+      - lengthEqual:
+          path: spec.ingress[0].from
+          count: 1
+      - equal:
+          path: spec.ingress[0].from[0].podSelector.matchLabels["app.kubernetes.io/name"]
+          value: custom-caller

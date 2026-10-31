@@ -16,10 +16,25 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+
 # The mcpgw server depends on `fastmcp` which is not installed in the main
 # project venv. Stub it out before importing the server module.
 # FastMCP.tool() is a decorator — make it a passthrough so the original
 # async functions remain callable.
+class _ToolResultStub:
+    """Matches fastmcp.tools.ToolResult's constructor contract exactly, so
+    whichever mcpgw test module's sys.modules["fastmcp.tools"] stub wins the
+    cross-file install race behaves identically either way."""
+
+    def __init__(self, content=None, structured_content=None, meta=None, is_error=False):
+        if content is None and structured_content is None:
+            raise ValueError("Either content or structured_content must be provided")
+        self.content = content
+        self.structured_content = structured_content
+        self.meta = meta
+        self.is_error = is_error
+
+
 if "fastmcp" not in sys.modules:
     _fastmcp_stub = types.ModuleType("fastmcp")
     _fastmcp_stub.Context = type("Context", (), {})
@@ -27,6 +42,12 @@ if "fastmcp" not in sys.modules:
     _mock_mcp.tool.return_value = lambda fn: fn  # decorator is a no-op
     _fastmcp_stub.FastMCP = MagicMock(return_value=_mock_mcp)
     sys.modules["fastmcp"] = _fastmcp_stub
+    # server.py also does `from fastmcp.tools import ToolResult` at module
+    # scope (the invoke_mcp_tool wrapper); register the submodule too.
+    _fastmcp_tools_stub = types.ModuleType("fastmcp.tools")
+    _fastmcp_tools_stub.ToolResult = _ToolResultStub
+    _fastmcp_stub.tools = _fastmcp_tools_stub
+    sys.modules["fastmcp.tools"] = _fastmcp_tools_stub
 
 # Add servers/mcpgw to sys.path so that `from models import ...` works
 _mcpgw_path = str(Path(__file__).resolve().parents[4] / "servers" / "mcpgw")
@@ -73,19 +94,27 @@ async def _call_with_mocked_get(tool_func, payload, capture=None, **tool_kwargs)
     mock_response.raise_for_status = MagicMock()
     mock_response.json.return_value = payload
 
-    async def mock_get(url, **kwargs):
+    async def mock_request_json_bounded(
+        client, method, url, *, params=None, json_body=None, limit=None
+    ):
         if capture is not None:
-            capture.update(kwargs)
-        return mock_response
+            capture["params"] = params
+        return mock_response.json()
 
     mock_client = AsyncMock()
-    mock_client.get = mock_get
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
     with (
-        patch("servers.mcpgw.server.httpx.AsyncClient", return_value=mock_client),
-        patch("servers.mcpgw.server._extract_bearer_token", return_value="test-token"),
+        patch(
+            "servers.mcpgw.server.caller_headers",
+            return_value={"X-Authorization": "Bearer test-token"},
+        ),
+        patch("servers.mcpgw.server.gateway_http_client", return_value=mock_client),
+        patch(
+            "servers.mcpgw.server.request_json_bounded",
+            AsyncMock(side_effect=mock_request_json_bounded),
+        ),
     ):
         return await tool_func(**tool_kwargs)
 
@@ -448,19 +477,27 @@ async def _call_search_with_mocked_post(payload, capture=None, **tool_kwargs):
     mock_response.raise_for_status = MagicMock()
     mock_response.json.return_value = payload
 
-    async def mock_post(url, **kwargs):
+    async def mock_request_json_bounded(
+        client, method, url, *, params=None, json_body=None, limit=None
+    ):
         if capture is not None:
-            capture.update(kwargs)
-        return mock_response
+            capture["json"] = json_body
+        return mock_response.json()
 
     mock_client = AsyncMock()
-    mock_client.post = mock_post
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
     with (
-        patch("servers.mcpgw.server.httpx.AsyncClient", return_value=mock_client),
-        patch("servers.mcpgw.server._extract_bearer_token", return_value="test-token"),
+        patch(
+            "servers.mcpgw.server.caller_headers",
+            return_value={"X-Authorization": "Bearer test-token"},
+        ),
+        patch("servers.mcpgw.server.gateway_http_client", return_value=mock_client),
+        patch(
+            "servers.mcpgw.server.request_json_bounded",
+            AsyncMock(side_effect=mock_request_json_bounded),
+        ),
     ):
         return await search_registry(**tool_kwargs)
 

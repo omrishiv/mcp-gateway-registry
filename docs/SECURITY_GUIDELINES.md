@@ -807,6 +807,33 @@ sanitizer that isn't called) is equivalent to no check.
   attacker uses.
 - **A relaxed check for a name the gateway invents is safe only if the gateway answers that name on every path and never forwards it.** Issue #1860 added a synthetic `connect_mcpgw_<server>` tool that `tools/list` returns before egress consent. It is authorized like `tools/list`, so a user with access to the server can call it without a grant for that tool. If the gateway answered it only while consent was pending and forwarded it afterwards, a backend tool with the same name would run with the user's vaulted credential under the weaker check. The rule has three parts. Answer the invented name at the gateway in every state: `_connect_tool_local_result` in `auth_server/server.py` covers the connected, OBO and non-egress cases. Match on the one exact name derived for the server. Grant the relaxed check only on routes where every request reaches the answering hop: direct routes, which nginx always sends to `/mcp-proxy` (pinned by `test_direct_route_location_only_proxies_to_mcp_proxy`). Virtual routes get no exemption, because nginx proxies their non-egress backends straight to the backend. A hop token that lacks the route claim gets none either.
 
+## Acting for the caller, not with a service credential
+
+- **A server that calls downstream services on behalf of a user forwards only
+  that user's own token, never a static token or an M2M service credential a
+  configuration variable could switch on; a server that relies on an upstream
+  hop for authorization also restricts who can reach it and keeps its kill
+  switch somewhere no caller can reach.** mcpgw (`servers/mcpgw/server.py`,
+  `servers/mcpgw/gateway_client.py`) used to pick its registry credential from
+  `REGISTRY_API_TOKEN`, then an M2M client/secret pair, before falling back to
+  the caller's own bearer (`_get_registry_headers`); an operator who set either
+  one made every user look like admin or like one shared service account.
+  `caller_headers()` now reads the caller's own `X-Authorization`/
+  `Authorization` bearer off the inbound request and forwards exactly that,
+  and nothing else, as `X-Authorization` on every outbound call.
+  `REGISTRY_API_TOKEN` and `M2M_CLIENT_ID`/`M2M_CLIENT_SECRET` are still read
+  once, only to log a startup `WARNING` that they are ignored, and
+  `OIDC_ENABLED=true` makes every mcpgw tool raise `CallerIdentityError`
+  rather than guess at an identity (issue #895). mcpgw also trusts an upstream
+  hop for authorization (nginx and the auth server) and runs with no
+  authentication of its own when OIDC is off, so the other half of the fix
+  restricts who can open a connection to it at all: a Helm `NetworkPolicy`,
+  its own Compose network with no host port published, and the ECS security
+  group that already admitted only the auth server and the registry. The
+  companion kill switch, `MCPGW_INVOKE_TOOLS_ENABLED` (default `false`), lives
+  in mcpgw's own environment, not in a header or parameter a caller supplies,
+  so no request a caller can build can turn the gated tools back on.
+
 ## Identity-provider self-registration (DCR)
 
 RFC 7591 Dynamic Client Registration lets an MCP client create its own IdP

@@ -224,6 +224,22 @@ class TestGenerateAgentLocationBlocks:
         assert "proxy_pass https://flight-booking.dev.example.com/;" in result
 
     @pytest.mark.asyncio
+    async def test_body_size_unchanged_for_a2a_locations(self, patched_agent_service):
+        """client_max_body_size / client_body_buffer_size apply to every MCP
+        location, but /validate does not
+        inspect A2A bodies for authorization (server_name is cleared after the
+        invoke_agent check), so the A2A route keeps nginx's default buffer.
+        """
+        patched_agent_service.get_enabled_agents = AsyncMock(return_value=["/flight-booking-agent"])
+        patched_agent_service.get_agent_info = AsyncMock(return_value=_agent())
+        service = NginxConfigService()
+
+        result = await service._generate_agent_location_blocks()
+
+        assert "client_max_body_size" not in result
+        assert "client_body_buffer_size" not in result
+
+    @pytest.mark.asyncio
     async def test_proxies_to_proxy_pass_url_when_set(self, patched_agent_service):
         """In reverse-proxy mode the advertised url is the gateway address, so the
         block must proxy to proxy_pass_url (the real backend), not url."""

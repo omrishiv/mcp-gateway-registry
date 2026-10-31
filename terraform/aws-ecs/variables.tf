@@ -2293,11 +2293,17 @@ variable "mcpgw_extra_env" {
   validation {
     condition = alltrue([
       for entry in var.mcpgw_extra_env : (
-        !contains(["SEARCH_LOG_QUERY_TEXT"], upper(trimspace(entry.name)))
+        !contains(["SEARCH_LOG_QUERY_TEXT", "MCPGW_INVOKE_TOOLS_ENABLED", "MCP_PROXY_TIMEOUT"], upper(trimspace(entry.name)))
       )
     ])
-    error_message = "mcpgw_extra_env must not override Terraform-managed variables (SEARCH_LOG_QUERY_TEXT; use the search_log_query_text variable instead)."
+    error_message = "mcpgw_extra_env must not override Terraform-managed variables (SEARCH_LOG_QUERY_TEXT, MCPGW_INVOKE_TOOLS_ENABLED, MCP_PROXY_TIMEOUT; use the search_log_query_text, mcpgw_invoke_tools_enabled or mcp_proxy_timeout variables instead)."
   }
+}
+
+variable "mcpgw_invoke_tools_enabled" {
+  description = "Master switch for mcpgw's three invocation tools (invoke_mcp_tool, invoke_agent, get_agent_task). Off by default: mcpgw does not register them at all, so no caller — however authorized against the registry or gateway — can reach them. Enabling this does not relax any existing server/tool/agent grant; it only lets the already-granted calls happen through mcpgw instead of a direct client."
+  type        = bool
+  default     = false
 }
 
 variable "autoscaling_min_capacity" {

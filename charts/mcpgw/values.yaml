@@ -42,6 +42,17 @@ app:
   # typed and can carry PII, so this stays false outside of debugging. The server
   # logs a startup warning while it is on.
   searchLogQueryText: false
+  # Timeout (seconds) the mcpgw tools use to derive their own deadline
+  # (MCP_PROXY_TIMEOUT minus 5s) for calls through the gateway. This MUST
+  # stay equal to the auth server's own mcp_proxy_timeout/MCP_PROXY_TIMEOUT
+  # (charts/auth-server/values.yaml app.mcpProxyTimeout) or the two drift.
+  # When deployed via mcp-gateway-registry-stack, global.mcpProxyTimeout
+  # overrides this. Standalone deployments keep this default.
+  mcpProxyTimeout: "30"
+  # Registers invoke_mcp_tool, invoke_agent and get_agent_task. Off by
+  # default: upgrades add nothing until an operator turns it on, and no
+  # caller can bypass this switch. Restart to change.
+  invokeToolsEnabled: false
   # GitHub private repo auth (SKILL.md fetching)
   githubPat: ""
   githubPatExistingSecret: "" # If set, read GITHUB_PAT from this K8s secret
@@ -167,3 +178,14 @@ metricsScrape:
     fromPodSelector:
       app.kubernetes.io/name: prometheus
 nodeSelector: {}
+# Application-port ingress restriction ("Restricted ingress").
+# Only the auth server's /mcp-proxy hop
+# and the registry (health checks, security scans) legitimately call
+# mcpgw's app port; this is the required control once a cluster enforces
+# NetworkPolicy, not only hardening — see templates/networkpolicy-app.yaml.
+networkPolicy:
+  app:
+    enabled: true
+    fromPodSelectors:
+      - app.kubernetes.io/name: auth-server
+      - app.kubernetes.io/name: registry

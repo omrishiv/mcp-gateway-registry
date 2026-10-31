@@ -1,0 +1,120 @@
+# Dedicated Dockerfile for the mcpgw (AI Registry Tools) server. Unlike the
+# shared docker/Dockerfile.mcp-server, this is not parameterized by
+# SERVER_DIR: mcpgw's guard client imports five files from registry/, which a
+# server-directory-only context cannot see. Build context must be the repo
+# root (`.`).
+FROM python:3.14.9-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    UV_NO_CACHE=1
+
+# Issue #1122: prefer IPv4 over IPv6 in glibc getaddrinfo. ECS Service Connect
+# populates /etc/hosts with both A (127.255.0.x) and AAAA (2600:f0f0::x)
+# entries; the Fargate task netns has no IPv6 routing, so the default RFC 6724
+# IPv6 preference makes outbound calls (mcpgw to registry, etc.) fail with
+# "Network is unreachable". Compose and EKS are unaffected because their
+# /etc/hosts has no IPv6 dual entries to compare against.
+RUN echo 'precedence ::ffff:0:0/96  100' >> /etc/gai.conf
+
+# Install system dependencies.
+# apt-get upgrade pulls in security patches against the base image's
+# already-installed packages (e.g. libc6 / glibc CVE updates) that would
+# otherwise stay at whatever version was baked into python:3.14-slim.
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+    curl \
+    git \
+    build-essential \
+    netcat-openbsd \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user early (before creating any app files)
+RUN groupadd -g 1000 appuser && useradd -u 1000 -g appuser appuser
+
+WORKDIR /app
+
+# Install uv as root (global tool)
+RUN pip install uv==0.13.5
+
+# Create /app directory with correct ownership from the start
+RUN chown appuser:appuser /app
+
+# Switch to non-root user for all subsequent operations
+USER appuser
+
+# Setup Python environment as appuser (avoids need to chown .venv later)
+RUN uv venv .venv --python 3.14
+
+# Switch back to root temporarily for COPY operations (Docker requires root for COPY)
+USER root
+
+# Copy dependency manifests FIRST so the install layer is cached on the
+# (pyproject, lock) pair, not on source changes.
+COPY --chown=appuser:appuser servers/mcpgw/pyproject.toml /app/pyproject.toml
+COPY --chown=appuser:appuser servers/mcpgw/uv.lock        /app/uv.lock
+
+# Install dependencies from uv.lock. --frozen uses uv.lock as the source of truth.
+USER appuser
+RUN uv sync --frozen --no-dev
+
+# Copy source last (busts frequently; the cached install layer above is preserved).
+USER root
+COPY --chown=appuser:appuser servers/mcpgw/ /app/
+
+# mcpgw's guard client (servers/mcpgw/gateway_client.py) imports these five
+# registry/ files and nothing else from the registry package (no third-party
+# imports beyond httpx and certifi, both already mcpgw dependencies).
+COPY --chown=appuser:appuser registry/exceptions.py           /app/registry/exceptions.py
+COPY --chown=appuser:appuser registry/common/__init__.py      /app/registry/common/__init__.py
+COPY --chown=appuser:appuser registry/common/log_redaction.py /app/registry/common/log_redaction.py
+COPY --chown=appuser:appuser registry/utils/__init__.py       /app/registry/utils/__init__.py
+COPY --chown=appuser:appuser registry/utils/url_guard.py      /app/registry/utils/url_guard.py
+
+USER appuser
+
+# Expose default port (can be overridden by environment variable)
+EXPOSE 8000
+
+# Health check (generic for all MCP servers)
+HEALTHCHECK --interval=500s --timeout=10s --start-period=30s --retries=3 \
+    CMD nc -z localhost ${PORT:-8000} || exit 1
+
+# Switch to root to create entrypoint script
+USER root
+
+# Create /var/log/containers/ai-registry for file logging (issue #987).
+RUN mkdir -p /var/log/containers/ai-registry && \
+    chown -R appuser:appuser /var/log/containers/ai-registry
+
+# Create entrypoint script that handles environment setup and runs server.py
+RUN echo '#!/bin/bash\n\
+set -e\n\
+\n\
+# Set default port\n\
+SERVER_PORT=${PORT:-8000}\n\
+\n\
+if [ ! -z "$REGISTRY_BASE_URL" ]; then\n\
+    echo "REGISTRY_BASE_URL=$REGISTRY_BASE_URL" > /app/.env\n\
+fi\n\
+\n\
+# Activate virtual environment and run the server\n\
+source .venv/bin/activate\n\
+CMD="python server.py --port $SERVER_PORT"\n\
+if [ -n "${OTEL_EXPORTER_OTLP_ENDPOINT}" ] && command -v opentelemetry-instrument >/dev/null 2>&1; then\n\
+    echo "Using OTEL_EXPORTER_OTLP_ENDPOINT at ${OTEL_EXPORTER_OTLP_ENDPOINT}"\n\
+    CMD="opentelemetry-instrument $CMD"\n\
+fi\n\
+exec $CMD' > /entrypoint.sh && \
+    chmod +x /entrypoint.sh && \
+    chown appuser:appuser /entrypoint.sh
+
+# Bake the build version into the image (issue #919). Requires
+# `docker build --build-arg BUILD_VERSION=$VERSION`; defaults to "1.0.0".
+ARG BUILD_VERSION="1.0.0"
+ENV BUILD_VERSION=$BUILD_VERSION
+
+# Switch to non-root user for runtime (no chown needed - files already owned by appuser)
+USER appuser
+
+ENTRYPOINT ["/entrypoint.sh"]

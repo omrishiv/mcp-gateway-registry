@@ -2663,6 +2663,19 @@ module "ecs_service_mcpgw" {
           # the registry reads, so both containers agree. Issue #1752.
           name  = "SEARCH_LOG_QUERY_TEXT"
           value = tostring(var.search_log_query_text)
+        },
+        {
+          # Kill switch for the three invocation tools (invoke_mcp_tool,
+          # invoke_agent, get_agent_task); off by default, no caller can
+          # bypass it.
+          name  = "MCPGW_INVOKE_TOOLS_ENABLED"
+          value = tostring(var.mcpgw_invoke_tools_enabled)
+        },
+        {
+          # Same variable the auth-server proxy hop already uses, so mcpgw's
+          # own request deadline (MCP_PROXY_TIMEOUT - 5s) never drifts from it.
+          name  = "MCP_PROXY_TIMEOUT"
+          value = tostring(var.mcp_proxy_timeout)
         }
         ],
         # Extra environment variables from user (Issue #1000)
