@@ -22,23 +22,14 @@ _SECRETS = st.text(alphabet=_SECRET_ALPHABET, min_size=12, max_size=24)
 
 _PINNED_SECRET: str = "pinnedSecret42"
 
-_SCHEMELESS_XFAIL = pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "Known defect: redact_url returns URLs without a '//' authority "
-        "marker unchanged, so the userinfo password is logged."
-    ),
-)
-
 # Each shape takes the planted secret via ``str.format``.
 _SHAPES = [
     pytest.param("http://user:{secret}@host:8080/path", id="scheme-authority"),
     pytest.param("https://h/p?token={secret}", id="query"),
     pytest.param("https://h/p#{secret}", id="fragment"),
-    pytest.param("user:{secret}@proxy:3128", id="no-scheme", marks=_SCHEMELESS_XFAIL),
-    pytest.param("http:/user:{secret}@host/", id="scheme-single-slash", marks=_SCHEMELESS_XFAIL),
-    pytest.param("http:user:{secret}@host", id="scheme-no-slash", marks=_SCHEMELESS_XFAIL),
+    pytest.param("user:{secret}@proxy:3128", id="no-scheme"),
+    pytest.param("http:/user:{secret}@host/", id="scheme-single-slash"),
+    pytest.param("http:user:{secret}@host", id="scheme-no-slash"),
 ]
 
 _SETTINGS = settings(
@@ -63,10 +54,7 @@ class TestRedactUrlSecretInjection:
         redacted = redact_url(url)
         assert secret not in redacted, f"redact_url({url!r}) = {redacted!r}"
 
-    @pytest.mark.parametrize(
-        "shape",
-        [pytest.param(p.values[0], id=p.id) for p in _SHAPES],
-    )
+    @pytest.mark.parametrize("shape", _SHAPES)
     @_SETTINGS
     @given(secret=_SECRETS)
     @example(secret=_PINNED_SECRET)

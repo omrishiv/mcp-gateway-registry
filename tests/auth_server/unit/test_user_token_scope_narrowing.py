@@ -85,11 +85,6 @@ STATEFUL_SETTINGS = settings(
     deadline=None,
 )
 
-DEMOTION_REASON: str = (
-    "Known defect: a self-signed token carries the groups the user held at mint "
-    "time, and the registry derives is_admin from those frozen groups."
-)
-
 # The user holds an admin group and one read group, and asks for the read scope only.
 _ADMIN_USER_READ_ONLY_REQUEST = (
     [ADMIN_GROUP, SERVER_READER_GROUP],
@@ -306,14 +301,6 @@ def _validate_for_registry_api(
     return validated
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "Known defect: a narrowed self-signed token carries the user's full groups, "
-        "and the registry derives permissions including is_admin from those groups."
-    ),
-)
 @HYPOTHESIS_SETTINGS
 @given(case=_narrowed_requests())
 @example(case=_ADMIN_USER_READ_ONLY_REQUEST)
@@ -588,16 +575,8 @@ def _demotion_violation(
 
 
 _DEMOTION_SEQUENCES = [
-    pytest.param(
-        ("mint", "demote", "use"),
-        id="mint-demote-use",
-        marks=pytest.mark.xfail(strict=True, raises=AssertionError, reason=DEMOTION_REASON),
-    ),
-    pytest.param(
-        ("mint", "unmap", "demote", "remap", "use"),
-        id="mint-unmap-demote-remap-use",
-        marks=pytest.mark.xfail(strict=True, raises=AssertionError, reason=DEMOTION_REASON),
-    ),
+    pytest.param(("mint", "demote", "use"), id="mint-demote-use"),
+    pytest.param(("mint", "unmap", "demote", "remap", "use"), id="mint-unmap-demote-remap-use"),
     pytest.param(("mint", "unmap", "use"), id="mint-unmap-use"),
     pytest.param(("mint", "demote", "promote", "use"), id="mint-demote-promote-use"),
     pytest.param(("demote", "mint", "promote", "use"), id="demote-mint-promote-use"),
@@ -681,7 +660,6 @@ class _TokenDemotionMachine(RuleBasedStateMachine):
             assert violation is None, f"token #{index}: {violation}"
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=DEMOTION_REASON)
 def test_registry_admin_tracks_demotion_state_machine(auth_env_vars):
     """For every operation sequence, a used token confers is_admin only on a current admin."""
     run_state_machine_as_test(_TokenDemotionMachine, settings=STATEFUL_SETTINGS)

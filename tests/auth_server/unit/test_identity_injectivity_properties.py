@@ -141,25 +141,6 @@ _RENAMED_PROFILE: dict[str, str] = {
     "upn": "alice.smith@example.com",
 }
 
-_INJECTIVE_REASON: str = (
-    "Known defect: the username is taken from a mutable profile claim "
-    "(preferred_username, nickname, login or email) ahead of sub, so two "
-    "accounts with distinct subjects and the same profile claim share an owner key."
-)
-_STABLE_REASON: str = (
-    "Known defect: the username is taken from a mutable profile claim ahead of "
-    "sub, so editing that claim changes the owner key of the same account."
-)
-_DIFFERENTIAL_REASON: str = (
-    "Known defect: the login callback and the provider's validate_token use "
-    "different claim fallback chains, so the same claims yield different "
-    "usernames on the cookie path and the bearer path."
-)
-_CROSS_PROVIDER_REASON: str = (
-    "Known defect: login usernames carry no issuer namespace, so accounts at "
-    "two different IdPs with the same profile claim share an owner key."
-)
-
 _PRIVATE_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 _JWKS: dict[str, Any] = {
     "keys": [
@@ -463,34 +444,6 @@ def _cookie_identity(
     return _cookie_session(login_path, identity_claims).get("owner_id") or None
 
 
-def _param(
-    value: str,
-    failing: frozenset[str],
-    reason: str,
-):
-    """Wrap ``value`` as a param, xfailed when it is in ``failing``.
-
-    Args:
-        value: The parameter value.
-        failing: Values whose property fails today.
-        reason: The xfail reason.
-
-    Returns:
-        A ``pytest.param``.
-    """
-    marks = (
-        [pytest.mark.xfail(strict=True, raises=AssertionError, reason=reason)]
-        if value in failing
-        else []
-    )
-    return pytest.param(value, marks=marks, id=value)
-
-
-_BEARER_MUTABLE_KEYED: frozenset[str] = frozenset({"keycloak", "entra", "auth0"})
-_LOGIN_MUTABLE_KEYED: frozenset[str] = frozenset(LOGIN_PATHS) - {"cognito"}
-_DIFFERENTIAL_FAILING: frozenset[str] = frozenset({"entra", "okta", "auth0", "pingfederate"})
-
-
 @st.composite
 def _distinct_accounts(
     draw: st.DrawFn,
@@ -517,7 +470,7 @@ _NAMESPACE_MIX_EXAMPLE = ("alice", "user-b", {}, {"preferred_username": "alice",
 
 @pytest.mark.parametrize(
     "provider",
-    [_param(p, _BEARER_MUTABLE_KEYED, _INJECTIVE_REASON) for p in BEARER_PROVIDERS],
+    [pytest.param(p, id=p) for p in BEARER_PROVIDERS],
 )
 @HYPOTHESIS_SETTINGS
 @given(accounts=_distinct_accounts())
@@ -538,7 +491,7 @@ def test_bearer_identity_injective_over_subject(provider, accounts):
 
 @pytest.mark.parametrize(
     "provider",
-    [_param(p, _BEARER_MUTABLE_KEYED, _STABLE_REASON) for p in BEARER_PROVIDERS],
+    [pytest.param(p, id=p) for p in BEARER_PROVIDERS],
 )
 @HYPOTHESIS_SETTINGS
 @given(sub=_SUBJECTS, before=_PROFILES, after=_PROFILES)
@@ -556,7 +509,7 @@ def test_bearer_identity_stable_under_profile_edits(provider, sub, before, after
 
 @pytest.mark.parametrize(
     "login_path",
-    [_param(p, _LOGIN_MUTABLE_KEYED, _INJECTIVE_REASON) for p in LOGIN_PATHS],
+    [pytest.param(p, id=p) for p in LOGIN_PATHS],
 )
 @HYPOTHESIS_SETTINGS
 @given(accounts=_distinct_accounts())
@@ -579,7 +532,7 @@ def test_session_identity_injective_over_subject(login_path, accounts):
 
 @pytest.mark.parametrize(
     "login_path",
-    [_param(p, _LOGIN_MUTABLE_KEYED, _STABLE_REASON) for p in LOGIN_PATHS],
+    [pytest.param(p, id=p) for p in LOGIN_PATHS],
 )
 @HYPOTHESIS_SETTINGS
 @given(sub=_SUBJECTS, before=_PROFILES, after=_PROFILES)
@@ -599,7 +552,7 @@ def test_session_identity_stable_under_profile_edits(login_path, sub, before, af
 
 @pytest.mark.parametrize(
     "provider",
-    [_param(p, _DIFFERENTIAL_FAILING, _DIFFERENTIAL_REASON) for p in BEARER_PROVIDERS],
+    [pytest.param(p, id=p) for p in BEARER_PROVIDERS],
 )
 @HYPOTHESIS_SETTINGS
 @given(sub=_SUBJECTS, profile=_PROFILES)
@@ -622,7 +575,6 @@ _CROSS_PROVIDER_PAIRS: list[tuple[str, str]] = [
 ]
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_CROSS_PROVIDER_REASON)
 @HYPOTHESIS_SETTINGS
 @given(
     pair=st.sampled_from(_CROSS_PROVIDER_PAIRS),
@@ -646,7 +598,7 @@ def test_session_identity_injective_across_issuers(pair, sub_a, sub_b, profile):
     assert identity_a != identity_b, (pair, identity_a, sub_a, sub_b, profile)
 
 
-# The display username each path derives today for subject ``user-a`` with
+# The display username each path derives for subject ``user-a`` with
 # ``_COLLIDING_PROFILE``. Ownership moved to owner_id; username is unchanged.
 _EXPECTED_BEARER_USERNAMES: dict[str, str] = {
     "keycloak": "alice",

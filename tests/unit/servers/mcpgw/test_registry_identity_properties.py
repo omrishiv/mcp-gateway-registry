@@ -97,30 +97,12 @@ _REGISTRY_VIEWS = {
     },
 }
 
-_FORWARDED_TOKEN_XFAIL = pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "Known defect: mcpgw reads Authorization before X-Authorization, so it "
-        "forwards a different credential than the one the gateway authorized."
-    ),
-)
-
 _SHARED_IDENTITY_XFAIL = pytest.mark.xfail(
     strict=True,
     raises=AssertionError,
     reason=(
         "Known defect: with a service credential configured, mcpgw queries the "
         "registry as that shared identity instead of as the caller."
-    ),
-)
-
-_EMPTY_ALLOWLIST_XFAIL = pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "Known defect: an allowlist with no host entries turns DNS-rebinding "
-        "protection off instead of keeping it on."
     ),
 )
 
@@ -330,7 +312,6 @@ _INGRESS_CASES = [
         f"Bearer {TOKEN_B}",
         f"Bearer {TOKEN_A}",
         id="both_different",
-        marks=_FORWARDED_TOKEN_XFAIL,
     ),
     pytest.param("Basic dXNlcjpwYXNz", None, id="non_bearer_authorization_only"),
     pytest.param(None, "Basic dXNlcjpwYXNz", id="non_bearer_x_authorization_only"),
@@ -338,13 +319,11 @@ _INGRESS_CASES = [
         f"Bearer {TOKEN_B}",
         "Basic dXNlcjpwYXNz",
         id="non_bearer_x_authorization_with_bearer_authorization",
-        marks=_FORWARDED_TOKEN_XFAIL,
     ),
     pytest.param(
         "Basic dXNlcjpwYXNz",
         f"Bearer {TOKEN_A}",
         id="non_bearer_authorization_with_bearer_x_authorization",
-        marks=_FORWARDED_TOKEN_XFAIL,
     ),
     pytest.param(f"BEARER {TOKEN_A}", None, id="upper_case_scheme_authorization"),
     pytest.param(None, f"BEARER {TOKEN_A}", id="upper_case_scheme_x_authorization"),
@@ -407,7 +386,6 @@ async def test_passthrough_forwards_the_gateway_authorized_token(authorization, 
 _TOKEN_STRATEGY = st.from_regex(r"\A[A-Za-z0-9._-]{1,40}\Z", fullmatch=True)
 
 
-@_FORWARDED_TOKEN_XFAIL
 @settings(max_examples=200, derandomize=True, database=None, report_multiple_bugs=False)
 @given(authorization_token=_TOKEN_STRATEGY, x_authorization_token=_TOKEN_STRATEGY)
 @example(authorization_token=TOKEN_B, x_authorization_token=TOKEN_A)
@@ -480,20 +458,14 @@ def _allowlist_cases() -> list:
     """Enumerate comma-joined allowlists of 0 to 3 entries, deduplicated.
 
     Returns:
-        pytest params; lists with neither a host nor "*" carry the xfail mark.
+        One pytest param per distinct allowlist value.
     """
     values: dict[str, None] = {}
     for length in range(4):
         for combo in itertools.product(_ALLOWLIST_ENTRIES, repeat=length):
             values.setdefault(",".join(combo), None)
 
-    cases = []
-    for raw_value in values:
-        entries = [e.strip() for e in raw_value.split(",")]
-        has_entry = any(entries)
-        marks = () if has_entry else _EMPTY_ALLOWLIST_XFAIL
-        cases.append(pytest.param(raw_value, id=repr(raw_value), marks=marks))
-    return cases
+    return [pytest.param(raw_value, id=repr(raw_value)) for raw_value in values]
 
 
 @pytest.mark.parametrize("raw_value", _allowlist_cases())

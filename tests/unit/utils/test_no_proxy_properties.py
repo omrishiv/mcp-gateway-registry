@@ -74,17 +74,6 @@ _PROXY_ENV_KEYS: tuple[str, ...] = (
     "REQUEST_METHOD",
 )
 
-_STRING_CHECK_REASON: str = (
-    "Known defect: the NO_PROXY startup check accepts a '*' entry inside a list "
-    "and ip:port entries, neither of which urllib treats as excluding the bare "
-    "credential endpoint address botocore requests."
-)
-_ENV_CHECK_REASON: str = (
-    "Known defect: the startup check reads NO_PROXY with upper case winning and "
-    "empty values skipped, while urllib lets a lower-case no_proxy (even an empty "
-    "one) override it, and it accepts NO_PROXY entries urllib does not honour."
-)
-
 
 def _reset_caches() -> None:
     """Clear the cached forward-proxy configuration and TLS context."""
@@ -146,7 +135,6 @@ def _urllib_bypasses(
 class TestNoProxyMatcherAgainstUrllib:
     """The guard's NO_PROXY matcher never claims an exclusion urllib ignores."""
 
-    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_STRING_CHECK_REASON)
     @PROPERTY_SETTINGS
     @given(no_proxy=_NO_PROXY_VALUES)
     @example(no_proxy="*,foo")
@@ -250,7 +238,6 @@ def _startup_accepts(
 class TestStartupCheckAgainstUrllib:
     """validate_forward_proxy_config only starts when urllib would bypass the proxy."""
 
-    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_ENV_CHECK_REASON)
     @PROPERTY_SETTINGS
     @given(env=_proxy_environments())
     @example(

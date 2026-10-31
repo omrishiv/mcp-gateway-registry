@@ -41,15 +41,6 @@ _SAFE_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _TABLE_REFERENCE = re.compile(r"\bFROM\s+([^\s)]+)")
 _COLUMN_REFERENCE = re.compile(r"\b(?:MIN|MAX)\(([^)]+)\)|\bWHERE\s+([^\s<]+)\s*<")
 
-IDENTIFIER_SUFFIX_REASON = (
-    "Known defect: _validate_identifier anchors its pattern with '$', which also "
-    "matches before a trailing newline, so a name such as 'a\\n' is accepted."
-)
-STATS_SUFFIX_REASON = (
-    "Known defect: a sqlite_master table named 'a\\n' passes _validate_identifier, "
-    "and its stats query 'FROM a\\n' reads table 'a' instead."
-)
-
 
 class _AsyncCursor:
     """Async view of a sqlite3 cursor, shaped like an aiosqlite cursor."""
@@ -360,7 +351,6 @@ def test_persisted_policies_only_ever_name_allowlisted_identifiers(
 
 
 @pytest.mark.unit
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=IDENTIFIER_SUFFIX_REASON)
 @settings(max_examples=200, derandomize=True, database=None, report_multiple_bugs=False)
 @given(identifier=st.text(max_size=12))
 @example(identifier="a\n")
@@ -376,7 +366,6 @@ def test_identifier_check_accepts_only_plain_identifiers(
 
 
 @pytest.mark.unit
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=STATS_SUFFIX_REASON)
 @settings(max_examples=200, derandomize=True, database=None, report_multiple_bugs=False)
 @given(
     names=st.lists(

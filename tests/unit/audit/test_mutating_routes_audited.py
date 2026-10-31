@@ -72,15 +72,6 @@ PARAM_SUFFIXES: tuple[str, ...] = (
     "/health",
 )
 
-STATIC_SUFFIX_REASON = (
-    "Known defect: AuditMiddleware skips any request path ending in a static-file "
-    "extension, so a mutation on an entity whose name ends in .js or .css is not audited."
-)
-DURABLE_AUDIT_REASON = (
-    "Known defect: AuditLogger.log_event swallows a failed durable audit write, so the "
-    "mutating request succeeds with no audit record."
-)
-
 
 def _walk_routes(
     routes: list[Any],
@@ -208,7 +199,6 @@ def test_mutating_route_is_audited(
 
 
 @pytest.mark.unit
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=STATIC_SUFFIX_REASON)
 @settings(max_examples=200, derandomize=True, database=None, report_multiple_bugs=False)
 @given(
     route=st.sampled_from(PARAMETRIC_ROUTES),
@@ -307,7 +297,6 @@ def test_sample_mutation_writes_attributed_audit_record() -> None:
 
 
 @pytest.mark.unit
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=DURABLE_AUDIT_REASON)
 def test_mutation_fails_when_audit_write_fails() -> None:
     """Property: a mutating request fails when its durable audit write fails."""
     insert = AsyncMock(side_effect=RuntimeError("audit store unavailable"))

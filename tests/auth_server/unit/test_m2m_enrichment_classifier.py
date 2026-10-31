@@ -76,21 +76,6 @@ _PROVIDER_ENV_VARS: tuple[str, ...] = (
     "ENTRA_GRAPH_RESOURCE_URL",
 )
 
-_GENERIC_DEFECT_REASON: str = (
-    "Known defect: should_enrich_groups accepts any groupless token whose result "
-    "carries a client_id, and every provider fills client_id from azp, cid or its "
-    "own client id, so a groupless human token enters M2M enrichment."
-)
-_COGNITO_DEFECT_REASON: str = (
-    "Known defect: a groupless Cognito user token or id token carries a client_id "
-    "in its validation result, so should_enrich_groups accepts it although the "
-    "classifier calls it a human."
-)
-_SESSION_DEFECT_REASON: str = (
-    "Known defect: a session-cookie result has client_id '' (not None), so "
-    "should_enrich_groups accepts a groupless browser session for M2M enrichment."
-)
-
 _PRIVATE_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 _PUBLIC_JWK: dict[str, Any] = {
     **json.loads(RSAAlgorithm.to_jwk(_PRIVATE_KEY.public_key())),
@@ -326,42 +311,8 @@ def _classified_as_machine(
     return client_id is not None
 
 
-def _provider_cell_is_known_defect(
-    name: str,
-    has_client_id_claim: bool,
-    service_account: bool,
-    has_username_claim: bool,
-    group_shape: str,
-    delegated_scope: bool,
-) -> str | None:
-    """Return the xfail reason for a provider cell that fails today, else None.
-
-    Args:
-        name: Provider method name.
-        has_client_id_claim: Whether a top-level ``client_id`` claim is present.
-        service_account: Whether ``preferred_username`` is a service account.
-        has_username_claim: Whether a ``username`` claim is present.
-        group_shape: One of ``GROUP_SHAPES``.
-        delegated_scope: Entra only: whether ``scp`` is present.
-
-    Returns:
-        The reason string, or None for a cell expected to pass.
-    """
-    if group_shape == "non_empty":
-        return None
-    if name == "cognito":
-        machine = has_client_id_claim and not has_username_claim
-        return None if machine else _COGNITO_DEFECT_REASON
-    machine = has_client_id_claim or service_account
-    if machine:
-        return None
-    if name == "entra" and delegated_scope:
-        return None
-    return _GENERIC_DEFECT_REASON
-
-
 def _provider_cells() -> list:
-    """Enumerate every provider cell, marking the ones that fail today.
+    """Enumerate every provider cell.
 
     Returns:
         ``pytest.param`` objects over the full grid.
@@ -375,12 +326,6 @@ def _provider_cells() -> list:
         GROUP_SHAPES,
     ):
         for scp in (True, False) if name == "entra" else (False,):
-            reason = _provider_cell_is_known_defect(name, cid, sa, uname, shape, scp)
-            marks = (
-                [pytest.mark.xfail(strict=True, raises=AssertionError, reason=reason)]
-                if reason
-                else []
-            )
             cell_id = "-".join(
                 [
                     name,
@@ -391,7 +336,7 @@ def _provider_cells() -> list:
                 ]
                 + (["scp" if scp else "noscp"] if name == "entra" else [])
             )
-            cells.append(pytest.param(name, cid, sa, uname, shape, scp, marks=marks, id=cell_id))
+            cells.append(pytest.param(name, cid, sa, uname, shape, scp, id=cell_id))
     return cells
 
 
@@ -501,7 +446,6 @@ def test_self_signed_token_enrichment_implies_machine(
         assert _classified_as_machine(result), (result, claims)
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_SESSION_DEFECT_REASON)
 def test_session_cookie_never_enters_m2m_enrichment():
     """A browser session is a human, so it never enters M2M enrichment.
 

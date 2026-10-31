@@ -54,20 +54,6 @@ _SCHEMES: tuple[str, ...] = ("http", "https", "HTTP", "Https")
 _PORT_SUFFIXES: tuple[str, ...] = ("", ":", ":80", ":443", ":0080", ":8003")
 _TAILS: tuple[str, ...] = ("", "/", "/p", "/a%20b?x=1", "?q")
 
-_IDNA_REASON: str = (
-    "Known defect: normalize_url_identity encodes hostnames with the IDNA2003 "
-    "codec while httpx dials the IDNA2008 form, so deviation characters such as "
-    "sharp s and final sigma name a different host than the one connected to."
-)
-_HOST_CHARACTER_REASON: str = (
-    "Known defect: normalize_url_identity accepts host characters that httpx "
-    "percent-encodes before dialling, so the identity names a different host."
-)
-_TRAILING_DOT_REASON: str = (
-    "Known defect: the reserved built-in hostname check compares the host "
-    "verbatim, so a trailing root dot reaches mcpgw-server from an ordinary profile."
-)
-
 
 def _settings(
     allow_private: bool = False,
@@ -218,7 +204,6 @@ class TestNormalizeUrlIdentity:
             return
         assert normalize_url_identity(once) == once
 
-    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_IDNA_REASON)
     @PROPERTY_SETTINGS
     @given(url=_urls())
     @example(url="https://stra\u00dfe.example/")
@@ -250,17 +235,7 @@ class TestNormalizeUrlIdentity:
 
     @pytest.mark.parametrize(
         "character",
-        [
-            pytest.param(
-                c,
-                id=f"U+{ord(c):04X}",
-                marks=pytest.mark.xfail(
-                    strict=True, raises=AssertionError, reason=_HOST_CHARACTER_REASON
-                ),
-            )
-            for c in " <>^"
-        ]
-        + [pytest.param(c, id=f"U+{ord(c):04X}") for c in "%\\_|"],
+        [pytest.param(c, id=f"U+{ord(c):04X}") for c in " <>^%\\_|"],
     )
     def test_host_punctuation_matches_httpx(self, character):
         """Property: a host character normalize accepts is dialled unchanged."""
@@ -316,7 +291,6 @@ class TestReservedHostSpellings:
         with pytest.raises(UrlValidationError):
             validate_url(url, profile=PROXY_PROFILE, resolve=False)
 
-    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_TRAILING_DOT_REASON)
     @PROPERTY_SETTINGS
     @given(
         case_mask=_CASE_MASKS,
@@ -404,18 +378,8 @@ async def _dialled_through_guard(
     [
         "http://mcpgw-server:8003/",
         "http://MCPGW-Server:8003/",
-        pytest.param(
-            "http://mcpgw-server.:8003/",
-            marks=pytest.mark.xfail(
-                strict=True, raises=AssertionError, reason=_TRAILING_DOT_REASON
-            ),
-        ),
-        pytest.param(
-            "http://mcpgw-server\u3002:8003/",
-            marks=pytest.mark.xfail(
-                strict=True, raises=AssertionError, reason=_TRAILING_DOT_REASON
-            ),
-        ),
+        "http://mcpgw-server.:8003/",
+        "http://mcpgw-server\u3002:8003/",
     ],
 )
 def test_reserved_host_is_never_dialled_with_private_targets_allowed(url):

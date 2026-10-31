@@ -123,23 +123,6 @@ MUTATIONS: tuple[str, ...] = (
     "hs256_public_key_secret",
 )
 
-AUDIENCE_DEFAULT_REASON = (
-    "Known defect: with AGENT_AUDIENCE unset (the shipped default) the middleware "
-    "skips the aud check, so a realm token minted for any other client is accepted."
-)
-# (config, mutation) pairs that fail today, for both agents.
-_KNOWN_AUTH_DEFECTS: frozenset[tuple[str, str]] = frozenset(
-    {
-        (CONFIG_DEFAULT, "wrong_audience"),
-        (CONFIG_DEFAULT, "missing_audience"),
-    }
-)
-
-CONFIRMATION_REASON = (
-    "Known defect: the agent's mutating tools run as soon as the model emits the "
-    "call; no human confirmation gate exists at the execution boundary."
-)
-
 
 def _generate_rsa_private_key() -> rsa.RSAPrivateKey:
     """Generate a 2048-bit RSA private key.
@@ -498,23 +481,11 @@ def _auth_params() -> list[Any]:
     for agent_key in _AGENT_SOURCES:
         for config in CONFIGS:
             for mutation in MUTATIONS:
-                marks = (
-                    [
-                        pytest.mark.xfail(
-                            strict=True,
-                            raises=AssertionError,
-                            reason=AUDIENCE_DEFAULT_REASON,
-                        )
-                    ]
-                    if (config, mutation) in _KNOWN_AUTH_DEFECTS
-                    else []
-                )
                 params.append(
                     pytest.param(
                         agent_key,
                         config,
                         mutation,
-                        marks=marks,
                         id=f"{agent_key}-{config}-{mutation}",
                     )
                 )
@@ -791,8 +762,7 @@ def _run_tool_loop(
 
 
 def _mutating_call_params() -> list[Any]:
-    """Build one parameter per mutating tool call, all failing today."""
-    xfail = pytest.mark.xfail(strict=True, raises=AssertionError, reason=CONFIRMATION_REASON)
+    """Build one parameter per mutating tool call."""
     cases = [
         (
             FLIGHT,
@@ -813,7 +783,7 @@ def _mutating_call_params() -> list[Any]:
         ),
     ]
     return [
-        pytest.param(agent_key, name, arguments, marks=[xfail], id=f"{agent_key}-{name}")
+        pytest.param(agent_key, name, arguments, id=f"{agent_key}-{name}")
         for agent_key, name, arguments in cases
     ]
 

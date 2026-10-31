@@ -40,11 +40,6 @@ _PLAIN_PATHS: tuple[str, ...] = (
     "/v1.2/tools",
 )
 
-_DOT_SEGMENT_REASON: str = (
-    "Known defect: server path validation accepts '.' and '..' segments, so a "
-    "registered path such as /peer/../github differs from the path nginx routes on."
-)
-
 
 def _accepted_by_url_guard(
     path: str,
@@ -123,7 +118,6 @@ _VALIDATORS = [
 
 
 @pytest.mark.parametrize("accepts", _VALIDATORS)
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_DOT_SEGMENT_REASON)
 def test_enumerated_accepted_paths_are_normal_form(
     accepts: Callable[[str], bool],
 ) -> None:
@@ -138,7 +132,6 @@ def test_enumerated_accepted_paths_are_normal_form(
 
 
 @pytest.mark.parametrize("accepts", _VALIDATORS)
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_DOT_SEGMENT_REASON)
 @settings(max_examples=200, derandomize=True, database=None, report_multiple_bugs=False)
 @given(path=_path_strategy())
 @example(path="/peer/../github")

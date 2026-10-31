@@ -81,7 +81,6 @@ UNPARSEABLE_STDOUT: tuple[tuple[str, str], ...] = (
     ("null-severity", '{"findings": [{"severity": null}]}'),
     ("string-finding", '{"findings": ["HIGH"]}'),
 )
-AGENT_NON_OBJECT_IDS: frozenset[str] = frozenset({"json-null", "json-true", "json-string"})
 
 SKILL_PATH: str = "/skills/demo"
 SKILL_CONTENT_DIR: str = "/nonexistent/skill-content"
@@ -100,42 +99,6 @@ PROPERTY_SETTINGS = settings(
     derandomize=True,
     database=None,
     report_multiple_bugs=False,
-)
-
-_SKILL_VERDICT_XFAIL = pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "Known defect: the skill scanner verdict is safe whenever it counts no "
-        "critical or high finding, so findings with a missing or unknown severity, "
-        "is_safe false, or a non-list findings value pass as safe."
-    ),
-)
-_AGENT_VERDICT_XFAIL = pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "Known defect: the agent scanner verdict is safe whenever it counts no "
-        "critical or high finding, so findings with a missing or unknown severity, "
-        "a non-list findings value, or a JSON array or scalar result pass as safe."
-    ),
-)
-_AGENT_NON_OBJECT_XFAIL = pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "Known defect: the agent scanner ignores a JSON result that is not an "
-        "object, so a scanner that prints null, true or a string is reported safe."
-    ),
-)
-_LLM_FLAG_XFAIL = pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "Known defect: the skill scanner adds --use-llm only for a lower-case "
-        "'llm' entry while the availability check matches 'llm' case-insensitively, "
-        "so 'LLM' scans without the LLM analyzer."
-    ),
 )
 
 
@@ -162,23 +125,13 @@ def _make_agent_service() -> AgentScannerService:
     return service
 
 
-def _unparseable_params(
-    xfail_ids: frozenset[str],
-    mark: Any,
-) -> list[Any]:
+def _unparseable_params() -> list[Any]:
     """Build pytest params for output that is not a classifiable scanner result.
-
-    Args:
-        xfail_ids: Case ids that fail today and carry `mark`.
-        mark: The xfail mark for those cases, or None when there are none.
 
     Returns:
         One pytest.param per entry of UNPARSEABLE_STDOUT.
     """
-    return [
-        pytest.param(stdout, id=case_id, marks=mark if case_id in xfail_ids else ())
-        for case_id, stdout in UNPARSEABLE_STDOUT
-    ]
+    return [pytest.param(stdout, id=case_id) for case_id, stdout in UNPARSEABLE_STDOUT]
 
 
 def _completed(
@@ -383,7 +336,6 @@ def _scanner_stdout(draw: st.DrawFn) -> tuple[str, bool]:
 
 
 @pytest.mark.unit
-@_SKILL_VERDICT_XFAIL
 @PROPERTY_SETTINGS
 @given(case=_scanner_stdout())
 @example(case=('{"findings": [{"analyzer": "static", "threat_names": []}]}', False))
@@ -401,7 +353,7 @@ def test_skill_scanner_verdict_fails_closed(
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("stdout", _unparseable_params(frozenset(), None))
+@pytest.mark.parametrize("stdout", _unparseable_params())
 def test_skill_scanner_unparseable_output_is_unsafe(
     stdout: str,
 ) -> None:
@@ -433,7 +385,6 @@ def test_skill_scanner_known_severity(
 
 
 @pytest.mark.unit
-@_AGENT_VERDICT_XFAIL
 @PROPERTY_SETTINGS
 @given(case=_scanner_stdout(), returncode=st.sampled_from((0, 1)))
 @example(case=('[{"analyzer": "yara", "severity": "HIGH"}]', False), returncode=0)
@@ -451,10 +402,7 @@ def test_agent_scanner_verdict_fails_closed(
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize(
-    "stdout",
-    _unparseable_params(AGENT_NON_OBJECT_IDS, _AGENT_NON_OBJECT_XFAIL),
-)
+@pytest.mark.parametrize("stdout", _unparseable_params())
 def test_agent_scanner_unparseable_output_is_unsafe(
     stdout: str,
 ) -> None:
@@ -539,8 +487,8 @@ def test_scan_requesting_unavailable_llm_analyzer_is_unsafe(
         pytest.param("static", id="no-llm"),
         pytest.param("llm", id="llm"),
         pytest.param("static, llm ", id="llm-with-whitespace"),
-        pytest.param("static,LLM", id="upper-case-llm", marks=_LLM_FLAG_XFAIL),
-        pytest.param("Llm", id="mixed-case-llm", marks=_LLM_FLAG_XFAIL),
+        pytest.param("static,LLM", id="upper-case-llm"),
+        pytest.param("Llm", id="mixed-case-llm"),
     ],
 )
 def test_skill_scanner_runs_llm_analyzer_when_requested(

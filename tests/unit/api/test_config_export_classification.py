@@ -46,11 +46,6 @@ USERINFO_URLS: tuple[str, ...] = (
     f"http://{SECRET_SENTINEL}:x-oauth-basic@host.example:8443/api",
 )
 
-USERINFO_LEAK_REASON = (
-    "Known defect: the masked config export prints URL-valued settings verbatim, "
-    "so a password or token in the URL userinfo is exported in cleartext."
-)
-
 # Every registry Settings field that is NOT classified sensitive by the export
 # classifier (the explicit is_sensitive flag in CONFIG_GROUPS, or a name match in
 # _is_sensitive_field). When you add a Settings field, the classification test
@@ -464,7 +459,6 @@ def test_every_settings_field_is_classified() -> None:
 
 
 @pytest.mark.unit
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=USERINFO_LEAK_REASON)
 @pytest.mark.parametrize("userinfo_url", USERINFO_URLS)
 @pytest.mark.parametrize("export_format", EXPORT_FORMATS, ids=lambda f: f.value)
 def test_masked_export_never_contains_url_userinfo(

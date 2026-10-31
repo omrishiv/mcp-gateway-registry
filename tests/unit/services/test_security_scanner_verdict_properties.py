@@ -39,11 +39,6 @@ SEVERITY_CHOICES: tuple[str, ...] = (
 )
 MISSING = object()
 
-FINDING_17_REASON = (
-    "Known defect: the scanner verdict is safe whenever it counts no critical or "
-    "high finding, so unclassifiable output and tool is_safe false pass as safe."
-)
-
 
 def _make_service() -> SecurityScannerService:
     """Build a SecurityScannerService with its repository dependency mocked.
@@ -142,7 +137,6 @@ def _tool_result(draw: st.DrawFn) -> dict[str, Any]:
 
 
 @pytest.mark.unit
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=FINDING_17_REASON)
 @settings(max_examples=200, derandomize=True, database=None, report_multiple_bugs=False)
 @given(tool_results=st.lists(_tool_result(), max_size=4))
 @example(tool_results=[{"tool_name": "t", "is_safe": True, "findings": {"yara_analyzer": {}}}])

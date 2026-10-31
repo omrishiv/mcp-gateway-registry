@@ -107,31 +107,6 @@ _ABSENT = object()
 
 _REPO_READS = ("get_all_group_mappings", "get_ui_scopes_bulk", "get_server_scopes_bulk")
 
-_FIRST_KEY_WINS_REASON = (
-    "Known defect: tool_filter._lookup_allowlist returns the first matching key "
-    "instead of the union over a server's slash-spelling variants, so another "
-    "scope's rule can hide tools the caller already holds."
-)
-_NULL_TOOLS_REASON = (
-    "Known defect: validate_server_tool_access raises on a rule whose tools value "
-    "is null or a number and its catch-all then denies the whole request, so such "
-    "a scope revokes grants held through every later scope."
-)
-_ALL_SERVER_REASON = (
-    "Known defect: the registry treated server 'all' as a cross-server wildcard "
-    "while the gateway honours only '*'; the reference model follows the gateway."
-)
-_LIST_VERSUS_CALL_REASON = (
-    "Known defect: the registry tool filter treats a cross-server rule as every "
-    "tool everywhere and looks up one slash spelling, while the gateway checks "
-    "the rule's tools and only honours '*', so list and call disagree."
-)
-_SUBSTRING_ADMIN_REASON = (
-    "Known defect: _user_is_admin tests 'all' with 'in' on whatever value is "
-    "stored, so a bare string such as 'reinstall' or a dict keyed 'all' confers "
-    "admin, and _grants_admin disagrees with it on such values."
-)
-
 
 class _Decision(NamedTuple):
     """One caller's authorization as the reference model or production sees it."""
@@ -612,7 +587,6 @@ def test_context_monotone_in_scopes(case: tuple[dict, list[str], list[str]]) -> 
     assert before <= after, f"lost going {scopes} -> {more}: {sorted(before - after)}"
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_FIRST_KEY_WINS_REASON)
 @_PROPERTY
 @given(case=_with_extra_group(_REGISTRY_TABLES))
 @example(case=(_FIRST_KEY_WINS_TABLE, ["eng"], "ops"))
@@ -624,7 +598,6 @@ def test_tool_visibility_monotone_in_groups(case: tuple[dict, list[str], str]) -
     assert before <= after, f"hidden by adding {extra!r}: {sorted(before - after)}"
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_NULL_TOOLS_REASON)
 @_PROPERTY
 @given(case=_with_inserted_scope(_tables(tools=_ANY_TOOLS, ui=st.just({}))))
 @example(case=(_NULL_TOOLS_TABLE, ["scope-b"], ["scope-a", "scope-b"]))
@@ -653,7 +626,6 @@ def test_context_invariant_under_order_and_duplicates(
     )
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_FIRST_KEY_WINS_REASON)
 @_PROPERTY
 @given(case=_reordered_groups())
 @example(case=(_LAST_NORMALIZED_KEY_TABLE, ["eng", "ops"], ["ops", "eng"]))
@@ -682,7 +654,6 @@ _NON_CONFERRING_GRANTS = (
     pytest.param(0, id="number"),
     pytest.param({"all": True}, id="dict-all"),
 )
-_SUBSTRING_ADMIN_IDS = frozenset({"bare-all", "bare-reinstall", "dict-all"})
 
 
 @pytest.mark.parametrize("action", ["register_service", "delete_agent", "create_virtual_server"])
@@ -694,23 +665,7 @@ def test_derived_context_admin_requires_list_all_grant(action: str, grant: Any) 
 
 
 @pytest.mark.parametrize("action", ["register_service", "delete_agent", "create_virtual_server"])
-@pytest.mark.parametrize(
-    "grant",
-    [
-        pytest.param(
-            *p.values,
-            id=p.id,
-            marks=[
-                pytest.mark.xfail(
-                    strict=True, raises=AssertionError, reason=_SUBSTRING_ADMIN_REASON
-                )
-            ]
-            if p.id in _SUBSTRING_ADMIN_IDS
-            else [],
-        )
-        for p in _NON_CONFERRING_GRANTS
-    ],
-)
+@pytest.mark.parametrize("grant", _NON_CONFERRING_GRANTS)
 def test_user_is_admin_requires_list_all_grant(action: str, grant: Any) -> None:
     """Property: _user_is_admin is true only for the list element "all" on a conferring action.
 
@@ -823,7 +778,6 @@ _json_values = st.recursive(
 )
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_SUBSTRING_ADMIN_REASON)
 @_PROPERTY
 @given(ui_permissions=st.dictionaries(st.sampled_from(_ACTIONS), _json_values, max_size=3))
 @example(ui_permissions={"register_service": "reinstall"})
@@ -873,7 +827,6 @@ def test_gateway_matches_reference_without_all_server(
     _assert_gateway_matches_reference(table, groups, blocked)
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_ALL_SERVER_REASON)
 @_PROPERTY
 @given(table=_GATEWAY_TABLES, groups=_groups, blocked=_blocked)
 @example(table=_ALL_SERVER_TABLE, groups=["eng"], blocked=frozenset())
@@ -907,7 +860,6 @@ def test_list_filter_matches_gateway_for_canonical_names(table: dict, groups: li
     _assert_list_matches_call(table, groups)
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_LIST_VERSUS_CALL_REASON)
 @_PROPERTY
 @given(table=_GATEWAY_TABLES, groups=_groups)
 @example(table=_ALL_SERVER_TABLE, groups=["eng"])
@@ -923,7 +875,6 @@ def test_list_filter_matches_gateway(table: dict, groups: list[str]) -> None:
     _assert_list_matches_call(table, groups)
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_LIST_VERSUS_CALL_REASON)
 @pytest.mark.parametrize(
     ("table", "groups"),
     [
@@ -933,5 +884,5 @@ def test_list_filter_matches_gateway(table: dict, groups: list[str]) -> None:
     ],
 )
 def test_list_filter_matches_gateway_pinned(table: dict, groups: list[str]) -> None:
-    """Property: each known list-versus-call divergence, pinned separately, lists exactly what is callable."""
+    """Property: each pinned list-versus-call case lists exactly what is callable."""
     _assert_list_matches_call(table, groups)

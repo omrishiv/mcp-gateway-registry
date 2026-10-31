@@ -31,15 +31,6 @@ from registry.utils.url_guard import _NGINX_METACHARACTERS
 
 _ASCII_SUFFIXES: tuple[str, ...] = tuple(chr(code) for code in range(128))
 
-_TRAILING_NEWLINE_REASON: str = (
-    "Known defect: the validator uses a $-anchored pattern with re.match, so it "
-    "accepts the seed followed by a trailing newline."
-)
-_AGENT_URL_CONTROL_REASON: str = (
-    "Known defect: the agent card URL validator accepts a trailing newline and "
-    "other C0 control characters such as NUL."
-)
-
 
 def _is_printable_non_whitespace(
     char: str,
@@ -139,63 +130,42 @@ def _accepts_server_path(
             "agents/foo",
             True,
             id="nginx_agent_path_safe",
-            marks=pytest.mark.xfail(
-                strict=True, raises=AssertionError, reason=_TRAILING_NEWLINE_REASON
-            ),
         ),
         pytest.param(
             _accepts_agent_backend_url,
             "http://agent.example:8080/a2a",
             True,
             id="nginx_agent_url_safe",
-            marks=pytest.mark.xfail(
-                strict=True, raises=AssertionError, reason=_TRAILING_NEWLINE_REASON
-            ),
         ),
         pytest.param(
             _accepts_virtual_server_model_path,
             "/virtual/dev-tools",
             True,
             id="virtual_server_model_path",
-            marks=pytest.mark.xfail(
-                strict=True, raises=AssertionError, reason=_TRAILING_NEWLINE_REASON
-            ),
         ),
         pytest.param(
             _accepts_virtual_server_route_path,
             "/virtual/dev-tools",
             True,
             id="virtual_server_route_path",
-            marks=pytest.mark.xfail(
-                strict=True, raises=AssertionError, reason=_TRAILING_NEWLINE_REASON
-            ),
         ),
         pytest.param(
             _accepts_agent_card_url,
             "https://agent.example.com/a2a",
             False,
             id="agent_card_url",
-            marks=pytest.mark.xfail(
-                strict=True, raises=AssertionError, reason=_AGENT_URL_CONTROL_REASON
-            ),
         ),
         pytest.param(
             _accepts_skill_card_name,
             "pdf-tools",
             True,
             id="skill_card_name",
-            marks=pytest.mark.xfail(
-                strict=True, raises=AssertionError, reason=_TRAILING_NEWLINE_REASON
-            ),
         ),
         pytest.param(
             _accepts_skill_registration_name,
             "pdf-tools",
             True,
             id="skill_registration_name",
-            marks=pytest.mark.xfail(
-                strict=True, raises=AssertionError, reason=_TRAILING_NEWLINE_REASON
-            ),
         ),
         pytest.param(
             _accepts_server_path,

@@ -95,34 +95,6 @@ OPENID_SCOPE: str = "openid"
 # the "/" naming convention, so the comparison covers both filter rules.
 PROBE_SCOPES: tuple[str, ...] = ("probe-plain-scope", "probe/slash-scope")
 
-# Cases of test_privileged_scope_withheld that fail today, keyed by
-# (surface, subtype, scope). Empty: every surface withholds every privileged
-# seed scope for both subtypes.
-PRIVILEGED_SCOPE_XFAILS: dict[tuple[str, str, str], str] = {}
-
-HELM_OPENID_REASON: str = (
-    "Known defect: the Helm DCR allowlist does not append openid, which the "
-    "other surfaces add because Keycloak rejects a registration requesting it."
-)
-INIT_AUTHENTICATED_REASON: str = (
-    "Known defect: init-keycloak.sh writes the Allowed Client Scopes policy for "
-    "the anonymous subtype only, so authenticated registrations keep the "
-    "Keycloak built-in policy that admits realm default scopes alone."
-)
-
-# Cases of test_surfaces_withhold_the_same_scopes that fail today, keyed by
-# (subtype, surface, other surface) in SURFACE_PATHS order.
-DIFFERENTIAL_XFAILS: dict[tuple[str, str, str], str] = {
-    ("anonymous", "init-keycloak", "helm-keycloak-configure"): HELM_OPENID_REASON,
-    ("anonymous", "upgrade-realm-for-dcr", "helm-keycloak-configure"): HELM_OPENID_REASON,
-    ("anonymous", "helm-keycloak-configure", "terraform-aws-ecs"): HELM_OPENID_REASON,
-    ("authenticated", "init-keycloak", "upgrade-realm-for-dcr"): INIT_AUTHENTICATED_REASON,
-    ("authenticated", "init-keycloak", "helm-keycloak-configure"): INIT_AUTHENTICATED_REASON,
-    ("authenticated", "init-keycloak", "terraform-aws-ecs"): INIT_AUTHENTICATED_REASON,
-    ("authenticated", "upgrade-realm-for-dcr", "helm-keycloak-configure"): HELM_OPENID_REASON,
-    ("authenticated", "helm-keycloak-configure", "terraform-aws-ecs"): HELM_OPENID_REASON,
-}
-
 _ARRAY_RE = re.compile(r"^[ \t]*(?P<name>[A-Z][A-Z0-9_]*)=\((?P<body>[^)]*)\)", re.M)
 _JSON_LIST_RE = re.compile(r"^[ \t]*(?P<name>[A-Z][A-Z0-9_]*)='(?P<body>\[[^']*\])'", re.M)
 _ARRAY_EXPANSION_RE = re.compile(r"\$\{(?P<name>[A-Z][A-Z0-9_]*)\[@\]\}")
@@ -720,16 +692,10 @@ def _privileged_params() -> list[Any]:
     for surface_id, subtype, (scope, seed, why) in itertools.product(
         SURFACE_PATHS, SUBTYPES, PRIVILEGED_SEED_SCOPES
     ):
-        key = (surface_id, subtype, scope)
-        marks = []
-        if key in PRIVILEGED_SCOPE_XFAILS:
-            marks.append(
-                pytest.mark.xfail(
-                    strict=True, raises=AssertionError, reason=PRIVILEGED_SCOPE_XFAILS[key]
-                )
-            )
         params.append(
-            pytest.param(*key, seed, why, marks=marks, id=f"{surface_id}-{subtype}-{scope}")
+            pytest.param(
+                surface_id, subtype, scope, seed, why, id=f"{surface_id}-{subtype}-{scope}"
+            )
         )
     return params
 
@@ -739,15 +705,7 @@ def _differential_params() -> list[Any]:
     params = []
     for subtype in SUBTYPES:
         for first, second in itertools.combinations(SURFACE_PATHS, 2):
-            key = (subtype, first, second)
-            marks = []
-            if key in DIFFERENTIAL_XFAILS:
-                marks.append(
-                    pytest.mark.xfail(
-                        strict=True, raises=AssertionError, reason=DIFFERENTIAL_XFAILS[key]
-                    )
-                )
-            params.append(pytest.param(*key, marks=marks, id=f"{subtype}-{first}-vs-{second}"))
+            params.append(pytest.param(subtype, first, second, id=f"{subtype}-{first}-vs-{second}"))
     return params
 
 

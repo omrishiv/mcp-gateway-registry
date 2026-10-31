@@ -74,15 +74,6 @@ _SCOPE_NAMES = (
 )
 _REPORTED_MISMATCHES = 5
 
-_GROUP_NAME_GATE_REASON = (
-    "Known defect: this gate also admits a caller by group or scope name, so a "
-    "caller whose admin scope was demoted still passes while is_admin is False."
-)
-_A2A_BYPASS_REASON = (
-    "Known defect: the A2A admin bypass admits any caller holding an admin "
-    "marker group or scope name without checking the derived admin decision."
-)
-
 
 class _Gate(NamedTuple):
     """One admin gate: a callable that raises HTTPException to deny."""
@@ -134,17 +125,6 @@ _GATES: dict[str, _Gate] = {
     ),
     "virtual_server_routes._require_admin": _Gate(virtual_server_routes._require_admin, _NONE),
 }
-_GROUP_NAME_GATES = frozenset(
-    {
-        "ans_routes._check_admin",
-        "auth0_m2m_routes._require_admin",
-        "custom_type_routes._require_admin",
-        "federation_routes._check_federation_management_scope",
-        "okta_m2m_routes._require_admin",
-        "peer_management_routes._check_peer_management_scope",
-        "virtual_server_routes._require_admin",
-    }
-)
 
 
 def _subsets(names: tuple[str, ...]) -> list[tuple[str, ...]]:
@@ -182,22 +162,7 @@ def _describe(cases: list[dict[str, Any]]) -> str:
     return f"{len(cases)} of 2048 contexts disagree, e.g. " + "; ".join(shown)
 
 
-@pytest.mark.parametrize(
-    "gate_id",
-    [
-        pytest.param(
-            gate_id,
-            marks=[
-                pytest.mark.xfail(
-                    strict=True, raises=AssertionError, reason=_GROUP_NAME_GATE_REASON
-                )
-            ]
-            if gate_id in _GROUP_NAME_GATES
-            else [],
-        )
-        for gate_id in sorted(_GATES)
-    ],
-)
+@pytest.mark.parametrize("gate_id", sorted(_GATES))
 def test_admin_gate_matches_canonical_decision(gate_id: str) -> None:
     """Property: a gate admits a context iff is_admin holds or it carries an allowlisted extra scope."""
     gate = _GATES[gate_id]
@@ -229,7 +194,6 @@ class _NoRulesScopeRepo:
         return {}
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_A2A_BYPASS_REASON)
 def test_a2a_admin_bypass_admits_only_admins() -> None:
     """Property: with no scope rules stored, A2A invoke is allowed only for an is_admin caller.
 

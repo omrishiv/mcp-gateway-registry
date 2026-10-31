@@ -43,10 +43,6 @@ _KNOWN_NAMES = (
     "issue",
     "list_all_repos",
 )
-_STRING_GRANT_REASON = (
-    "Known defect: a string-valued tools grant is matched with substring 'in', "
-    "so it authorizes tools other than the one it names."
-)
 
 
 def _scope_repo(tools: Any) -> AsyncMock:
@@ -134,7 +130,6 @@ def _grant_and_tool(draw: st.DrawFn) -> tuple[str, str]:
     return granted, tool_name
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_STRING_GRANT_REASON)
 @settings(max_examples=200, derandomize=True, database=None, report_multiple_bugs=False)
 @given(pair=_grant_and_tool())
 @example(pair=("install_all", "delete_repo"))

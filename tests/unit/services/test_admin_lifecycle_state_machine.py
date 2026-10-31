@@ -120,28 +120,6 @@ _IDP_SYNC_ENV: dict[str, str] = {
 
 _DELETE_OPS: frozenset[str] = frozenset({"delete_user", "m2m_delete"})
 
-ZERO_ADMIN_REASON: str = (
-    "Known defect: scope group edits and deletes, M2M client group patches and "
-    "deletes, and the mis-counted last-admin guard can each remove admin from "
-    "every principal."
-)
-GROUP_EDIT_REASON: str = (
-    "Known defect: scope group create, update, delete and import run no "
-    "last-admin check, so editing the admin scope demotes every administrator."
-)
-WRONG_POPULATION_REASON: str = (
-    "Known defect: the last-admin guard counts any scope with an 'all' grant as "
-    "admin, so it lets the last real administrator demote themselves."
-)
-M2M_UNGUARDED_REASON: str = (
-    "Known defect: M2M client group patches and deletes run no last-admin or self-delete check."
-)
-NAME_GATE_REASON: str = (
-    "Known defect: the Okta and Auth0 M2M routes admit callers whose groups "
-    "include the name mcp-registry-admin even when the request-time decision "
-    "says they are not admin."
-)
-
 
 def _matches_value(
     value: Any,
@@ -1109,19 +1087,16 @@ class _OnlyAdminsMutateMachine(_AdminLifecycleMachine):
         assert not violations, f"non-admin mutation succeeded: {violations}"
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=ZERO_ADMIN_REASON)
 def test_admin_lifecycle_never_reaches_zero_admins() -> None:
     """Property: after every operation some principal is admin at request time."""
     run_state_machine_as_test(_AdminSurvivesMachine, settings=STATEFUL_SETTINGS)
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=M2M_UNGUARDED_REASON)
 def test_admin_lifecycle_never_self_deletes() -> None:
     """Property: no successful user or M2M delete has the actor as its target."""
     run_state_machine_as_test(_NoSelfDeleteMachine, settings=STATEFUL_SETTINGS)
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=NAME_GATE_REASON)
 def test_admin_lifecycle_only_admins_mutate() -> None:
     """Property: no mutation by a principal that is not admin at request time succeeds."""
     run_state_machine_as_test(_OnlyAdminsMutateMachine, settings=STATEFUL_SETTINGS)
@@ -1187,10 +1162,6 @@ _DISARMED_ADMIN_SCOPE = {
     },
 }
 
-_GROUP_EDIT_XFAIL = pytest.mark.xfail(strict=True, raises=AssertionError, reason=GROUP_EDIT_REASON)
-_M2M_XFAIL = pytest.mark.xfail(strict=True, raises=AssertionError, reason=M2M_UNGUARDED_REASON)
-_NAME_GATE_XFAIL = pytest.mark.xfail(strict=True, raises=AssertionError, reason=NAME_GATE_REASON)
-
 _SINGLE_STEP_CASES = [
     pytest.param(
         _SOLE_HUMAN_ADMIN,
@@ -1224,7 +1195,6 @@ _SINGLE_STEP_CASES = [
         ADMIN_GROUP,
         {"ui_permissions": NARROW_UI, "group_mappings": None},
         id="update-admin-group-ui",
-        marks=_GROUP_EDIT_XFAIL,
     ),
     pytest.param(
         _SOLE_HUMAN_ADMIN,
@@ -1233,7 +1203,6 @@ _SINGLE_STEP_CASES = [
         ADMIN_GROUP,
         {"ui_permissions": None, "group_mappings": [OPS_GROUP]},
         id="update-admin-group-mappings",
-        marks=_GROUP_EDIT_XFAIL,
     ),
     pytest.param(
         _SOLE_HUMAN_ADMIN,
@@ -1242,7 +1211,6 @@ _SINGLE_STEP_CASES = [
         ADMIN_GROUP,
         {"ui_permissions": NARROW_UI},
         id="create-group-overwrites-admin-scope",
-        marks=_GROUP_EDIT_XFAIL,
     ),
     pytest.param(
         _SOLE_HUMAN_ADMIN,
@@ -1251,7 +1219,6 @@ _SINGLE_STEP_CASES = [
         ADMIN_GROUP,
         {},
         id="delete-admin-group",
-        marks=_GROUP_EDIT_XFAIL,
     ),
     pytest.param(
         _SOLE_HUMAN_ADMIN,
@@ -1260,7 +1227,6 @@ _SINGLE_STEP_CASES = [
         ADMIN_GROUP,
         {"force": True},
         id="servers-delete-admin-group-forced",
-        marks=_GROUP_EDIT_XFAIL,
     ),
     pytest.param(
         _SOLE_HUMAN_ADMIN,
@@ -1269,7 +1235,6 @@ _SINGLE_STEP_CASES = [
         ADMIN_GROUP,
         {"ui_permissions": NARROW_UI, "group_mappings": None},
         id="servers-import-overwrites-admin-scope",
-        marks=_GROUP_EDIT_XFAIL,
     ),
     pytest.param(
         _SOLE_HUMAN_ADMIN_READ_ALL,
@@ -1278,7 +1243,6 @@ _SINGLE_STEP_CASES = [
         ROOT,
         {"groups": [READERS_GROUP]},
         id="patch-user-groups-into-read-all-group",
-        marks=pytest.mark.xfail(strict=True, raises=AssertionError, reason=WRONG_POPULATION_REASON),
     ),
     pytest.param(
         _sole_m2m_admin(SVC_MANUAL, MANUAL_PROVIDER),
@@ -1295,7 +1259,6 @@ _SINGLE_STEP_CASES = [
         SVC_MANUAL,
         {"groups": [READERS_GROUP]},
         id="m2m-patch-self-demote",
-        marks=_M2M_XFAIL,
     ),
     pytest.param(
         _sole_m2m_admin(SVC_MANUAL, MANUAL_PROVIDER),
@@ -1304,7 +1267,6 @@ _SINGLE_STEP_CASES = [
         SVC_MANUAL,
         {},
         id="m2m-delete-self-last-admin",
-        marks=_M2M_XFAIL,
     ),
     pytest.param(
         _sole_m2m_admin(SVC_OKTA, OKTA_PROVIDER),
@@ -1313,7 +1275,6 @@ _SINGLE_STEP_CASES = [
         SVC_OKTA,
         {"groups": [READERS_GROUP]},
         id="okta-patch-self-demote",
-        marks=_M2M_XFAIL,
     ),
     pytest.param(
         _sole_m2m_admin(SVC_AUTH0, AUTH0_PROVIDER),
@@ -1322,7 +1283,6 @@ _SINGLE_STEP_CASES = [
         SVC_AUTH0,
         {"groups": [READERS_GROUP]},
         id="auth0-patch-self-demote",
-        marks=_M2M_XFAIL,
     ),
     pytest.param(
         _HUMAN_AND_M2M_ADMIN,
@@ -1331,7 +1291,6 @@ _SINGLE_STEP_CASES = [
         SVC_MANUAL,
         {},
         id="m2m-delete-self-other-admin-remains",
-        marks=_M2M_XFAIL,
     ),
     pytest.param(
         _HUMAN_AND_M2M_ADMIN,
@@ -1348,7 +1307,6 @@ _SINGLE_STEP_CASES = [
         SVC_OKTA,
         {"groups": [OPS_GROUP]},
         id="okta-patch-by-non-admin-name-holder",
-        marks=_NAME_GATE_XFAIL,
     ),
     pytest.param(
         _DISARMED_ADMIN_SCOPE,
@@ -1357,7 +1315,6 @@ _SINGLE_STEP_CASES = [
         SVC_AUTH0,
         {"groups": [OPS_GROUP]},
         id="auth0-patch-by-non-admin-name-holder",
-        marks=_NAME_GATE_XFAIL,
     ),
 ]
 

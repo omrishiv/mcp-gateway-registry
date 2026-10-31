@@ -95,12 +95,6 @@ BASE_GROUPS: dict[str, list[str]] = {
     "user:root": ["devs"],
 }
 
-FAIL_OPEN_OUTAGE_REASON = (
-    "Known defect: with fail_open False, a membership or definitions read error "
-    "propagates out of RateLimiter.check instead of denying, and the auth server "
-    "treats that error as allow."
-)
-
 MACHINE_SETTINGS = settings(
     max_examples=50,
     stateful_step_count=15,
@@ -691,14 +685,7 @@ def _machine_for(
     [
         pytest.param(True, False, id="fail_open-default"),
         pytest.param(True, True, id="fail_open-quarantine_fail_closed"),
-        pytest.param(
-            False,
-            False,
-            id="fail_closed",
-            marks=pytest.mark.xfail(
-                strict=True, raises=AssertionError, reason=FAIL_OPEN_OUTAGE_REASON
-            ),
-        ),
+        pytest.param(False, False, id="fail_closed"),
         pytest.param(False, True, id="fail_closed-quarantine_fail_closed"),
     ],
 )
@@ -746,7 +733,6 @@ def _outage_limiter(
 
 
 @pytest.mark.unit
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=FAIL_OPEN_OUTAGE_REASON)
 @pytest.mark.parametrize("name", sorted(CALLERS))
 def test_fail_closed_limiter_denies_during_outage(
     name: str,

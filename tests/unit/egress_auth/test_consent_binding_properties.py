@@ -59,11 +59,6 @@ _LIVE_SESSIONS: dict[str, dict] = {
         "session_id": "sid-mallory",
     },
 }
-_NO_LIVE_SESSION_REASON = (
-    "Known defect: the egress callback stores the token in the consent state's "
-    "principal bucket when the browser has no live session (no cookie or an "
-    "expired one) instead of failing closed."
-)
 
 
 class _BrowserState(NamedTuple):
@@ -86,12 +81,10 @@ _BROWSER_STATES = [
     pytest.param(
         _BrowserState(cookie=None, same_browser=False, live_principal=None),
         id="no-session-cookie",
-        marks=pytest.mark.xfail(strict=True, raises=AssertionError, reason=_NO_LIVE_SESSION_REASON),
     ),
     pytest.param(
         _BrowserState(cookie=_EXPIRED_COOKIE, same_browser=False, live_principal=None),
         id="expired-session-cookie",
-        marks=pytest.mark.xfail(strict=True, raises=AssertionError, reason=_NO_LIVE_SESSION_REASON),
     ),
     pytest.param(
         _BrowserState(

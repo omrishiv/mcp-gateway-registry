@@ -127,12 +127,6 @@ _PROXY_ENV_KEYS: tuple[str, ...] = (
 _ROUTE_DIRECT: str = "direct"
 _ROUTE_PROXIED: str = "proxied"
 
-_PINNED_URL_REASON: str = (
-    "Known defect: the guarded transport rewrites request.url to the pinned IP, "
-    "so httpx derives the next redirect hop's Host, SNI, Authorization and "
-    "NO_PROXY decisions from that IP instead of from the hop's hostname."
-)
-
 
 def _settings() -> MagicMock:
     """Return a registry settings stub with one allowlisted internal hostname.
@@ -591,7 +585,6 @@ def test_redirect_chain_identity_without_ip_literal_hops() -> None:
 
 
 @pytest.mark.unit
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_PINNED_URL_REASON)
 def test_redirect_chain_identity_state_machine() -> None:
     """Property: for every redirect chain, rebinding sequence and proxy setting,
     every hop dials a validated address for its own host, names that host in
@@ -632,19 +625,16 @@ def _single_redirect_violations(
             _ScriptedRedirect(_KIND_IP_LITERAL, target=_PUBLIC_IP_C),
             None,
             id="other-public-ip-literal-keeps-previous-sni",
-            marks=pytest.mark.xfail(strict=True, raises=AssertionError, reason=_PINNED_URL_REASON),
         ),
         pytest.param(
             _ScriptedRedirect(_KIND_IP_LITERAL, target=_PUBLIC_IP_A),
             None,
             id="pinned-ip-literal-keeps-host-and-authorization",
-            marks=pytest.mark.xfail(strict=True, raises=AssertionError, reason=_PINNED_URL_REASON),
         ),
         pytest.param(
             _ScriptedRedirect(_KIND_RELATIVE),
             _HOST_A,
             id="relative-from-no-proxy-host-tunnels-to-ip",
-            marks=pytest.mark.xfail(strict=True, raises=AssertionError, reason=_PINNED_URL_REASON),
         ),
         pytest.param(_ScriptedRedirect(_KIND_RELATIVE), None, id="relative-direct"),
         pytest.param(_ScriptedRedirect(_KIND_RELATIVE), "", id="relative-proxied"),

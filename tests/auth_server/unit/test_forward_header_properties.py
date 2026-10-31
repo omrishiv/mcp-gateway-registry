@@ -240,15 +240,6 @@ def test_ordinary_headers_forwarded_verbatim(incoming, relay):
     assert forwarded == expected
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "Known defect: only three exact X-Internal-Token names and two exact X-Body "
-        "names are stripped, so any other name in those reserved families is "
-        "forwarded to the upstream."
-    ),
-)
 @HYPOTHESIS_SETTINGS
 @given(reserved=_reserved_family_headers(), relay=st.booleans())
 @example(reserved=_RESERVED_FAMILY_VARIANT, relay=False)

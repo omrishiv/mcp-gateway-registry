@@ -147,16 +147,6 @@ _SETTINGS_FOR_SWEEP = settings(
     report_multiple_bugs=False,
 )
 
-_SERVER_METADATA_REASON: str = (
-    "Known defect: the anonymous server.json copies registered_by, allowed_groups "
-    "and auth_scheme into its _meta block, which the public agent and skill routes strip."
-)
-_LEAF_COLLISION_REASON: str = (
-    "Known defect: public record URLs match only the sanitized last path segment, so "
-    "two public records sharing that segment get the same catalog URL and one of them "
-    "is served for the other."
-)
-
 
 @dataclass(frozen=True)
 class _Record:
@@ -870,12 +860,7 @@ def _internal_metadata(
 @pytest.mark.parametrize(
     "kind",
     [
-        pytest.param(
-            "server",
-            marks=pytest.mark.xfail(
-                strict=True, raises=AssertionError, reason=_SERVER_METADATA_REASON
-            ),
-        ),
+        "server",
         "agent",
         "skill",
     ],
@@ -1017,7 +1002,6 @@ def test_case_changed_leaf_never_case_folds_onto_a_record(
         )
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_LEAF_COLLISION_REASON)
 @_SETTINGS_FOR_SWEEP
 @given(population=_populations())
 @example(population=_build_population(_COLLIDING_SERVERS))

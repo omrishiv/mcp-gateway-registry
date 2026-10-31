@@ -76,43 +76,6 @@ VIRTUAL_SERVER_PATH: str = "/virtual/dev"
 AGENT_PATH: str = "/flight-agent"
 GENERATION_DIRECTIVE_VARIABLE: str = "$vs_config_generation"
 
-# Placeholders a carrier value is expanded through today: every replace that
-# runs over the whole document after the carrier's generated block is inserted.
-# Version labels land in {{LOCATION_BLOCKS}} (substituted first), virtual server
-# names in {{VIRTUAL_SERVER_BLOCKS}}, agent names in {{AGENT_LOCATION_BLOCKS}}.
-_REGEX_STRIPPED_MARKERS: frozenset[str] = frozenset(
-    {
-        "{{KEYCLOAK_LOCATIONS_START}}",
-        "{{KEYCLOAK_LOCATIONS_END}}",
-        "{{PINGFEDERATE_LOCATIONS_START}}",
-        "{{PINGFEDERATE_LOCATIONS_END}}",
-    }
-)
-EXPANDED_PLACEHOLDERS: dict[str, frozenset[str]] = {
-    VERSION_LABEL: frozenset(PLACEHOLDERS) - _REGEX_STRIPPED_MARKERS - {"{{LOCATION_BLOCKS}}"},
-    VIRTUAL_SERVER_NAME: frozenset(
-        {"{{AGENT_LOCATION_BLOCKS}}", "{{ROOT_PATH}}", "{{MCP_RESOURCE_METADATA_URL}}"}
-    ),
-    AGENT_NAME: frozenset({"{{ROOT_PATH}}", "{{MCP_RESOURCE_METADATA_URL}}"}),
-    AGENT_DESCRIPTION: frozenset(),
-}
-
-# Placeholders whose expansion inside a carrier makes nginx -t reject the whole
-# config: multi-line generated blocks with quotes land inside the quoted version
-# label, and agent blocks expanded from a virtual server name comment become
-# live duplicate locations.
-NGINX_T_BREAKING: dict[str, frozenset[str]] = {
-    VERSION_LABEL: frozenset({"{{VIRTUAL_SERVER_BLOCKS}}", "{{AGENT_LOCATION_BLOCKS}}"}),
-    VIRTUAL_SERVER_NAME: frozenset({"{{AGENT_LOCATION_BLOCKS}}"}),
-    AGENT_NAME: frozenset(),
-}
-
-EXPANSION_REASON: str = (
-    "Known defect: _render_config_impl runs every later placeholder replace over "
-    "the whole document after generated blocks are inserted, so a {{PLACEHOLDER}} "
-    "inside a registry value is expanded."
-)
-
 PROPERTY_SETTINGS = settings(
     max_examples=200,
     derandomize=True,
@@ -167,10 +130,6 @@ _NGINX_T_SCRIPT: str = (
 )
 _DOCKER_CARRIERS: tuple[str, ...] = (VERSION_LABEL, VIRTUAL_SERVER_NAME, AGENT_NAME)
 _BASELINE_SAMPLE: str = "baseline"
-NGINX_T_REASON: str = (
-    "Known defect: a {{PLACEHOLDER}} in a registry value is expanded into "
-    "generated blocks during render, and nginx -t then rejects the whole config."
-)
 
 
 def _build_registry(
@@ -478,35 +437,21 @@ def _injection_violations(
 
 
 def _carrier_params(
-    expected_failures: dict[str, frozenset[str]],
-    reason: str,
     carriers: tuple[str, ...] = CARRIERS,
 ) -> list:
-    """Build ``(carrier, placeholder)`` params, xfailing the known defects.
+    """Build ``(carrier, placeholder)`` params.
 
     Args:
-        expected_failures: Placeholders known to break the property per carrier.
-        reason: xfail reason for those params.
         carriers: Carriers to enumerate.
 
     Returns:
         ``pytest.param`` list.
     """
-    params = []
-    for carrier in carriers:
-        for placeholder in PLACEHOLDERS:
-            marks = ()
-            if placeholder in expected_failures.get(carrier, frozenset()):
-                marks = pytest.mark.xfail(strict=True, raises=AssertionError, reason=reason)
-            params.append(
-                pytest.param(
-                    carrier,
-                    placeholder,
-                    id=f"{carrier}-{placeholder.strip('{}')}",
-                    marks=marks,
-                )
-            )
-    return params
+    return [
+        pytest.param(carrier, placeholder, id=f"{carrier}-{placeholder.strip('{}')}")
+        for carrier in carriers
+        for placeholder in PLACEHOLDERS
+    ]
 
 
 def _arbitrary_text() -> st.SearchStrategy[str]:
@@ -552,7 +497,7 @@ def test_baseline_render_parses_without_placeholders(
 @pytest.mark.parametrize("template", TEMPLATES, ids=lambda path: path.name)
 @pytest.mark.parametrize(
     ("carrier", "placeholder"),
-    _carrier_params(EXPANDED_PLACEHOLDERS, EXPANSION_REASON),
+    _carrier_params(),
 )
 def test_placeholder_in_registry_value_is_not_expanded(
     template: Path,
@@ -600,18 +545,7 @@ def test_arbitrary_registry_text_only_changes_its_carrier(
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize(
-    "carrier",
-    [
-        pytest.param(
-            carrier,
-            marks=pytest.mark.xfail(strict=True, raises=AssertionError, reason=EXPANSION_REASON),
-        )
-        if EXPANDED_PLACEHOLDERS[carrier]
-        else carrier
-        for carrier in CARRIERS
-    ],
-)
+@pytest.mark.parametrize("carrier", CARRIERS)
 @PROPERTY_SETTINGS
 @given(
     template=st.sampled_from(TEMPLATES),
@@ -640,10 +574,10 @@ def test_embedded_placeholder_only_changes_its_carrier(
 ) -> None:
     """Property: text with an embedded {{PLACEHOLDER}} only changes its carrier.
 
-    Hypothesis over ``before + placeholder + after``. Pinned counterexamples:
-    ``x{{AGENT_LOCATION_BLOCKS}}`` (agent blocks expanded into a version label
-    or a virtual server name comment) and ``v{{ROOT_PATH}}2`` (rendered as
-    ``v/gw2`` in a label or name).
+    Hypothesis over ``before + placeholder + after``. Pinned examples:
+    ``x{{AGENT_LOCATION_BLOCKS}}`` (must not expand agent blocks into a version
+    label or a virtual server name comment) and ``v{{ROOT_PATH}}2`` (must not
+    render as ``v/gw2`` in a label or name).
     """
     value = before + placeholder + after
     assume(_valid_for_carrier(carrier, value))
@@ -788,7 +722,7 @@ def test_nginx_t_accepts_baseline_render(
 @pytest.mark.integration
 @pytest.mark.parametrize(
     ("carrier", "placeholder"),
-    _carrier_params(NGINX_T_BREAKING, NGINX_T_REASON, carriers=_DOCKER_CARRIERS),
+    _carrier_params(carriers=_DOCKER_CARRIERS),
 )
 def test_nginx_t_accepts_placeholder_injection(
     nginx_t_verdicts: dict[str, str],

@@ -153,21 +153,6 @@ PROPERTY_SETTINGS = settings(
     deadline=None,
 )
 
-GUARD_REASON: str = (
-    "Known defect: _safe_generic_block checks its own short character list, "
-    "so $, #, single quote and NUL in the path, and single quote, NUL and a "
-    "trailing # in the target, reach the location, set and proxy_pass directives."
-)
-VARIABLE_REASON: str = (
-    "Known defect: _safe_generic_block accepts $ in the path, so a path such as "
-    "/x$http_foo makes nginx expand a client header into $entity_path and proxy_pass."
-)
-AGENT_CLEAR_REASON: str = (
-    "Known defect: the A2A agent locations proxy to the registrant backend "
-    "without clearing Proxy-Authorization or the X-Internal-Token headers a "
-    "caller sends."
-)
-
 
 def _safe_block(
     entity_type: str,
@@ -285,28 +270,24 @@ def _target_strategy() -> st.SearchStrategy[str]:
             "/skills/de",
             "mo",
             id="path-inside-segment",
-            marks=pytest.mark.xfail(strict=True, raises=AssertionError, reason=GUARD_REASON),
         ),
         pytest.param(
             "path",
             "/skills/demo",
             "",
             id="path-suffix",
-            marks=pytest.mark.xfail(strict=True, raises=AssertionError, reason=GUARD_REASON),
         ),
         pytest.param(
             "target",
             "https://skill.example.com/a",
             "b",
             id="target-inside-path",
-            marks=pytest.mark.xfail(strict=True, raises=AssertionError, reason=GUARD_REASON),
         ),
         pytest.param(
             "target",
             "https://skill.example.com/ab",
             "",
             id="target-suffix",
-            marks=pytest.mark.xfail(strict=True, raises=AssertionError, reason=GUARD_REASON),
         ),
     ],
 )
@@ -331,7 +312,6 @@ def test_generic_guard_rejects_every_canonical_metacharacter(
 
 
 @pytest.mark.unit
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=GUARD_REASON)
 @PROPERTY_SETTINGS
 @given(path=_path_strategy())
 @example(path="/skills/x$http_foo")
@@ -340,8 +320,8 @@ def test_generated_paths_with_metacharacters_are_rejected(
 ) -> None:
     """Property: an accepted generic path never contains a canonical metacharacter.
 
-    Pinned counterexample: ``/skills/x$http_foo``, which renders
-    ``set $entity_path "skills/x$http_foo"`` and lets a client header become
+    Pinned example: ``/skills/x$http_foo``, which would render
+    ``set $entity_path "skills/x$http_foo"`` and let a client header become
     part of the authorization key.
     """
     block = _safe_block(SAFE_ENTITY_TYPE, path, SAFE_TARGET)
@@ -352,7 +332,6 @@ def test_generated_paths_with_metacharacters_are_rejected(
 
 
 @pytest.mark.unit
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=GUARD_REASON)
 @PROPERTY_SETTINGS
 @given(target=_target_strategy())
 @example(target="https://skill.example.com/a'b")
@@ -361,7 +340,7 @@ def test_generated_targets_with_metacharacters_are_rejected(
 ) -> None:
     """Property: an accepted generic target never contains a canonical metacharacter.
 
-    Pinned counterexample: ``https://skill.example.com/a'b``.
+    Pinned example: ``https://skill.example.com/a'b``.
     """
     block = _safe_block(SAFE_ENTITY_TYPE, SAFE_PATH, target)
 
@@ -397,7 +376,6 @@ def test_safe_generic_block_references_only_allowlisted_variables(
 
 
 @pytest.mark.unit
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=VARIABLE_REASON)
 @PROPERTY_SETTINGS
 @given(
     entity_type=st.sampled_from(["skill", "a2a_agent", "custom-type_1"]),
@@ -424,7 +402,7 @@ def test_generated_generic_block_references_only_allowlisted_variables(
 
     Hypothesis over path, target and variant flags: whenever a block is
     produced it parses and references only ``GENERIC_BLOCK_VARIABLES``.
-    Pinned counterexample: ``/skills/x$http_foo`` adds ``$http_foo``.
+    Pinned example: ``/skills/x$http_foo``, which must not add ``$http_foo``.
     """
     block = _safe_block(entity_type, path, target, streaming, has_upstream_auth)
     if block is None:
@@ -732,7 +710,6 @@ def test_registrant_locations_forward_no_internal_secret(
 
 
 @pytest.mark.unit
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=AGENT_CLEAR_REASON)
 @PROPERTY_SETTINGS
 @given(template=st.sampled_from(TEMPLATES), registry=_registry_strategy())
 @example(template=TEMPLATES[0], registry=_PINNED_REGISTRY)
@@ -746,8 +723,8 @@ def test_registrant_locations_clear_reserved_credentials(
     ``proxy_set_header <Name> ""`` for Authorization, X-Authorization,
     Proxy-Authorization, Cookie and every X-Internal-Token header, except
     that agent routes forward Authorization under the A2A trust model.
-    Pinned counterexample: one agent, whose card and JSON-RPC locations leave
-    Proxy-Authorization and the X-Internal-Token headers uncleared.
+    Pinned example: one agent, whose card and JSON-RPC locations must clear
+    Proxy-Authorization and the X-Internal-Token headers.
     """
     uncleared = {
         location["args"][-1]: missing

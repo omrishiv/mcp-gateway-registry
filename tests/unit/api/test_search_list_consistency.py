@@ -161,21 +161,6 @@ _SETTINGS_FOR_SWEEP = settings(
     report_multiple_bugs=False,
 )
 
-_LIST_SERVICE_REASON: str = (
-    "Known defect: search admits a server, and its tools, on an accessible_servers "
-    "grant that matches its path or display name, while GET /api/servers matches the "
-    "grant by path only and also requires the list_service grant."
-)
-_VIRTUAL_SERVER_REASON: str = (
-    "Known defect: search gates virtual servers on accessible_servers, while "
-    "GET /api/virtual-servers gates them on the list_virtual_server grant."
-)
-_AGENT_REDACTION_REASON: str = (
-    "Known defect: search returns the full stored agent card, so proxy_target_url, "
-    "proxy_target_host, proxy_resolved_ips and custom_headers_encrypted reach callers "
-    "that GET /api/agents withholds them from."
-)
-
 
 # One scope-table entry: (scope name, (server rules as (server, tools), ui as (key, values))).
 _ScopeEntry = tuple[str, tuple[tuple[Any, ...], tuple[tuple[str, tuple[str, ...]], ...]]]
@@ -1045,25 +1030,14 @@ def _sensitive(
     return found
 
 
-def _xfail(
-    entity: str,
-    reason: str,
-) -> Any:
-    """Return a parameter for ``entity`` that is a known failure."""
-    return pytest.param(
-        entity,
-        marks=pytest.mark.xfail(strict=True, raises=AssertionError, reason=reason),
-    )
-
-
 @pytest.mark.parametrize(
     "entity",
     [
-        _xfail("servers", _LIST_SERVICE_REASON),
-        _xfail("tools", _LIST_SERVICE_REASON),
+        "servers",
+        "tools",
         "agents",
         "skills",
-        _xfail("virtual_servers", _VIRTUAL_SERVER_REASON),
+        "virtual_servers",
         "custom",
     ],
 )
@@ -1091,7 +1065,7 @@ def test_search_results_are_a_subset_of_list_results(
     [
         "servers",
         "tools",
-        _xfail("agents", _AGENT_REDACTION_REASON),
+        "agents",
         "skills",
         "virtual_servers",
         "custom",

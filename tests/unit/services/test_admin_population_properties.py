@@ -76,11 +76,6 @@ _FEDERATION_ONLY_CATALOGUE = {
         },
     },
 }
-_KNOWN_DEFECT_REASON = (
-    "Known defect: resolve_admin_group_names counts any scope with an 'all' "
-    "grant on any action as admin, so read-only groups such as the "
-    "federation-service seed are counted as administrators."
-)
 
 
 class _CatalogueScopeRepo:
@@ -239,9 +234,6 @@ _catalogues = st.dictionaries(st.sampled_from(_SCOPE_NAME_POOL), _scope_docs, ma
         pytest.param(
             (*_ADMIN_SEED_FILES, _FEDERATION_SEED_FILE),
             id="all-shipped-seeds",
-            marks=pytest.mark.xfail(
-                strict=True, raises=AssertionError, reason=_KNOWN_DEFECT_REASON
-            ),
         ),
     ],
 )
@@ -251,7 +243,6 @@ def test_seed_catalogue_admin_population_matches_request_time(seed_files):
 
 
 @pytest.mark.unit
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_KNOWN_DEFECT_REASON)
 @settings(max_examples=200, derandomize=True, database=None, report_multiple_bugs=False)
 @given(catalogue=_catalogues)
 @example(catalogue=_FEDERATION_ONLY_CATALOGUE)

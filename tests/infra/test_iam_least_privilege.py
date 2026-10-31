@@ -72,38 +72,6 @@ ACTIONS_ONLY_ALLOWED_ON_ANY_RESOURCE: frozenset[str] = frozenset(
     }
 )
 
-# Allow statements that grant a wildcard Resource for actions that accept a
-# resource ARN. Each id is file:line of the statement.
-KNOWN_UNBOUNDED_RESOURCE_STATEMENTS: tuple[tuple[str, str], ...] = (
-    (
-        "terraform/aws-ecs/codebuild.tf:326",
-        "the CodeBuild role may create and write to any CloudWatch log group",
-    ),
-    (
-        "terraform/aws-ecs/keycloak-ecs.tf:201",
-        "the Keycloak task execution role may call kms:Decrypt with any key",
-    ),
-    (
-        "terraform/aws-ecs/modules/mcp-gateway/iam.tf:131",
-        "the ECS Exec task execution policy writes to every log group in every account",
-    ),
-    (
-        "terraform/aws-ecs/secret-rotation.tf:101",
-        "the rotation Lambda may create, delete and re-address any network interface",
-    ),
-    (
-        "infra/lib/registry/constructs/keycloak-service.ts:239",
-        "the Keycloak task execution role may call kms:Decrypt with any key",
-    ),
-    (
-        "infra/lib/registry/registry-ops-stack.ts:247",
-        "the rotation Lambda may create, delete and re-address any network interface",
-    ),
-)
-
-# Allow statements that grant "*" or "<service>:*" as an action. None today.
-KNOWN_WILDCARD_ACTION_STATEMENTS: tuple[tuple[str, str], ...] = ()
-
 # The terraform-aws-modules/ecs service module (v6, modules/service/main.tf)
 # builds part of each role itself, outside this repository. Its task execution
 # policy is the AmazonECSTaskExecutionRolePolicy action set ("Pulled from
@@ -141,7 +109,6 @@ class _RolePair:
     name: str
     terraform: tuple[tuple[str, str], ...]
     cdk: tuple[tuple[str, str | None, str], ...]
-    divergence: str | None = None
 
 
 def _ecs_service_pair(
@@ -150,8 +117,6 @@ def _ecs_service_pair(
     cdk_role_file: str,
     task_extra: tuple[tuple[str, str | None, str], ...] = (),
     exec_extra: tuple[tuple[str, str | None, str], ...] = (),
-    task_divergence: str | None = None,
-    exec_divergence: str | None = None,
 ) -> tuple[_RolePair, _RolePair]:
     """Build the task and task-execution role pairs for one ECS service.
 
@@ -161,8 +126,6 @@ def _ecs_service_pair(
         cdk_role_file: CDK construct file that creates both roles.
         task_extra: CDK sources passed in for the task role.
         exec_extra: CDK sources passed in for the execution role.
-        task_divergence: Known defect reason for the task role, if any.
-        exec_divergence: Known defect reason for the execution role, if any.
 
     Returns:
         The task role pair and the task execution role pair.
@@ -172,22 +135,14 @@ def _ecs_service_pair(
             f"{name}-task",
             (("ecs_tasks", module),),
             ((cdk_role_file, None, "taskRole"), *task_extra),
-            task_divergence,
         ),
         _RolePair(
             f"{name}-task-execution",
             (("ecs_task_exec", module),),
             ((cdk_role_file, None, "taskExecRole"), *exec_extra),
-            exec_divergence,
         ),
     )
 
-
-_EXEC_LOG_DESCRIBE = (
-    "Terraform also grants logs:DescribeLogGroups and logs:DescribeLogStreams "
-    "to the task execution role."
-)
-_TASK_SECRETS = "Terraform also grants every platform secret plus KMS decrypt to the task role"
 
 # Roles mapped by purpose. The CDK extra sources mirror the props passed in
 # registry-service-stack.ts (additionalExecRoleStatements and friends). Not
@@ -213,13 +168,11 @@ ROLE_PAIRS: tuple[_RolePair, ...] = (
         "secret-rotation-lambda",
         (("role", "aws_iam_role.rotation_lambda"),),
         ((f"{_CDK}/registry-ops-stack.ts", None, "role"),),
-        "Terraform also grants rds:DescribeDBInstances to the rotation Lambda role.",
     ),
     _RolePair(
         "keycloak-rds-proxy",
         (("role", "aws_iam_role.rds_proxy_role"),),
         ((f"{_CDK}/constructs/keycloak-database.ts", None, "proxyRole"),),
-        "CDK also grants kms:Decrypt to the RDS proxy role.",
     ),
     *_ecs_service_pair(
         "registry",
@@ -227,48 +180,38 @@ ROLE_PAIRS: tuple[_RolePair, ...] = (
         _CDK_REGISTRY_ECS,
         task_extra=((f"{_CDK}/registry-service-stack.ts", None, "agentCoreStatements"),),
         exec_extra=(_CDK_SECRETS_ACCESS,),
-        task_divergence=(f"{_TASK_SECRETS}, the egress vault, Cognito read and AMP remote write."),
-        exec_divergence=_EXEC_LOG_DESCRIBE,
     ),
     *_ecs_service_pair(
         "auth-server",
         "ecs_service_auth",
         _CDK_REGISTRY_ECS,
         exec_extra=(_CDK_SECRETS_ACCESS,),
-        task_divergence=f"{_TASK_SECRETS} and AMP remote write.",
-        exec_divergence=_EXEC_LOG_DESCRIBE,
     ),
     *_ecs_service_pair(
         "mcpgw",
         "ecs_service_mcpgw",
         _CDK_MCP_SERVER,
         exec_extra=(_CDK_SECRETS_ACCESS,),
-        task_divergence=f"{_TASK_SECRETS} and AMP remote write.",
-        exec_divergence=_EXEC_LOG_DESCRIBE,
     ),
     *_ecs_service_pair(
         "currenttime",
         "ecs_service_currenttime",
         _CDK_MCP_SERVER,
-        exec_divergence=_EXEC_LOG_DESCRIBE,
     ),
     *_ecs_service_pair(
         "realserverfaketools",
         "ecs_service_realserverfaketools",
         _CDK_MCP_SERVER,
-        exec_divergence=_EXEC_LOG_DESCRIBE,
     ),
     *_ecs_service_pair(
         "flight-booking-agent",
         "ecs_service_flight_booking_agent",
         _CDK_MCP_SERVER,
-        exec_divergence=_EXEC_LOG_DESCRIBE,
     ),
     *_ecs_service_pair(
         "travel-assistant-agent",
         "ecs_service_travel_assistant_agent",
         _CDK_MCP_SERVER,
-        exec_divergence=_EXEC_LOG_DESCRIBE,
     ),
     _RolePair(
         "metrics-service-task",
@@ -277,13 +220,11 @@ ROLE_PAIRS: tuple[_RolePair, ...] = (
             (_CDK_OBSERVABILITY, "_createTaskRole", "role"),
             (_CDK_OBSERVABILITY, None, "ampRemoteWritePolicy"),
         ),
-        f"{_TASK_SECRETS}.",
     ),
     _RolePair(
         "metrics-service-task-execution",
         (("ecs_task_exec", "ecs_service_metrics"),),
         ((_CDK_OBSERVABILITY, "_createTaskExecRole", "role"), _CDK_SECRETS_ACCESS),
-        _EXEC_LOG_DESCRIBE,
     ),
     _RolePair(
         "grafana-task",
@@ -297,7 +238,6 @@ ROLE_PAIRS: tuple[_RolePair, ...] = (
         "grafana-task-execution",
         (("ecs_task_exec", "ecs_service_grafana"),),
         ((_CDK_OBSERVABILITY, "_createTaskExecRole", "role"), _CDK_SECRETS_ACCESS),
-        _EXEC_LOG_DESCRIBE,
     ),
 )
 
@@ -1041,35 +981,20 @@ def _is_kms_root_delegation(statement: _Statement) -> bool:
     )
 
 
-def _params(
-    statements: list[_Statement],
-    known: tuple[tuple[str, str], ...],
-) -> list:
-    """Build one param per statement, xfailing the ids listed in ``known``.
+def _params(statements: list[_Statement]) -> list:
+    """Build one param per statement.
 
     Args:
         statements: Statements to parametrize over.
-        known: ``(id, reason)`` pairs of known violations.
 
     Returns:
         List of ``pytest.param`` objects with ``file:line`` ids.
     """
-    reasons = dict(known)
-    params = []
-    for statement in statements:
-        marks = ()
-        if statement.id in reasons:
-            marks = pytest.mark.xfail(
-                strict=True,
-                raises=AssertionError,
-                reason=f"Known defect: {reasons[statement.id]}.",
-            )
-        params.append(pytest.param(statement, id=statement.id, marks=marks))
-    return params
+    return [pytest.param(statement, id=statement.id) for statement in statements]
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("statement", _params(_ALLOW_STATEMENTS, KNOWN_WILDCARD_ACTION_STATEMENTS))
+@pytest.mark.parametrize("statement", _params(_ALLOW_STATEMENTS))
 def test_allow_statement_grants_no_wildcard_action(statement: _Statement) -> None:
     """Property: no Allow statement grants ``*``, ``<service>:*`` or NotAction."""
     if _is_kms_root_delegation(statement):
@@ -1084,10 +1009,7 @@ def test_allow_statement_grants_no_wildcard_action(statement: _Statement) -> Non
 @pytest.mark.unit
 @pytest.mark.parametrize(
     "statement",
-    _params(
-        [s for s in _ALLOW_STATEMENTS if s.kind not in ("kms-key", "trust")],
-        KNOWN_UNBOUNDED_RESOURCE_STATEMENTS,
-    ),
+    _params([s for s in _ALLOW_STATEMENTS if s.kind not in ("kms-key", "trust")]),
 )
 def test_allow_statement_on_any_resource_needs_it(statement: _Statement) -> None:
     """Property: an unbounded Resource only carries actions AWS allows on nothing else.
@@ -1152,22 +1074,6 @@ def test_policy_scanner_sees_every_statement(tree: str) -> None:
     assert extracted == expected, (
         f"{tree}: scanner extracted {extracted} statements, source has {expected}"
     )
-
-
-@pytest.mark.unit
-def test_known_violation_ids_name_existing_statements() -> None:
-    """Property: every known-violation id still names a statement in the source.
-
-    Ids are ``file:line``, so an edit above a statement moves it; this keeps a
-    stale id from silently dropping its xfail.
-    """
-    ids = {s.id for s in _ALLOW_STATEMENTS}
-    stale = [
-        known_id
-        for known_id, _ in (*KNOWN_UNBOUNDED_RESOURCE_STATEMENTS, *KNOWN_WILDCARD_ACTION_STATEMENTS)
-        if known_id not in ids
-    ]
-    assert not stale, f"known-violation ids with no statement at that line: {stale}"
 
 
 def _terraform_policy_actions(owner: str) -> set[str]:
@@ -1289,23 +1195,8 @@ def _cdk_role_actions(file: str, function: str | None, identifier: str) -> set[s
     return actions
 
 
-def _role_params() -> list:
-    """Build one param per mapped role, xfailing the known divergences."""
-    params = []
-    for pair in ROLE_PAIRS:
-        marks = ()
-        if pair.divergence:
-            marks = pytest.mark.xfail(
-                strict=True,
-                raises=AssertionError,
-                reason=f"Known defect: {pair.divergence}",
-            )
-        params.append(pytest.param(pair, id=pair.name, marks=marks))
-    return params
-
-
 @pytest.mark.unit
-@pytest.mark.parametrize("pair", _role_params())
+@pytest.mark.parametrize("pair", [pytest.param(pair, id=pair.name) for pair in ROLE_PAIRS])
 def test_terraform_and_cdk_grant_a_role_the_same_actions(pair: _RolePair) -> None:
     """Property: a role both stacks create holds the same action set in both.
 

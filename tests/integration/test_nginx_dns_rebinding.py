@@ -63,12 +63,6 @@ _NAMED_LOCATIONS: tuple[str, ...] = (
     "@upstream_unavailable_jsonrpc",
 )
 
-_REBINDING_REASON: str = (
-    "Known defect: the virtual-backend location hands nginx the backend hostname, "
-    "so nginx resolves it again after the pinned health check and follows a "
-    "rebound answer to 127.0.0.1."
-)
-
 
 def _dns_encode_name(
     name: str,
@@ -710,7 +704,6 @@ def _prepare_lab(
         pytest.param("rebind", id="resolver-variable"),
     ],
 )
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_REBINDING_REASON)
 @pytest.mark.usefixtures("render_settings")
 def test_virtual_backend_never_dials_internal_after_public_health_check(
     rebinding_lab: Callable[[str], _RebindingLab],

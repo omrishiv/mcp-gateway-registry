@@ -13,7 +13,6 @@ from html.parser import HTMLParser
 from pathlib import Path
 from types import ModuleType
 
-import pytest
 from hypothesis import (
     example,
     given,
@@ -150,14 +149,6 @@ def _with_markers(
     return st.lists(insertion, max_size=_MAX_INSERTIONS).map(_insert)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "Known defect: the byline renderer checks the href scheme before it strips "
-        "emphasis markers, so java_script: becomes a live javascript: href."
-    ),
-)
 @settings(max_examples=200, derandomize=True, database=None, report_multiple_bugs=False)
 @given(url=st.one_of(_with_markers(_SCRIPT_URL), _with_markers(_HTTPS_URL)))
 @example(url="java_script:alert`1`")

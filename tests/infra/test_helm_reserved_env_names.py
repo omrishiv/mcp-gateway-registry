@@ -48,32 +48,6 @@ RENDER_SET_VALUES: tuple[str, ...] = (
     "registry.embeddings.extraHeaders={X-A: a,X-B: b,X-C: c,X-D: d,X-E: e}",
 )
 
-_UNRESERVED_IN_CHART_SECRET = (
-    "the chart secret template sets it under envFrom but reserved-env-names.txt omits it"
-)
-_UNRESERVED_IN_STACK_SECRET = (
-    "the stack oauth-provider-secret sets it under envFrom but reserved-env-names.txt omits it"
-)
-
-# Chart-managed names missing from reserved-env-names.txt.
-KNOWN_UNRESERVED: dict[tuple[str, str], str] = {
-    **{
-        (chart, name): _UNRESERVED_IN_CHART_SECRET
-        for chart in ("auth-server", "registry")
-        for name in (
-            "AUTH0_AUDIENCE",
-            "AUTH0_CLIENT_ID",
-            "AUTH0_DOMAIN",
-            "AUTH0_ENABLED",
-            "AUTH0_GROUPS_CLAIM",
-            "AUTH0_M2M_CLIENT_ID",
-            "OKTA_M2M_CLIENT_ID",
-        )
-    },
-    ("registry", "ENTRA_GRAPH_BASE_URL"): _UNRESERVED_IN_STACK_SECRET,
-    ("registry", "ENTRA_GRAPH_RESOURCE_URL"): _UNRESERVED_IN_STACK_SECRET,
-}
-
 # Reserved names no template renders. The list is documented as a superset
 # ("over-rejection is preferred to under-rejection"), so these are deliberate,
 # each for the reason given; a stale entry not listed here fails the
@@ -332,14 +306,7 @@ def _forward_params() -> list:
     params = []
     for chart, names in _ENV_NAMES.items():
         for name in sorted(names):
-            marks = ()
-            if (chart, name) in KNOWN_UNRESERVED:
-                marks = pytest.mark.xfail(
-                    strict=True,
-                    raises=AssertionError,
-                    reason=f"Known defect: {KNOWN_UNRESERVED[(chart, name)]}.",
-                )
-            params.append(pytest.param(chart, name, id=f"{chart}:{name}", marks=marks))
+            params.append(pytest.param(chart, name, id=f"{chart}:{name}"))
     return params
 
 
@@ -376,16 +343,11 @@ def test_reserved_env_name_is_chart_managed(chart: str, name: str) -> None:
 
 
 @pytest.mark.unit
-def test_known_lists_name_chart_entries() -> None:
-    """Property: every known-defect and over-reservation entry names a live case.
-
-    A known-unreserved name must still be chart-managed, and an
-    over-reservation must still be reserved and still never rendered.
-    """
+def test_reserved_without_render_names_chart_entries() -> None:
+    """Property: every over-reservation entry is still reserved and still never rendered."""
     if not _RENDERED:
         pytest.skip("helm is not on PATH; envFrom keys need a render")
-    stale = [key for key in KNOWN_UNRESERVED if key[1] not in _ENV_NAMES[key[0]]]
-    stale += [
+    stale = [
         key
         for key in RESERVED_WITHOUT_RENDER
         if key[1] not in _reserved_names(key[0]) or key[1] in _ENV_NAMES[key[0]]

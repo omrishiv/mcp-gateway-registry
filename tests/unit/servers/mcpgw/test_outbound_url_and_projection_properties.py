@@ -108,16 +108,6 @@ PROPERTY_SETTINGS = settings(
     report_multiple_bugs=False,
 )
 
-_RESOURCE_URL_XFAIL = pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "Known defect: derive_resource_url interpolates the manifest path into the "
-        "URL without percent-encoding, so '?', '#' and '%' in a file name change "
-        "which URL the registry fetches with the skill's credential."
-    ),
-)
-
 
 def _build_ctx() -> SimpleNamespace:
     """Build a FastMCP-like context carrying the caller's bearer token.
@@ -362,7 +352,6 @@ def test_derived_resource_url_keeps_skill_origin(
 
 
 @pytest.mark.unit
-@_RESOURCE_URL_XFAIL
 @PROPERTY_SETTINGS
 @given(base=st.sampled_from(SKILL_MD_BASES), resource=_manifest_path())
 @example(base=SKILL_MD_BASES[0], resource="%2e%2e/secret.md")
@@ -382,7 +371,6 @@ def test_derived_resource_url_stays_under_skill_directory(
 
 
 @pytest.mark.unit
-@_RESOURCE_URL_XFAIL
 @PROPERTY_SETTINGS
 @given(base=st.sampled_from(SKILL_MD_BASES), resource=_manifest_path())
 @example(base=SKILL_MD_BASES[0], resource="references/a?b.md")

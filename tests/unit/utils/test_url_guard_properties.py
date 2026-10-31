@@ -69,18 +69,8 @@ _SPECIAL_IPV6_BLOCKS: tuple[str, ...] = (
     "::/128",
     "fc00::/7",
     "fe80::/10",
+    "fec0::/10",
     "ff00::/8",
-)
-
-_SITE_LOCAL_BLOCK: str = "fec0::/10"
-
-_SITE_LOCAL_XFAIL = pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "Known defect: IPv6 site-local fec0::/10 addresses are classified as "
-        "public and allowed in the default deny-private mode."
-    ),
 )
 
 
@@ -197,15 +187,6 @@ def _libc_ipv4(
 class TestCoerceIpLiteralMatchesLibc:
     """``coerce_ip_literal`` agrees with inet_aton on IPv4-looking hosts."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason=(
-            "Known defect: coerce_ip_literal assigns an address to host strings "
-            "inet_aton rejects (underscores, 0o prefixes, signs, whitespace, "
-            "Unicode digits)."
-        ),
-    )
     @_SETTINGS
     @given(host=_ipv4_like_hosts())
     @example(host="9_3.184.216.34")
@@ -266,8 +247,7 @@ def _denial_cases() -> list:
     """Build the exhaustive special-purpose address table as pytest params.
 
     Returns:
-        ``pytest.param`` objects, one per (block, sample, wrapper), with the
-        site-local block carrying the known-defect xfail marker.
+        ``pytest.param`` objects, one per (block, sample, wrapper).
     """
     cases = []
     ipv4_samples: list[tuple[str, ipaddress.IPv4Address]] = []
@@ -285,8 +265,6 @@ def _denial_cases() -> list:
     for cidr in _SPECIAL_IPV6_BLOCKS:
         for ip in _block_samples(cidr):
             cases.append(pytest.param(ip, id=f"{cidr}-{ip}"))
-    for ip in _block_samples(_SITE_LOCAL_BLOCK):
-        cases.append(pytest.param(ip, id=f"{_SITE_LOCAL_BLOCK}-{ip}", marks=_SITE_LOCAL_XFAIL))
     return cases
 
 

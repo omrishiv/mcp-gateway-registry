@@ -53,11 +53,6 @@ _ROUTED_VARIANTS: tuple[tuple[str, str], ...] = (
     ("/a/a/mcp?x=/aa/", "/a/a"),
 )
 
-_SEMICOLON_REASON: str = (
-    "Known defect: urlparse splits ';params' off the last path segment, so the "
-    "binding reads '/a;x' as '/a' while nginx routes '/a;x' to the catch-all."
-)
-
 
 def _binding_accepts(
     original_url: str,
@@ -342,7 +337,6 @@ def _false_claims(
     return status, body, [path for path in claims if not _covers(path, routed)]
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_SEMICOLON_REASON)
 @settings(
     max_examples=100,
     derandomize=True,

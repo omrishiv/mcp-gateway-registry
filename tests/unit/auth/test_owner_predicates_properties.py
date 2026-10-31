@@ -1621,161 +1621,39 @@ _PREDICATES: tuple[_Predicate, ...] = (
 )
 _BY_NAME: dict[str, _Predicate] = {predicate.name: predicate for predicate in _PREDICATES}
 
-# (username label, owner label) pairs for which a predicate grants ownership
-# to a falsy username today, grouped by the shape of the comparison.
-#
-# ``owner == user_context.get("username")``: an absent key reads as None, so
-# None owns a None or absent owner, and "" owns "".
-_GET_EQUALITY_GRANTS: frozenset[tuple[str, str]] = frozenset(
-    {
-        ("missing", "missing"),
-        ("missing", "none"),
-        ("none", "missing"),
-        ("none", "none"),
-        ("empty", "empty"),
-    }
-)
-# ``owner != user_context["username"]``: an absent key raises KeyError (denied),
-# but an explicit None or "" still matches an equally falsy owner.
-_SUBSCRIPT_EQUALITY_GRANTS: frozenset[tuple[str, str]] = frozenset(
-    {
-        ("none", "missing"),
-        ("none", "none"),
-        ("empty", "empty"),
-    }
-)
-# An absent username defaults to "" while a None username stays None, so ""
-# owns "" and None owns a None or absent owner.
-_EMPTY_DEFAULT_GRANTS: frozenset[tuple[str, str]] = frozenset(
-    {
-        ("missing", "empty"),
-        ("none", "missing"),
-        ("none", "none"),
-        ("empty", "empty"),
-    }
-)
-# The owner is coerced with ``str(owner or "")``, so "" owns every falsy owner.
-_COERCED_OWNER_GRANTS: frozenset[tuple[str, str]] = frozenset(
-    {
-        ("empty", "missing"),
-        ("empty", "none"),
-        ("empty", "empty"),
-    }
-)
-_EMPTY_STRING_GRANTS: frozenset[tuple[str, str]] = frozenset({("empty", "empty")})
-
-_KNOWN_FALSY_GRANTS: dict[str, frozenset[tuple[str, str]]] = {
-    "user_can_access_agent_from_doc": _COERCED_OWNER_GRANTS,
-    "user_can_access_skill": _GET_EQUALITY_GRANTS,
-    "user_can_access_custom_entity": _GET_EQUALITY_GRANTS,
-    "custom_entity._user_can_view": _GET_EQUALITY_GRANTS,
-    "custom_entity._build_visibility_filter": _EMPTY_DEFAULT_GRANTS,
-    "skill_routes._user_can_access_skill": _GET_EQUALITY_GRANTS,
-    "skill_routes._user_can_modify_skill": _GET_EQUALITY_GRANTS,
-    "agent_routes._filter_agents_by_access": _SUBSCRIPT_EQUALITY_GRANTS,
-    "user_can_access_agent": _GET_EQUALITY_GRANTS,
-    "validate_user_can_bind_resource[agent]": _GET_EQUALITY_GRANTS,
-    "validate_user_can_bind_resource[skill]": _GET_EQUALITY_GRANTS,
-    "SkillService.list_skills_for_user": _EMPTY_DEFAULT_GRANTS,
-    "agent_batch_item_processor._authorize": _EMPTY_STRING_GRANTS,
-    "agent_routes.toggle_agent": _GET_EQUALITY_GRANTS,
-    "agent_routes.get_agent_batch_job": _EMPTY_STRING_GRANTS,
-    "agent_routes.pull_agent_card": _SUBSCRIPT_EQUALITY_GRANTS,
-    "agent_routes.update_agent": _SUBSCRIPT_EQUALITY_GRANTS,
-    "agent_routes.patch_agent": _SUBSCRIPT_EQUALITY_GRANTS,
-    "agent_routes.delete_agent": _SUBSCRIPT_EQUALITY_GRANTS,
-    "server_routes.edit_server_submit": _GET_EQUALITY_GRANTS,
-    "server_routes.register_service_api": _GET_EQUALITY_GRANTS,
-    "server_routes.update_server_auth_credential": _GET_EQUALITY_GRANTS,
-    "server_routes.get_server_oauth_config": _GET_EQUALITY_GRANTS,
-    "server_routes.put_server_oauth_config": _GET_EQUALITY_GRANTS,
-    "server_routes.get_server_oauth_discovery": _GET_EQUALITY_GRANTS,
-    "server_routes.put_server_oauth_discovery": _GET_EQUALITY_GRANTS,
-    "server_routes.delete_server_oauth_discovery": _GET_EQUALITY_GRANTS,
-    "server_routes.remove_service_api": _GET_EQUALITY_GRANTS,
-    "server_routes.remove_server_version": _GET_EQUALITY_GRANTS,
-    "server_routes.set_default_version": _GET_EQUALITY_GRANTS,
-    "server_routes.update_server_endpoint": _SUBSCRIPT_EQUALITY_GRANTS,
-    "server_routes.patch_server_endpoint": _SUBSCRIPT_EQUALITY_GRANTS,
-    "egress_oauth_facade_routes.egress_connect": _GET_EQUALITY_GRANTS,
-}
-
-
-def _known_defect_reason(
-    predicate: _Predicate,
-) -> str:
-    """Build the xfail reason for a predicate that grants a falsy username.
-
-    Args:
-        predicate: The failing predicate.
-
-    Returns:
-        The reason string.
-    """
-    return (
-        f"Known defect: {predicate.name} ({predicate.location}) decides ownership by "
-        f"plain equality, so a falsy username owns a record whose owner field is also falsy."
-    )
-
 
 def _falsy_cases() -> list[Any]:
-    """Enumerate predicate x falsy username x owner, marking known grants.
+    """Enumerate predicate x falsy username x owner.
 
     Returns:
         The pytest params.
     """
     cases = []
     for predicate in _PREDICATES:
-        known = _KNOWN_FALSY_GRANTS.get(predicate.name, frozenset())
         for username in predicate.usernames:
             for owner in predicate.owners:
-                pair = (_label(username), _label(owner))
-                marks = (
-                    [
-                        pytest.mark.xfail(
-                            strict=True,
-                            raises=AssertionError,
-                            reason=_known_defect_reason(predicate),
-                        )
-                    ]
-                    if pair in known
-                    else []
-                )
                 cases.append(
                     pytest.param(
                         predicate.name,
                         username,
                         owner,
-                        id=f"{predicate.name}-user={pair[0]}-owner={pair[1]}",
-                        marks=marks,
+                        id=f"{predicate.name}-user={_label(username)}-owner={_label(owner)}",
                     )
                 )
     return cases
 
 
 def _pure_cases() -> list[Any]:
-    """Enumerate the pure helpers, marking those with a known falsy grant.
+    """Enumerate the pure helpers.
 
     Returns:
         The pytest params.
     """
-    cases = []
-    for predicate in _PREDICATES:
-        if not predicate.pure:
-            continue
-        marks = (
-            [
-                pytest.mark.xfail(
-                    strict=True,
-                    raises=AssertionError,
-                    reason=_known_defect_reason(predicate),
-                )
-            ]
-            if _KNOWN_FALSY_GRANTS.get(predicate.name)
-            else []
-        )
-        cases.append(pytest.param(predicate.name, id=predicate.name, marks=marks))
-    return cases
+    return [
+        pytest.param(predicate.name, id=predicate.name)
+        for predicate in _PREDICATES
+        if predicate.pure
+    ]
 
 
 @pytest.mark.parametrize("name", [predicate.name for predicate in _PREDICATES])

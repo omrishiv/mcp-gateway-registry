@@ -86,16 +86,6 @@ STATEFUL_SETTINGS = settings(
     report_multiple_bugs=False,
 )
 
-FINDING_15_REASON = (
-    "Known defect: peer sync and peer removal select records by the /<peer_id>/ "
-    "path prefix, so a local record under that prefix is overwritten by sync and "
-    "deleted with the peer."
-)
-FINDING_14_REASON = (
-    "Known defect: peer sync stores the registered_by value chosen by the peer, "
-    "so a peer can name a local user as owner of a synced item."
-)
-
 
 class _InMemoryServerService:
     """In-memory stand-in for ``server_service`` that records every mutation.
@@ -377,7 +367,6 @@ class FederationIngestMachine(RuleBasedStateMachine):
 
 
 @pytest.mark.unit
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=FINDING_15_REASON)
 def test_federation_ingest_state_machine() -> None:
     """Property: peer sync and removal never change or delete local records."""
     run_state_machine_as_test(FederationIngestMachine, settings=STATEFUL_SETTINGS)
@@ -414,7 +403,6 @@ def test_federation_ingest_state_machine() -> None:
             "peer-a",
             [{"path": "/x", "server_name": "alpha"}],
             id="sync-overwrites-local-under-prefix",
-            marks=pytest.mark.xfail(strict=True, raises=AssertionError, reason=FINDING_15_REASON),
         ),
         pytest.param(
             "/peer-b/y",
@@ -422,7 +410,6 @@ def test_federation_ingest_state_machine() -> None:
             "peer-b",
             [],
             id="remove-deletes-local-under-prefix",
-            marks=pytest.mark.xfail(strict=True, raises=AssertionError, reason=FINDING_15_REASON),
         ),
     ],
 )
@@ -448,7 +435,6 @@ def test_local_record_survives_peer_action(
 
 
 @pytest.mark.unit
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=FINDING_14_REASON)
 @PROPERTY_SETTINGS
 @given(peer_owner=st.from_regex(r"[a-z]{3,10}", fullmatch=True))
 @example(peer_owner="alice")
@@ -469,7 +455,6 @@ def test_synced_server_owner_not_chosen_by_peer(
 
 
 @pytest.mark.unit
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=FINDING_14_REASON)
 @PROPERTY_SETTINGS
 @given(peer_owner=st.from_regex(r"[a-z]{3,10}", fullmatch=True))
 @example(peer_owner="alice")
@@ -692,7 +677,6 @@ class FederationAgentIngestMachine(RuleBasedStateMachine):
 
 
 @pytest.mark.unit
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=FINDING_15_REASON)
 def test_federation_agent_ingest_state_machine() -> None:
     """Property: peer agent sync and removal never change or delete local agents."""
     run_state_machine_as_test(FederationAgentIngestMachine, settings=STATEFUL_SETTINGS)
@@ -711,7 +695,6 @@ def test_federation_agent_ingest_state_machine() -> None:
             "peer-a",
             "/x",
             id="sync-overwrites-local-under-prefix",
-            marks=pytest.mark.xfail(strict=True, raises=AssertionError, reason=FINDING_15_REASON),
         ),
         pytest.param(
             "/peer-b/y",
@@ -719,7 +702,6 @@ def test_federation_agent_ingest_state_machine() -> None:
             "peer-b",
             None,
             id="remove-deletes-local-under-prefix",
-            marks=pytest.mark.xfail(strict=True, raises=AssertionError, reason=FINDING_15_REASON),
         ),
     ],
 )

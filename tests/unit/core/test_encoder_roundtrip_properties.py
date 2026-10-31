@@ -90,15 +90,6 @@ _COLON_PATHS = [
     pytest.param("/x:", id="trailing-colon"),
 ]
 
-_COLON_XFAIL = pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "Known defect: only the Pydantic path regex bans ':', so the service-level "
-        "registration path persists a server path shaped like a version document id."
-    ),
-)
-
 
 def _decode_location_suffix(
     encoded: str,
@@ -292,10 +283,7 @@ class TestVersionIdComposition:
 class TestServerPathRejectsVersionSeparator:
     """A server path can never carry the ':' that delimits version ids."""
 
-    @pytest.mark.parametrize(
-        "path",
-        [pytest.param(p.values[0], id=p.id, marks=_COLON_XFAIL) for p in _COLON_PATHS],
-    )
+    @pytest.mark.parametrize("path", _COLON_PATHS)
     def test_register_server_never_persists_colon_path(self, path):
         """Property: ServerService.register_server never creates a path containing ':'."""
         repo = _register_and_capture_create(path)
