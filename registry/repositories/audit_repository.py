@@ -137,6 +137,25 @@ class AuditRepositoryBase(ABC):
         """
         pass
 
+    @abstractmethod
+    async def update_outcome(
+        self,
+        record: RegistryApiAccessRecord,
+    ) -> bool:
+        """
+        Record the outcome of a request on its previously inserted audit record.
+
+        Replaces the outcome fields (identity, response, action, authorization)
+        of the record with the same (request_id, log_type) key. Never inserts.
+
+        Args:
+            record: The completed audit record
+
+        Returns:
+            True if exactly one existing record was updated, False otherwise
+        """
+        pass
+
 
 class DocumentDBAuditRepository(AuditRepositoryBase):
     """
@@ -347,4 +366,33 @@ class DocumentDBAuditRepository(AuditRepositoryBase):
             return True
         except Exception as e:
             logger.error(f"Error inserting audit event: {e}", exc_info=True)
+            return False
+
+    async def update_outcome(
+        self,
+        record: RegistryApiAccessRecord,
+    ) -> bool:
+        """
+        Record the outcome of a request on its previously inserted audit record.
+
+        Args:
+            record: The completed audit record
+
+        Returns:
+            True if exactly one existing record was updated, False if no record
+            matched the (request_id, log_type) key or the update failed.
+        """
+        try:
+            collection = await self._get_collection()
+            doc = record.model_dump(
+                mode="json",
+                include={"identity", "response", "action", "authorization"},
+            )
+            result = await collection.update_one(
+                {"request_id": record.request_id, "log_type": record.log_type},
+                {"$set": doc},
+            )
+            return result.matched_count == 1
+        except Exception as e:
+            logger.error(f"Error updating audit event outcome: {e}", exc_info=True)
             return False

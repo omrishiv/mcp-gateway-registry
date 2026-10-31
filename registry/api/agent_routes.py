@@ -34,6 +34,7 @@ from ..audit.request_id import sanitize_correlation_id
 from ..auth.asset_permissions import user_has_asset_permission
 from ..auth.csrf import verify_csrf_token_flexible
 from ..auth.dependencies import nginx_proxied_auth
+from ..auth.ownership import is_owner, legacy_owner_id_claim, user_owner_id
 from ..auth.resource_binding import normalize_request_path
 from ..common.log_redaction import redact_headers, redact_mapping, redact_url
 from ..core.config import settings
@@ -1041,7 +1042,7 @@ def _filter_agents_by_access(
     """
     accessible = []
     user_groups = set(user_context.get("groups", []))
-    username = user_context["username"]
+    username = user_context.get("username")
     is_admin = user_context.get("is_admin", False)
 
     # Get accessible agents from user context (UI-Scopes)
@@ -1065,7 +1066,7 @@ def _filter_agents_by_access(
             continue
 
         if agent.visibility == "private":
-            if agent.registered_by == username:
+            if is_owner(agent, user_context):
                 accessible.append(agent)
             continue
 
@@ -1284,6 +1285,7 @@ async def register_agent(
             trust_level=request.trust_level,
             supported_protocol=request.supported_protocol,
             registered_by=user_context["username"],
+            owner_id=user_owner_id(user_context),
             source_created_at=source_created_dt,
             source_updated_at=source_updated_dt,
             external_tags=external_tag_list,
@@ -1867,7 +1869,7 @@ async def toggle_agent(
     # accessible_agents, or be its owner).
     if not user_context.get("is_admin", False):
         accessible_agents = user_context.get("accessible_agents", [])
-        owns_agent = agent_card.registered_by == user_context.get("username")
+        owns_agent = is_owner(agent_card, user_context)
         if "all" not in accessible_agents and path not in accessible_agents and not owns_agent:
             logger.warning(
                 f"User {user_context.get('username')} attempted to toggle agent "
@@ -2117,6 +2119,7 @@ async def submit_agent_batch(
         job, replayed = await agent_batch_service.submit(
             body,
             submitted_by=user_context["username"],
+            owner_id=user_owner_id(user_context),
             submitted_body_hash=_hash_items(body.items),
             submitter_is_admin=user_context.get("is_admin", False),
             submitter_ui_permissions=user_context.get("ui_permissions", {}),
@@ -2146,7 +2149,9 @@ async def get_agent_batch_job(
     job = await agent_batch_service.get(job_id)
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="job not found")
-    if not user_context.get("is_admin", False) and job.submitted_by != user_context["username"]:
+    if not user_context.get("is_admin", False) and not is_owner(
+        job, user_context, legacy_field="submitted_by"
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only view batch jobs you submitted",
@@ -2214,7 +2219,7 @@ async def pull_agent_card(
     # 2. Check permissions (modify_service + owner or admin)
     _check_agent_permission("modify", existing_agent.name, user_context)
 
-    if not user_context["is_admin"] and existing_agent.registered_by != user_context["username"]:
+    if not user_context["is_admin"] and not is_owner(existing_agent, user_context):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only pull card updates for agents you registered",
@@ -2336,6 +2341,13 @@ async def pull_agent_card(
             # URL. Validate before persisting it under the backend field.
             validate_agent_url(str(updates["url"]))
             updates["proxy_pass_url"] = updates.pop("url")
+    if not dry_run:
+        # Trust on first use: the owner applying a pull binds a legacy record.
+        owner_id_claim = legacy_owner_id_claim(
+            existing_agent, user_context, kind="agent", path=path
+        )
+        if owner_id_claim:
+            updates["owner_id"] = owner_id_claim
 
     # 9. Persist. In dry-run mode this is just the health side-effect; in apply
     #    mode it is health + A2A fields in one call.
@@ -2512,9 +2524,9 @@ async def update_agent(
 
     _check_agent_permission("modify", existing_agent.name, user_context)
 
-    if not user_context["is_admin"] and existing_agent.registered_by != user_context["username"]:
+    if not user_context["is_admin"] and not is_owner(existing_agent, user_context):
         logger.warning(
-            f"User {user_context['username']} attempted to update agent {path} "
+            f"User {user_context.get('username')} attempted to update agent {path} "
             f"owned by {existing_agent.registered_by}"
         )
         raise HTTPException(
@@ -2561,6 +2573,9 @@ async def update_agent(
             is_proxied=request.is_proxied,
             proxy_target_url=request.proxy_target_url,
             registered_by=existing_agent.registered_by,
+            # Trust on first use: the owner's write binds a legacy record.
+            owner_id=existing_agent.owner_id
+            or legacy_owner_id_claim(existing_agent, user_context, kind="agent", path=path),
             registered_at=existing_agent.registered_at,
             is_enabled=existing_agent.is_enabled,
             num_stars=existing_agent.num_stars,
@@ -2720,9 +2735,9 @@ async def patch_agent(
 
     # Authorization (parity with PUT)
     _check_agent_permission("modify", existing_agent.name, user_context)
-    if not user_context["is_admin"] and existing_agent.registered_by != user_context["username"]:
+    if not user_context["is_admin"] and not is_owner(existing_agent, user_context):
         logger.warning(
-            f"User {user_context['username']} attempted to patch agent {path} "
+            f"User {user_context.get('username')} attempted to patch agent {path} "
             f"owned by {existing_agent.registered_by}"
         )
         raise HTTPException(
@@ -2769,6 +2784,10 @@ async def patch_agent(
     # Defence in depth: re-pin server-managed fields from the existing card.
     for field in REGISTRANT_ONLY_FIELDS:
         setattr(merged_agent, field, getattr(existing_agent, field))
+    # Trust on first use: the owner's write binds a legacy record.
+    owner_id_claim = legacy_owner_id_claim(existing_agent, user_context, kind="agent", path=path)
+    if owner_id_claim:
+        merged_agent.owner_id = owner_id_claim
 
     # Lifecycle status change requires change_lifecycle_status (Issue #1330).
     _check_agent_lifecycle_status_permission(existing_agent, merged_agent, user_context)
@@ -2912,12 +2931,9 @@ async def delete_agent(
     # (skipped for admins) supplies the AND-owner half.
     _check_agent_permission("delete", existing_agent.name, user_context)
 
-    if (
-        not user_context.get("is_admin", False)
-        and existing_agent.registered_by != user_context["username"]
-    ):
+    if not user_context.get("is_admin", False) and not is_owner(existing_agent, user_context):
         logger.warning(
-            f"User {user_context['username']} attempted to delete agent {path} "
+            f"User {user_context.get('username')} attempted to delete agent {path} "
             f"owned by {existing_agent.registered_by}"
         )
         raise HTTPException(

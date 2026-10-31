@@ -36,6 +36,7 @@ def admin_user_context() -> dict[str, Any]:
     """Create admin user context."""
     return {
         "username": "admin",
+        "owner_id": "idp|admin",
         "is_admin": True,
         "groups": ["mcp-registry-admin"],
         "scopes": ["mcp-servers-unrestricted/read", "mcp-servers-unrestricted/execute"],
@@ -59,6 +60,7 @@ def regular_user_context() -> dict[str, Any]:
     """Create regular (non-admin) user context."""
     return {
         "username": "testuser",
+        "owner_id": "idp|testuser",
         "is_admin": False,
         "groups": ["test-group"],
         "scopes": ["test-server/read"],
@@ -3440,11 +3442,19 @@ class TestServersGroupsAdminGate:
         test_client_admin,
     ):
         """Admin import reaches the service layer (no 403)."""
-        with patch(
-            "registry.services.scope_service.import_group",
-            new_callable=AsyncMock,
-            return_value=True,
-        ) as mock_import:
+        # The last-admin guard is covered by
+        # tests/unit/services/test_admin_lifecycle_state_machine.py.
+        with (
+            patch(
+                "registry.services.scope_service.import_group",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_import,
+            patch(
+                "registry.services.admin_safety.assert_scope_change_keeps_an_admin",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
             response = test_client_admin.post(
                 "/api/servers/groups/import",
                 json={"scope_name": "legit-group", "create_in_idp": False},

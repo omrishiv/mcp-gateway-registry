@@ -2,9 +2,11 @@
 
 import json
 import logging
+from typing import Any
 
 from dependencies import get_db_manager, get_registry_client, get_remote_agent_cache
 from strands import Agent, tool
+from tool_guard import MutatingToolGuard
 
 logging.basicConfig(
     level=logging.INFO,
@@ -183,7 +185,7 @@ async def discover_remote_agents(query: str, max_results: int = 5) -> str:
         # gateway: the registry/gateway token is sent in X-Authorization (which
         # the gateway validates for the invoke_agent scope and then STRIPS before
         # proxying, so it never reaches the registrant-controlled agent). The
-        # target-agent credential travels separately in Authorization -- the
+        # target-agent credential travels separately in Authorization; the
         # registry token is never placed there. A production deployment supplies a
         # delegation_token_provider that mints an audience-restricted, short-lived
         # token per target agent for the Authorization header.
@@ -325,10 +327,45 @@ TRAVEL_ASSISTANT_TOOLS = [
     invoke_remote_agent,
 ]
 
+# Tools that never change state. discover_remote_agents only searches the registry
+# and fills this process's in-memory cache. create_trip_plan writes the database
+# and invoke_remote_agent sends a message that can make the remote agent act, so
+# both (and any unlisted tool) are mutating and are denied by the guard below.
+_READ_ONLY_TOOLS: frozenset[str] = frozenset(
+    {
+        "search_flights",
+        "check_prices",
+        "get_recommendations",
+        "discover_remote_agents",
+        "view_cached_remote_agents",
+    }
+)
+
+
+def is_read_only_tool_call(
+    tool_name: str,
+    tool_input: dict[str, Any],
+) -> bool:
+    """Classify a model-emitted tool call as read-only (True) or mutating (False).
+
+    Args:
+        tool_name: Name of the tool the model called.
+        tool_input: Arguments the model supplied.
+
+    Returns:
+        True only when the call provably cannot change state.
+    """
+    return tool_name in _READ_ONLY_TOOLS
+
+
+# Model-emitted tool calls are untrusted. The guard lets read-only calls run and
+# denies every mutating call: an A2A server has no human confirmation channel.
+# AGENT_ALLOW_MUTATING_TOOLS=true is the operator opt-in.
 strands_agent = Agent(
     name="Travel Assistant Agent",
     description="Flight search and trip planning agent with dynamic agent discovery",
     tools=TRAVEL_ASSISTANT_TOOLS,
+    hooks=[MutatingToolGuard(is_read_only=is_read_only_tool_call)],
     callback_handler=None,
     model="global.anthropic.claude-sonnet-4-5-20250929-v1:0",
 )

@@ -11,7 +11,7 @@ from ...auth.privileged_constants import (
     ADMIN_ACTION_PREFIXES,
     PRIVILEGED_GRANTS,
     PRIVILEGED_SCOPE_NAMES,
-    is_admin_conferring_action,
+    grant_confers_admin,
 )
 from ..interfaces import ScopeRepositoryBase
 from .client import get_collection_name, get_documentdb_client
@@ -22,15 +22,18 @@ _GUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
 
-# Last-line-of-defense reject set for server-scope writes. A server_path that
-# normalizes to one of these collides with the cross-server wildcard sentinel
-# and would grant access to every server. The registration guard
+# Last-line-of-defense reject set for server-scope writes. "*" is the
+# cross-server wildcard sentinel (a server_path normalizing to it would grant
+# access to every server); "all" stays reserved so no server can carry a name
+# operators may read as a wildcard, although neither the resolver nor the
+# gateway treats `server: "all"` as one. The registration guard
 # registry.utils.validate_server_path already rejects these paths; this mirror
-# ensures a caller that bypasses that guard still cannot inject a wildcard row.
+# ensures a caller that bypasses that guard still cannot inject such a row.
 #
 # MUST stay in sync with registry.utils.url_guard._RESERVED_SERVER_PATH_NAMES
-# and registry.auth.access_resolver._WILDCARD_VALUES. Mirrored locally rather
-# than imported to keep this repository layer independent of the util layer.
+# and contain registry.auth.access_resolver.CROSS_SERVER_WILDCARD. Mirrored
+# locally rather than imported to keep this repository layer independent of
+# the util layer.
 _RESERVED_SERVER_PATH_NAMES: frozenset[str] = frozenset({"all", "*"})
 
 
@@ -69,6 +72,8 @@ def _grants_admin(
     drift), so a group carrying genuinely-admin permissions promotes its members
     to admin.
 
+    Only a list grant holding the element "all" counts (``grant_confers_admin``).
+
     Args:
         ui_permissions: Dict mapping UI actions to lists of allowed resources.
 
@@ -77,10 +82,7 @@ def _grants_admin(
     """
     if not ui_permissions:
         return False
-    for action, resources in ui_permissions.items():
-        if is_admin_conferring_action(action) and (_PRIVILEGED_GRANTS & set(resources or [])):
-            return True
-    return False
+    return any(grant_confers_admin(a, r) for a, r in ui_permissions.items())
 
 
 def _is_privileged_write(
@@ -156,8 +158,9 @@ def _server_access_has_invalid_server_rule(
     :func:`registry.utils.validate_server_path` would have rejected at
     registration. Two cases are refused, mirroring that guard:
 
-    1. ``server: "all"`` / ``server: "*"`` -- the resolver promotes these to a
-       cross-server wildcard, granting access to every server.
+    1. ``server: "all"`` / ``server: "*"``: reserved names. "*" is the
+       resolver's cross-server wildcard, granting access to every server, and
+       "all" is kept reserved alongside it.
     2. ``server: ""`` (or slashes-only) -- grants no access in the resolver, but
        the same path renders as a gateway-wide ``location /`` nginx block
        (issue #1501); reject it so this mirror stays in sync with the guard.
@@ -176,10 +179,7 @@ def _server_access_has_invalid_server_rule(
     for rule in _flatten_server_access(server_access or []):
         if not isinstance(rule, dict) or "server" not in rule:
             continue
-        # Coerce with str() exactly as the resolver does
-        # (access_resolver.py: `str(server_name) in _WILDCARD_VALUES`) so the
-        # scan cannot be blind to a non-string value the resolver would still
-        # promote to a wildcard.
+        # Coerce with str() so the scan cannot be blind to a non-string value.
         normalized = str(rule.get("server") or "").strip("/").lower()
         if not normalized or normalized in _RESERVED_SERVER_PATH_NAMES:
             return True

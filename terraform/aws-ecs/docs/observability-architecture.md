@@ -416,9 +416,12 @@ Configurable via the `HISTOGRAM_BUCKET_BOUNDARIES` environment variable on the m
 ### IAM Roles
 
 **metrics-service Task Role**:
-- `SecretsManagerAccess` -- read metrics API key
-- `EcsExecTask` -- ECS Exec for debugging
-- `AMPRemoteWrite` -- ADOT sidecar writes to AMP
+- `EcsExecTask`: ECS Exec for debugging
+- `AMPRemoteWrite`: ADOT sidecar writes to AMP (`aps:RemoteWrite` only)
+
+The metrics API key reaches the container through the task execution role
+(`SecretsManagerAccess` there, via the task definition `secrets` block), so the
+task role holds no Secrets Manager or KMS permissions.
 
 **Grafana Task Role**:
 ```json

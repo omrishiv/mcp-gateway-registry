@@ -63,13 +63,15 @@ def _validate_agent_url(
     if not (url_str.startswith("http://") or url_str.startswith("https://")):
         return False
 
+    # Path: no whitespace, no C0 control characters, no DEL. ``\Z`` (not ``$``)
+    # so a trailing newline cannot slip past the anchor.
     url_pattern = (
         r"^https?://([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*"
         r"[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?"
-        r"(:\d+)?(/[^\s]*)?$"
+        r"(:\d+)?(/[^\s\x00-\x1f\x7f]*)?\Z"
     )
 
-    return bool(re.match(url_pattern, url_str))
+    return re.match(url_pattern, url_str) is not None
 
 
 def _validate_skills(

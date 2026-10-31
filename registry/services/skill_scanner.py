@@ -19,7 +19,12 @@ from ..core.config import settings
 from ..repositories.factory import get_skill_security_scan_repository
 from ..schemas.skill_security import SkillSecurityScanConfig, SkillSecurityScanResult
 from .scanner_llm_analyzer import (
+    _requests_llm_analyzer,
     ensure_llm_analyzer_available,
+)
+from .scanner_verdict import (
+    classify_severity,
+    result_document_allows_safe,
 )
 
 logger = logging.getLogger(__name__)
@@ -201,10 +206,13 @@ class SkillScannerService:
 
             # Add optional analyzer flags based on config
             config = self.get_scan_config()
-            analyzer_list = [a.strip() for a in analyzers.split(",")]
+            # Match analyzer names the same way ensure_llm_analyzer_available
+            # does (trimmed, case-insensitive), so a scan that passed the LLM
+            # availability check for "LLM" also runs the LLM analyzer.
+            analyzer_list = [a.strip().lower() for a in analyzers.split(",")]
             if "behavioral" in analyzer_list:
                 cmd.append("--use-behavioral")
-            if "llm" in analyzer_list:
+            if _requests_llm_analyzer(analyzers):
                 cmd.append("--use-llm")
             if "virustotal" in analyzer_list:
                 cmd.append("--use-virustotal")
@@ -286,6 +294,10 @@ class SkillScannerService:
 
         Returns:
             Dict with analysis_results organized by analyzer and raw scan_results
+
+        Raises:
+            ValueError: If the output is not a JSON object, its findings are
+                not a list, or a finding is not an object
         """
         # Remove ANSI codes
         ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
@@ -293,6 +305,8 @@ class SkillScannerService:
 
         # Parse JSON
         scan_results = json.loads(clean_stdout)
+        if not isinstance(scan_results, dict):
+            raise ValueError("Skill scanner output is not a JSON object")
 
         # Organize into standard format
         raw_output = {
@@ -300,9 +314,14 @@ class SkillScannerService:
             "scan_results": scan_results,
         }
 
-        # Extract findings by analyzer
+        # Extract findings by analyzer. A result the scanner never prints is a
+        # failed scan, not a clean one.
         findings = scan_results.get("findings", [])
+        if not isinstance(findings, list):
+            raise ValueError("Skill scanner findings are not a list")
         for finding in findings:
+            if not isinstance(finding, dict):
+                raise ValueError("Skill scanner finding is not a JSON object")
             analyzer = finding.get("analyzer", "unknown")
             if analyzer not in raw_output["analysis_results"]:
                 raw_output["analysis_results"][analyzer] = {"findings": []}
@@ -313,6 +332,11 @@ class SkillScannerService:
     def _analyze_scan_results(self, raw_output: dict) -> tuple[bool, int, int, int, int]:
         """
         Analyze scan results and extract severity counts.
+
+        The verdict fails closed: it is safe only when no critical or high
+        finding was counted and the scanner's result document classifies as
+        safe (every finding has a known severity below high and nothing reports
+        is_safe false). A missing or malformed result document is unsafe.
 
         Args:
             raw_output: Parsed scanner output dict
@@ -326,7 +350,9 @@ class SkillScannerService:
         for analyzer_data in analysis_results.values():
             if isinstance(analyzer_data, dict):
                 for finding in analyzer_data.get("findings", []):
-                    severity = finding.get("severity", "").lower()
+                    if not isinstance(finding, dict):
+                        continue
+                    severity = classify_severity(finding.get("severity"))
                     if severity == "critical":
                         critical += 1
                     elif severity == "high":
@@ -336,7 +362,11 @@ class SkillScannerService:
                     elif severity == "low":
                         low += 1
 
-        is_safe = critical == 0 and high == 0
+        is_safe = (
+            critical == 0
+            and high == 0
+            and result_document_allows_safe(raw_output.get("scan_results"))
+        )
 
         logger.info(
             f"Skill security analysis: Critical={critical}, High={high}, Medium={medium}, Low={low}"

@@ -81,7 +81,8 @@ def verify_registry_ui_token(token: str) -> dict:
 
     Returns:
         The verified claims: ``sub``, ``session_id``, ``groups``, ``auth_method``,
-        ``client_id`` (plus standard JWT claims).
+        ``client_id``, optionally ``token_scopes`` (the scopes a narrowed token was
+        requested for; None or absent means not narrowed), plus standard JWT claims.
 
     Raises:
         HTTPException: 500 if ``SECRET_KEY`` is unset (configuration error); 401 on

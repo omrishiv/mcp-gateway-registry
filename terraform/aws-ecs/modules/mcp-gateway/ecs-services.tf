@@ -54,9 +54,10 @@ module "ecs_service_auth" {
   }
   create_tasks_iam_role = true
   tasks_iam_role_policies = merge(
+    # No ecs_secrets_access here: platform secrets reach the container through
+    # the task execution role (secrets valueFrom); the app never reads them.
     {
-      SecretsManagerAccess = aws_iam_policy.ecs_secrets_access.arn
-      EcsExecTask          = aws_iam_policy.ecs_exec_task.arn
+      EcsExecTask = aws_iam_policy.ecs_exec_task.arn
     },
     var.enable_observability ? {
       AMPRemoteWrite = aws_iam_policy.adot_amp_write[0].arn
@@ -930,9 +931,10 @@ module "ecs_service_registry" {
   }
   create_tasks_iam_role = true
   tasks_iam_role_policies = merge(
+    # No ecs_secrets_access here: platform secrets reach the container through
+    # the task execution role (secrets valueFrom); the app never reads them.
     {
-      SecretsManagerAccess = aws_iam_policy.ecs_secrets_access.arn
-      EcsExecTask          = aws_iam_policy.ecs_exec_task.arn
+      EcsExecTask = aws_iam_policy.ecs_exec_task.arn
     },
     var.aws_registry_federation_enabled ? {
       BedrockAgentCoreAccess = aws_iam_policy.bedrock_agentcore_access[0].arn
@@ -2546,9 +2548,10 @@ module "ecs_service_mcpgw" {
   }
   create_tasks_iam_role = true
   tasks_iam_role_policies = merge(
+    # No ecs_secrets_access here: platform secrets reach the container through
+    # the task execution role (secrets valueFrom); the app never reads them.
     {
-      SecretsManagerAccess = aws_iam_policy.ecs_secrets_access.arn
-      EcsExecTask          = aws_iam_policy.ecs_exec_task.arn
+      EcsExecTask = aws_iam_policy.ecs_exec_task.arn
     },
     # Issue #1122: per-task ADOT sidecar needs AMP remote-write permission
     var.enable_observability ? {

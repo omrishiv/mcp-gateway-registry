@@ -64,6 +64,13 @@ def _server(**over):
     return base
 
 
+def _with_live_session(c, monkeypatch, user_context):
+    """Make the callback (which resolves the cookie itself) see a live session."""
+    c.cookies.set(routes.settings.session_cookie_name, "live-session")
+    monkeypatch.setattr(routes, "nginx_proxied_auth", AsyncMock(return_value=user_context))
+    return c
+
+
 @pytest.mark.unit
 class TestConfigure:
     def test_configure_admin_ok_secret_stripped(self, client, monkeypatch):
@@ -223,7 +230,7 @@ class TestCallback:
         svc.handle_callback = AsyncMock(
             return_value=EgressConnection(provider="github", server_path="/github-mcp")
         )
-        c = client(USER, server=_server(), svc=svc)
+        c = _with_live_session(client(USER, server=_server(), svc=svc), monkeypatch, USER)
         r = c.get("/api/oauth2/egress/callback", params={"code": "the-code", "state": blob})
         assert r.status_code == 200
         assert "Connected github" in r.text
@@ -254,7 +261,7 @@ class TestCallback:
         )
         svc = AsyncMock()
         svc.handle_callback = AsyncMock(side_effect=SecretStoreError("vault write failed"))
-        c = client(USER, server=_server(), svc=svc)
+        c = _with_live_session(client(USER, server=_server(), svc=svc), monkeypatch, USER)
         r = c.get("/api/oauth2/egress/callback", params={"code": "the-code", "state": blob})
         assert r.status_code == 503
         assert "Connection not saved" in r.text
@@ -286,7 +293,7 @@ class TestCallback:
         svc.handle_callback = AsyncMock(
             return_value=EgressConnection(provider="<b>github</b>", server_path=evil_path)
         )
-        c = client(USER, server=_server(), svc=svc)
+        c = _with_live_session(client(USER, server=_server(), svc=svc), monkeypatch, USER)
         r = c.get("/api/oauth2/egress/callback", params={"code": "the-code", "state": blob})
         assert r.status_code == 200
         # The raw script-bearing markup must NOT appear; the escaped form must.

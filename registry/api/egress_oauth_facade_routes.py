@@ -34,6 +34,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from registry.auth.dependencies import nginx_proxied_auth
+from registry.auth.ownership import is_owner
 from registry.core.config import settings
 from registry.egress_auth import as_facade
 from registry.egress_auth.factory import get_egress_auth_service
@@ -217,8 +218,7 @@ async def egress_connect(
     # Discovery connect is a backend-admin operation: only the server owner or an
     # admin may vault a token the registry will borrow for its own discovery.
     if purpose == "discovery" and not (
-        user_context.get("is_admin")
-        or (server_info or {}).get("registered_by") == user_context.get("username")
+        user_context.get("is_admin") or is_owner(server_info or {}, user_context)
     ):
         return JSONResponse(
             {"error": "access_denied", "error_description": "owner or admin only"},

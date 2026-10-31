@@ -421,13 +421,23 @@ class TestValidateUserCanBindResource:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_server_wildcard_all_allows(self) -> None:
+    async def test_server_wildcard_star_allows(self) -> None:
+        result = await resource_binding.validate_user_can_bind_resource(
+            resource_type="server",
+            resource_id="/anything",
+            user_context={"accessible_servers": ["*"]},
+        )
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_server_all_is_not_a_wildcard(self) -> None:
+        """A literal 'all' server grant does not reach other servers (gateway honours only '*')."""
         result = await resource_binding.validate_user_can_bind_resource(
             resource_type="server",
             resource_id="/anything",
             user_context={"accessible_servers": ["all"]},
         )
-        assert result is True
+        assert result is False
 
     @pytest.mark.asyncio
     async def test_virtual_server_checked_against_ui_permission(self) -> None:
@@ -465,10 +475,9 @@ class TestValidateUserCanBindResource:
     @pytest.mark.parametrize("wildcard", ["all", "*"])
     async def test_wildcard_access_consistent_across_types(self, wildcard: str) -> None:
         """Different scope/permission stores have used both ``"all"`` and
-        ``"*"`` as the "no restriction" sentinel. All three resource
-        types must accept both to avoid denials when one config
-        format happens to be used in one place."""
-        server_ctx = {"is_admin": False, "accessible_servers": [wildcard]}
+        ``"*"`` as the "no restriction" sentinel. The UI-permission lists
+        (virtual servers, agents) accept both; accessible_servers accepts only
+        ``"*"`` (covered by the server tests above)."""
         virtual_ctx = {
             "is_admin": False,
             "ui_permissions": {"list_virtual_server": [wildcard]},
@@ -479,10 +488,6 @@ class TestValidateUserCanBindResource:
             "username": "me",
             "groups": [],
         }
-        assert (
-            await resource_binding.validate_user_can_bind_resource("server", "anything", server_ctx)
-            is True
-        )
         assert (
             await resource_binding.validate_user_can_bind_resource(
                 "virtual_server", "virtual/anything", virtual_ctx
@@ -577,6 +582,7 @@ class TestValidateUserCanBindResource:
         fake_skill = MagicMock()
         fake_skill.visibility = VisibilityEnum.PRIVATE
         fake_skill.owner = "owner-user"
+        fake_skill.owner_id = "idp|owner-user"
         fake_skill.allowed_groups = []
         fake_service = MagicMock()
         fake_service.get_skill = AsyncMock(return_value=fake_skill)
@@ -584,8 +590,19 @@ class TestValidateUserCanBindResource:
             "registry.services.skill_service.get_skill_service",
             return_value=fake_service,
         ):
-            owner_ctx = {"is_admin": False, "username": "owner-user", "groups": []}
-            stranger_ctx = {"is_admin": False, "username": "stranger", "groups": []}
+            owner_ctx = {
+                "is_admin": False,
+                "username": "owner-user",
+                "owner_id": "idp|owner-user",
+                "groups": [],
+            }
+            # Same username, different owner_id: a username collision owns nothing.
+            stranger_ctx = {
+                "is_admin": False,
+                "username": "owner-user",
+                "owner_id": "idp|stranger",
+                "groups": [],
+            }
             assert (
                 await resource_binding.validate_user_can_bind_resource(
                     "skill", "/my-skill", owner_ctx

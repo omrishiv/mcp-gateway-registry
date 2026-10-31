@@ -7,7 +7,7 @@ supporting both github.com and enterprise GitHub instances.
 
 import logging
 import re
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from registry.common.log_redaction import redact_url
 
@@ -256,12 +256,45 @@ def extract_repository_url(
     return f"https://{base_hostname}/{owner}/{repo}"
 
 
+def _encode_resource_path(
+    resource_path: str,
+) -> str:
+    """Percent-encode a relative manifest path one segment at a time.
+
+    Each segment is encoded with no safe characters, so a file name holding
+    '?', '#', '%' or other URL delimiters stays part of the path instead of
+    starting a query or fragment or decoding into a different name. Segments
+    are joined with '/' so the manifest's directory structure is kept.
+
+    Args:
+        resource_path: Path relative to the skill directory, '/'-separated.
+
+    Returns:
+        The encoded relative path.
+
+    Raises:
+        ValueError: If the path is empty, absolute, or has an empty, '.' or '..'
+            segment, any of which could resolve outside the skill directory.
+    """
+    segments = resource_path.split("/")
+    if any(segment in ("", ".", "..") for segment in segments):
+        raise ValueError("resource path must be a relative path inside the skill directory")
+    return "/".join(quote(segment, safe="") for segment in segments)
+
+
 def derive_resource_url(skill_md_url: str, resource_path: str) -> str:
     """Derive a resource URL by replacing the filename in a SKILL.md URL.
 
     Tries platform-specific derivation first (e.g. GitLab API v4), then
-    falls back to simple path replacement.
+    falls back to simple path replacement with each manifest path segment
+    percent-encoded, so the fetched URL names exactly that file under the
+    skill directory.
+
+    Raises:
+        ValueError: If ``resource_path`` could leave the skill directory.
     """
+    encoded_path = _encode_resource_path(resource_path)
+
     try:
         from .gitlab_url_utils import derive_gitlab_resource_url
 
@@ -273,7 +306,7 @@ def derive_resource_url(skill_md_url: str, resource_path: str) -> str:
 
     if "/SKILL.md" in skill_md_url:
         base = skill_md_url.rsplit("/SKILL.md", 1)[0]
-        return f"{base}/{resource_path}"
+        return f"{base}/{encoded_path}"
 
     base = skill_md_url.rsplit("/", 1)[0]
-    return f"{base}/{resource_path}"
+    return f"{base}/{encoded_path}"

@@ -34,6 +34,7 @@ _NON_CREDENTIAL_REGISTRANT_FIELDS = [
     "id",
     "path",
     "registered_by",
+    "owner_id",
     "registered_at",
     "updated_at",
     "is_enabled",
@@ -120,6 +121,7 @@ class TestServerUpdateRequest:
             "id",
             "path",
             "registered_by",
+            "owner_id",
             "registered_at",
             "updated_at",
             "is_enabled",
@@ -356,11 +358,12 @@ class TestSizeCapsAndConstants:
         assert isinstance(SERVER_REGISTRANT_ONLY_FIELDS, frozenset)
 
     def test_registrant_only_fields_contents(self):
-        """The constant contains the expected 20 names from the LLD."""
+        """The constant contains the expected 20 names from the LLD plus owner_id."""
         expected = {
             "id",
             "path",
             "registered_by",
+            "owner_id",
             "registered_at",
             "updated_at",
             "is_enabled",

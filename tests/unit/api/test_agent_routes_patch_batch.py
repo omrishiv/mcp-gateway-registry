@@ -26,6 +26,7 @@ from tests.fixtures.factories import AgentCardFactory
 def user_context() -> dict[str, Any]:
     return {
         "username": "alice",
+        "owner_id": "idp|alice",
         "groups": ["g"],
         "scopes": ["write:agents"],
         "auth_method": "session",

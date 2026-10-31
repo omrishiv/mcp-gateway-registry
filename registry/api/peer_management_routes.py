@@ -25,6 +25,7 @@ from ..schemas.peer_federation_schema import (
     PeerSyncStatus,
     SyncResult,
 )
+from ..services import admin_safety
 from ..services.federation_audit_service import (
     FederationConnectionLog,
     PeerSyncSummary,
@@ -35,14 +36,20 @@ from ..services.peer_federation_service import get_peer_federation_service
 logger = logging.getLogger(__name__)
 
 
+# Federation static token scope accepted besides is_admin.
+_FEDERATION_SCOPES: frozenset[str] = frozenset({"federation/peers"})
+
+
 def _check_peer_management_scope(
     user_context: dict[str, Any],
 ) -> None:
     """Check if user has permission to manage peers.
 
     Allows access for:
-    - Admin users (network-trusted or mcp-registry-admin group)
+    - Admin users (the canonical request-time is_admin decision)
     - Federation-static token users (have federation/peers scope)
+
+    Group names such as mcp-registry-admin are not an admin signal.
 
     Args:
         user_context: User context from auth dependency
@@ -50,19 +57,11 @@ def _check_peer_management_scope(
     Raises:
         HTTPException: 403 if user lacks peer management permission
     """
-    # Admins always have access
-    if user_context.get("is_admin", False):
+    if admin_safety.caller_is_admin(user_context, _FEDERATION_SCOPES):
         return
 
-    # Check for federation/peers scope (federation static token)
     scopes = user_context.get("scopes", [])
-    if "federation/peers" in scopes:
-        return
-
-    # Check for admin group
     groups = user_context.get("groups", [])
-    if "mcp-registry-admin" in groups:
-        return
 
     logger.warning(
         f"User {user_context.get('username')} attempted peer management "

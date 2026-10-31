@@ -11,11 +11,12 @@ Design notes (fail closed):
       request whose token fails signature/issuer/expiry/audience validation is
       rejected. Only an explicit allowlist of unauthenticated paths (health
       probes) is exempt.
-    - If authentication is not configured (no issuer/JWKS reachable), the
-      middleware still denies protected paths rather than falling open. Set
-      ``AGENT_AUTH_DISABLED=true`` to intentionally run without auth in a trusted
-      local sandbox — this is logged loudly and must never be used in a shared or
-      internet-reachable deployment.
+    - If authentication is not configured (no issuer/JWKS reachable, or no
+      expected audience), the middleware still denies protected paths rather
+      than falling open. The audience is always checked; there is no mode that
+      skips it. Set ``AGENT_AUTH_DISABLED=true`` to intentionally run without
+      auth in a trusted local sandbox; this is logged loudly and must never be
+      used in a shared or internet-reachable deployment.
     - Signature verification uses PyJWT's ``PyJWKClient`` against the realm JWKS
       endpoint (keys are cached and rotated by the client), so we never trust
       unverified claims.
@@ -41,7 +42,7 @@ logger = logging.getLogger(__name__)
 # authenticated. The public agent card at /.well-known/agent-card.json is
 # discovery metadata that the A2A spec treats as publicly fetchable (only the
 # authenticated/extended card requires a credential), and the registry's health
-# probe fetches it unauthenticated -- so it must stay open.
+# probe fetches it unauthenticated, so it must stay open.
 _PUBLIC_PATHS: frozenset[str] = frozenset({"/ping", "/api/health", "/.well-known/agent-card.json"})
 
 _SIGNING_ALGORITHMS: tuple[str, ...] = ("RS256", "RS384", "RS512", "ES256", "ES384")
@@ -84,7 +85,7 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
     Every request except the public health paths must carry an
     ``Authorization: Bearer <jwt>`` header whose token validates against the
     configured Keycloak realm. Validation failures and unconfigured auth both
-    result in a 401/503 denial — the middleware never falls open.
+    result in a 401/503 denial; the middleware never falls open.
     """
 
     def __init__(
@@ -92,7 +93,7 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
         app: ASGIApp,
         keycloak_url: str,
         realm: str,
-        audience: str | None = None,
+        audience: str,
         auth_disabled: bool = False,
         presence_only: bool = False,
     ) -> None:
@@ -102,13 +103,12 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
             app: The wrapped ASGI application.
             keycloak_url: Base URL of the Keycloak server.
             realm: Keycloak realm whose JWKS signs the accepted tokens.
-            audience: Expected ``aud`` claim. When None, audience is not checked
-                (Keycloak access tokens often carry ``account``); prefer setting
-                it in production.
+            audience: Expected ``aud`` claim. Always enforced; an empty value
+                leaves authentication unconfigured, so protected paths are denied.
             auth_disabled: When True, authentication is bypassed entirely. Only
                 for trusted local sandboxes; logged as a loud warning.
             presence_only: When True, a request is accepted if it merely carries a
-                non-empty ``Authorization: Bearer <anything>`` header -- the token
+                non-empty ``Authorization: Bearer <anything>`` header; the token
                 is NOT verified against the realm JWKS. This is a TEST/DEMO shim
                 for exercising the A2A gateway's credential passthrough (the
                 gateway forwards Authorization end-to-end and strips
@@ -133,16 +133,23 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
             logger.warning(
                 "AGENT AUTH IS PRESENCE-ONLY (AGENT_AUTH_PRESENCE_ONLY). A non-empty "
                 "'Authorization: Bearer <anything>' is accepted WITHOUT verifying the token "
-                "against the realm. This is a TEST/DEMO shim only -- never use it in a shared "
+                "against the realm. This is a TEST/DEMO shim only; never use it in a shared "
                 "or internet-reachable deployment."
             )
+            return
+
+        if not audience:
+            # Do not fall open: without an audience any realm token would pass.
+            logger.error("No expected token audience configured; denying protected paths")
             return
 
         jwks_uri = f"{self._issuer}/protocol/openid-connect/certs"
         try:
             # PyJWKClient caches and rotates signing keys for us.
             self._jwks_client = PyJWKClient(jwks_uri)
-            logger.info("JWT auth middleware configured (issuer=%s)", self._issuer)
+            logger.info(
+                "JWT auth middleware configured (issuer=%s, audience=%s)", self._issuer, audience
+            )
         except Exception as exc:  # noqa: BLE001 - fail closed on any config error
             # Do not fall open: leave jwks_client None so protected paths are denied.
             logger.error("Failed to initialize JWKS client for %s: %s", jwks_uri, exc)
@@ -174,18 +181,14 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
             raise AuthConfigurationError("JWKS client not initialized")
 
         signing_key = self._jwks_client.get_signing_key_from_jwt(token)
-        options = {"require": ["exp", "iss"]}
-        decode_kwargs: dict = {
-            "algorithms": _SIGNING_ALGORITHMS,
-            "issuer": self._issuer,
-            "options": options,
-        }
-        if self._audience is not None:
-            decode_kwargs["audience"] = self._audience
-        else:
-            options["verify_aud"] = False
-
-        return jwt.decode(token, signing_key.key, **decode_kwargs)
+        return jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=_SIGNING_ALGORITHMS,
+            issuer=self._issuer,
+            audience=self._audience,
+            options={"require": ["exp", "iss", "aud"]},
+        )
 
     async def dispatch(
         self,
@@ -239,7 +242,7 @@ def install_agent_auth(
     app: ASGIApp,
     keycloak_url: str,
     realm: str,
-    audience: str | None = None,
+    audience: str,
     bind_host: str | None = None,
 ) -> None:
     """Install JWT authentication on an A2A agent FastAPI app.
@@ -253,15 +256,17 @@ def install_agent_auth(
             starts serving (middleware cannot be added after startup).
         keycloak_url: Base URL of the Keycloak server.
         realm: Keycloak realm whose JWKS signs accepted tokens.
-        audience: Optional expected ``aud`` claim.
+        audience: Expected ``aud`` claim of inbound tokens. Required when JWT
+            validation is active; the audience check cannot be turned off.
         bind_host: The address the server will bind to. When authentication is
             disabled AND the server would listen on all interfaces, startup is
-            refused — that combination exposes an unauthenticated LLM tool loop to
+            refused: that combination exposes an unauthenticated LLM tool loop to
             the network.
 
     Raises:
         AuthConfigurationError: If auth is disabled while binding to a
-            network-exposed address.
+            network-exposed address, or JWT validation is active without an
+            expected audience.
     """
     auth_disabled = _env_flag("AGENT_AUTH_DISABLED", default=False)
     presence_only = _env_flag("AGENT_AUTH_PRESENCE_ONLY", default=False)
@@ -286,6 +291,12 @@ def install_agent_auth(
             "effectively unauthenticated on an exposed interface. Bind to 127.0.0.1, "
             "configure real JWT validation, or (test only) set "
             "AGENT_AUTH_ALLOW_EXPOSED_PRESENCE_ONLY=true."
+        )
+    if not auth_disabled and not presence_only and not audience:
+        raise AuthConfigurationError(
+            "Refusing to start: no expected token audience is configured. Set "
+            "AGENT_AUDIENCE to this agent's client id so tokens minted for other "
+            "clients are rejected."
         )
     app.add_middleware(
         JWTAuthMiddleware,

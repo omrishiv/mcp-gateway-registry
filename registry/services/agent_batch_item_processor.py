@@ -8,8 +8,8 @@ captured into an AgentBatchItemResult so one failing item never aborts a job.
 
 The processor runs inside the batch worker, outside any HTTP request, so it
 cannot rebuild a user_context from scopes. Instead it consumes the submitter's
-authorization snapshot (is_admin + ui_permissions) captured on the job at
-submit time.
+authorization snapshot (is_admin + ui_permissions + owner_id) captured on the
+job at submit time.
 """
 
 import asyncio
@@ -18,6 +18,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
+from ..auth.ownership import is_owner, legacy_owner_id_claim, normalize_identity
 from ..schemas.agent_models import (
     REGISTRANT_ONLY_FIELDS,
     AgentBatchItem,
@@ -52,11 +53,28 @@ def _result(
     return AgentBatchItemResult(index=index, op=op, path=path, status=status, error=error)
 
 
+def _submitter_context(
+    submitted_by: str,
+    submitter_owner_id: str | None,
+) -> dict[str, Any]:
+    """Build the identity half of a user context from the job's submitter snapshot.
+
+    Args:
+        submitted_by: The submitter's username (display name).
+        submitter_owner_id: The submitter's immutable ownership identity.
+
+    Returns:
+        A minimal context accepted by :func:`registry.auth.ownership.is_owner`.
+    """
+    return {"username": submitted_by, "owner_id": submitter_owner_id}
+
+
 async def _authorize(
     item: AgentBatchItem,
     submitted_by: str,
     is_admin: bool,
     ui_permissions: dict[str, list[str]],
+    submitter_owner_id: str | None = None,
 ) -> tuple[bool, str]:
     """Re-authorize a batch item using the submitter's persisted permissions.
 
@@ -98,7 +116,8 @@ async def _authorize(
         return False, f"{action}_agent permission required for {existing.name}"
 
     # Ownership half: admins bypass; otherwise the submitter must own the agent.
-    if not is_admin and existing.registered_by != submitted_by:
+    submitter = _submitter_context(submitted_by, submitter_owner_id)
+    if not is_admin and not is_owner(existing, submitter):
         verb = "delete" if item.op == BatchItemOp.delete else "modify"
         return False, f"you can only {verb} agents you registered"
 
@@ -185,6 +204,7 @@ def _build_card_from_request(request, path: str, existing: AgentCard | None) -> 
         # Replace: preserve server-managed fields from the existing card.
         optional_kwargs.update(
             registered_by=existing.registered_by,
+            owner_id=existing.owner_id,
             registered_at=existing.registered_at,
             is_enabled=existing.is_enabled,
             num_stars=existing.num_stars,
@@ -230,6 +250,7 @@ async def _do_register(
     index: int,
     item: _RegisterItem,
     submitted_by: str,
+    submitter_owner_id: str | None = None,
 ) -> AgentBatchItemResult:
     """Register a new agent (POST /api/agents/register parity)."""
     from ..api.agent_routes import _apply_a2a_reverse_proxy_split, _normalize_path
@@ -254,6 +275,7 @@ async def _do_register(
     except ValueError as e:
         return _result(index, item.op, path, 422, "validation_error", str(e))
     card.registered_by = submitted_by
+    card.owner_id = normalize_identity(submitter_owner_id)
 
     is_valid, errors = await _validate(card)
     if not is_valid:
@@ -291,6 +313,7 @@ async def _do_patch(
     index: int,
     item: _PatchItem,
     submitted_by: str,
+    submitter_owner_id: str | None = None,
 ) -> AgentBatchItemResult:
     """Apply a JSON Merge Patch to an existing agent (PATCH parity)."""
     from ..api.agent_routes import _apply_a2a_reverse_proxy_split, _normalize_path
@@ -323,6 +346,10 @@ async def _do_patch(
 
     for field in REGISTRANT_ONLY_FIELDS:
         setattr(merged, field, getattr(existing, field))
+    # Trust on first use: the owner's write binds a legacy record.
+    merged.owner_id = existing.owner_id or legacy_owner_id_claim(
+        existing, _submitter_context(submitted_by, submitter_owner_id), kind="agent", path=path
+    )
 
     is_valid, errors = await _validate(merged)
     if not is_valid:
@@ -350,6 +377,7 @@ async def _do_replace(
     index: int,
     item: _ReplaceItem,
     submitted_by: str,
+    submitter_owner_id: str | None = None,
 ) -> AgentBatchItemResult:
     """Fully replace an existing agent card (PUT parity)."""
     from ..api.agent_routes import (
@@ -366,6 +394,13 @@ async def _do_replace(
     try:
         card = _build_card_from_request(item.card, path, existing=existing)
         _restore_proxied_agent_on_replace(card, existing, path)
+        # Trust on first use: the owner's write binds a legacy record.
+        card.owner_id = existing.owner_id or legacy_owner_id_claim(
+            existing,
+            _submitter_context(submitted_by, submitter_owner_id),
+            kind="agent",
+            path=path,
+        )
     except Exception as e:
         return _result(index, item.op, path, 422, "validation_error", str(e))
 
@@ -424,20 +459,23 @@ async def process_item(
     submitted_by: str,
     is_admin: bool,
     ui_permissions: dict[str, list[str]],
+    submitter_owner_id: str | None = None,
 ) -> AgentBatchItemResult:
     """Authorize and run a single batch item, capturing any error as a result."""
     try:
-        ok, reason = await _authorize(item, submitted_by, is_admin, ui_permissions)
+        ok, reason = await _authorize(
+            item, submitted_by, is_admin, ui_permissions, submitter_owner_id
+        )
         if not ok:
             path = getattr(item, "path", None)
             return _result(index, item.op, path, 403, "forbidden", reason)
 
         if item.op == BatchItemOp.register:
-            return await _do_register(index, item, submitted_by)
+            return await _do_register(index, item, submitted_by, submitter_owner_id)
         if item.op == BatchItemOp.patch:
-            return await _do_patch(index, item, submitted_by)
+            return await _do_patch(index, item, submitted_by, submitter_owner_id)
         if item.op == BatchItemOp.replace:
-            return await _do_replace(index, item, submitted_by)
+            return await _do_replace(index, item, submitted_by, submitter_owner_id)
         if item.op == BatchItemOp.delete:
             return await _do_delete(index, item, submitted_by)
 

@@ -5,7 +5,7 @@ Validates: Requirements 4.1, 4.3
 """
 
 import tempfile
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -115,7 +115,7 @@ class TestDispatch:
 
         logged_events = []
 
-        async def capture_log_event(record):
+        async def capture_log_event(record, fail_closed=False):
             logged_events.append(record)
 
         self.audit_logger.log_event = capture_log_event
@@ -146,6 +146,92 @@ class TestDispatch:
 
     async def _async_return(self, value):
         return value
+
+
+class TestMutatingRequestAuditOrdering:
+    """A mutating request's record is durable before its handler runs."""
+
+    def _middleware(self, repo):
+        audit_logger = AuditLogger(stream_name="test", mongodb_enabled=True, audit_repository=repo)
+        return AuditMiddleware(MagicMock(), audit_logger)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("insert_failure", ["raises", "returns_false"])
+    async def test_failed_insert_rejects_without_running_handler(self, insert_failure):
+        repo = MagicMock()
+        if insert_failure == "raises":
+            repo.insert = AsyncMock(side_effect=RuntimeError("audit store down"))
+        else:
+            repo.insert = AsyncMock(return_value=False)
+        repo.update_outcome = AsyncMock(return_value=True)
+        handler = AsyncMock()
+
+        result = await self._middleware(repo).dispatch(
+            MockRequest(path="/api/servers", method="POST"), handler
+        )
+
+        assert result.status_code == 500
+        handler.assert_not_awaited()
+        repo.update_outcome.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_success_inserts_pending_record_then_updates_outcome(self):
+        inserted = []
+
+        async def _insert(record):
+            inserted.append(record.model_dump())
+            return True
+
+        repo = MagicMock()
+        repo.insert = AsyncMock(side_effect=_insert)
+        repo.update_outcome = AsyncMock(return_value=True)
+        request = MockRequest(path="/api/servers", method="POST")
+        response = MagicMock(status_code=201, headers={})
+
+        async def handler(req):
+            # The insert happened before the handler, with no outcome yet.
+            assert len(inserted) == 1
+            assert inserted[0]["response"] is None
+            req.state.user_context = {"username": "alice", "auth_method": "oauth2"}
+            return response
+
+        result = await self._middleware(repo).dispatch(request, handler)
+
+        assert result is response
+        assert repo.insert.await_count == 1
+        completed = repo.update_outcome.await_args.args[0]
+        assert completed.request_id == inserted[0]["request_id"]
+        assert completed.response.status_code == 201
+        assert completed.identity.username == "alice"
+
+    @pytest.mark.asyncio
+    async def test_failed_outcome_update_does_not_fail_committed_request(self):
+        repo = MagicMock()
+        repo.insert = AsyncMock(return_value=True)
+        repo.update_outcome = AsyncMock(return_value=False)
+        response = MagicMock(status_code=200, headers={})
+
+        result = await self._middleware(repo).dispatch(
+            MockRequest(path="/api/servers", method="DELETE"), AsyncMock(return_value=response)
+        )
+
+        assert result is response
+        repo.update_outcome.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_safe_read_stays_best_effort(self):
+        repo = MagicMock()
+        repo.insert = AsyncMock(return_value=False)
+        repo.update_outcome = AsyncMock(return_value=True)
+        response = MagicMock(status_code=200, headers={})
+
+        result = await self._middleware(repo).dispatch(
+            MockRequest(path="/api/servers", method="GET"), AsyncMock(return_value=response)
+        )
+
+        assert result is response
+        repo.insert.assert_awaited_once()
+        repo.update_outcome.assert_not_awaited()
 
 
 class TestBestEffortSessionIdentity:

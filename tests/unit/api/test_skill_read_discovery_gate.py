@@ -53,6 +53,7 @@ def _ctx(
     return {
         "is_admin": is_admin,
         "username": username,
+        "owner_id": f"idp|{username}",
         "groups": groups or [],
         "ui_permissions": ui_permissions,
     }

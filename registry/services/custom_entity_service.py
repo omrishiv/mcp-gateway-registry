@@ -14,6 +14,7 @@ from ..api.custom_entity_visibility import (
     _require_owner_or_admin,
     _user_can_view,
 )
+from ..auth.ownership import OWNER_FIELD, legacy_owner_id_update
 from ..core.config import settings
 from ..repositories.factory import (
     get_custom_entity_repository,
@@ -181,8 +182,13 @@ class CustomEntityService:
         type_name: str,
         request: CustomEntityCreate,
         owner: str,
+        owner_id: str | None = None,
     ) -> CustomEntityRecord:
-        """Validate attributes, persist a record, then index it (non-fatal)."""
+        """Validate attributes, persist a record, then index it (non-fatal).
+
+        ``owner`` (display username) and ``owner_id`` (immutable ownership
+        identity) are server-derived from the caller's context, never the body.
+        """
         descriptor = await self.cache.get_for_write(type_name)  # authoritative
         if descriptor is None:
             raise UnknownCustomTypeError(type_name)
@@ -234,6 +240,7 @@ class CustomEntityService:
             name=request.name,
             description=request.description,
             owner=owner,  # server-derived, NEVER from client
+            owner_id=owner_id,  # server-derived, NEVER from client
             visibility=request.visibility,
             allowed_groups=request.allowed_groups,
             tags=request.tags,
@@ -289,8 +296,13 @@ class CustomEntityService:
         if existing is None or not _user_can_view(existing, user_context):
             raise CustomEntityNotFoundError(path)  # 404 — don't disclose existence
         _require_owner_or_admin(existing, user_context)  # 403 if viewable-but-not-owned
+        # Trust on first use: the owner's write binds a legacy record's owner_id.
+        updates: dict[str, object] = dict(
+            legacy_owner_id_update(
+                existing, user_context, kind="custom entity", path=path, legacy_field=OWNER_FIELD
+            )
+        )
 
-        updates: dict[str, object] = {}
         if request.name is not None:
             updates["name"] = request.name
         if request.description is not None:
@@ -401,6 +413,9 @@ class CustomEntityService:
         if existing is None or not _user_can_view(existing, user_context):
             raise CustomEntityNotFoundError(path)  # 404 — don't disclose existence
         _require_owner_or_admin(existing, user_context)  # 403 if viewable-but-not-owned
+        owner_binding = legacy_owner_id_update(
+            existing, user_context, kind="custom entity", path=path, legacy_field=OWNER_FIELD
+        )
 
         from ..utils.credential_encryption import build_custom_headers_storage_fields
 
@@ -417,6 +432,7 @@ class CustomEntityService:
         except ValueError as e:
             raise CustomEntityValidationError("custom_headers", str(e)) from e
 
+        updates.update(owner_binding)
         updated = await self._get_entities().update(path, updates)
         if updated is None:
             raise CustomEntityNotFoundError(path)  # concurrent delete

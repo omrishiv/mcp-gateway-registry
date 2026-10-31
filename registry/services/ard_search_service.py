@@ -328,6 +328,7 @@ async def search_and_scope(
             hit.get("owner", ""),
             hit.get("allowed_groups", []) or [],
             user_context,
+            owner_id=hit.get("owner_id"),
         )
         if not allowed:
             scoped_out += 1
@@ -464,6 +465,7 @@ async def browse(
                 getattr(skill, "owner", "") or "",
                 list(getattr(skill, "allowed_groups", []) or []),
                 user_context,
+                owner_id=getattr(skill, "owner_id", None),
             )
             if not allowed:
                 continue

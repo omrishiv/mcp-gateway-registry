@@ -291,17 +291,20 @@ class _Response:
 def _http_get(
     port: int,
     target: str,
+    extra_headers: dict[str, str] | None = None,
 ) -> _Response:
     """Send one GET to the published gateway port and read the whole response.
 
     Args:
         port: Host port on 127.0.0.1.
         target: Request target.
+        extra_headers: Extra request headers, such as client-forged routing headers.
 
     Returns:
         The parsed response.
     """
-    request = f"GET {target} HTTP/1.1\r\nHost: gw.example\r\nConnection: close\r\n\r\n"
+    extra = "".join(f"{name}: {value}\r\n" for name, value in (extra_headers or {}).items())
+    request = f"GET {target} HTTP/1.1\r\nHost: gw.example\r\nConnection: close\r\n{extra}\r\n"
     with socket.create_connection(("127.0.0.1", port), timeout=_REQUEST_TIMEOUT_SECONDS) as conn:
         conn.sendall(request.encode("ascii"))
         chunks = []
@@ -572,9 +575,10 @@ def _gateway_config(
 
     The harness adds: rate-limit zones the direct block references, a stub
     ``/validate`` that allows every request, stub named error locations, a stub
-    auth server and a stand-in private service on loopback, and an optional
-    ``/probe`` location that rewrites into an internal location the way the
-    Lua virtual router's subrequest reaches it.
+    auth server that echoes the route it was asked for in ``X-Hop-*`` response
+    headers, a stand-in private service on loopback, and an optional ``/probe``
+    location that rewrites into an internal location the way the Lua virtual
+    router's subrequest reaches it.
 
     Args:
         locations: Rendered location blocks.
@@ -600,7 +604,13 @@ http {{
     limit_conn_zone $binary_remote_addr zone=mcp_gateway_conn:1m;
     server {{
         listen {auth_host}:{auth_port};
-        location / {{ return 200 "AUTH-HOP"; }}
+        location / {{
+            add_header X-Hop-Uri $request_uri always;
+            add_header X-Hop-Server-Path $http_x_registered_server_path always;
+            add_header X-Hop-Route-Mode $http_x_registered_route_mode always;
+            add_header X-Hop-Upstream-Url $http_x_upstream_url always;
+            return 200 "AUTH-HOP";
+        }}
     }}
     server {{
         listen {_REBOUND_ANSWER}:{_BACKEND_PORT};
@@ -654,6 +664,22 @@ def _is_internal(
     return any(ip in network for network in _INTERNAL_NETWORKS)
 
 
+def _backend_lookups(
+    lab: _RebindingLab,
+    hostname: str,
+) -> list[str]:
+    """Return the responder's queries for the backend host name, in order.
+
+    Args:
+        lab: The running lab.
+        hostname: Backend host name.
+
+    Returns:
+        The ``QUERY`` lines whose question is ``hostname``.
+    """
+    return [line for line in lab.dns_queries() if line.split()[1:2] == [hostname.lower()]]
+
+
 def _prepare_lab(
     rebinding_lab: Callable[[str], _RebindingLab],
     monkeypatch: pytest.MonkeyPatch,
@@ -691,20 +717,42 @@ def test_virtual_backend_never_dials_internal_after_public_health_check(
     monkeypatch: pytest.MonkeyPatch,
     hostname: str,
 ) -> None:
-    """Property: a virtual backend that was public at health check is never dialled internally."""
+    """Property: a virtual backend that was public at health check is never dialled internally.
+
+    The only loopback address nginx may dial is the configured auth-server hop
+    (``_AUTH_HOP``, the value ``render_settings`` installs), which owns backend
+    resolution, and nginx must not look the backend name up again itself. The
+    hop must be asked for the nginx-selected registration, whatever routing
+    headers the client sends.
+    """
     lab = _prepare_lab(rebinding_lab, monkeypatch, hostname)
+    health_check_lookups = _backend_lookups(lab, hostname)
     service = nginx_service_module.NginxConfigService()
     blocks = _render_virtual_backend_blocks(service, _server_info(hostname))
     backend_location = service._virtual_backend_location(_SERVER_PATH)
     lab.start_nginx(_gateway_config(_plain_nginx_block(blocks), backend_location))
 
-    response = _http_get(lab.port, _PROBE_PATH)
+    forged = {
+        "X-Upstream-Url": f"http://{_REBOUND_ANSWER}:{_BACKEND_PORT}/mcp",
+        "X-Registered-Server-Path": "/forged",
+        "X-Registered-Route-Mode": "direct",
+    }
+    response = _http_get(lab.port, _PROBE_PATH, forged)
     dialled = _dialled_addresses(response)
-    internal = [address for address in dialled if _is_internal(address)]
+    internal = [address for address in dialled if address != _AUTH_HOP and _is_internal(address)]
     assert not internal, (
         f"health check pinned {_PUBLIC_ANSWER} for {hostname}, nginx dialled {dialled} "
         f"and answered {response.status} {response.body!r}; DNS log {lab.dns_queries()}"
     )
+    assert _backend_lookups(lab, hostname) == health_check_lookups, (
+        f"nginx resolved {hostname} after the health check: {lab.dns_queries()}"
+    )
+    assert response.status == 200, f"backend location answered {response.status}"
+    assert response.body == "AUTH-HOP"
+    assert response.headers.get("x-hop-uri") == f"/mcp-proxy/{_SERVER_PATH.strip('/')}/"
+    assert response.headers.get("x-hop-server-path") == _SERVER_PATH
+    assert response.headers.get("x-hop-route-mode") == "virtual"
+    assert "x-hop-upstream-url" not in response.headers
 
 
 @pytest.mark.usefixtures("render_settings")

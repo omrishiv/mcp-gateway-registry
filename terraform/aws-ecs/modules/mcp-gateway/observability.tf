@@ -161,10 +161,11 @@ module "ecs_service_metrics" {
     EcsExecTaskExecution = aws_iam_policy.ecs_exec_task_execution.arn
   }
   create_tasks_iam_role = true
+  # No ecs_secrets_access here: platform secrets reach the container through
+  # the task execution role (secrets valueFrom); the app never reads them.
   tasks_iam_role_policies = {
-    SecretsManagerAccess = aws_iam_policy.ecs_secrets_access.arn
-    EcsExecTask          = aws_iam_policy.ecs_exec_task.arn
-    AMPRemoteWrite       = aws_iam_policy.adot_amp_write[0].arn
+    EcsExecTask    = aws_iam_policy.ecs_exec_task.arn
+    AMPRemoteWrite = aws_iam_policy.adot_amp_write[0].arn
   }
 
   service_connect_configuration = {
@@ -367,8 +368,10 @@ module "ecs_service_metrics" {
 # =============================================================================
 # ADOT COLLECTOR — IAM POLICY FOR AMP REMOTE WRITE
 # =============================================================================
-# ADOT runs as a sidecar in the metrics-service task (above).
-# This policy is attached to the metrics-service task role.
+# ADOT runs as a sidecar in the metrics-service task (above) and, per issue
+# #1122, in the auth-server, registry and mcpgw tasks. This policy is attached
+# to each of those task roles. The prometheusremotewrite exporter only writes,
+# so aps:RemoteWrite is the whole grant.
 
 resource "aws_iam_policy" "adot_amp_write" {
   count       = var.enable_observability ? 1 : 0
@@ -380,10 +383,7 @@ resource "aws_iam_policy" "adot_amp_write" {
       {
         Effect = "Allow"
         Action = [
-          "aps:RemoteWrite",
-          "aps:GetSeries",
-          "aps:GetLabels",
-          "aps:GetMetricMetadata"
+          "aps:RemoteWrite"
         ]
         Resource = aws_prometheus_workspace.mcp[0].arn
       }

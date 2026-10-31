@@ -242,23 +242,9 @@ function _createRotationRole(
     }),
   );
 
-  // ---- VPC network interface management (requires wildcard resource) ----
-  role.addToPolicy(
-    new iam.PolicyStatement({
-      sid: 'VPCNetworkInterface',
-      effect: iam.Effect.ALLOW,
-      actions: [
-        'ec2:CreateNetworkInterface',
-        'ec2:DescribeNetworkInterfaces',
-        'ec2:DeleteNetworkInterface',
-        'ec2:AssignPrivateIpAddresses',
-        'ec2:UnassignPrivateIpAddresses',
-      ],
-      resources: ['*'],
-    }),
-  );
-
   // ---- Attach managed policy for Lambda VPC execution ----
+  // This is the only source of the VPC network-interface permissions: AWS
+  // requires them on Resource "*", so an inline copy would add nothing.
   role.addManagedPolicy(
     iam.ManagedPolicy.fromAwsManagedPolicyName(
       'service-role/AWSLambdaVPCAccessExecutionRole',

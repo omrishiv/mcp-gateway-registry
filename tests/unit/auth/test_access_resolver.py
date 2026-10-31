@@ -99,8 +99,8 @@ async def test_resolve_scope_access_admin_star_server_and_tools(patched_factory)
 
 
 @pytest.mark.asyncio
-async def test_resolve_scope_access_admin_all_string_server(patched_factory):
-    """server='all' behaves identically to server='*'."""
+async def test_resolve_scope_access_all_string_server_is_not_a_wildcard(patched_factory):
+    """server='all' is a literal (reserved) name, not a cross-server wildcard."""
     # Arrange
     patched_factory.get_server_scopes.return_value = [
         {"server": "all", "methods": ["all"], "tools": ["all"]}
@@ -110,8 +110,24 @@ async def test_resolve_scope_access_admin_all_string_server(patched_factory):
     access = await resolve_scope_access(["tla-admin-all"])
 
     # Assert
+    assert access.servers == ["all"]
+    assert "*" not in access.tools
+
+
+@pytest.mark.asyncio
+async def test_resolve_scope_access_star_server_keeps_its_tool_allowlist(patched_factory):
+    """server='*' with named tools records those tools, not every tool."""
+    # Arrange
+    patched_factory.get_server_scopes.return_value = [
+        {"server": "*", "methods": ["tools/call"], "tools": ["read"]}
+    ]
+
+    # Act
+    access = await resolve_scope_access(["tla-star-read"])
+
+    # Assert
     assert access.servers == ["*"]
-    assert access.tools == {"*": {"*"}}
+    assert access.tools == {"*": {"read"}}
 
 
 @pytest.mark.asyncio

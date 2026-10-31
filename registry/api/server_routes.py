@@ -32,6 +32,12 @@ from ..auth.csrf import (
 )
 from ..auth.dependencies import enhanced_auth, nginx_proxied_auth
 from ..auth.internal import validate_internal_auth
+from ..auth.ownership import (
+    bind_legacy_owner_id,
+    is_owner,
+    legacy_owner_id_claim,
+    user_owner_id,
+)
 from ..auth.tool_filter import filter_tools_for_user
 from ..common.log_redaction import redact_mapping, redact_url
 from ..constants import VALID_AUTH_SCHEMES, DeploymentType, HealthStatus
@@ -1010,7 +1016,9 @@ async def get_servers_json(
     is_admin = user_context.get("is_admin", False) if user_context else False
     accessible_servers_list = user_context.get("accessible_servers", []) if user_context else []
     accessible_services = user_context.get("accessible_services", []) if user_context else []
-    is_unrestricted = is_admin or "all" in accessible_servers_list or "all" in accessible_services
+    # A literal "all" in accessible_servers is not a server wildcard (only a
+    # `server: "*"` rule is, and the gateway never honours `server: "all"`).
+    is_unrestricted = is_admin or "all" in accessible_services
     # Redaction decision is per-request (admin + deployment mode), so compute
     # it once rather than per server row.
     redact_backend = should_redact_backend_urls(user_context)
@@ -1882,6 +1890,7 @@ async def register_service(
         "allowed_groups": allowed_groups_list,
         "deployment": deployment,
         "registered_by": user_context["username"],
+        "owner_id": user_owner_id(user_context),
         "metadata": {},
     }
 
@@ -2932,6 +2941,12 @@ async def edit_server_submit(
         # Preserve audit trail; edits don't reset it.
         "registered_by": server_info.get("registered_by"),
     }
+    # Trust on first use: the owner editing a legacy record binds its owner_id.
+    owner_id_claim = legacy_owner_id_claim(
+        server_info, user_context, kind="server", path=service_path
+    )
+    if owner_id_claim:
+        updated_server_entry["owner_id"] = owner_id_claim
 
     # Deployment-specific fields
     if is_local:
@@ -3020,7 +3035,7 @@ async def edit_server_submit(
         # modal, see the OAuth fields blanked, change the dropdown, and save.
         scheme_changed = auth_scheme != (server_info.get("auth_scheme") or "none")
         if scheme_changed and not user_context.get("is_admin"):
-            if server_info.get("registered_by") != user_context.get("username"):
+            if not is_owner(server_info, user_context):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail=(
@@ -4593,6 +4608,7 @@ async def register_service_api(
         "tool_list": tool_list,
         "deployment": deployment,
         "registered_by": user_context.get("username"),
+        "owner_id": user_owner_id(user_context),
         "metadata": {},
     }
 
@@ -4762,13 +4778,13 @@ async def register_service_api(
 
     # Ownership guard: overwriting (or auto-versioning) an existing server
     # replaces another user's registration and can redirect its traffic. Only
-    # the original owner (registered_by) or an admin may do so. Without this,
+    # the original owner or an admin may do so. Without this,
     # any user with registration permission could hijack any server by
     # re-registering at the same path. Mirrors the guard on the dedicated
-    # update endpoint. Fails closed when ownership can't be established.
+    # update endpoint. Fails closed when ownership can't be established. The
+    # overwrite entry carries the caller's owner_id, binding a legacy record.
     if existing_server and (
-        not user_context.get("is_admin")
-        and existing_server.get("registered_by") != user_context.get("username")
+        not user_context.get("is_admin") and not is_owner(existing_server, user_context)
     ):
         logger.warning(
             f"SERVERS REGISTER: User {user_context.get('username')} attempted to "
@@ -4940,13 +4956,11 @@ async def update_server_auth_credential(
     )
 
     # Ownership guard: overwriting a backend credential can hijack the server's
-    # upstream connection, so only the original owner (registered_by) or an
+    # upstream connection, so only the original owner or an
     # admin may do it -- matching PUT /servers/{path}. modify_service alone is
     # granted to any user with an /execute scope and is not sufficient. Fails
     # closed when ownership cannot be established.
-    if not user_context.get("is_admin") and existing_server.get(
-        "registered_by"
-    ) != user_context.get("username"):
+    if not user_context.get("is_admin") and not is_owner(existing_server, user_context):
         logger.warning(
             f"User {username} attempted to update auth credential for server "
             f"{server_path} owned by {existing_server.get('registered_by')}"
@@ -4958,6 +4972,7 @@ async def update_server_auth_credential(
                 "reason": "You can only modify servers you registered",
             },
         )
+    bind_legacy_owner_id(existing_server, user_context, kind="server", path=server_path)
 
     # Validate auth_scheme
     if body.auth_scheme not in VALID_AUTH_SCHEMES:
@@ -5103,9 +5118,7 @@ async def get_server_oauth_config(
     # read another owner's backend credential config (token_url, client_id and
     # the custom authorize/token endpoints). Fails closed when ownership cannot
     # be established.
-    if not user_context.get("is_admin") and existing_server.get(
-        "registered_by"
-    ) != user_context.get("username"):
+    if not user_context.get("is_admin") and not is_owner(existing_server, user_context):
         return JSONResponse(
             status_code=403, content={"error": "Only the server owner or an admin may view this"}
         )
@@ -5152,9 +5165,7 @@ async def put_server_oauth_config(
     _check_server_permission(
         "modify", existing_server.get("server_name", server_path), user_context
     )
-    if not user_context.get("is_admin") and existing_server.get(
-        "registered_by"
-    ) != user_context.get("username"):
+    if not user_context.get("is_admin") and not is_owner(existing_server, user_context):
         return JSONResponse(
             status_code=403,
             content={
@@ -5162,6 +5173,7 @@ async def put_server_oauth_config(
                 "reason": "You can only modify servers you registered",
             },
         )
+    bind_legacy_owner_id(existing_server, user_context, kind="server", path=server_path)
 
     # Local (stdio) servers have no HTTP endpoint the registry authenticates to.
     if existing_server.get("deployment") == "local":
@@ -5313,9 +5325,7 @@ async def get_server_oauth_discovery(
     # identity the registry borrows (designated_by) and its vault principal, so
     # it must not be readable by anyone who merely holds execute on the server.
     # Fails closed when ownership cannot be established.
-    if not user_context.get("is_admin") and existing_server.get(
-        "registered_by"
-    ) != user_context.get("username"):
+    if not user_context.get("is_admin") and not is_owner(existing_server, user_context):
         return JSONResponse(
             status_code=403, content={"error": "Only the server owner or an admin may view this"}
         )
@@ -5380,9 +5390,7 @@ async def put_server_oauth_discovery(
     _check_server_permission(
         "modify", existing_server.get("server_name", server_path), user_context
     )
-    if not user_context.get("is_admin") and existing_server.get(
-        "registered_by"
-    ) != user_context.get("username"):
+    if not user_context.get("is_admin") and not is_owner(existing_server, user_context):
         return JSONResponse(
             status_code=403,
             content={
@@ -5390,6 +5398,7 @@ async def put_server_oauth_discovery(
                 "reason": "You can only modify servers you registered",
             },
         )
+    bind_legacy_owner_id(existing_server, user_context, kind="server", path=server_path)
 
     # Local (stdio) servers short-circuit before the backend-OAuth resolver runs, so a
     # discovery identity on one can never be read. Reject rather than store config the
@@ -5564,10 +5573,9 @@ async def delete_server_oauth_discovery(
     _check_server_permission(
         "modify", existing_server.get("server_name", server_path), user_context
     )
-    if not user_context.get("is_admin") and existing_server.get(
-        "registered_by"
-    ) != user_context.get("username"):
+    if not user_context.get("is_admin") and not is_owner(existing_server, user_context):
         return JSONResponse(status_code=403, content={"error": "Not authorized"})
+    bind_legacy_owner_id(existing_server, user_context, kind="server", path=server_path)
 
     # Capture the designation BEFORE clearing it: it is the only record of which vault
     # address holds the borrowed token. Dropping the designation without this leaves a
@@ -5824,13 +5832,13 @@ async def remove_service_api(
             )
 
         # Ownership guard: deleting a server tears down its routing and scopes,
-        # so only the original owner (registered_by) or an admin may do it --
+        # so only the original owner or an admin may do it --
         # matching PUT /servers/{path} and PATCH .../auth-credential. Permission
         # AND ownership are both required (defense in depth) so the whole
         # mutation family is consistent; a delete_service grant alone is not
         # sufficient. Fails closed when ownership cannot be established
-        # (missing registered_by -> deny for a non-admin).
-        if server_info.get("registered_by") != user_context.get("username"):
+        # (no owner identity on either side -> deny for a non-admin).
+        if not is_owner(server_info, user_context):
             logger.warning(
                 f"User {user_context.get('username')} attempted to delete server "
                 f"'{service_name}' ({path}) owned by {server_info.get('registered_by')}"
@@ -6162,6 +6170,7 @@ async def _delete_group_impl(
     and can be called from both Basic Auth and JWT endpoints.
     Uses the IAMManager abstraction to support any identity provider.
     """
+    from ..services import admin_safety
     from ..services.scope_service import delete_group
     from ..utils.iam_manager import get_iam_manager
 
@@ -6187,6 +6196,17 @@ async def _delete_group_impl(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Cannot delete system group '{group_name}'. Use force=true to override.",
             )
+
+    # Last-admin guard, applied even with force=True and before any scope or
+    # IdP side effect. Deleting the IdP group also strips its membership.
+    try:
+        await admin_safety.assert_scope_change_keeps_an_admin(
+            group_name,
+            delete=True,
+            revoked_group=group_name if delete_from_idp else None,
+        )
+    except admin_safety.AdminSafetyError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     try:
         # Delete from scopes (file or OpenSearch)
@@ -6449,6 +6469,7 @@ async def import_group_definition(
     """
     _require_admin(user_context)
 
+    from ..services import admin_safety
     from ..services.scope_service import import_group
     from ..utils.iam_manager import get_iam_manager
 
@@ -6481,6 +6502,17 @@ async def import_group_definition(
             f"API import group request from user '{user_context.get('username') if user_context else 'unknown'}' "
             f"for group '{scope_name}'"
         )
+
+        # Last-admin guard: import upserts, so it can overwrite the scope that
+        # makes the remaining administrators admin.
+        try:
+            await admin_safety.assert_scope_change_keeps_an_admin(
+                scope_name,
+                group_mappings=group_mappings,
+                ui_permissions=ui_permissions,
+            )
+        except admin_safety.AdminSafetyError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
         # Import group definition. This route is admin-only (see _require_admin
         # above); allow_privileged satisfies the service- and repository-layer
@@ -6964,13 +6996,11 @@ async def remove_server_version(
     )
 
     # Ownership guard: removing a version mutates another user's server and can
-    # break its routing, so only the owner (registered_by) or an admin may do
+    # break its routing, so only the owner or an admin may do
     # it -- matching PUT /servers/{path}. modify_service alone (any /execute
     # scope) is not sufficient. Fails closed when ownership cannot be
     # established.
-    if not user_context.get("is_admin") and existing_server.get(
-        "registered_by"
-    ) != user_context.get("username"):
+    if not user_context.get("is_admin") and not is_owner(existing_server, user_context):
         logger.warning(
             f"User {user_context.get('username')} attempted to remove version "
             f"{version} from server {decoded_path} owned by "
@@ -7030,12 +7060,10 @@ async def set_default_version(
     )
 
     # Ownership guard: changing the default version reroutes another user's
-    # server, so only the owner (registered_by) or an admin may do it --
+    # server, so only the owner or an admin may do it --
     # matching PUT /servers/{path}. modify_service alone (any /execute scope) is
     # not sufficient. Fails closed when ownership cannot be established.
-    if not user_context.get("is_admin") and existing_server.get(
-        "registered_by"
-    ) != user_context.get("username"):
+    if not user_context.get("is_admin") and not is_owner(existing_server, user_context):
         logger.warning(
             f"User {user_context.get('username')} attempted to set default "
             f"version for server {decoded_path} owned by "
@@ -7267,12 +7295,9 @@ async def update_server_endpoint(
         user_context,
     )
 
-    if (
-        not user_context.get("is_admin")
-        and existing.get("registered_by") != user_context["username"]
-    ):
+    if not user_context.get("is_admin") and not is_owner(existing, user_context):
         logger.warning(
-            f"User {user_context['username']} attempted to update server {path} "
+            f"User {user_context.get('username')} attempted to update server {path} "
             f"owned by {existing.get('registered_by')}"
         )
         raise HTTPException(
@@ -7305,6 +7330,7 @@ async def update_server_endpoint(
         incoming["provider"] = body.provider.model_dump()
 
     merged = _merge_server_update(existing, incoming)
+    bind_legacy_owner_id(merged, user_context, kind="server", path=path)
 
     # Lifecycle status change via PUT is gated like PATCH (Issue #1330).
     old_status = existing.get("status") or "active"
@@ -7451,12 +7477,9 @@ async def patch_server_endpoint(
         user_context,
     )
 
-    if (
-        not user_context.get("is_admin")
-        and existing.get("registered_by") != user_context["username"]
-    ):
+    if not user_context.get("is_admin") and not is_owner(existing, user_context):
         logger.warning(
-            f"User {user_context['username']} attempted to patch server {path} "
+            f"User {user_context.get('username')} attempted to patch server {path} "
             f"owned by {existing.get('registered_by')}"
         )
         raise HTTPException(
@@ -7508,6 +7531,8 @@ async def patch_server_endpoint(
             )
 
     merged = _merge_server_update(existing, patch_dict)
+    if bind_legacy_owner_id(merged, user_context, kind="server", path=path):
+        patch_fields.append("owner_id")
 
     gate_result = await check_registration_gate(
         asset_type="server",

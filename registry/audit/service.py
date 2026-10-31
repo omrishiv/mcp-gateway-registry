@@ -98,6 +98,12 @@ def enforce_durable_audit_sink(
     )
 
 
+class AuditWriteError(RuntimeError):
+    """Raised by ``AuditLogger.log_event(..., fail_closed=True)`` when the
+    durable audit write fails, so the caller can fail the request.
+    """
+
+
 class AuditLogger:
     """
     Async audit logger for MongoDB storage.
@@ -147,41 +153,86 @@ class AuditLogger:
     async def log_event(
         self,
         record: Union[RegistryApiAccessRecord, "MCPServerAccessRecord", TokenMintAuditRecord],
+        fail_closed: bool = False,
     ) -> None:
         """
         Write an audit record to the durable store (MongoDB).
 
         This method is thread-safe. If a durable sink is not available (audit
-        disabled or MongoDB not wired up) the event is dropped — startup already
+        disabled or MongoDB not wired up) the event is dropped: startup already
         fails closed on a missing durable sink when AUDIT_LOG_REQUIRE_DURABLE is
         set, so reaching this path means an operator explicitly opted into a
         non-durable trail.
 
-        A durable-write failure at request time (transient MongoDB
-        unavailability, etc.) does not fail the request — failing every API call
-        on an audit blip would be a self-inflicted denial of service. Instead the
-        dropped record is logged as a distinct CRITICAL event so the loss itself
-        is loud and alertable (a durable audit trail must never lose a record
-        silently). See the audit-logging docs for the retry/DLQ follow-up.
+        A failed durable write (transient MongoDB unavailability, etc.) is
+        always logged as a distinct CRITICAL event and counted, so the loss is
+        loud and alertable. With ``fail_closed`` the failure is then raised as
+        :class:`AuditWriteError` so the caller fails the request: a mutating
+        request must not succeed without its audit record. Without it (safe
+        reads) the write stays best-effort and the request is not failed.
 
         Args:
             record: The audit record to log.
+            fail_closed: Raise ``AuditWriteError`` when the durable write fails.
+
+        Raises:
+            AuditWriteError: If ``fail_closed`` and the durable write failed.
         """
         if not self.mongodb_enabled or not self._audit_repository:
             return
 
         async with self._lock:
             try:
-                await self._audit_repository.insert(record)
+                # The repository contract returns False when the insert failed
+                # (DocumentDBAuditRepository logs and swallows the driver error).
+                # Compare with "is False" so a repository returning None is not
+                # mistaken for a failure.
+                if await self._audit_repository.insert(record) is False:
+                    raise AuditWriteError("audit repository reported a failed insert")
             except Exception as e:
-                # Never raise (would DoS the request path), but make the dropped
-                # record loud and alertable rather than a quiet error line. Log
-                # only identifying context, never the full record (avoids
+                # Log only identifying context, never the full record (avoids
                 # leaking any sensitive field the record may carry).
                 logger.critical(
                     "AUDIT RECORD DROPPED: durable write failed (log_type=%s request_id=%s): %s",
                     getattr(record, "log_type", "unknown"),
                     getattr(record, "request_id", "unknown"),
+                    e,
+                )
+                _record_integrity_degradation("record_dropped")
+                if fail_closed:
+                    raise AuditWriteError("durable audit write failed") from e
+
+    async def update_outcome(
+        self,
+        record: RegistryApiAccessRecord,
+    ) -> None:
+        """
+        Write the outcome of a request onto its already inserted audit record.
+
+        Used for mutating requests, whose record is inserted (fail closed)
+        before the handler runs. By the time this runs the change is committed
+        and the attempt is durably recorded, so a failure never raises: it is
+        logged as a CRITICAL dropped-record event and counted instead.
+
+        Args:
+            record: The completed audit record (same request_id and log_type
+                as the inserted one).
+        """
+        if not self.mongodb_enabled or not self._audit_repository:
+            return
+
+        async with self._lock:
+            try:
+                # Same "is False" contract as insert(): False means no record
+                # was updated (missing record or a swallowed driver error).
+                if await self._audit_repository.update_outcome(record) is False:
+                    raise AuditWriteError("audit repository reported a failed outcome update")
+            except Exception as e:
+                logger.critical(
+                    "AUDIT RECORD DROPPED: outcome update failed; the record stays "
+                    "pending (log_type=%s request_id=%s): %s",
+                    record.log_type,
+                    record.request_id,
                     e,
                 )
                 _record_integrity_degradation("record_dropped")

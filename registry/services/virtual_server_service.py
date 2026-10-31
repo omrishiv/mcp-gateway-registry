@@ -233,6 +233,7 @@ class VirtualServerService:
         self,
         request: CreateVirtualServerRequest,
         created_by: str | None = None,
+        owner_id: str | None = None,
     ) -> VirtualServerConfig:
         """Create a new virtual server.
 
@@ -241,6 +242,7 @@ class VirtualServerService:
         Args:
             request: Creation request with server config
             created_by: Username of creator
+            owner_id: Creator's immutable ownership identity
 
         Returns:
             Created VirtualServerConfig
@@ -277,6 +279,7 @@ class VirtualServerService:
             supported_transports=request.supported_transports,
             is_enabled=False,
             created_by=created_by,
+            owner_id=owner_id,
             created_at=now,
             updated_at=now,
         )

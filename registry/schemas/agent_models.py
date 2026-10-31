@@ -39,7 +39,7 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-GROUP_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_\-\.]+$")
+GROUP_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_\-\.]+\Z")
 
 
 def _validate_path_format(
@@ -195,7 +195,7 @@ def _validate_url_format(
     return url
 
 
-_HOSTNAME_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
+_HOSTNAME_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\Z")
 
 
 def _is_valid_http_url(
@@ -876,6 +876,13 @@ class AgentCard(ProxyableMixin):
         None,
         alias="registeredBy",
         description="Username who registered agent",
+    )
+    owner_id: str | None = Field(
+        None,
+        description=(
+            "Immutable ownership identity of the registrant, derived from the "
+            "token's (issuer, subject). Server-managed; never client-supplied."
+        ),
     )
 
     # Access control
@@ -1629,6 +1636,7 @@ REGISTRANT_ONLY_FIELDS: frozenset[str] = frozenset(
         "id",
         "path",
         "registered_by",
+        "owner_id",
         "registered_at",
         "updated_at",
         "num_stars",
@@ -1792,6 +1800,8 @@ class AgentBatchJob(BaseModel):
     job_id: str  # uuid4 hex
     state: AgentBatchJobState
     submitted_by: str
+    # Immutable ownership identity of the submitter (registry/auth/ownership.py).
+    owner_id: str | None = None
     submitted_at: datetime
     updated_at: datetime  # refreshed on every item checkpoint; anchors TTL
     request_id: str | None = None  # X-Request-Id captured at submit time

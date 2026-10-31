@@ -66,6 +66,8 @@ _PROPERTY = settings(max_examples=200, derandomize=True, database=None, report_m
 
 _TOOL_CALL = "tools/call"
 _WILDCARDS = frozenset({"*", "all"})
+# Only "*" names every server; "all" is a plain (reserved) server name.
+_SERVER_WILDCARD = "*"
 _EVERY_TOOL = frozenset({"*"})
 
 # Restated admin rule: a mutating prefix, minus the per-type custom-entity and
@@ -116,8 +118,8 @@ _NULL_TOOLS_REASON = (
     "a scope revokes grants held through every later scope."
 )
 _ALL_SERVER_REASON = (
-    "Known defect: the gateway treats only server '*' as a cross-server wildcard, "
-    "while the registry and its reserved-name guard treat 'all' the same way."
+    "Known defect: the registry treated server 'all' as a cross-server wildcard "
+    "while the gateway honours only '*'; the reference model follows the gateway."
 )
 _LIST_VERSUS_CALL_REASON = (
     "Known defect: the registry tool filter treats a cross-server rule as every "
@@ -177,8 +179,7 @@ def _decide(table: dict[str, dict], groups: Iterable[str]) -> _Decision:
         for rule in table[scope]["server_access"]:
             server = rule.get("server")
             if isinstance(server, str) and server:
-                key = "*" if server in _WILDCARDS else server
-                tools.setdefault(key, set()).update(_allowlist(rule.get("tools", [])))
+                tools.setdefault(server, set()).update(_allowlist(rule.get("tools", [])))
     ui_permissions = _normalize_ui(ui)
     is_admin = any(_confers_admin(a) and "all" in r for a, r in ui_permissions.items())
     allowlists = {k: _EVERY_TOOL if "*" in v else frozenset(v) for k, v in tools.items()}
@@ -201,7 +202,7 @@ def _may_call(
             name = rule.get("server")
             if not isinstance(name, str) or not name.strip("/"):
                 continue
-            if name not in _WILDCARDS and name.strip("/") != server.strip("/"):
+            if name != _SERVER_WILDCARD and name.strip("/") != server.strip("/"):
                 continue
             allowed = _allowlist(rule.get("tools", []))
             if method == _TOOL_CALL:

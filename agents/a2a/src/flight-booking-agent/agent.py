@@ -12,10 +12,12 @@ from dependencies import (
 from fastapi import FastAPI
 from strands import Agent
 from strands.multiagent.a2a import A2AServer
+from tool_guard import MutatingToolGuard
 from tools import (
     FLIGHT_BOOKING_TOOLS,
     check_availability,
     confirm_booking,
+    is_read_only_tool_call,
     manage_reservation,
     process_payment,
     reserve_flight,
@@ -29,10 +31,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Model-emitted tool calls are untrusted. The guard lets read-only calls run and
+# denies every mutating call (reserve, confirm, pay, cancel): an A2A server has no
+# human confirmation channel. AGENT_ALLOW_MUTATING_TOOLS=true is the operator opt-in.
 strands_agent = Agent(
     name="Flight Booking Agent",
     description="Flight booking and reservation management agent",
     tools=FLIGHT_BOOKING_TOOLS,
+    hooks=[MutatingToolGuard(is_read_only=is_read_only_tool_call)],
     callback_handler=None,
     model="global.anthropic.claude-sonnet-4-5-20250929-v1:0",
 )

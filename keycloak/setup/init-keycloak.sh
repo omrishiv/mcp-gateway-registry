@@ -680,9 +680,10 @@ setup_groups_mapper() {
 #    DCR'd ones), so this is the only reliable place to put a mapper that runs
 #    for clients we don't pre-create.
 #
-# 2. configure_dcr_allowed_scopes() - widen the anonymous DCR
-#    "Allowed Client Scopes" policy to accept all realm client-scopes. Without
-#    this, DCR rejects registrations that name any non-default scope.
+# 2. configure_dcr_allowed_scopes() - widen the anonymous and authenticated
+#    DCR "Allowed Client Scopes" policies to accept every non-privileged realm
+#    client-scope. Without this, DCR rejects registrations that name any
+#    non-default scope.
 #
 # 3. configure_dcr_trusted_hosts() - relax the anonymous DCR "Trusted Hosts"
 #    policy so MCP clients running on diverse cloud egress IPs (Claude Code's
@@ -804,22 +805,68 @@ setup_dcr_audience_mapper() {
     fi
 }
 
+_widen_allowed_scopes_policy() {
+    # Write one subType's "Allowed Client Scopes" policy. Both 'anonymous' and
+    # 'authenticated' need it because Keycloak picks one based on whether the
+    # DCR request carries an initial-access / registration token.
+    local token=$1
+    local sub_type=$2  # "anonymous" or "authenticated"
+    local components=$3
+    local all_scope_names=$4
+
+    local policy_id=$(echo "$components" | \
+        jq -r --arg st "$sub_type" '.[] | select(.name=="Allowed Client Scopes" and .subType==$st) | .id')
+    local parent_id=$(echo "$components" | \
+        jq -r --arg st "$sub_type" '.[] | select(.name=="Allowed Client Scopes" and .subType==$st) | .parentId')
+
+    if [ -z "$policy_id" ] || [ "$policy_id" = "null" ]; then
+        echo -e "${RED}Error: Could not find ${sub_type} 'Allowed Client Scopes' policy${NC}"
+        return 1
+    fi
+
+    # Keep `allow-default-scopes` true so the built-in OIDC scopes still pass;
+    # explicitly include every non-privileged realm scope so DCR doesn't
+    # reject registry-internal scope names.
+    local policy_json=$(jq -n \
+        --arg name "Allowed Client Scopes" \
+        --arg providerId "allowed-client-templates" \
+        --arg providerType "org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy" \
+        --arg parentId "$parent_id" \
+        --arg subType "$sub_type" \
+        --argjson allowedScopes "$all_scope_names" \
+        '{
+            name: $name,
+            providerId: $providerId,
+            providerType: $providerType,
+            parentId: $parentId,
+            subType: $subType,
+            config: {
+                "allow-default-scopes": ["true"],
+                "allowed-client-scopes": $allowedScopes
+            }
+        }')
+
+    local response=$(curl -s -o /dev/null -w "%{http_code}" \
+        -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/components/${policy_id}" \
+        -H "Authorization: Bearer ${token}" \
+        -H "Content-Type: application/json" \
+        -d "$policy_json")
+
+    if [ "$response" = "204" ]; then
+        echo -e "${GREEN}${sub_type} Allowed Client Scopes policy includes non-privileged realm scopes.${NC}"
+    else
+        echo -e "${RED}Failed to update ${sub_type} Allowed Client Scopes policy. HTTP status: ${response}${NC}"
+        return 1
+    fi
+}
+
 configure_dcr_allowed_scopes() {
     local token=$1
 
-    echo "Configuring anonymous-DCR 'Allowed Client Scopes' policy..."
+    echo "Configuring DCR 'Allowed Client Scopes' policy (anonymous + authenticated)..."
 
-    # Find the anonymous-subType "Allowed Client Scopes" policy
     local components=$(curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/components?type=org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy")
-
-    local policy_id=$(echo "$components" | \
-        jq -r '.[] | select(.name=="Allowed Client Scopes" and .subType=="anonymous") | .id')
-
-    if [ -z "$policy_id" ] || [ "$policy_id" = "null" ]; then
-        echo -e "${RED}Error: Could not find anonymous 'Allowed Client Scopes' policy${NC}"
-        return 1
-    fi
 
     # Build the allowed-client-scopes list from the realm's client-scope NAMES,
     # minus every scope in PRIVILEGED_CLIENT_SCOPES, plus "openid" (the OIDC
@@ -843,40 +890,8 @@ configure_dcr_allowed_scopes() {
                 | select(contains("/") | not)
              ] + ["openid"] | unique')
 
-    # Build the updated policy body. Keep `allow-default-scopes` true so the
-    # built-in OIDC scopes still pass; explicitly include every realm scope
-    # so DCR doesn't reject registry-internal scope names.
-    local policy_json=$(jq -n \
-        --arg name "Allowed Client Scopes" \
-        --arg providerId "allowed-client-templates" \
-        --arg providerType "org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy" \
-        --arg parentId "$(echo "$components" | jq -r '.[] | select(.name=="Allowed Client Scopes" and .subType=="anonymous") | .parentId')" \
-        --arg subType "anonymous" \
-        --argjson allowedScopes "$all_scope_names" \
-        '{
-            name: $name,
-            providerId: $providerId,
-            providerType: $providerType,
-            parentId: $parentId,
-            subType: $subType,
-            config: {
-                "allow-default-scopes": ["true"],
-                "allowed-client-scopes": $allowedScopes
-            }
-        }')
-
-    local response=$(curl -s -o /dev/null -w "%{http_code}" \
-        -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/components/${policy_id}" \
-        -H "Authorization: Bearer ${token}" \
-        -H "Content-Type: application/json" \
-        -d "$policy_json")
-
-    if [ "$response" = "204" ]; then
-        echo -e "${GREEN}Allowed Client Scopes policy updated to permit all realm scopes.${NC}"
-    else
-        echo -e "${RED}Failed to update Allowed Client Scopes policy. HTTP status: ${response}${NC}"
-        return 1
-    fi
+    _widen_allowed_scopes_policy "$token" "anonymous" "$components" "$all_scope_names" || return 1
+    _widen_allowed_scopes_policy "$token" "authenticated" "$components" "$all_scope_names" || return 1
 }
 
 configure_dcr_trusted_hosts() {

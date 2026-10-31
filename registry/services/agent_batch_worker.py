@@ -122,6 +122,7 @@ class AgentBatchWorker:
                 submitted_by=job.submitted_by,
                 is_admin=job.submitter_is_admin,
                 ui_permissions=job.submitter_ui_permissions,
+                submitter_owner_id=job.owner_id,
             )
             succeeded_delta = 1 if result.status < 400 else 0
             failed_delta = 1 - succeeded_delta

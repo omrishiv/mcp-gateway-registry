@@ -165,9 +165,9 @@ resource "aws_iam_role_policy_attachment" "keycloak_task_exec_role_policy" {
 }
 
 # Policy to read from SSM Parameter Store
+# kms:Decrypt is scoped to the RDS CMK, which encrypts the three SSM
+# SecureStrings and the database secret this role reads.
 resource "aws_iam_role_policy" "keycloak_task_exec_ssm_policy" {
-  #checkov:skip=CKV_AWS_290:kms:Decrypt requires wildcard resource as KMS key ARN is determined at runtime by SSM
-  #checkov:skip=CKV_AWS_355:kms:Decrypt requires wildcard resource as KMS key ARN is determined at runtime by SSM
   name = "keycloak-task-exec-ssm-policy"
   role = aws_iam_role.keycloak_task_exec_role.id
 
@@ -203,7 +203,7 @@ resource "aws_iam_role_policy" "keycloak_task_exec_ssm_policy" {
         Action = [
           "kms:Decrypt"
         ]
-        Resource = "*"
+        Resource = aws_kms_key.rds.arn
       }
     ]
   })

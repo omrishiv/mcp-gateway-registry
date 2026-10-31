@@ -206,8 +206,8 @@ class TestCreateBlock:
         # from the registered path, so /skills/proxy-demo -> /gateway/skill/proxy-demo,
         # NOT the doubled /skill/skills/proxy-demo).
         block = self._block()
-        assert "location {{ROOT_PATH}}/gateway/skill/proxy-demo/ {" in block
-        assert "location {{ROOT_PATH}}/skill/skills/proxy-demo" not in block
+        assert "location /gateway/skill/proxy-demo/ {" in block
+        assert "location /skill/skills/proxy-demo" not in block
 
     def test_location_has_trailing_slash_no_prefix_hijack(self):
         # Issue #1501 class: a bare `location /gateway/skill/foo` prefix-matches
@@ -216,8 +216,8 @@ class TestCreateBlock:
         # trailing slash so it only matches the subtree (same guard real/virtual
         # servers apply).
         block = self._block(path="/skills/foo")
-        assert "location {{ROOT_PATH}}/gateway/skill/foo/ {" in block
-        assert "location {{ROOT_PATH}}/gateway/skill/foo {" not in block
+        assert "location /gateway/skill/foo/ {" in block
+        assert "location /gateway/skill/foo {" not in block
 
     def test_proxy_pass_targets_auth_server_generic_hop(self):
         block = self._block()
@@ -249,7 +249,7 @@ class TestCreateBlock:
         assert 'set $generic_proxy_kind "a2a_agent";' in block
         assert 'set $entity_path "agents/code-reviewer";' in block
         # ...while the outward location uses the stripped, prefixed client path.
-        assert "location {{ROOT_PATH}}/gateway/a2a_agent/code-reviewer/ {" in block
+        assert "location /gateway/a2a_agent/code-reviewer/ {" in block
         assert "client_max_body_size 8m;" in block
 
     @pytest.mark.parametrize("streaming", [False, True])
@@ -421,19 +421,19 @@ class TestSafeBlock:
 
 
 class TestLocationPaths:
-    def test_extracts_plain_and_placeholder_paths(self):
+    def test_extracts_plain_and_exact_paths(self):
         text = """
-    location {{ROOT_PATH}}/skill/skills/x {
+    location /gw/skill/skills/x {
         proxy_pass http://a/;
     }
     location = /validate {
     }"""
         paths = NginxConfigService._location_paths_in(text)
-        assert "/skill/skills/x" in paths
+        assert "/gw/skill/skills/x" in paths
         assert "/validate" in paths
 
     def test_ignores_commented_locations(self):
-        text = "#    location {{ROOT_PATH}}/dead {\n    location /live {\n    }"
+        text = "#    location /dead {\n    location /live {\n    }"
         paths = NginxConfigService._location_paths_in(text)
         assert paths == {"/live"}
 

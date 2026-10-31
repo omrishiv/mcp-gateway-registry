@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 import time
 from datetime import UTC
 from enum import Enum
@@ -576,6 +577,50 @@ def _mask_sensitive_value(value: Any) -> str:
     return str_value[:4] + "*" * min(len(str_value) - 4, 8)
 
 
+# The authority of every ``scheme://`` URL inside a value, which may hold one URL
+# or several (comma or space separated). The lookbehind does not consume the
+# ``://``, so a URL that directly follows another in a list is still matched.
+_URL_AUTHORITY_RE = re.compile(r"(?<=://)[^/?#\s]*")
+_MASKED_USERINFO = "<MASKED>"
+
+
+def _mask_authority_userinfo(
+    match: re.Match[str],
+) -> str:
+    """Replace the userinfo of one URL authority, keeping host and port."""
+    authority = match.group(0)
+    if "@" not in authority:
+        return authority
+    return f"{_MASKED_USERINFO}@{authority.rpartition('@')[2]}"
+
+
+def _mask_url_userinfo(
+    value: Any,
+) -> Any:
+    """Return ``value`` with credentials in URL userinfo masked, at any depth.
+
+    A setting whose name is not secret-sounding can still carry a password or
+    token in the userinfo part of a URL. Masked views and exports run every
+    value through this, so only the host, port, path and query survive. The
+    split matches ``urlsplit`` (userinfo ends at the last ``@`` before the path).
+
+    Args:
+        value: A setting value: str, list, tuple, dict or a scalar.
+
+    Returns:
+        The value with each URL's userinfo replaced by ``<MASKED>``.
+    """
+    if isinstance(value, str):
+        return _URL_AUTHORITY_RE.sub(_mask_authority_userinfo, value) if "@" in value else value
+    if isinstance(value, list):
+        return [_mask_url_userinfo(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_mask_url_userinfo(item) for item in value)
+    if isinstance(value, dict):
+        return {key: _mask_url_userinfo(item) for key, item in value.items()}
+    return value
+
+
 def _format_value(
     field_name: str,
     value: Any,
@@ -594,6 +639,8 @@ def _format_value(
             "unit": None,
         }
 
+    # The view masks secrets, so it also masks credentials embedded in a URL.
+    value = _mask_url_userinfo(value)
     display = str(value)
     unit = None
 
@@ -1062,6 +1109,8 @@ def _export_as_env(include_sensitive: bool = False) -> str:
                 lines.append(f"# --- {sg_title} ---")
                 current_sg = sg_title
             value = _get_field_value(field_name)
+            if not include_sensitive:
+                value = _mask_url_userinfo(value)
             env_key = field_name.upper()
             sensitive = is_sensitive or _is_sensitive_field(field_name)
 
@@ -1091,6 +1140,8 @@ def _export_as_json(include_sensitive: bool = False) -> str:
         group_config: dict[str, Any] = {}
         for field_name, _display_name, is_sensitive, _sg_title in _iter_group_fields(group_def):
             value = _get_field_value(field_name)
+            if not include_sensitive:
+                value = _mask_url_userinfo(value)
             sensitive = is_sensitive or _is_sensitive_field(field_name)
 
             if sensitive and not include_sensitive:
@@ -1133,6 +1184,8 @@ def _export_as_tfvars(include_sensitive: bool = False) -> str:
                 lines.append(f"# {sg_title}")
                 current_sg = sg_title
             value = _get_field_value(field_name)
+            if not include_sensitive:
+                value = _mask_url_userinfo(value)
             tf_key = field_name.lower()
             sensitive = is_sensitive or _is_sensitive_field(field_name)
 
@@ -1185,6 +1238,8 @@ def _export_as_yaml(include_sensitive: bool = False) -> str:
                 lines.append(f"    # {sg_title}")
                 current_sg = sg_title
             value = _get_field_value(field_name)
+            if not include_sensitive:
+                value = _mask_url_userinfo(value)
             sensitive = is_sensitive or _is_sensitive_field(field_name)
 
             if sensitive:

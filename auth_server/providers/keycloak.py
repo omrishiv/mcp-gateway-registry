@@ -14,6 +14,8 @@ from .base import (
     AuthProvider,
     IdTokenVerificationError,
     normalize_groups_claim,
+    self_signed_owner_id,
+    with_owner_id,
 )
 
 # Constants for self-signed token validation
@@ -166,16 +168,19 @@ class KeycloakProvider(AuthProvider):
 
             # Extract user info from claims
             groups = normalize_groups_claim(claims.get("groups"), source="keycloak groups")
-            return {
-                "valid": True,
-                "username": claims.get("preferred_username", claims.get("sub")),
-                "email": claims.get("email"),
-                "groups": groups,
-                "scopes": claims.get("scope", "").split() if claims.get("scope") else [],
-                "client_id": claims.get("azp", claims.get("aud", self.client_id)),
-                "method": "keycloak",
-                "data": claims,
-            }
+            return with_owner_id(
+                {
+                    "valid": True,
+                    "username": claims.get("preferred_username", claims.get("sub")),
+                    "email": claims.get("email"),
+                    "groups": groups,
+                    "scopes": claims.get("scope", "").split() if claims.get("scope") else [],
+                    "client_id": claims.get("azp", claims.get("aud", self.client_id)),
+                    "method": "keycloak",
+                    "data": claims,
+                },
+                self.owner_id_from_claims(claims),
+            )
 
         except jwt.ExpiredSignatureError:
             logger.warning("Token validation failed: Token has expired")
@@ -281,6 +286,11 @@ class KeycloakProvider(AuthProvider):
             f"http://localhost:8080/realms/{self.realm}",
         ]
 
+    @property
+    def owner_issuer(self) -> str:
+        """The realm's external URL, for every accepted issuer alias of the realm."""
+        return self.external_realm_url
+
     def accepted_audiences(self) -> list[str]:
         """Audiences that make an access token valid AT THIS GATEWAY.
 
@@ -362,18 +372,21 @@ class KeycloakProvider(AuthProvider):
                 len(scopes),
             )
 
-            return {
-                "valid": True,
-                "method": "self_signed",
-                "data": claims,
-                "client_id": claims.get("client_id", "user-generated"),
-                "username": claims.get("sub", ""),
-                "email": claims.get("email", ""),
-                "expires_at": claims.get("exp"),
-                "scopes": scopes,
-                "groups": groups,
-                "token_type": "user_generated",
-            }
+            return with_owner_id(
+                {
+                    "valid": True,
+                    "method": "self_signed",
+                    "data": claims,
+                    "client_id": claims.get("client_id", "user-generated"),
+                    "username": claims.get("sub", ""),
+                    "email": claims.get("email", ""),
+                    "expires_at": claims.get("exp"),
+                    "scopes": scopes,
+                    "groups": groups,
+                    "token_type": "user_generated",
+                },
+                self_signed_owner_id(claims),
+            )
 
         except jwt.ExpiredSignatureError:
             logger.warning("Self-signed token validation failed: Token has expired")

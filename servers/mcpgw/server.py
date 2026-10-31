@@ -57,9 +57,15 @@ REGISTRY_EXTERNAL_URL = os.getenv("REGISTRY_EXTERNAL_URL", "")
 # always allowed by FastMCP's built-in defaults, so those are not listed here.
 # Operators who front mcpgw under a different name override the comma-separated
 # MCPGW_HTTP_ALLOWED_HOSTS (e.g. "my-mcpgw.svc"); "*" disables protection
-# entirely for the (discouraged) case where the Host is unpredictable.
+# entirely for the (discouraged) case where the Host is unpredictable. A value
+# with no host entries (empty or only commas/blanks) keeps protection ON with the
+# default host rather than turning it off.
 _DEFAULT_MCPGW_ALLOWED_HOSTS = "mcpgw-server"
 MCPGW_HTTP_ALLOWED_HOSTS = os.getenv("MCPGW_HTTP_ALLOWED_HOSTS", _DEFAULT_MCPGW_ALLOWED_HOSTS)
+
+# Lowercased scheme prefix the gateway's /validate accepts on X-Authorization /
+# Authorization; compared against the lowercased header value.
+_BEARER_PREFIX = "bearer "
 
 MAX_QUERY_LENGTH: int = 500
 MIN_TOP_N: int = 1
@@ -253,12 +259,16 @@ def _resolve_allowed_hosts(
           OFF, for the discouraged case where the front-door Host is
           unpredictable. mcpgw is never directly internet-exposed, but keeping
           protection ON with a named allowlist is still preferred.
-        - empty -> (False, None): nothing to enforce.
+        - no host entries (empty, or only blanks/commas) -> (True, [default]):
+          protection stays ON with the default "mcpgw-server" host. Only an
+          explicit "*" turns it off, so a mis-set value fails closed.
     """
     hosts = [h.strip() for h in raw_value.split(",") if h.strip()]
 
-    if not hosts or "*" in hosts:
+    if "*" in hosts:
         return False, None
+    if not hosts:
+        return True, [_DEFAULT_MCPGW_ALLOWED_HOSTS]
 
     return True, hosts
 
@@ -452,9 +462,13 @@ def _build_discovery_receipt(
 
 
 def _extract_bearer_token(ctx: Context | None) -> str:
-    """Extract bearer token from FastMCP context (legacy / no-OAuth mode).
+    """Extract the bearer token the gateway authorized (legacy / no-OAuth mode).
 
-    Supports both standard Authorization header and MCP Gateway's X-Authorization header.
+    Uses the gateway /validate selection rule so mcpgw forwards the same
+    credential the gateway checked: X-Authorization wins when present, otherwise
+    Authorization; the scheme prefix "Bearer " is matched case-insensitively and
+    the remaining token is whitespace-stripped. A selected header with another
+    scheme or an empty token is refused (no fallback to the other header).
     """
     if not ctx:
         raise ValueError("Authentication required: Context is None")
@@ -463,13 +477,15 @@ def _extract_bearer_token(ctx: Context | None) -> str:
         if hasattr(ctx, "request_context") and ctx.request_context:
             request = ctx.request_context.request
             if request and hasattr(request, "headers"):
-                auth_header = request.headers.get("authorization")
-                if not auth_header:
-                    auth_header = request.headers.get("x-authorization")
-                if auth_header and auth_header.lower().startswith("bearer "):
-                    return auth_header.split(" ", 1)[1]
+                auth_header = request.headers.get("x-authorization") or request.headers.get(
+                    "authorization"
+                )
+                if auth_header and auth_header.lower().startswith(_BEARER_PREFIX):
+                    token = auth_header[len(_BEARER_PREFIX) :].strip()
+                    if token:
+                        return token
                 raise ValueError(
-                    "Bearer token not found in Authorization or X-Authorization header"
+                    "Bearer token not found in X-Authorization or Authorization header"
                 )
             raise ValueError("Request object or headers not found in request_context")
         raise ValueError("request_context not available in Context")

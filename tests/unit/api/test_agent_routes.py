@@ -84,6 +84,7 @@ def mock_user_context() -> dict[str, Any]:
     """Create a mock user context for authentication."""
     return {
         "username": "testuser",
+        "owner_id": "idp|testuser",
         "groups": ["test-group", "dev-group"],
         "scopes": ["read:agents", "write:agents"],
         "auth_method": "session",
@@ -106,6 +107,7 @@ def mock_admin_context() -> dict[str, Any]:
     """Create a mock admin user context."""
     return {
         "username": "admin",
+        "owner_id": "idp|admin",
         "groups": ["mcp-registry-admin"],
         "scopes": ["admin:all"],
         "auth_method": "session",
@@ -128,6 +130,7 @@ def mock_limited_user_context() -> dict[str, Any]:
     """Create a mock user context with limited permissions."""
     return {
         "username": "limiteduser",
+        "owner_id": "idp|limiteduser",
         "groups": ["limited-group"],
         "scopes": ["read:agents"],
         "auth_method": "session",
@@ -1509,6 +1512,7 @@ class TestToggleAgent:
         # sample_agent_card.registered_by == "testuser"
         ctx = {
             "username": "testuser",
+            "owner_id": "idp|testuser",
             "groups": ["test-group"],
             "scopes": ["write:agents"],
             "accessible_agents": ["/agents/some-other-agent"],

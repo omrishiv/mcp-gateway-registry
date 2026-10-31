@@ -27,6 +27,10 @@ from .scanner_llm_analyzer import (
     LLMAnalyzerUnavailableError,
     ensure_llm_analyzer_available,
 )
+from .scanner_verdict import (
+    classify_severity,
+    mcp_tool_results_allow_safe,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -527,6 +531,11 @@ class SecurityScannerService:
         """
         Analyze scan results and extract severity counts.
 
+        The verdict fails closed: it is safe only when no critical or high
+        finding was counted and the raw tool results classify as safe (every
+        analyzer result is a dict with a known severity below high and no tool
+        reports is_safe false). Missing or malformed tool results are unsafe.
+
         Args:
             raw_output: Dictionary containing scanner results
 
@@ -545,7 +554,9 @@ class SecurityScannerService:
             if isinstance(analyzer_data, dict):
                 findings = analyzer_data.get("findings", [])
                 for finding in findings:
-                    severity = finding.get("severity", "").lower()
+                    if not isinstance(finding, dict):
+                        continue
+                    severity = classify_severity(finding.get("severity"))
                     if severity == "critical":
                         critical_count += 1
                     elif severity == "high":
@@ -555,8 +566,11 @@ class SecurityScannerService:
                     elif severity == "low":
                         low_count += 1
 
-        # Determine if safe: no critical or high severity issues
-        is_safe = critical_count == 0 and high_count == 0
+        is_safe = (
+            critical_count == 0
+            and high_count == 0
+            and mcp_tool_results_allow_safe(raw_output.get("tool_results"))
+        )
 
         logger.info("Security analysis results:")
         logger.info(f"  Critical Issues: {critical_count}")

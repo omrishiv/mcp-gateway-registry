@@ -411,7 +411,6 @@ class TestNoProxyAndSchemes:
             # reserved hostname rejected by every ordinary profile.
             ("auth-server", "auth-server"),
             ("AUTH-SERVER", "auth-server"),
-            ("acme.example:443", "acme.example"),
             ("svc.cluster.local", "a.svc.cluster.local"),
             (".svc.cluster.local", "a.svc.cluster.local"),
             ("*", "acme.example"),

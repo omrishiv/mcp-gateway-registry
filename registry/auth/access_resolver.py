@@ -18,10 +18,45 @@ logger = logging.getLogger(__name__)
 ToolAllowlist = dict[str, set[str]]
 
 
-# Cross-server wildcard sentinels on the READ side. MUST stay in sync with the
-# WRITE-side reject set registry.utils.url_guard._RESERVED_SERVER_PATH_NAMES,
-# which blocks a registration path from normalizing into one of these values.
+# Per-server TOOL wildcard values: `tools: ["*"]` / `tools: ["all"]` (and the
+# bare-string forms) grant every tool on the rule's server, as the gateway's
+# validate_server_tool_access does.
 _WILDCARD_VALUES: frozenset[str] = frozenset(("all", "*"))
+
+# Cross-server SERVER wildcard. Only `server: "*"` (slashes ignored, as the
+# gateway's _server_names_match normalizes) names every server; the gateway
+# never honours `server: "all"`, so the registry treats "all" as a plain server
+# name that matches nothing (the WRITE-side guard
+# registry.utils.url_guard._RESERVED_SERVER_PATH_NAMES keeps both "all" and "*"
+# reserved so no registered server can carry either name).
+CROSS_SERVER_WILDCARD: str = "*"
+
+
+def _merge_tool_rule(
+    tools: ToolAllowlist,
+    key: str,
+    tool_rules: object,
+) -> None:
+    """Union one rule's ``tools`` value into the allowlist for ``key``.
+
+    A list or bare string naming a wildcard value records ``{"*"}`` (sticky);
+    a bare string names one tool; list elements that are not strings are
+    ignored; a missing or malformed value (None, number, dict) adds nothing,
+    but still records an (empty) entry so the server is known and fail-closed.
+    """
+    existing = tools.setdefault(key, set())
+    if existing == {"*"}:
+        return
+    if isinstance(tool_rules, str):
+        names = {tool_rules}
+    elif isinstance(tool_rules, list):
+        names = {t for t in tool_rules if isinstance(t, str)}
+    else:
+        return
+    if names & _WILDCARD_VALUES:
+        tools[key] = {"*"}
+        return
+    existing.update(names)
 
 
 @dataclass(frozen=True)
@@ -33,8 +68,8 @@ class UserAccess:
 
     Attributes:
         servers: List of server names the user can access. Contains the
-            sentinel "*" when any scope grants cross-server wildcard via
-            `server: "*"` / `server: "all"`.
+            sentinel "*" when any scope grants cross-server access via
+            `server: "*"`.
         tools: Mapping of server_name to the set of allowed tool names.
             `{"*"}` means wildcard on that server (no pruning). A missing
             entry or empty set means "no tools allowed" (fail-closed).
@@ -49,21 +84,24 @@ async def resolve_scope_access(
 ) -> UserAccess:
     """Resolve `accessible_servers` and `accessible_tools` in one loop.
 
-    Wildcard semantics (mirrors auth_server/server.py):
-        - `server: "*"` / `server: "all"` at the rule level is a
-          cross-server wildcard. The sentinel "*" is registered in both
-          `servers` and `tools` so downstream callers can short-circuit
-          without knowing the concrete server name.
+    Wildcard semantics (mirrors auth_server/server.py
+    validate_server_tool_access):
+        - `server: "*"` at the rule level is a cross-server rule. It is
+          recorded under the sentinel key "*" in both `servers` and `tools`,
+          with that rule's OWN tool allowlist: the gateway still checks the
+          rule's `tools` on every server, so `server: "*", tools: ["read"]`
+          grants `read` everywhere, not every tool. `server: "all"` is NOT a
+          wildcard (the gateway does not honour it); it is kept as a literal
+          server name, which no registered server can carry.
         - `tools: ["all"]` / `tools: ["*"]` is a per-server wildcard and
           is recorded as `{"*"}`.
-        - A missing `tools` key or a non-list value means "no tools
+        - A missing `tools` key or a malformed value means "no tools
           allowed" on that server (fail-closed). A startup audit in
           `audit_legacy_scopes_on_startup` warns operators about the
           legacy shape so they can migrate before the tightening bites.
 
-    Wildcards are sticky across scopes: once any scope grants wildcard on
-    a server, later scopes cannot narrow it. Non-wildcard tool sets are
-    unioned across scopes.
+    Tool allowlists are unioned across scopes and rules, so the result does
+    not depend on scope order; a wildcard is absorbing.
 
     Args:
         user_scopes: Flat list of user scope names.
@@ -83,12 +121,8 @@ async def resolve_scope_access(
     tools: ToolAllowlist = {}
 
     # Fetch every scope's rules in one round-trip rather than one per scope.
-    # The sticky-wildcard / union semantics below depend on iterating
-    # `user_scopes` in order, NOT on DB return order, so we look each scope
-    # up in the prefetched map while preserving the original loop. Do NOT
-    # "optimize" this into `for scope in scope_rules:` — dict order is the
-    # $in/sort order, not the user's scope order, and that would let a later
-    # restricted scope lose to an earlier wildcard (or vice versa).
+    # Iterate `user_scopes` (not the map) so a scope the repo returned but the
+    # caller does not hold can never contribute.
     try:
         scope_rules = await scope_repo.get_server_scopes_bulk(user_scopes)
     except Exception as exc:
@@ -104,62 +138,17 @@ async def resolve_scope_access(
             if not isinstance(rule, dict):
                 continue
             server_name = rule.get("server")
-            if not server_name:
+            if not isinstance(server_name, str) or not server_name:
                 continue
 
-            # Cross-server wildcard: server: "*" or server: "all". Promote
-            # to sentinel "*" in both servers and tools so downstream
-            # short-circuits work regardless of the requested server.
-            if str(server_name) in _WILDCARD_VALUES:
-                servers.add("*")
-                tools["*"] = {"*"}
-                continue
+            # Cross-server rule: server "*" (slashes ignored, as the gateway
+            # normalizes). Recorded under the sentinel key "*" with the rule's
+            # own tools; "all" is a literal name here, not a wildcard.
+            if server_name.strip("/") == CROSS_SERVER_WILDCARD:
+                server_name = CROSS_SERVER_WILDCARD
 
             servers.add(server_name)
-
-            tool_rules = rule.get("tools")
-            if tool_rules is None:
-                # Fail-closed for legacy scopes missing the tools key.
-                if server_name not in tools:
-                    tools[server_name] = set()
-                continue
-
-            # Some UIs store a wildcard as a bare string ("*" or "all")
-            # instead of a single-item list. Treat both forms as wildcard
-            # so the resolver agrees with what auth_server's
-            # validate_server_tool_access already accepts.
-            if isinstance(tool_rules, str):
-                if tool_rules in _WILDCARD_VALUES:
-                    tools[server_name] = {"*"}
-                else:
-                    # Single tool name written as a bare string.
-                    existing_str = tools.get(server_name)
-                    if existing_str == {"*"}:
-                        continue
-                    merged_str = existing_str if existing_str is not None else set()
-                    merged_str.add(tool_rules)
-                    tools[server_name] = merged_str
-                continue
-
-            if not isinstance(tool_rules, list):
-                # Malformed rule (e.g. dict / int): treat as no allowlist.
-                if server_name not in tools:
-                    tools[server_name] = set()
-                continue
-
-            existing = tools.get(server_name)
-            if existing == {"*"}:
-                # Wildcard already sticky from a prior scope; keep it.
-                continue
-
-            has_wildcard = any(str(t) in _WILDCARD_VALUES for t in tool_rules)
-            if has_wildcard:
-                tools[server_name] = {"*"}
-                continue
-
-            merged: set[str] = existing if existing is not None else set()
-            merged.update(str(t) for t in tool_rules)
-            tools[server_name] = merged
+            _merge_tool_rule(tools, server_name, rule.get("tools"))
 
     tool_restricted = sum(1 for v in tools.values() if v != {"*"})
     logger.info(

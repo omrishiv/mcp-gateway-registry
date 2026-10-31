@@ -229,6 +229,7 @@ def mint_mcp_proxy_token(
     audit_identity: dict | None = None,
     version_id: str = "",
     virtual_backend: bool = False,
+    owner_id: str = "",
 ) -> str:
     """Mint the per-request /mcp-proxy token in /validate's 200 path.
 
@@ -264,6 +265,10 @@ def mint_mcp_proxy_token(
     the verified ``sub`` principal. Chosen over deleting the guard, which would
     sign ``"audit_identity": null`` on those paths.
 
+    ``owner_id`` is the caller's immutable ownership identity (issuer plus
+    subject, see ``providers.base.make_owner_id``), omitted when the caller has
+    none (static and federation credentials, a token without a subject).
+
     Raises:
         ValueError: The subject is empty or ``SECRET_KEY`` is unset.
         InternalTokenTooLargeError: The minted token exceeds
@@ -283,6 +288,8 @@ def mint_mcp_proxy_token(
     }
     if audit_identity:
         extra_claims["audit_identity"] = audit_identity
+    if owner_id:
+        extra_claims["owner_id"] = owner_id
     return _mint_internal_token(
         audience=MCP_PROXY_AUDIENCE,
         subject=subject,
@@ -305,6 +312,7 @@ def mint_generic_proxy_token(
     http_method: str,
     streaming: bool = False,
     has_upstream_auth: bool = False,
+    owner_id: str = "",
 ) -> str:
     """Mint the per-request /proxy/{entity_type}/{path} token in /validate's 200 path.
 
@@ -329,6 +337,9 @@ def mint_generic_proxy_token(
     headers, so the hop vends + injects them (from the registry's internal
     endpoint) only on the signed claim.
 
+    ``owner_id`` is the caller's ownership identity, omitted when it has none
+    (see ``mint_mcp_proxy_token``).
+
     Raises:
         ValueError: The subject is empty or ``SECRET_KEY`` is unset.
         InternalTokenTooLargeError: The minted token exceeds
@@ -338,19 +349,22 @@ def mint_generic_proxy_token(
     if not method:
         raise ValueError("http_method is required for a generic proxy token")
 
+    extra_claims: dict = {
+        "entity_type": entity_type,
+        "server": registered_path,  # FULL registered path, not first-segment
+        "upstream_url": upstream_url,
+        "method": method,
+        "streaming": bool(streaming),
+        "has_upstream_auth": bool(has_upstream_auth),
+        "token_use": GENERIC_PROXY_TOKEN_USE,
+    }
+    if owner_id:
+        extra_claims["owner_id"] = owner_id
     return _mint_internal_token(
         audience=GENERIC_PROXY_AUDIENCE,
         subject=subject,
         scopes=scopes,
-        extra_claims={
-            "entity_type": entity_type,
-            "server": registered_path,  # FULL registered path, not first-segment
-            "upstream_url": upstream_url,
-            "method": method,
-            "streaming": bool(streaming),
-            "has_upstream_auth": bool(has_upstream_auth),
-            "token_use": GENERIC_PROXY_TOKEN_USE,
-        },
+        extra_claims=extra_claims,
         ttl_seconds=_generic_ttl_seconds(),
     )
 
@@ -367,6 +381,8 @@ def mint_registry_ui_token(
     auth_method: str,
     client_id: str,
     egress_user: str = "",
+    token_scopes: list[str] | None = None,
+    owner_id: str = "",
 ) -> str:
     """Mint the per-request registry /api/ token in /validate's 200 path.
 
@@ -385,6 +401,18 @@ def mint_registry_ui_token(
     registry's consent-write path keys the vault on this; it must match the value
     the vend path reads from the mcp-proxy token so one human maps to one bucket.
 
+    ``token_scopes`` is the upper bound on the registry's derived scopes for a
+    request made with a scope-narrowed token (a self-signed token minted for
+    ``requested_scopes``): the registry intersects the scopes it derives from
+    ``groups`` with this list before computing permissions and admin. ``None``
+    (the claim value ``null``) means the request carried no narrowed token and
+    no bound applies; an empty list bounds the registry to no scopes.
+
+    ``owner_id`` is the caller's immutable ownership identity (issuer plus
+    subject, see ``providers.base.make_owner_id``). The registry keys record
+    ownership on it, not on ``sub`` (the display username). Omitted when the
+    caller has none, so the registry treats the request as owning nothing.
+
     ``_mint_internal_token`` refuses an empty subject (fail-closed): if minting
     raises, /validate attaches no token and the registry rejects the request
     rather than trusting unsigned headers.
@@ -394,18 +422,22 @@ def mint_registry_ui_token(
         InternalTokenTooLargeError: The minted token exceeds
             ``INTERNAL_TOKEN_MAX_BYTES`` (see ``_mint_internal_token``).
     """
+    extra_claims: dict = {
+        "session_id": session_id or "",
+        "groups": list(groups or []),
+        "auth_method": auth_method or "",
+        "client_id": client_id or "",
+        "egress_user": egress_user or "",
+        "token_scopes": None if token_scopes is None else list(token_scopes),
+        "token_use": MCP_REGISTRY_UI_TOKEN_USE,
+    }
+    if owner_id:
+        extra_claims["owner_id"] = owner_id
     return _mint_internal_token(
         audience=MCP_REGISTRY_UI_AUDIENCE,
         subject=subject,
         scopes=[],
-        extra_claims={
-            "session_id": session_id or "",
-            "groups": list(groups or []),
-            "auth_method": auth_method or "",
-            "client_id": client_id or "",
-            "egress_user": egress_user or "",
-            "token_use": MCP_REGISTRY_UI_TOKEN_USE,
-        },
+        extra_claims=extra_claims,
     )
 
 

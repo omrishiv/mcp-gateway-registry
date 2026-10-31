@@ -186,7 +186,7 @@ class TestRenderAuthzCoherence:
             )
         # Client route is prefixed and de-duplicates the registered namespace;
         # authz markers and the internal hop below retain the full registered path.
-        assert "location {{ROOT_PATH}}/gateway/skill/proxy-demo/ {" in block
+        assert "location /gateway/skill/proxy-demo/ {" in block
         assert "proxy_pass http://auth-server:8888/proxy/skill/skills/proxy-demo/;" in block
         # The token the verifier accepts for that same route:
         tok = mint_generic_proxy_token(

@@ -22,6 +22,7 @@ from starlette.testclient import TestClient
 KEYCLOAK_URL = "https://keycloak.example.com"
 REALM = "mcp-gateway"
 ISSUER = f"{KEYCLOAK_URL}/realms/{REALM}"
+AUDIENCE = "travel-assistant-agent"
 
 
 @pytest.fixture(scope="module")
@@ -37,8 +38,8 @@ def rsa_keypair():
     return private_pem, public_key
 
 
-def _mint_token(private_pem, issuer=ISSUER, expired=False, audience=None):
-    """Mint an RS256 JWT with the given issuer/expiry/audience."""
+def _mint_token(private_pem, issuer=ISSUER, expired=False, audience=AUDIENCE):
+    """Mint an RS256 JWT with the given issuer/expiry/audience (None omits aud)."""
     now = int(time.time())
     claims = {
         "iss": issuer,
@@ -51,7 +52,9 @@ def _mint_token(private_pem, issuer=ISSUER, expired=False, audience=None):
     return jwt.encode(claims, private_pem, algorithm="RS256")
 
 
-def _build_app(rsa_keypair, monkeypatch, audience=None, auth_disabled=False, presence_only=False):
+def _build_app(
+    rsa_keypair, monkeypatch, audience=AUDIENCE, auth_disabled=False, presence_only=False
+):
     """Build a minimal FastAPI app guarded by the middleware.
 
     The JWKS client is monkeypatched to return the test public key so no network
@@ -142,16 +145,37 @@ def test_health_path_is_public(rsa_keypair, monkeypatch):
     assert response.status_code == 200
 
 
-def test_audience_is_enforced_when_configured(rsa_keypair, monkeypatch):
+def test_wrong_or_missing_audience_is_rejected(rsa_keypair, monkeypatch):
     private_pem, _ = rsa_keypair
-    app = _build_app(rsa_keypair, monkeypatch, audience="travel-assistant")
+    app = _build_app(rsa_keypair, monkeypatch)
     client = TestClient(app)
-    # Wrong audience -> reject.
     wrong = _mint_token(private_pem, audience="some-other-agent")
     assert client.post("/api/book", headers={"Authorization": f"Bearer {wrong}"}).status_code == 401
-    # Correct audience -> accept.
-    right = _mint_token(private_pem, audience="travel-assistant")
-    assert client.post("/api/book", headers={"Authorization": f"Bearer {right}"}).status_code == 200
+    missing = _mint_token(private_pem, audience=None)
+    assert (
+        client.post("/api/book", headers={"Authorization": f"Bearer {missing}"}).status_code == 401
+    )
+
+
+def test_empty_audience_denies_protected_paths(rsa_keypair, monkeypatch):
+    """Without an expected audience the middleware is unconfigured and denies (503)."""
+    private_pem, _ = rsa_keypair
+    app = _build_app(rsa_keypair, monkeypatch, audience="")
+    client = TestClient(app)
+    token = _mint_token(private_pem)
+    response = client.post("/api/book", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 503
+
+
+def test_refuses_to_start_without_audience(monkeypatch):
+    """JWT validation without an expected audience must refuse to start."""
+    monkeypatch.delenv("AGENT_AUTH_DISABLED", raising=False)
+    monkeypatch.delenv("AGENT_AUTH_PRESENCE_ONLY", raising=False)
+    app = FastAPI()
+    with pytest.raises(AuthConfigurationError):
+        install_agent_auth(
+            app, keycloak_url=KEYCLOAK_URL, realm=REALM, audience="", bind_host="127.0.0.1"
+        )
 
 
 def test_fails_closed_when_jwks_unavailable(rsa_keypair, monkeypatch):
@@ -194,6 +218,7 @@ def test_refuses_to_start_when_auth_disabled_and_bound_to_all_interfaces(monkeyp
             app,
             keycloak_url=KEYCLOAK_URL,
             realm=REALM,
+            audience=AUDIENCE,
             bind_host="0.0.0.0",  # nosec B104 - test asserts this is rejected
         )
 
@@ -202,7 +227,9 @@ def test_auth_disabled_on_loopback_is_permitted(monkeypatch):
     """Disabling auth on loopback is allowed (trusted local sandbox)."""
     monkeypatch.setenv("AGENT_AUTH_DISABLED", "true")
     app = FastAPI()
-    install_agent_auth(app, keycloak_url=KEYCLOAK_URL, realm=REALM, bind_host="127.0.0.1")
+    install_agent_auth(
+        app, keycloak_url=KEYCLOAK_URL, realm=REALM, audience=AUDIENCE, bind_host="127.0.0.1"
+    )
 
 
 def test_presence_only_accepts_any_nonempty_bearer(rsa_keypair, monkeypatch):
@@ -232,6 +259,7 @@ def test_presence_only_on_all_interfaces_refused_without_optin(monkeypatch):
             app,
             keycloak_url=KEYCLOAK_URL,
             realm=REALM,
+            audience=AUDIENCE,
             bind_host="0.0.0.0",  # nosec B104 - test asserts this is rejected
         )
 
@@ -246,6 +274,7 @@ def test_presence_only_on_all_interfaces_permitted_with_optin(monkeypatch):
         app,
         keycloak_url=KEYCLOAK_URL,
         realm=REALM,
+        audience=AUDIENCE,
         bind_host="0.0.0.0",  # nosec B104 - test asserts opt-in permits this
     )
 
@@ -255,4 +284,6 @@ def test_presence_only_on_loopback_is_permitted(monkeypatch):
     monkeypatch.setenv("AGENT_AUTH_PRESENCE_ONLY", "true")
     monkeypatch.delenv("AGENT_AUTH_ALLOW_EXPOSED_PRESENCE_ONLY", raising=False)
     app = FastAPI()
-    install_agent_auth(app, keycloak_url=KEYCLOAK_URL, realm=REALM, bind_host="127.0.0.1")
+    install_agent_auth(
+        app, keycloak_url=KEYCLOAK_URL, realm=REALM, audience=AUDIENCE, bind_host="127.0.0.1"
+    )

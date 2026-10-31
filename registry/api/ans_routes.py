@@ -20,8 +20,10 @@ from fastapi import (
 from registry.audit import set_audit_action
 from registry.auth.csrf import verify_csrf_token_flexible
 from registry.auth.dependencies import nginx_proxied_auth
+from registry.auth.ownership import is_owner, user_owner_id
 from registry.core.config import settings
 from registry.schemas.ans_models import LinkANSRequest
+from registry.services import admin_safety
 from registry.services.ans_service import (
     get_ans_metrics,
     get_sync_history,
@@ -95,6 +97,11 @@ def _get_username(
     return user_context.get("username", user_context.get("sub", "unknown"))
 
 
+# Dedicated ANS admin scope accepted by _check_admin besides is_admin
+# (docs/design/ans-integration.md).
+_ANS_ADMIN_SCOPES: frozenset[str] = frozenset({"ans-admin/manage"})
+
+
 def _check_admin(
     user_context: dict | None,
 ) -> None:
@@ -109,22 +116,14 @@ def _check_admin(
     if not user_context:
         raise HTTPException(status_code=403, detail="Admin access required")
 
-    # Use the canonical admin signal derived in dependencies (_user_is_admin),
-    # plus explicit admin group/scope membership and the dedicated ANS admin
-    # scope. Deliberately does NOT match on any scope merely *containing*
-    # "unrestricted": a per-server access scope such as
+    # The canonical request-time is_admin decision, plus the dedicated ANS
+    # admin scope. Group and scope NAMES such as "admin" or
+    # "mcp-registry-admin" are not an admin signal: a scope keeps its name after
+    # its grants stop conferring admin, and a narrowed token carries the user's
+    # full groups. A per-server access scope such as
     # "mcp-servers-unrestricted/execute" grants server access, not registry
-    # administration, and must not satisfy an admin gate (fail closed).
-    scopes = user_context.get("scopes", [])
-    groups = user_context.get("groups", [])
-    is_admin = (
-        user_context.get("is_admin", False)
-        or "admin" in groups
-        or "mcp-registry-admin" in groups
-        or "mcp-registry-admin" in scopes
-        or "ans-admin/manage" in scopes
-    )
-    if not is_admin:
+    # administration (fail closed).
+    if not admin_safety.caller_is_admin(user_context, _ANS_ADMIN_SCOPES):
         raise HTTPException(status_code=403, detail="Admin access required")
 
 
@@ -144,12 +143,12 @@ async def _require_server_owner_or_admin(
     """Enforce that the caller owns the server or is an administrator.
 
     ANS link/unlink mutate trust signals attached to a server, so only the
-    server's owner (``registered_by``) or an admin may perform them. This is a
+    server's owner or an admin may perform them. This is a
     route-level defense-in-depth check layered on top of the service check.
 
-    Fails closed: the caller must be an authenticated admin, or the
-    authenticated username must exactly match the server's recorded owner. A
-    missing user context, a missing owner field, or any mismatch is denied.
+    Fails closed: the caller must be an authenticated admin, or own the server
+    per :func:`registry.auth.ownership.is_owner`. A missing user context, a
+    missing owner identity, or any mismatch is denied.
 
     Args:
         path: Normalized server path.
@@ -171,7 +170,7 @@ async def _require_server_owner_or_admin(
 
     username = (user_context or {}).get("username")
     registered_by = server.get("registered_by")
-    if not username or not registered_by or username != registered_by:
+    if not is_owner(server, user_context):
         logger.warning(
             "ANS: user %s denied owner-only ANS operation on server %s (owner=%s)",
             username,
@@ -215,7 +214,7 @@ async def _require_agent_owner_or_admin(
 
     username = (user_context or {}).get("username")
     registered_by = getattr(agent, "registered_by", None)
-    if not username or not registered_by or username != registered_by:
+    if not is_owner(agent, user_context):
         logger.warning(
             "ANS: user %s denied owner-only ANS operation on agent %s (owner=%s)",
             username,
@@ -257,6 +256,7 @@ async def link_ans_to_agent_endpoint(
         body.ans_agent_id,
         username=username,
         is_admin=bool(user_context and user_context.get("is_admin")),
+        owner_id=user_owner_id(user_context),
     )
     if not result["success"]:
         status_code = status.HTTP_400_BAD_REQUEST
@@ -321,6 +321,7 @@ async def unlink_ans_from_agent_endpoint(
         path,
         username=username,
         is_admin=bool(user_context and user_context.get("is_admin")),
+        owner_id=user_owner_id(user_context),
     )
     if not result["success"]:
         status_code = 404
@@ -359,6 +360,7 @@ async def link_ans_to_server_endpoint(
         body.ans_agent_id,
         username=username,
         is_admin=bool(user_context and user_context.get("is_admin")),
+        owner_id=user_owner_id(user_context),
     )
     if not result["success"]:
         status_code = status.HTTP_400_BAD_REQUEST
@@ -424,6 +426,7 @@ async def unlink_ans_from_server_endpoint(
         path,
         username=username,
         is_admin=bool(user_context and user_context.get("is_admin")),
+        owner_id=user_owner_id(user_context),
     )
     if not result["success"]:
         status_code = 404

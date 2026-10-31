@@ -45,8 +45,12 @@ class AgentBatchService:
         submitter_is_admin: bool,
         submitter_ui_permissions: dict[str, list[str]],
         request_id: str | None = None,
+        owner_id: str | None = None,
     ) -> tuple[AgentBatchJob, bool]:
         """Create a job, or return an existing idempotent one.
+
+        ``owner_id`` is the submitter's immutable ownership identity; the job
+        stores it so the worker authorizes per-item ownership on it.
 
         Returns:
             (job, was_replay). was_replay is True when an existing job matching
@@ -79,6 +83,7 @@ class AgentBatchService:
             job_id=uuid.uuid4().hex,
             state=AgentBatchJobState.queued,
             submitted_by=submitted_by,
+            owner_id=owner_id,
             submitted_at=now,
             updated_at=now,
             request_id=request_id,

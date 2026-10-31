@@ -9,7 +9,13 @@ from urllib.parse import urlencode
 import jwt
 import requests
 
-from .base import AuthProvider, IdTokenVerificationError, normalize_groups_claim
+from .base import (
+    AuthProvider,
+    IdTokenVerificationError,
+    normalize_groups_claim,
+    self_signed_owner_id,
+    with_owner_id,
+)
 
 # Constants for self-signed token validation
 JWT_ISSUER = os.environ.get("JWT_ISSUER", "mcp-auth-server")
@@ -172,16 +178,19 @@ class Auth0Provider(AuthProvider):
                 raw_groups = claims.get("permissions")
             groups = normalize_groups_claim(raw_groups, source="auth0 groups")
 
-            return {
-                "valid": True,
-                "username": claims.get("nickname", claims.get("sub")),
-                "email": claims.get("email"),
-                "groups": groups,
-                "scopes": claims.get("scope", "").split() if claims.get("scope") else [],
-                "client_id": claims.get("azp", self.client_id),
-                "method": "auth0",
-                "data": claims,
-            }
+            return with_owner_id(
+                {
+                    "valid": True,
+                    "username": claims.get("nickname", claims.get("sub")),
+                    "email": claims.get("email"),
+                    "groups": groups,
+                    "scopes": claims.get("scope", "").split() if claims.get("scope") else [],
+                    "client_id": claims.get("azp", self.client_id),
+                    "method": "auth0",
+                    "data": claims,
+                },
+                self.owner_id_from_claims(claims),
+            )
 
         except jwt.ExpiredSignatureError as e:
             logger.warning("Token validation failed: Token has expired")
@@ -242,18 +251,21 @@ class Auth0Provider(AuthProvider):
                 f"groups: {groups}, scopes: {scopes}"
             )
 
-            return {
-                "valid": True,
-                "method": "self_signed",
-                "data": claims,
-                "client_id": claims.get("client_id", "user-generated"),
-                "username": claims.get("sub", ""),
-                "email": claims.get("email", ""),
-                "expires_at": claims.get("exp"),
-                "scopes": scopes,
-                "groups": groups,
-                "token_type": "user_generated",
-            }
+            return with_owner_id(
+                {
+                    "valid": True,
+                    "method": "self_signed",
+                    "data": claims,
+                    "client_id": claims.get("client_id", "user-generated"),
+                    "username": claims.get("sub", ""),
+                    "email": claims.get("email", ""),
+                    "expires_at": claims.get("exp"),
+                    "scopes": scopes,
+                    "groups": groups,
+                    "token_type": "user_generated",
+                },
+                self_signed_owner_id(claims),
+            )
 
         except jwt.ExpiredSignatureError as e:
             logger.warning("Self-signed token validation failed: Token has expired")
@@ -513,6 +525,11 @@ class Auth0Provider(AuthProvider):
         except requests.RequestException as e:
             logger.error(f"Failed to get M2M token: {e}")
             raise ValueError(f"M2M token generation failed: {e}")
+
+    @property
+    def owner_issuer(self) -> str:
+        """The tenant issuer (``https://<domain>/``)."""
+        return self.issuer
 
     def validate_id_token(
         self,

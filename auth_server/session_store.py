@@ -117,6 +117,7 @@ async def create_session(
     id_token: str | None = None,
     subject: str | None = None,
     entra_graph_groups_resolved: bool = False,
+    owner_id: str | None = None,
 ) -> str:
     """Persist a new session and return its opaque session_id.
 
@@ -140,6 +141,11 @@ async def create_session(
         entra_graph_groups_resolved: Whether Entra Graph confirmed membership at
             login, including an empty result. Prevents local fallback from
             replacing the verified result on later session-cookie requests.
+        owner_id: The immutable ownership identity derived from the login's
+            ``(issuer, subject)`` (see ``providers.base.make_owner_id``). Stored
+            records are owned by this value, not by ``username``. Omitted from
+            the record when the login yielded no subject, so the session owns
+            nothing.
 
     Returns:
         Opaque session_id to be embedded in the signed session cookie.
@@ -163,6 +169,8 @@ async def create_session(
         document["entra_graph_groups_resolved"] = True
     if subject:
         document["subject"] = subject
+    if owner_id:
+        document["owner_id"] = owner_id
     if id_token:
         document["id_token_encrypted"] = encrypt_id_token(id_token)
 
@@ -212,6 +220,9 @@ async def resolve_session(session_id: str) -> dict[str, Any] | None:
         # canonical_egress_user.
         "subject": doc.get("subject"),
         "entra_graph_groups_resolved": doc.get("entra_graph_groups_resolved") is True,
+        # Ownership identity (issuer + subject); None for a session created
+        # without a derivable one, which then owns no record.
+        "owner_id": doc.get("owner_id") or None,
     }
 
     encrypted = doc.get("id_token_encrypted")

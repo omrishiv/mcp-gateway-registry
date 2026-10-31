@@ -951,11 +951,11 @@ class TestStoreSyncedServers:
                     "registry.services.peer_federation_service.agent_service",
                     mock_agent_service,
                 ):
-                    # Server already exists
+                    # Server already exists and was synced from this peer
                     mock_server_service.get_server_info.return_value = {
                         "path": "/peer-test-peer/server1",
                         "name": "Old Server 1",
-                        "sync_metadata": {},
+                        "sync_metadata": {"source_peer_id": "test-peer"},
                     }
 
                     service = PeerFederationService()

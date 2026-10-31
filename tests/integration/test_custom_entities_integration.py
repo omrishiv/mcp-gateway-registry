@@ -36,8 +36,8 @@ from registry.services.custom_entity_errors import (
 logger = logging.getLogger(__name__)
 
 ADMIN = {"username": "admin", "is_admin": True, "groups": []}
-ALICE = {"username": "alice", "is_admin": False, "groups": ["g1"]}
-BOB = {"username": "bob", "is_admin": False, "groups": ["g2"]}
+ALICE = {"username": "alice", "owner_id": "idp|alice", "is_admin": False, "groups": ["g1"]}
+BOB = {"username": "bob", "owner_id": "idp|bob", "is_admin": False, "groups": ["g2"]}
 
 
 def _descriptor(name: str) -> CustomTypeDescriptor:

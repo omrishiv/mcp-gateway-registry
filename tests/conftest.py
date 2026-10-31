@@ -126,6 +126,14 @@ def pytest_configure(config):
     # logs, and this also removes a write per log line from every run.
     os.environ["APP_LOG_CENTRALIZED_ENABLED"] = "false"
 
+    # Keep the registry's audit trail out of MongoDB during tests. A mutating
+    # request fails closed (500) when its durable audit write fails, and the
+    # app-level audit repository cannot write from TestClient event loops, so
+    # every real-app mutation would fail. Tests that exercise the durable write
+    # patch the audit logger's repository and mongodb_enabled flag directly.
+    os.environ["AUDIT_LOG_MONGODB_ENABLED"] = "false"
+    os.environ["AUDIT_LOG_REQUIRE_DURABLE"] = "false"
+
     # NOTE: SECRET_KEY is set at module-import time near the top of this
     # conftest, because Settings() is constructed during import and refuses
     # to start without one — pytest_configure runs too late for that path.

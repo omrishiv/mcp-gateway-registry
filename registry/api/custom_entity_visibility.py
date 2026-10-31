@@ -14,6 +14,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
+from ..auth.ownership import OWNER_FIELD, is_owner, owner_query_clauses
 from ..schemas.custom_entity_models import CustomEntityRecord
 
 
@@ -29,12 +30,17 @@ def _build_visibility_filter(
     """
     if user_context.get("is_admin"):
         return None  # admin sees all
-    username = user_context.get("username", "")
     groups = user_context.get("groups", []) or []
+    # Private records the caller owns, in lockstep with ``is_owner`` (an empty
+    # list when the caller has no owner_id, so no private record matches).
+    owned = [
+        {"visibility": "private", **clause}
+        for clause in owner_query_clauses(user_context, legacy_field=OWNER_FIELD)
+    ]
     return {
         "$or": [
             {"visibility": "public"},
-            {"visibility": "private", "owner": username},
+            *owned,
             {"visibility": "group-restricted", "allowed_groups": {"$in": groups}},
         ]
     }
@@ -56,7 +62,7 @@ def _user_can_view(
     if record.visibility == "public":
         return True
     if record.visibility == "private":
-        return record.owner == user_context.get("username")
+        return is_owner(record, user_context, legacy_field=OWNER_FIELD)
     if record.visibility == "group-restricted":
         user_groups = set(user_context.get("groups", []) or [])
         return bool(user_groups & set(record.allowed_groups))
@@ -74,6 +80,6 @@ def _require_owner_or_admin(
     """
     if user_context.get("is_admin"):
         return
-    if record.owner and record.owner == user_context.get("username"):
+    if is_owner(record, user_context, legacy_field=OWNER_FIELD):
         return
     raise HTTPException(status_code=403, detail="You do not have permission to modify this record")

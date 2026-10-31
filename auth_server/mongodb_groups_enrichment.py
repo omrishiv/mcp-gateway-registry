@@ -202,6 +202,53 @@ async def enrich_groups_from_mongodb(
     return current_groups
 
 
+def machine_client_id(validation_result: dict) -> str | None:
+    """Return the client id of a machine (client_credentials) caller, else None.
+
+    This is the single machine-versus-human classifier the auth server uses: the
+    rate limiter keys on it and the M2M group enrichment gate requires it, so a
+    token can never be enriched as a machine while being limited as a human.
+
+    ``validation_result['client_id']`` alone is NOT a machine signal: every
+    provider fills it from ``azp`` / ``cid`` / its own client id, and a session
+    cookie carries ``''``. The discriminator is provider-specific and read from
+    the verified token claims (``validation_result['data']``):
+
+    - Keycloak / Entra / Auth0 / Okta / PingFederate: a client_credentials token
+      carries a top-level ``client_id`` claim or a ``service-account-*``
+      ``preferred_username``; a user token carries the client only as ``azp``.
+    - Cognito: user and M2M access tokens both carry ``client_id``; only the M2M
+      token lacks a ``username`` claim.
+
+    Args:
+        validation_result: Token validation result dictionary.
+
+    Returns:
+        The non-empty client id string for a machine caller, or None for a human
+        (including a machine-shaped token whose client id is empty or not a
+        string, fail closed).
+    """
+    claims = validation_result.get("data") or {}
+    if not isinstance(claims, dict):
+        claims = {}
+    token_client_id = claims.get("client_id")
+
+    if validation_result.get("method") == "cognito":
+        is_machine = bool(token_client_id) and "username" not in claims
+    else:
+        preferred = claims.get("preferred_username")
+        is_machine = bool(token_client_id) or (
+            isinstance(preferred, str) and preferred.startswith("service-account-")
+        )
+    if not is_machine:
+        return None
+
+    client_id = token_client_id or validation_result.get("client_id")
+    if not isinstance(client_id, str) or not client_id:
+        return None
+    return client_id
+
+
 def should_enrich_groups(validation_result: dict) -> bool:
     """Check if groups should be enriched from the M2M client collection.
 
@@ -216,31 +263,22 @@ def should_enrich_groups(validation_result: dict) -> bool:
         validation_result: Token validation result dictionary
 
     Returns:
-        True only if the token is a valid M2M token with empty groups and a
-        real (non-sentinel) client_id.
+        True only if the token is valid, has empty groups, is not a self-signed
+        user token, and ``machine_client_id`` classifies it as a machine.
     """
-    # Only enrich if:
-    # 1. Token is valid
-    # 2. Groups list is empty (not present or empty array)
-    # 3. Has a real client_id
-    # 4. Is NOT a self-signed user token (those are not M2M clients even when
-    #    they carry a client_id, so enriching them from the M2M collection would
-    #    be a privilege source the user never had).
-    is_valid = validation_result.get("valid", False)
-    groups = validation_result.get("groups", [])
-    client_id = validation_result.get("client_id")
-    token_type = validation_result.get("token_type")
-
-    if not is_valid or groups or client_id is None:
+    if not validation_result.get("valid", False) or validation_result.get("groups", []):
         return False
 
     # A user-generated / user token is not an M2M client. Gate it out both by
     # token_type and by the sentinel client_id, so a token missing one marker is
     # still rejected (fail closed).
+    client_id = validation_result.get("client_id")
+    token_type = validation_result.get("token_type")
     if token_type == "user_generated" or client_id == _USER_GENERATED_CLIENT_ID:  # nosec B105 - token-type marker, not a credential
         return False
 
-    return True
+    # Same classifier the rate limiter uses: only a machine caller is enriched.
+    return machine_client_id(validation_result) is not None
 
 
 async def enrich_user_groups_from_mongodb(

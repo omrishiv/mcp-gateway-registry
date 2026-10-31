@@ -94,9 +94,9 @@ end
 -- auth_request_set variables ($auth_user, $auth_username) are scoped to the
 -- parent request and do NOT propagate into ngx.location.capture subrequests
 -- via proxy_set_header, so we copy them onto request headers here; the
--- _vs_backend_* locations then forward them to the upstream MCP server via
--- $http_x_user/$http_x_username, enabling backends to enforce write-gates and
--- record audit attribution.
+-- _vs_backend_* locations then hand them to the auth-server mcp-proxy hop via
+-- $http_x_user/$http_x_username, which relays them to the upstream MCP server,
+-- enabling backends to enforce write-gates and record audit attribution.
 --
 -- SECURITY: $http_x_user is a CLIENT-controllable request header. The backend
 -- value must be the gateway-validated identity or nothing -- never a value the
@@ -286,8 +286,9 @@ local TOKEN_REUSE_SECONDS = 4
 
 -- The backend subrequest bypasses nginx auth_request, so explicitly validate
 -- the exact rewritten JSON-RPC request at a dedicated backend-bound location.
--- The validated internal token is required even for plain backends; their
--- proxy location must clear it before forwarding upstream.
+-- The validated internal token is required for every backend: the
+-- _vs_backend_* location forwards it to the auth-server mcp-proxy hop, which
+-- verifies it and strips it before forwarding to the upstream signed into it.
 --
 -- Only a 401/403 is a grant decision. A rate limit, an auth-server error or
 -- timeout, or a 200 without a token is a failure of that one backend's check:
@@ -569,7 +570,7 @@ local JSONRPC_METHOD_NOT_FOUND = -32601
 -- Classify a 200 JSON-RPC list response body. A JSON-RPC error is the
 -- backend's answer, not the gateway's grant decision, so it never denies the
 -- aggregate. The consent marker is honoured only from the egress broker
--- (``from_broker``): a plain backend proxies straight to its registrant.
+-- (``from_broker``): a plain backend's hop never marks a response pre-consent.
 local function _classify_list_body(res, result_key, from_broker)
     local json_body = _parse_sse_body(res.body)
     local ok, data = pcall(cjson.decode, json_body or "")

@@ -44,8 +44,8 @@ resource "aws_iam_role" "rotation_lambda" {
 # Issue #955.
 #
 resource "aws_iam_role_policy" "rotation_lambda" {
-  #checkov:skip=CKV_AWS_290:GetRandomPassword and EC2 network interface actions require wildcard resource per AWS API design
-  #checkov:skip=CKV_AWS_355:GetRandomPassword and EC2 network interface actions require wildcard resource per AWS API design
+  #checkov:skip=CKV_AWS_290:GetRandomPassword has no IAM resource type and requires a wildcard resource
+  #checkov:skip=CKV_AWS_355:GetRandomPassword has no IAM resource type and requires a wildcard resource
   name = "${var.name}-secret-rotation-policy"
   role = aws_iam_role.rotation_lambda.id
 
@@ -92,25 +92,15 @@ resource "aws_iam_role_policy" "rotation_lambda" {
           Sid    = "RDSAccess"
           Effect = "Allow"
           Action = [
-            "rds:DescribeDBInstances",
             "rds:DescribeDBClusters",
             "rds:ModifyDBCluster"
           ]
           Resource = aws_rds_cluster.keycloak.arn
         },
-        {
-          Sid    = "VPCNetworkInterface"
-          Effect = "Allow"
-          Action = [
-            "ec2:CreateNetworkInterface",
-            "ec2:DescribeNetworkInterfaces",
-            "ec2:DeleteNetworkInterface",
-            "ec2:AssignPrivateIpAddresses",
-            "ec2:UnassignPrivateIpAddresses"
-          ]
-          Resource = "*"
-        },
       ],
+      # VPC network-interface permissions come only from the attached
+      # AWSLambdaVPCAccessExecutionRole managed policy below: AWS requires them
+      # on Resource "*", so an inline copy would add nothing.
       # DocumentDBAccess statement only when the DocumentDB cluster exists.
       local.is_aws_documentdb ? [{
         Sid    = "DocumentDBAccess"

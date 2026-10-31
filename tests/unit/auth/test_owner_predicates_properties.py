@@ -1,15 +1,22 @@
-"""Ownership predicates deny every caller whose username is falsy.
+"""Ownership predicates deny every caller whose ownership identity is falsy.
 
 Servers, agents, skills, custom entities and agent batch jobs decide ownership
-by comparing a record's owner field (``registered_by``, ``owner`` or
-``submitted_by``) with ``user_context["username"]``. A caller only owns a
-record when its username is a non-empty string equal to a non-empty owner. A
-context whose username is absent, ``None`` or ``""`` must never own anything,
-and in particular must not own a record whose owner field is also absent or
-falsy, where a bare ``==`` turns ``None == None`` or ``"" == ""`` into a grant.
-These tests drive every ownership predicate (pure helpers directly, inline
-route gates through their handler with the stores patched) and observe the
-ownership decision itself.
+through ``registry.auth.ownership.is_owner``: the caller's immutable
+``user_context["owner_id"]`` must equal the record's ``owner_id``, or, for a
+legacy record with no ``owner_id``, the caller (who still needs a non-empty
+``owner_id``) must have a non-empty username equal to the record's username
+field (``registered_by``, ``owner`` or ``submitted_by``). A context whose
+``owner_id`` is absent, ``None`` or ``""`` must never own anything, and in
+particular must not own a record whose owner fields are also absent or falsy,
+where a bare ``==`` turns ``None == None`` or ``"" == ""`` into a grant. A
+shared username never transfers ownership of a record bound to another
+``owner_id``. These tests drive every ownership predicate (pure helpers
+directly, inline route gates through their handler with the stores patched)
+and observe the ownership decision itself.
+
+An identity value is either a plain value, used as both the ``owner_id`` and
+the username (caller) or username field (record), or an ``_Identity`` that
+sets the two independently.
 """
 
 from __future__ import annotations
@@ -89,8 +96,61 @@ class _Missing:
 
 _MISSING = _Missing()
 
-# Falsy usernames, plus whitespace-only as a borderline value. A whitespace
-# username is only asserted against owners it differs from, which is an
+
+class _Identity(NamedTuple):
+    """An ownership identity with independent ``owner_id`` and username parts.
+
+    Either part may be ``_MISSING`` to omit it.
+    """
+
+    owner_id: Any
+    username: Any
+
+
+def _owner_id_of(
+    value: Any,
+) -> Any:
+    """Return the ``owner_id`` part of an identity value.
+
+    Args:
+        value: A plain value or an ``_Identity``.
+
+    Returns:
+        The ``owner_id`` part, possibly ``_MISSING``.
+    """
+    return value.owner_id if isinstance(value, _Identity) else value
+
+
+def _username_of(
+    value: Any,
+) -> Any:
+    """Return the username part of an identity value.
+
+    Args:
+        value: A plain value or an ``_Identity``.
+
+    Returns:
+        The username part, possibly ``_MISSING``.
+    """
+    return value.username if isinstance(value, _Identity) else value
+
+
+def _present(
+    value: Any,
+) -> Any:
+    """Map ``_MISSING`` to None for call arguments that cannot be omitted.
+
+    Args:
+        value: The value, possibly ``_MISSING``.
+
+    Returns:
+        None for ``_MISSING``, else the value unchanged.
+    """
+    return None if value is _MISSING else value
+
+
+# Falsy identities, plus whitespace-only as a borderline value. A whitespace
+# identity is only asserted against owners it differs from, which is an
 # identity bypass under any reading.
 _FALSY_USERNAMES: tuple[Any, ...] = (_MISSING, None, "", " ")
 _OWNERS: tuple[Any, ...] = (_MISSING, None, "", "alice")
@@ -248,21 +308,23 @@ def _async_probe() -> AsyncMock:
 
 
 def _context(
-    username: Any,
+    identity: Any,
     **fields: Any,
 ) -> dict:
     """Build a non-admin user context with no groups.
 
     Args:
-        username: The username, or ``_MISSING`` to omit the key.
+        identity: The caller identity; ``_MISSING`` parts are omitted.
         **fields: Extra context fields.
 
     Returns:
         The user context.
     """
     ctx: dict[str, Any] = {"is_admin": False, "groups": [], **fields}
-    if username is not _MISSING:
-        ctx["username"] = username
+    if _owner_id_of(identity) is not _MISSING:
+        ctx["owner_id"] = _owner_id_of(identity)
+    if _username_of(identity) is not _MISSING:
+        ctx["username"] = _username_of(identity)
     return ctx
 
 
@@ -270,16 +332,21 @@ def _owner_kwargs(
     field: str,
     owner: Any,
 ) -> dict[str, Any]:
-    """Return model kwargs that set an owner field, or omit it when missing.
+    """Return model kwargs that set the owner fields, omitting missing parts.
 
     Args:
-        field: The owner field name.
-        owner: The owner value, or ``_MISSING``.
+        field: The record's username field name.
+        owner: The record owner identity.
 
     Returns:
         Keyword arguments for the model constructor.
     """
-    return {} if owner is _MISSING else {field: owner}
+    kwargs: dict[str, Any] = {}
+    if _owner_id_of(owner) is not _MISSING:
+        kwargs["owner_id"] = _owner_id_of(owner)
+    if _username_of(owner) is not _MISSING:
+        kwargs[field] = _username_of(owner)
+    return kwargs
 
 
 def _request() -> Request:
@@ -493,16 +560,16 @@ def _custom_record(
 
 def _plain_owner(
     owner: Any,
-) -> Any:
-    """Map ``_MISSING`` to the value callers pass for an absent owner field.
+) -> dict[str, Any]:
+    """Return the ``owner``/``owner_id`` args callers pass for a record owner.
 
     Args:
-        owner: The owner value, or ``_MISSING``.
+        owner: The record owner identity.
 
     Returns:
-        ``None`` for a missing owner, else the owner unchanged.
+        Keyword arguments; a missing part is passed as None.
     """
-    return None if owner is _MISSING else owner
+    return {"owner": _present(_username_of(owner)), "owner_id": _present(_owner_id_of(owner))}
 
 
 @contextmanager
@@ -574,7 +641,7 @@ def _drive_user_can_access_skill(
         visibility.user_can_access_skill(
             skill_path=_SKILL_PATH,
             visibility="private",
-            owner=_plain_owner(owner),
+            **_plain_owner(owner),
             allowed_groups=[],
             user_context=_skill_context(username),
         )
@@ -589,7 +656,7 @@ def _drive_user_can_access_custom_entity(
     return asyncio.run(
         visibility.user_can_access_custom_entity(
             visibility="private",
-            owner=_plain_owner(owner),
+            **_plain_owner(owner),
             allowed_groups=[],
             user_context=_context(username),
         )
@@ -773,17 +840,22 @@ def _drive_ans_route_agent(
 
 
 def _ans_username_kwargs(
-    username: Any,
+    identity: Any,
 ) -> dict[str, Any]:
-    """Return the ``username`` kwarg for an ANS service call.
+    """Return the ``username``/``owner_id`` kwargs for an ANS service call.
 
     Args:
-        username: The username, or ``_MISSING`` to rely on the default.
+        identity: The caller identity; ``_MISSING`` parts rely on the default.
 
     Returns:
         Keyword arguments for the call.
     """
-    return {} if username is _MISSING else {"username": username}
+    kwargs: dict[str, Any] = {}
+    if _username_of(identity) is not _MISSING:
+        kwargs["username"] = _username_of(identity)
+    if _owner_id_of(identity) is not _MISSING:
+        kwargs["owner_id"] = _owner_id_of(identity)
+    return kwargs
 
 
 def _drive_ans_service(
@@ -885,7 +957,8 @@ def _drive_batch_authorize(
         allowed, _ = asyncio.run(
             agent_batch_item_processor._authorize(
                 item,
-                submitted_by=username,
+                submitted_by=_username_of(username),
+                submitter_owner_id=_present(_owner_id_of(username)),
                 is_admin=False,
                 ui_permissions=_AGENT_PERMISSIONS,
             )
@@ -918,7 +991,11 @@ def _drive_agent_batch_job(
 ) -> bool:
     """Return True when GET /agents/batch/{job_id} passes its submitter check."""
     probe = _probe()
-    job = SimpleNamespace(submitted_by=owner, model_dump=probe)
+    job = SimpleNamespace(
+        submitted_by=_present(_username_of(owner)),
+        owner_id=_present(_owner_id_of(owner)),
+        model_dump=probe,
+    )
     with patch.object(agent_routes.agent_batch_service, "get", AsyncMock(return_value=job)):
         return _reached(
             agent_routes.get_agent_batch_job(job_id="job-1", user_context=_context(username)),
@@ -1713,13 +1790,53 @@ def test_real_owner_owns_and_other_user_does_not(name):
     assert not predicate.drive(_OTHER_USER, _OWNER), f"{predicate.location}: non-owner admitted"
 
 
+@pytest.mark.parametrize("name", [predicate.name for predicate in _PREDICATES])
+def test_shared_username_does_not_own_a_bound_record(name):
+    """Property: a username collision never owns a record bound to another owner_id.
+
+    The username is a mutable display name; once a record carries an
+    ``owner_id``, a different principal holding the same username is no owner.
+    """
+    predicate = _BY_NAME[name]
+    owner = _Identity(owner_id="issuer|alice-sub", username=_OWNER)
+    impostor = _Identity(owner_id="issuer|mallory-sub", username=_OWNER)
+    assert predicate.drive(_Identity("issuer|alice-sub", _OWNER), owner), (
+        f"{predicate.location}: owner was denied"
+    )
+    assert not predicate.drive(impostor, owner), (
+        f"{predicate.location}: same username with another owner_id admitted"
+    )
+
+
+@pytest.mark.parametrize("name", [predicate.name for predicate in _PREDICATES])
+def test_legacy_record_falls_back_to_username(name):
+    """Property: a record with no owner_id is owned by its username, never without an owner_id.
+
+    A legacy record (created before ``owner_id`` existed) keeps working for the
+    caller whose username matches its username field, but only when that
+    caller has a non-empty ``owner_id``; a different username is denied.
+    """
+    predicate = _BY_NAME[name]
+    legacy = _Identity(owner_id=_MISSING, username=_OWNER)
+    assert predicate.drive(_Identity("issuer|alice-sub", _OWNER), legacy), (
+        f"{predicate.location}: legacy owner was denied"
+    )
+    assert not predicate.drive(_Identity("issuer|bob-sub", _OTHER_USER), legacy), (
+        f"{predicate.location}: other user owns a legacy record"
+    )
+    for falsy in _FALSY_USERNAMES:
+        assert not predicate.drive(_Identity(falsy, _OWNER), legacy), (
+            f"{predicate.location}: owner_id={falsy!r} owns a legacy record by username"
+        )
+
+
 @pytest.mark.parametrize(("name", "username", "owner"), _falsy_cases())
 def test_falsy_username_never_owns(name, username, owner):
-    """Property: a falsy username owns no record, whatever its owner field holds."""
+    """Property: a falsy identity owns no record, whatever its owner fields hold."""
     predicate = _BY_NAME[name]
     granted = predicate.drive(username, owner)
     assert not granted, (
-        f"{predicate.location}: username={username!r} granted ownership of a record "
+        f"{predicate.location}: identity={username!r} granted ownership of a record "
         f"with owner={owner!r}"
     )
 
@@ -1728,9 +1845,66 @@ def test_falsy_username_never_owns(name, username, owner):
 @settings(max_examples=200, derandomize=True, database=None, report_multiple_bugs=False)
 @given(username=_IDENTITIES, owner=_IDENTITIES)
 def test_pure_owner_predicate_implies_equal_nonempty_identity(name, username, owner):
-    """Property: a pure helper grants ownership only to a non-empty username equal to the owner."""
+    """Property: a pure helper grants ownership only to a non-empty identity equal to the owner."""
     predicate = _BY_NAME[name]
     if predicate.drive(username, owner):
         assert bool(username) and username == owner, (
-            f"{predicate.location}: username={username!r} owns a record with owner={owner!r}"
+            f"{predicate.location}: identity={username!r} owns a record with owner={owner!r}"
         )
+
+
+_ID_PARTS = st.one_of(
+    st.just(_MISSING),
+    st.none(),
+    st.just(""),
+    st.sampled_from(["alice", "bob", "issuer|alice-sub"]),
+    st.text(max_size=8),
+)
+_SPLIT_IDENTITIES = st.builds(_Identity, owner_id=_ID_PARTS, username=_ID_PARTS)
+
+
+def _usable(
+    value: Any,
+) -> bool:
+    """Return True for a non-empty, non-whitespace string identity.
+
+    Args:
+        value: An identity part, possibly ``_MISSING``.
+
+    Returns:
+        Whether the value can establish ownership.
+    """
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _spec_owns(
+    caller: _Identity,
+    record: _Identity,
+) -> bool:
+    """Reference ownership decision over split identities.
+
+    Args:
+        caller: The caller identity.
+        record: The record owner identity.
+
+    Returns:
+        True iff the caller has a usable owner_id and either the record's
+        owner_id equals it, or the record has no owner_id and its usable
+        username field equals the caller's username.
+    """
+    if not _usable(caller.owner_id):
+        return False
+    if record.owner_id in (_MISSING, None, ""):
+        return _usable(record.username) and record.username == caller.username
+    return record.owner_id == caller.owner_id
+
+
+@pytest.mark.parametrize("name", [p.name for p in _PREDICATES if p.pure])
+@settings(max_examples=200, derandomize=True, database=None, report_multiple_bugs=False)
+@given(caller=_SPLIT_IDENTITIES, record=_SPLIT_IDENTITIES)
+def test_pure_owner_predicate_matches_owner_id_reference(name, caller, record):
+    """Property: a pure helper grants ownership exactly when the owner_id reference does."""
+    predicate = _BY_NAME[name]
+    assert predicate.drive(caller, record) == _spec_owns(caller, record), (
+        f"{predicate.location}: caller={caller!r} record={record!r}"
+    )

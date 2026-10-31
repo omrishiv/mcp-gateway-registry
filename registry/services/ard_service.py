@@ -11,7 +11,7 @@ See ``.scratchpad/issue-1294/lld.md`` for the full design.
 
 import logging
 import time
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from fastapi import Request
 
@@ -85,13 +85,13 @@ def _public_record_url(
 ) -> str:
     """Build the anonymous per-record URL an ARD client dereferences.
 
-    ``kind`` is one of servers/agents/skills. The URL leaf is the same sanitized
-    token used in the entry's URN, so the public endpoint can resolve it by
-    matching the leaf regardless of how the record's path is stored (servers,
-    agents, and skills use different path conventions). Servers use the canonical
-    ``/server.json`` suffix to mirror the existing authed endpoint shape.
+    ``kind`` is one of servers/agents/skills. The URL leaf is the record's full
+    path (see ``ard_mapping.public_record_leaf``), so every record gets its own
+    URL; the URN's sanitized last segment is not unique and is not used here.
+    Servers use the canonical ``/server.json`` suffix to mirror the existing
+    authed endpoint shape.
     """
-    leaf = ard_mapping._sanitize_name(path)
+    leaf = quote(ard_mapping.public_record_leaf(kind, path), safe="/")
     if kind == "servers":
         return f"{base_url}/api/public/servers/{leaf}/server.json"
     return f"{base_url}/api/public/{kind}/{leaf}"

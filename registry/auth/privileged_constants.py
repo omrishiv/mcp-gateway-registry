@@ -106,6 +106,32 @@ def is_admin_conferring_action(action: str) -> bool:
     return True
 
 
+def grant_confers_admin(action: object, resources: object) -> bool:
+    """Return True if granting ``action`` on ``resources`` confers admin.
+
+    Admin is conferred only when ``action`` is admin-conferring and
+    ``resources`` is a list holding the element ``"all"``. Any other stored
+    shape (a bare string such as ``"all"`` or ``"reinstall"``, a dict keyed
+    ``"all"``, None, a number) never confers admin: a substring or key test on
+    such a value would promote a caller from malformed data.
+
+    Both the per-request admin check and the privileged-write guard call this
+    so they cannot disagree on any stored value.
+
+    Args:
+        action: A UI-Scopes action name.
+        resources: The stored grant value for that action.
+
+    Returns:
+        True if the grant confers admin, False otherwise.
+    """
+    if not isinstance(action, str) or not isinstance(resources, list):
+        return False
+    return is_admin_conferring_action(action) and any(
+        isinstance(r, str) and r in PRIVILEGED_GRANTS for r in resources
+    )
+
+
 # Scope/group names that confer administrative access by membership. Naming a
 # scope one of these, or mapping a group to one of these, elevates whoever holds
 # it -- the original /api/servers/groups/import privesc vector.

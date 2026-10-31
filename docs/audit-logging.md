@@ -32,7 +32,38 @@ When audit logging is enabled (`AUDIT_LOG_ENABLED=true`) but no durable sink is 
 
 ### Runtime write failures
 
-Startup fails closed on a missing durable sink (see above), but a transient durable-write failure at request time (e.g. a momentary MongoDB unavailability) does not fail the API request — failing every call on an audit blip would be a self-inflicted denial of service. Instead, a dropped record is surfaced as a distinct `CRITICAL` `AUDIT RECORD DROPPED` log event (carrying identifying context, never the full record) so the loss is loud and alertable. A retry/dead-letter buffer that guarantees no record is lost on a transient failure is planned follow-up hardening.
+Startup fails closed on a missing durable sink (see above). At request time the audit write path depends on the request
+method.
+
+**Mutating requests** (any method other than `GET`, `HEAD` or `OPTIONS`) fail closed, before any change is made:
+
+1. Before the route handler runs, the middleware inserts the record with the fields known at that point: timestamp,
+   server-generated `request_id`, correlation id, instance id, the request block, and the identity resolvable before
+   authentication runs (the session cookie, else `anonymous`). `response` is `null`, which marks the outcome as pending.
+2. If that insert fails (the driver raises, or the repository reports a failed insert), the request is rejected with
+   `500` and `{"detail": "The audit record for this request could not be written"}`. The handler never runs, so nothing
+   is changed and the client can retry safely.
+3. After the handler returns, the middleware updates the same record (matched on `request_id` and `log_type`) with the
+   outcome: `response` (status code, duration, content length), `action`, `authorization`, and the authenticated
+   identity set by the route's auth dependency. A handler that raises is recorded with status `500`. A successful
+   mutation therefore produces exactly one record.
+4. If the outcome update fails, the request is not failed: the change is committed and the attempt is already durably
+   recorded. The record stays pending (`response: null`) and the loss of the outcome is logged as `CRITICAL`
+   `AUDIT RECORD DROPPED: outcome update failed`.
+
+**Safe reads** (`GET`, `HEAD`, `OPTIONS`) stay best-effort: the record is inserted once after the response is built,
+and a failed write does not fail the read.
+
+Every lost record or outcome is surfaced as a distinct `CRITICAL` `AUDIT RECORD DROPPED` log event (carrying
+identifying context, never the full record) and the
+`mcpgw_registry_audit_integrity_degraded_total{reason="record_dropped"}` counter, so the loss is loud and alertable. To
+find mutations whose outcome was never recorded (or that are still in flight), query
+`{"log_type": "registry_api_access", "response": null}`. A retry/dead-letter buffer that guarantees no record is lost on
+a transient failure is planned follow-up hardening.
+
+Static-asset suppression (`AUDIT_LOG_STATIC_ASSETS=false`, the default) skips `/static/*`, `/favicon*` and, for
+safe-method requests only, paths ending in a static-file extension (`.js`, `.css`, `.png` and similar). A mutating
+request is always audited, even when a caller-chosen path parameter ends in `.js`.
 
 ### Tamper-evidence (roadmap)
 
@@ -544,16 +575,14 @@ db.audit_events_default.find({
 | `AUDIT_LOG_ENABLED` | `true` | Enable/disable audit logging |
 | `AUDIT_LOG_MONGODB_TTL_DAYS` | `7` | Log retention period in days |
 
-### Non-Blocking Design
+### Write Path
 
-Audit logging is designed to never impact request processing:
-
-- Logging happens asynchronously after the response is sent
-- A failure to record an event never fails the request; the loss is surfaced as a
-  `CRITICAL` `AUDIT RECORD DROPPED` log event instead (see
-  [Runtime write failures](#runtime-write-failures))
-- Each record is written with its own insert (`insert_one` in
-  `registry/repositories/audit_repository.py`); there is no write batching
+- Mutating request: one insert before the route handler runs (fail closed) and one outcome update after it returns
+  (best-effort). See [Runtime write failures](#runtime-write-failures).
+- Safe read: one insert after the route handler returns and before the response is sent to the client
+  (best-effort).
+- Each record is written with its own insert (`insert_one` in `registry/repositories/audit_repository.py`) and
+  completed with `update_one` on its (`request_id`, `log_type`) key; there is no write batching.
 
 ## Compliance Considerations
 

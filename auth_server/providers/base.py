@@ -3,6 +3,7 @@
 import logging
 from abc import ABC, abstractmethod
 from typing import Any
+from urllib.parse import quote
 
 import jwt
 
@@ -53,6 +54,88 @@ def normalize_groups_claim(value: Any, *, source: str) -> list[str]:
         )
         raise ValueError(f"Invalid {source} claim: expected a JSON array of strings")
     return value
+
+
+# Separator between the encoded issuer and the encoded subject of an owner_id.
+# ``quote(..., safe="")`` percent-encodes it inside either part, so no choice of
+# claim values can produce an owner_id that parses two ways.
+OWNER_ID_SEPARATOR: str = "|"
+
+
+def make_owner_id(
+    issuer: object,
+    subject: object,
+) -> str | None:
+    """Encode ``(issuer, subject)`` as the immutable ownership identity.
+
+    Ownership of stored records is keyed on this value, never on the display
+    ``username``: the subject is the IdP's immutable account id, and the issuer
+    namespaces it so equal subjects at two IdPs never collide. Both parts are
+    percent-encoded, so the encoding is injective over the pair.
+
+    Fails closed: a missing, empty or non-string part yields ``None``, and the
+    caller must then leave ``owner_id`` absent (nobody owns through it) rather
+    than invent one. An integer subject (GitHub's numeric ``id``) is accepted
+    as its decimal string; ``bool`` is not an account id and is refused.
+
+    Args:
+        issuer: The verified token issuer, or the fixed provider alias for an
+            OAuth provider without one (``github``, ``google``).
+        subject: The IdP's immutable account id for the principal.
+
+    Returns:
+        ``"<quoted issuer>|<quoted subject>"``, or ``None`` when either part is
+        not derivable.
+    """
+    if isinstance(subject, int) and not isinstance(subject, bool):
+        subject = str(subject)
+    if not isinstance(issuer, str) or not issuer:
+        return None
+    if not isinstance(subject, str) or not subject:
+        return None
+    return f"{quote(issuer, safe='')}{OWNER_ID_SEPARATOR}{quote(subject, safe='')}"
+
+
+def self_signed_owner_id(
+    claims: dict[str, Any],
+) -> str | None:
+    """Return the ``owner_id`` a verified self-signed user token carries.
+
+    The auth server embeds the owner_id of the user it minted the token for. A
+    token minted before the claim existed, or for a caller with no derivable
+    owner_id, carries none, and the result then has no ``owner_id``.
+
+    Args:
+        claims: The signature-verified self-signed token claims.
+
+    Returns:
+        The non-empty ``owner_id`` claim, or ``None``.
+    """
+    owner_id = claims.get("owner_id")
+    if isinstance(owner_id, str) and owner_id:
+        return owner_id
+    return None
+
+
+def with_owner_id(
+    result: dict[str, Any],
+    owner_id: str | None,
+) -> dict[str, Any]:
+    """Set ``result["owner_id"]`` when ``owner_id`` is non-empty; return ``result``.
+
+    A validation result with no derivable owner_id keeps the key absent, so
+    ownership checks downstream fail closed instead of matching an empty value.
+
+    Args:
+        result: A ``validate_token`` result dict, updated in place.
+        owner_id: The derived owner_id, or ``None``.
+
+    Returns:
+        ``result``.
+    """
+    if owner_id:
+        result["owner_id"] = owner_id
+    return result
 
 
 class AuthProvider(ABC):
@@ -255,6 +338,34 @@ class AuthProvider(ABC):
             False unless a provider implements delegated-user classification.
         """
         return False
+
+    @property
+    def owner_issuer(self) -> str | None:
+        """The canonical issuer that namespaces this provider's owner_ids.
+
+        One fixed value per configured provider, even when the provider accepts
+        several ``iss`` spellings for the same tenant or realm (internal and
+        external URLs, v1 and v2 endpoints): those are aliases of one account
+        namespace, and the login path, which sees no access token, must derive
+        the same owner_id as the bearer path. ``None`` (the default) means the
+        provider derives no owner_id, so nobody owns through it (fail closed).
+        """
+        return None
+
+    def owner_id_from_claims(self, claims: dict[str, Any]) -> str | None:
+        """Derive the owner_id from a verified IdP access token's claims.
+
+        The subject is the token's ``sub``: the user's immutable id for a user
+        token, the client's for a client-credentials token. Providers whose
+        access tokens put a mutable value in ``sub`` override this.
+
+        Args:
+            claims: The signature-verified access token claims.
+
+        Returns:
+            The owner_id, or ``None`` when the token has no subject.
+        """
+        return make_owner_id(self.owner_issuer, claims.get("sub"))
 
     @abstractmethod
     def validate_token(self, token: str, **kwargs: Any) -> dict[str, Any]:

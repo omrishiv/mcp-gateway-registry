@@ -1775,7 +1775,7 @@ class TestToolCatalogService:
 
     @pytest.mark.asyncio
     async def test_catalog_wildcard_access_sees_all(self, catalog_service, mock_server_repo):
-        """A non-admin with the 'all' server grant sees every server's tools."""
+        """A non-admin with a server '*' / tools '*' rule sees every server's tools."""
         mock_server_repo.list_all.return_value = {
             "/github": {
                 "server_name": "GitHub",
@@ -1794,7 +1794,8 @@ class TestToolCatalogService:
 
         user_context = {
             "is_admin": False,
-            "accessible_servers": ["all"],
+            "accessible_servers": ["*"],
+            "accessible_tools": {"*": {"*"}},
             "username": "dave",
             "groups": [],
         }

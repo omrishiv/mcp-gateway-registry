@@ -8,10 +8,11 @@ structured audit records.
 
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 
 from fastapi import Request, Response
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
@@ -30,7 +31,7 @@ from .models import (
     Response as AuditResponse,
 )
 from .request_id import new_audit_request_id, sanitize_correlation_id
-from .service import AuditLogger
+from .service import AuditLogger, AuditWriteError, _record_integrity_degradation
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,30 @@ _HEALTH_CHECK_EXACT_PATHS: frozenset[str] = frozenset(
 # Everything under the /api/health router (e.g. /api/health/ws/health_status,
 # /api/health/ws/stats) is monitoring traffic; matched by prefix.
 _HEALTH_CHECK_PREFIX: str = "/api/health/"
+
+# Methods that do not change server state. Only these may skip the audit trail
+# as static-asset traffic, and only these keep best-effort audit writes; every
+# other method (including unknown ones) is treated as mutating and fails closed.
+_SAFE_METHODS: frozenset[str] = frozenset({"GET", "HEAD", "OPTIONS"})
+
+# Common static file extensions, skipped only for safe-method requests.
+_STATIC_EXTENSIONS: tuple[str, ...] = (
+    ".css",
+    ".js",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".ico",
+    ".svg",
+    ".woff",
+    ".woff2",
+    ".ttf",
+)
+
+AUDIT_WRITE_FAILED_BODY: dict[str, str] = {
+    "detail": "The audit record for this request could not be written",
+}
 
 
 def _is_health_check_path(path: str) -> bool:
@@ -132,12 +157,21 @@ class AuditMiddleware(BaseHTTPMiddleware):
         self.log_health_checks = log_health_checks
         self.log_static_assets = log_static_assets
 
-    def _should_log(self, path: str) -> bool:
+    def _should_log(
+        self,
+        path: str,
+        method: str | None = None,
+    ) -> bool:
         """
         Determine if a request should be logged.
 
         Args:
             path: The request path
+            method: The HTTP method. The static-file extension skip applies only
+                to safe methods (GET, HEAD, OPTIONS); None means the method is
+                unknown, so that skip is not applied (fail closed). Path
+                parameters such as {path:path} let a caller choose a name ending
+                in ".js", which must never turn a mutation into an unaudited one.
 
         Returns:
             True if the request should be logged, False otherwise
@@ -158,22 +192,9 @@ class AuditMiddleware(BaseHTTPMiddleware):
                 return False
             if path.startswith("/favicon"):
                 return False
-            # Common static file extensions
-            static_extensions = (
-                ".css",
-                ".js",
-                ".png",
-                ".jpg",
-                ".jpeg",
-                ".gif",
-                ".ico",
-                ".svg",
-                ".woff",
-                ".woff2",
-                ".ttf",
-            )
-            if path.endswith(static_extensions):
-                return False
+            if method is not None and method.upper() in _SAFE_METHODS:
+                if path.endswith(_STATIC_EXTENSIONS):
+                    return False
 
         return True
 
@@ -360,9 +381,92 @@ class AuditMiddleware(BaseHTTPMiddleware):
 
         return None
 
+    def _request_details(self, request: Request) -> AuditRequest:
+        """Build the request block of an audit record (known before the handler runs)."""
+        request_content_length = None
+        if "content-length" in request.headers:
+            try:
+                request_content_length = int(request.headers["content-length"])
+            except (ValueError, TypeError):
+                pass
+
+        return AuditRequest(
+            method=request.method,
+            path=request.url.path,
+            query_params=dict(request.query_params),
+            # Validated against spoofed/malformed headers
+            client_ip=get_client_ip(request),
+            forwarded_for=request.headers.get("X-Forwarded-For"),
+            user_agent=request.headers.get("User-Agent"),
+            content_length=request_content_length,
+        )
+
+    def _response_details(
+        self,
+        status_code: int,
+        headers: Mapping[str, str],
+        start_time: float,
+    ) -> AuditResponse:
+        """Build the response block of an audit record."""
+        response_content_length = None
+        if "content-length" in headers:
+            try:
+                response_content_length = int(headers["content-length"])
+            except (ValueError, TypeError):
+                pass
+
+        return AuditResponse(
+            status_code=status_code,
+            duration_ms=(time.perf_counter() - start_time) * 1000,
+            content_length=response_content_length,
+        )
+
+    async def _record_outcome(
+        self,
+        record: RegistryApiAccessRecord,
+        request: Request,
+        status_code: int,
+        headers: Mapping[str, str],
+        start_time: float,
+    ) -> None:
+        """Complete a pending mutating-request record and write its outcome.
+
+        Never raises: the change is committed and the attempt is already
+        durably recorded, so a failure here is logged CRITICAL and counted
+        instead of failing the request.
+        """
+        try:
+            # The auth dependency sets request.state.user_context while the
+            # handler runs, so the authoritative identity is only known now.
+            # Without it, keep the identity resolved before the handler (a
+            # handler such as logout may already have ended the session).
+            if isinstance(getattr(request.state, "user_context", None), dict):
+                record.identity = await self._extract_identity(request)
+            record.response = self._response_details(status_code, headers, start_time)
+            record.action = self._extract_action(request)
+            record.authorization = self._extract_authorization(request)
+        except Exception as e:
+            logger.critical(
+                "AUDIT RECORD DROPPED: could not build outcome for %s %s; the record "
+                "stays pending (request_id=%s): %s",
+                request.method,
+                request.url.path,
+                record.request_id,
+                e,
+            )
+            _record_integrity_degradation("record_dropped")
+            return
+        await self.audit_logger.update_outcome(record)
+
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         """
         Process the request and create an audit record.
+
+        Safe methods (GET, HEAD, OPTIONS) are audited best-effort after the
+        response. Every other method is treated as mutating and fails closed:
+        its record is inserted before the handler runs, and if that durable
+        write fails the request is rejected with 500 without running the
+        handler. The outcome is then written onto the same record.
 
         Args:
             request: The FastAPI request object
@@ -372,7 +476,7 @@ class AuditMiddleware(BaseHTTPMiddleware):
             The response from the next handler
         """
         # Check if this request should be logged
-        if not self._should_log(request.url.path):
+        if not self._should_log(request.url.path, request.method):
             return await call_next(request)
 
         # The audit record's unique key (request_id, log_type) MUST be
@@ -386,42 +490,15 @@ class AuditMiddleware(BaseHTTPMiddleware):
             request.headers.get("X-Correlation-ID") or request.headers.get("X-Request-ID")
         )
 
-        # Start timing
         start_time = time.perf_counter()
 
-        # Process the request
-        response = await call_next(request)
+        if request.method.upper() in _SAFE_METHODS:
+            return await self._dispatch_safe(
+                request, call_next, request_id, correlation_id, start_time
+            )
 
-        # Work around Starlette BaseHTTPMiddleware bug: call_next wraps
-        # the response in a StreamingResponse which can send body bytes
-        # for 204 No Content, causing "Response content longer than
-        # Content-Length" errors.  Return a plain Response instead.
-        if response.status_code == 204:
-            response = Response(status_code=204, headers=dict(response.headers))
-
-        # Calculate duration
-        duration_ms = (time.perf_counter() - start_time) * 1000
-
-        # Extract client IP (validated against spoofed/malformed headers)
-        client_ip = get_client_ip(request)
-
-        # Get content length from request headers (may be None)
-        request_content_length = None
-        if "content-length" in request.headers:
-            try:
-                request_content_length = int(request.headers["content-length"])
-            except (ValueError, TypeError):
-                pass
-
-        # Get content length from response headers (may be None)
-        response_content_length = None
-        if "content-length" in response.headers:
-            try:
-                response_content_length = int(response.headers["content-length"])
-            except (ValueError, TypeError):
-                pass
-
-        # Build the audit record
+        # Mutating request: write the attributable record BEFORE the handler,
+        # with the outcome pending. No durable record, no mutation.
         try:
             record = RegistryApiAccessRecord(
                 timestamp=datetime.now(UTC),
@@ -429,33 +506,62 @@ class AuditMiddleware(BaseHTTPMiddleware):
                 correlation_id=correlation_id,
                 instance_id=resolve_instance_id(),
                 identity=await self._extract_identity(request),
-                request=AuditRequest(
-                    method=request.method,
-                    path=request.url.path,
-                    query_params=dict(request.query_params),
-                    client_ip=client_ip,
-                    forwarded_for=request.headers.get("X-Forwarded-For"),
-                    user_agent=request.headers.get("User-Agent"),
-                    content_length=request_content_length,
-                ),
-                response=AuditResponse(
-                    status_code=response.status_code,
-                    duration_ms=duration_ms,
-                    content_length=response_content_length,
-                ),
+                request=self._request_details(request),
+            )
+            await self.audit_logger.log_event(record, fail_closed=True)
+        except AuditWriteError:
+            # log_event already logged the dropped record as CRITICAL.
+            return JSONResponse(status_code=500, content=AUDIT_WRITE_FAILED_BODY)
+        except Exception as e:
+            logger.critical(
+                "AUDIT RECORD DROPPED: could not build/log record for %s %s: %s",
+                request.method,
+                request.url.path,
+                e,
+            )
+            return JSONResponse(status_code=500, content=AUDIT_WRITE_FAILED_BODY)
+
+        try:
+            response = await call_next(request)
+        except Exception:
+            # An unhandled handler error becomes a 500 further out; record it.
+            await self._record_outcome(record, request, 500, {}, start_time)
+            raise
+
+        response = _plain_204(response)
+        await self._record_outcome(
+            record, request, response.status_code, response.headers, start_time
+        )
+        return response
+
+    async def _dispatch_safe(
+        self,
+        request: Request,
+        call_next: Callable,
+        request_id: str,
+        correlation_id: str | None,
+        start_time: float,
+    ) -> Response:
+        """Run a safe-method request and audit it best-effort afterwards."""
+        response = _plain_204(await call_next(request))
+
+        try:
+            record = RegistryApiAccessRecord(
+                timestamp=datetime.now(UTC),
+                request_id=request_id,
+                correlation_id=correlation_id,
+                instance_id=resolve_instance_id(),
+                identity=await self._extract_identity(request),
+                request=self._request_details(request),
+                response=self._response_details(response.status_code, response.headers, start_time),
                 action=self._extract_action(request),
                 authorization=self._extract_authorization(request),
             )
-
-            # Log the event asynchronously
             await self.audit_logger.log_event(record)
-
         except Exception as e:
-            # Never break the request on an audit failure, but a record we could
-            # not even build is a dropped audit event — make it loud/alertable
-            # (CRITICAL) rather than a quiet error line. log_event() handles its
-            # own durable-write failures internally, so reaching here means
-            # record construction itself failed.
+            # Never break a read on an audit failure, but a record we could not
+            # even build is a dropped audit event: make it loud (CRITICAL).
+            # log_event() handles its own durable-write failures.
             logger.critical(
                 "AUDIT RECORD DROPPED: could not build/log record for %s %s: %s",
                 request.method,
@@ -464,6 +570,18 @@ class AuditMiddleware(BaseHTTPMiddleware):
             )
 
         return response
+
+
+def _plain_204(response: Response) -> Response:
+    """Work around a Starlette BaseHTTPMiddleware bug for 204 No Content.
+
+    call_next wraps the response in a StreamingResponse which can send body
+    bytes for 204, causing "Response content longer than Content-Length"
+    errors. Return a plain Response instead.
+    """
+    if response.status_code == 204:
+        return Response(status_code=204, headers=dict(response.headers))
+    return response
 
 
 def add_audit_middleware(

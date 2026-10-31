@@ -34,6 +34,7 @@ if they choose to.
 
 import logging
 
+from ..auth.ownership import OWNER_FIELD, OWNER_ID_FIELD, REGISTERED_BY_FIELD, is_owner
 from ..core.config import settings
 from ..repositories.factory import (
     get_agent_repository,
@@ -291,28 +292,24 @@ class DuplicateCheckService:
         document: dict,
         user_context: dict,
     ) -> bool:
-        """True iff the matching document was registered by the caller.
+        """True iff the matching document is owned by the caller.
 
-        Compares the caller's username (from auth context) against the
-        ownership field appropriate for the entity type. Servers and
-        agents use ``registered_by``; skills use ``owner``. Returns
-        False when either side is missing — we'd rather show an
-        unnecessary collision than silently hide one.
+        Delegates to :func:`registry.auth.ownership.is_owner` with the
+        username field appropriate for the entity type for legacy
+        documents: servers and agents use ``registered_by``; skills use
+        ``owner``. Returns False when either side has no identity — we'd
+        rather show an unnecessary collision than silently hide one.
         """
-        username = str(user_context.get("username") or "")
-        if not username:
-            return False
         if entity_type == ENTITY_TYPE_SKILL:
-            owner = str(document.get("owner") or "")
-            return bool(owner) and owner == username
+            return is_owner(document, user_context, legacy_field=OWNER_FIELD)
+        record = document
         if entity_type == ENTITY_TYPE_AGENT:
             agent_card = document.get("agent_card")
-            if isinstance(agent_card, dict):
-                registered_by = str(agent_card.get("registered_by") or "")
-                if registered_by:
-                    return registered_by == username
-        registered_by = str(document.get("registered_by") or "")
-        return bool(registered_by) and registered_by == username
+            if isinstance(agent_card, dict) and (
+                agent_card.get(OWNER_ID_FIELD) or agent_card.get(REGISTERED_BY_FIELD)
+            ):
+                record = agent_card
+        return is_owner(record, user_context)
 
     async def _build_collision_entity(
         self,
@@ -627,6 +624,7 @@ class DuplicateCheckService:
                 owner=owner,
                 allowed_groups=allowed_groups,
                 user_context=user_context,
+                owner_id=document.get(OWNER_ID_FIELD),
             )
         return False
 

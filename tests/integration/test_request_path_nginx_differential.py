@@ -17,7 +17,7 @@ import subprocess
 import time
 import uuid
 from collections.abc import Iterator
-from urllib.parse import urlparse
+from urllib.parse import urlsplit
 
 import pytest
 from hypothesis import (
@@ -67,7 +67,7 @@ def _binding_accepts(
 
     Reproduces ``auth_server.server._registered_proxy_url_matches`` for
     ``route_mode="direct"`` with an empty registry root path: the URL path is
-    taken with ``urlparse``, canonicalized by ``normalize_request_path``, keeps a
+    taken with ``urlsplit``, canonicalized by ``normalize_request_path``, keeps a
     trailing slash the raw path had, and then must equal the registration or
     continue past ``<registration>/``.
 
@@ -78,7 +78,7 @@ def _binding_accepts(
     Returns:
         True when the binding accepts ``original_url`` for ``registered_path``.
     """
-    raw_path = urlparse(original_url).path
+    raw_path = urlsplit(original_url).path
     path = normalize_request_path(raw_path)
     if raw_path.endswith("/") and not path.endswith("/"):
         path += "/"

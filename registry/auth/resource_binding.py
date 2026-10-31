@@ -33,6 +33,8 @@ from enum import Enum
 from typing import Any, Final
 from urllib.parse import unquote
 
+from .ownership import OWNER_FIELD, is_owner
+
 logger = logging.getLogger(__name__)
 
 # Collapse runs of consecutive '/' into a single slash. Defense-in-depth
@@ -186,6 +188,11 @@ RESOURCE_ID_CLAIM: Final[str] = "resource_id"
 # all three accessible-list types; a future config format that
 # introduces a new wildcard only needs to be added here.
 _WILDCARD_ACCESS: Final[frozenset[str]] = frozenset({"all", "*"})
+
+# accessible_servers is the exception: only the cross-server sentinel "*"
+# (from a `server: "*"` scope rule) means every server. The gateway never
+# honours `server: "all"`, so a literal "all" grants no server here.
+_SERVER_WILDCARD: Final[str] = "*"
 
 
 # Convenience tuple used for error messages and Pydantic validation. Derived
@@ -473,7 +480,7 @@ async def validate_user_can_bind_resource(
 
     Semantics per type:
         SERVER         -> user_context['accessible_servers'] must contain
-                          the server name, or the user is admin / has "all".
+                          the server name, or the user is admin / has "*".
         VIRTUAL_SERVER -> must appear in user's list_virtual_server UI
                           permission (or admin / "all").
         AGENT          -> accessible_agents contains the agent path, or
@@ -500,7 +507,7 @@ async def validate_user_can_bind_resource(
 
     if rtype is ResourceType.SERVER:
         accessible = user_context.get("accessible_servers") or []
-        if _WILDCARD_ACCESS & set(accessible):
+        if _SERVER_WILDCARD in accessible:
             return True
         return any(
             isinstance(grant, str) and normalize_resource_id(grant) == normalized_id
@@ -550,7 +557,7 @@ async def validate_user_can_bind_resource(
         if agent_card.visibility == "public":
             return True
         if agent_card.visibility == "private":
-            return agent_card.registered_by == user_context.get("username")
+            return is_owner(agent_card, user_context)
         if agent_card.visibility == "group-restricted":
             user_groups = set(user_context.get("groups") or [])
             return bool(set(agent_card.allowed_groups) & user_groups)
@@ -586,7 +593,7 @@ async def validate_user_can_bind_resource(
         if visibility == VisibilityEnum.PUBLIC:
             return True
         if visibility == VisibilityEnum.PRIVATE:
-            return skill.owner == user_context.get("username")
+            return is_owner(skill, user_context, legacy_field=OWNER_FIELD)
         if visibility == VisibilityEnum.GROUP:
             user_groups = set(user_context.get("groups") or [])
             return bool(user_groups & set(getattr(skill, "allowed_groups", []) or []))

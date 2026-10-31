@@ -235,12 +235,12 @@ export class KeycloakService extends Construct {
       resources: ssmParamArns,
     }));
 
-    // Inline policy: KMS decrypt (wildcard required - key ARN determined at runtime by SSM)
+    // Inline policy: KMS decrypt with the RDS CMK, which encrypts the SSM SecureStrings and the DB secret
     taskExecRole.addToPolicy(new iam.PolicyStatement({
       sid: 'KMSDecrypt',
       effect: iam.Effect.ALLOW,
       actions: ['kms:Decrypt'],
-      resources: ['*'],
+      resources: [rdsKmsKey.keyArn],
     }));
 
     // Inline policy: read Keycloak DB credentials from Secrets Manager

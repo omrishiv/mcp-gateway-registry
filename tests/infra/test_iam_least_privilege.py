@@ -12,6 +12,7 @@ toolchain is needed.
 """
 
 import re
+from collections.abc import Callable
 from dataclasses import (
     dataclass,
     field,
@@ -297,6 +298,117 @@ ROLE_PAIRS: tuple[_RolePair, ...] = (
         (("ecs_task_exec", "ecs_service_grafana"),),
         ((_CDK_OBSERVABILITY, "_createTaskExecRole", "role"), _CDK_SECRETS_ACCESS),
         _EXEC_LOG_DESCRIBE,
+    ),
+)
+
+
+def _cdk_text(*files: str) -> str:
+    """Return the concatenated text of CDK source files.
+
+    Args:
+        files: Repo-relative TypeScript paths.
+
+    Returns:
+        Their contents, newline-joined.
+    """
+    return "\n".join((REPO_ROOT / file).read_text() for file in files)
+
+
+# CDK sources that build the auth-server, registry and mcpgw task definitions.
+_CDK_APP_SERVICE_FILES = (
+    f"{_CDK}/registry-service-stack.ts",
+    _CDK_REGISTRY_ECS,
+    _CDK_MCP_SERVER,
+)
+
+
+def _cdk_has_app_adot_sidecar() -> str | None:
+    """Return evidence that a CDK app task runs an ADOT sidecar, or None."""
+    text = _cdk_text(*_CDK_APP_SERVICE_FILES)
+    for marker in ("aws-otel-collector", "OTEL_EXPORTER_OTLP_ENDPOINT"):
+        if marker in text:
+            return f"{marker} appears in {_CDK_APP_SERVICE_FILES}"
+    return None
+
+
+def _cdk_has_cognito_provider() -> str | None:
+    """Return evidence that CDK can enable the Cognito provider, or None."""
+    values = re.findall(
+        r"COGNITO_ENABLED\s*:\s*([^,\n]+)",
+        _cdk_text(*(str(p.relative_to(REPO_ROOT)) for p in _cdk_files())),
+    )
+    enabled = [v.strip() for v in values if v.strip() != "'false'"]
+    return f"COGNITO_ENABLED is set to {enabled}" if enabled else None
+
+
+def _cdk_has_egress_vault() -> str | None:
+    """Return evidence that CDK configures the egress credential vault, or None."""
+    text = _cdk_text(*(str(p.relative_to(REPO_ROOT)) for p in _cdk_files()))
+    for marker in ("EGRESS_AUTH_ENABLED", "SECRET_STORE_BACKEND"):
+        if marker in text:
+            return f"CDK sets {marker}"
+    return None
+
+
+@dataclass(frozen=True)
+class _CdkFeatureGap:
+    """Terraform-only actions of a role, needed by a feature CDK does not implement.
+
+    ``cdk_evidence`` returns a description of where CDK implements the feature,
+    or None while CDK lacks it. Once CDK gains the feature the entry fails, so
+    the matching grant cannot be forgotten.
+    """
+
+    role: str
+    actions: frozenset[str]
+    feature: str
+    justification: str
+    cdk_evidence: Callable[[], str | None]
+
+
+_ADOT_GAP = (
+    frozenset({"aps:RemoteWrite"}),
+    "per-task ADOT sidecar (issue #1122)",
+    "Terraform runs an ADOT collector beside the app container; CDK runs one only "
+    "in the metrics-service task, so its app task roles never write to AMP",
+    _cdk_has_app_adot_sidecar,
+)
+
+CDK_FEATURE_GAPS: tuple[_CdkFeatureGap, ...] = (
+    *(
+        _CdkFeatureGap(role, *_ADOT_GAP)
+        for role in ("auth-server-task", "registry-task", "mcpgw-task")
+    ),
+    _CdkFeatureGap(
+        "registry-task",
+        frozenset(
+            {
+                "cognito-idp:ListGroups",
+                "cognito-idp:ListUsers",
+                "cognito-idp:AdminListGroupsForUser",
+            }
+        ),
+        "Cognito identity provider",
+        "registry/utils/cognito_manager.py lists the user pool for the IAM pages; "
+        "CDK hardcodes COGNITO_ENABLED to false",
+        _cdk_has_cognito_provider,
+    ),
+    _CdkFeatureGap(
+        "registry-task",
+        frozenset(
+            {
+                "secretsmanager:CreateSecret",
+                "secretsmanager:GetSecretValue",
+                "secretsmanager:PutSecretValue",
+                "secretsmanager:DeleteSecret",
+                "kms:Decrypt",
+                "kms:GenerateDataKey",
+            }
+        ),
+        "egress credential vault, secrets-manager backend",
+        "registry/secrets/secrets_manager/store.py keeps per-user secrets under a "
+        "path prefix; CDK does not configure the egress vault",
+        _cdk_has_egress_vault,
     ),
 )
 
@@ -1198,16 +1310,44 @@ def test_terraform_and_cdk_grant_a_role_the_same_actions(pair: _RolePair) -> Non
     """Property: a role both stacks create holds the same action set in both.
 
     Each side is the union over every conditional branch, so the comparison is
-    between the most each deployment path can ever grant.
+    between the most each deployment path can ever grant. Terraform-only
+    actions listed in ``CDK_FEATURE_GAPS`` are excused only while CDK still
+    lacks the feature and still grants none of them.
     """
     terraform = set().union(*(_terraform_role_actions(k, r) for k, r in pair.terraform))
     cdk = set().union(*(_cdk_role_actions(*source) for source in pair.cdk))
     terraform_lower = {a.lower() for a in terraform}
     cdk_lower = {a.lower() for a in cdk}
-    only_terraform = sorted(a for a in terraform if a.lower() not in cdk_lower)
+    excused: set[str] = set()
+    for gap in (g for g in CDK_FEATURE_GAPS if g.role == pair.name):
+        evidence = gap.cdk_evidence()
+        assert evidence is None, (
+            f"{pair.name}: CDK now implements the {gap.feature} ({evidence}); grant "
+            f"{sorted(gap.actions)} in CDK too and drop the CDK_FEATURE_GAPS entry"
+        )
+        stale = sorted(a for a in gap.actions if a.lower() not in terraform_lower)
+        assert not stale, (
+            f"{pair.name}: {gap.feature} gap lists {stale}, which Terraform no longer grants"
+        )
+        granted = sorted(a for a in gap.actions if a.lower() in cdk_lower)
+        assert not granted, (
+            f"{pair.name}: {gap.feature} gap lists {granted}, which CDK already grants"
+        )
+        excused |= {a.lower() for a in gap.actions}
+    only_terraform = sorted(
+        a for a in terraform if a.lower() not in cdk_lower and a.lower() not in excused
+    )
     only_cdk = sorted(a for a in cdk if a.lower() not in terraform_lower)
     assert terraform, f"{pair.name}: no Terraform actions found for {pair.terraform}"
     assert cdk, f"{pair.name}: no CDK actions found for {pair.cdk}"
     assert not only_terraform and not only_cdk, (
         f"{pair.name}: Terraform only {only_terraform}; CDK only {only_cdk}"
     )
+
+
+@pytest.mark.unit
+def test_cdk_feature_gaps_name_mapped_roles() -> None:
+    """Property: every CDK feature-gap entry names a role pair the parity test checks."""
+    mapped = {pair.name for pair in ROLE_PAIRS}
+    unknown = sorted({gap.role for gap in CDK_FEATURE_GAPS} - mapped)
+    assert not unknown, f"CDK_FEATURE_GAPS entries for unmapped roles: {unknown}"

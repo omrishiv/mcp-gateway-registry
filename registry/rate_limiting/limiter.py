@@ -337,7 +337,19 @@ class RateLimiter:
 
         groups: list[str] = []
         if not is_admin:
-            groups = await self._memberships.get_groups_for(username, client_id)
+            try:
+                groups = await self._memberships.get_groups_for(username, client_id)
+            except Exception as exc:
+                # The caller's memberships (including caller quarantine) are unknown.
+                logger.warning(
+                    f"rate-limit membership read error: {exc} "
+                    f"caller_username={username or ''} caller_client_id={client_id or ''}"
+                )
+                rate_limit_errors_total.add(1, {"axis": "meta"})
+                if self._quarantine_fail_closed:
+                    self._emit_quarantine("caller", "group", username, client_id)
+                    return RateLimitDecision.quarantine_deny("clr", "group")
+                return self._metadata_error_decision()
             # Caller quarantine, like caller gates, is bypassed for admins (no self-lockout).
             if await self._is_caller_quarantined(groups):
                 self._emit_quarantine("caller", "group", username, client_id)
@@ -348,12 +360,22 @@ class RateLimiter:
         rate_groups = [g for g in groups if g not in RESERVED_GROUP_NAMES]
         caller_gates: list[_Gate] = []
         caller_target_gates: list[_Gate] = []
-        if not is_admin:
-            caller_gates = await self._build_caller_gates(identity, rate_groups, caller_type)
-            caller_target_gates = await self._build_caller_target_gates(
-                identity, rate_groups, caller_type, target_entity_type, target_name
+        try:
+            if not is_admin:
+                caller_gates = await self._build_caller_gates(identity, rate_groups, caller_type)
+                caller_target_gates = await self._build_caller_target_gates(
+                    identity, rate_groups, caller_type, target_entity_type, target_name
+                )
+            target_gates = await self._build_target_gates(target_entity_type, target_name)
+        except Exception as exc:
+            # The applicable gates are unknown, so no per-definition fail_closed flag
+            # can be consulted; the global fail policy decides.
+            logger.warning(
+                f"rate-limit definitions read error: {exc} "
+                f"caller_username={username or ''} caller_client_id={client_id or ''}"
             )
-        target_gates = await self._build_target_gates(target_entity_type, target_name)
+            rate_limit_errors_total.add(1, {"axis": "meta"})
+            return self._metadata_error_decision()
         gates = caller_gates + caller_target_gates + target_gates
         if not gates:
             return RateLimitDecision.allow()
@@ -370,6 +392,23 @@ class RateLimiter:
             remaining_values.append(decision.remaining)
         # All gates passed. Report the tightest remaining headroom for the response headers.
         return RateLimitDecision.allow(remaining=min(remaining_values))
+
+    def _metadata_error_decision(self) -> RateLimitDecision:
+        """Apply the global fail policy when memberships or definitions cannot be read.
+
+        Fail-open allows. Fail-closed denies as a short throttle (403 plus the
+        throttle marker, which nginx turns into a 429 with ``Retry-After``), since
+        the datastore outage is expected to be transient.
+        """
+        if self._fail_open:
+            return RateLimitDecision.allow()
+        now_epoch = int(time.time())
+        return RateLimitDecision(
+            allowed=False,
+            remaining=0,
+            reset_epoch=now_epoch + 1,
+            retry_after=1,
+        )
 
     async def _enforce(
         self,

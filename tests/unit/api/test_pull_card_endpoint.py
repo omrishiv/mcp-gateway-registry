@@ -27,6 +27,7 @@ CARD_URL = "https://agent.example.com/.well-known/agent-card.json"
 def mock_user_context() -> dict[str, Any]:
     return {
         "username": "testuser",
+        "owner_id": "idp|testuser",
         "groups": ["dev-group"],
         "scopes": ["write:agents"],
         "auth_method": "session",

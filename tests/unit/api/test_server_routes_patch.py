@@ -24,6 +24,7 @@ from registry.api.server_routes import router
 def user_context() -> dict[str, Any]:
     return {
         "username": "alice",
+        "owner_id": "idp|alice",
         "groups": ["g"],
         "scopes": ["modify_service"],
         "auth_method": "session",
@@ -500,6 +501,7 @@ class TestServerPatch:
         concurrent writer updated is not overwritten by this PATCH.
         """
         existing = _existing(auth_credential_encrypted="ENC::keepme")
+        existing["owner_id"] = "idp|alice"  # already bound: nothing to backfill
         with (
             patch("registry.api.server_routes.server_service") as svc,
             patch(
@@ -523,6 +525,39 @@ class TestServerPatch:
         assert response.status_code == 200
         kwargs = svc.update_server.call_args.kwargs
         assert kwargs["updated_fields"] == ["description"]
+
+    def test_patch_by_legacy_owner_binds_owner_id(self, client):
+        """The owner's first write to a legacy record persists their owner_id.
+
+        A record with no owner_id is owned by its registered_by username; the
+        owner-authorized PATCH binds it to the caller's owner_id (trust on first
+        use), extending the field scope so the binding is actually written.
+        """
+        existing = _existing()
+        with (
+            patch("registry.api.server_routes.server_service") as svc,
+            patch(
+                "registry.auth.dependencies.user_has_ui_permission_for_service",
+                return_value=True,
+            ),
+            patch(
+                "registry.api.server_routes.check_registration_gate",
+                AsyncMock(return_value=_gate_allow()),
+            ),
+            patch("registry.api.server_routes.send_registration_webhook", AsyncMock()),
+        ):
+            svc.get_server_info = AsyncMock(side_effect=[existing, existing])
+            svc.update_server = AsyncMock(return_value=True)
+
+            response = client.patch(
+                "/servers/test-server",
+                json={"description": "patched"},
+            )
+
+        assert response.status_code == 200
+        written = svc.update_server.call_args.args[1]
+        assert written["owner_id"] == "idp|alice"
+        assert svc.update_server.call_args.kwargs["updated_fields"] == ["description", "owner_id"]
 
     def test_patch_write_carries_read_revision_for_if_match(self, client):
         """With If-Match, the revision joins the atomic repository write."""

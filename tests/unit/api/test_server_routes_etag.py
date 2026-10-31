@@ -27,6 +27,7 @@ _WEAK_ETAG_RE = re.compile(r'^W/"\d+"$')
 def user_context() -> dict[str, Any]:
     return {
         "username": "alice",
+        "owner_id": "idp|alice",
         "groups": ["g"],
         "scopes": ["modify_service"],
         "auth_method": "session",

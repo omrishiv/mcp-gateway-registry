@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from ..auth.ownership import OWNER_FIELD, is_owner
 from ..common.log_redaction import redact_url
 from ..core.config import settings
 from ..core.metrics import ASSET_ID_CONFLICT_TOTAL
@@ -1243,13 +1244,15 @@ def _build_skill_card(
     skill_md_raw_url: str | None = None,
     resource_manifest: "SkillResourceManifest | None" = None,
     content_integrity: ContentIntegrity | None = None,
+    owner_id: str | None = None,
 ) -> SkillCard:
     """Build SkillCard from registration request.
 
     Args:
         request: Registration request
         path: Skill path
-        owner: Owner username/email
+        owner: Owner username/email (display)
+        owner_id: Owner's immutable ownership identity (access control)
         content_version: Content hash
         content_updated_at: Content update timestamp
         skill_md_raw_url: Raw URL for fetching SKILL.md content
@@ -1327,6 +1330,7 @@ def _build_skill_card(
         visibility=request.visibility,
         allowed_groups=request.allowed_groups,
         owner=owner,
+        owner_id=owner_id,
         is_enabled=True,
         status=request.status,
         auth_scheme=getattr(request, "auth_scheme", "none"),
@@ -1405,13 +1409,15 @@ class SkillService:
         request: SkillRegistrationRequest,
         owner: str | None = None,
         validate_url: bool = True,
+        owner_id: str | None = None,
     ) -> SkillCard:
         """Register a new skill.
 
         Args:
             request: Skill registration request
-            owner: Owner username/email for access control
+            owner: Owner username/email (display)
             validate_url: Whether to validate SKILL.md URL
+            owner_id: Owner's immutable ownership identity (access control)
 
         Returns:
             Created SkillCard
@@ -1478,6 +1484,7 @@ class SkillService:
                 skill_md_raw_url=raw_url,
                 resource_manifest=resource_manifest,
                 content_integrity=content_integrity,
+                owner_id=owner_id,
             )
         except ValueError as e:
             raise SkillValidationError(str(e)) from e
@@ -1571,6 +1578,7 @@ class SkillService:
                 allowed_groups=s.allowed_groups,
                 registry_name=s.registry_name,
                 owner=s.owner,
+                owner_id=s.owner_id,
                 auth_scheme=s.auth_scheme,
                 auth_header_name=s.auth_header_name,
                 num_stars=s.num_stars,
@@ -1629,7 +1637,6 @@ class SkillService:
             return []
 
         user_groups = set((user_context or {}).get("groups", []))
-        username = (user_context or {}).get("username", "")
 
         filtered = []
         for skill in all_skills:
@@ -1641,7 +1648,7 @@ class SkillService:
                 filtered.append(skill)
             elif skill.visibility == VisibilityEnum.PRIVATE:
                 # Check owner directly from SkillInfo (no N+1 query)
-                if skill.owner == username:
+                if is_owner(skill, user_context, legacy_field=OWNER_FIELD):
                     filtered.append(skill)
             elif skill.visibility == VisibilityEnum.GROUP:
                 if user_groups & set(skill.allowed_groups):

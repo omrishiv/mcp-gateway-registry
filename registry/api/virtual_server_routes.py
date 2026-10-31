@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from ..audit.context import set_audit_action
 from ..auth.csrf import verify_csrf_token_flexible
 from ..auth.dependencies import nginx_proxied_auth
+from ..auth.ownership import user_owner_id
 from ..exceptions import (
     VirtualServerAlreadyExistsError,
     VirtualServerNotFoundError,
@@ -35,6 +36,7 @@ from ..schemas.virtual_server_models import (
     UpdateVirtualServerRequest,
     VirtualServerConfig,
 )
+from ..services import admin_safety
 from ..services.tool_catalog_service import get_tool_catalog_service
 from ..services.virtual_server_service import get_virtual_server_service
 
@@ -71,16 +73,10 @@ def _require_admin(
     Raises:
         HTTPException: 403 if the user is not an administrator.
     """
-    is_admin = user_context.get("is_admin", False)
-
-    # Explicit admin group/scope membership is also accepted as an admin
-    # signal. can_modify_servers is intentionally excluded.
-    groups = user_context.get("groups", [])
-    scopes = user_context.get("scopes", [])
-    has_admin_group = "mcp-registry-admin" in groups
-    has_admin_scope = "mcp-registry-admin" in scopes
-
-    if not (is_admin or has_admin_group or has_admin_scope):
+    # Canonical request-time is_admin only. Group or scope names such as
+    # mcp-registry-admin are not an admin signal, and can_modify_servers is
+    # intentionally excluded.
+    if not admin_safety.caller_is_admin(user_context):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Administrator privileges required",
@@ -142,7 +138,7 @@ def _require_virtual_server_access(
         )
 
 
-_VALID_VIRTUAL_PATH_RE = re.compile(r"^/virtual/[a-z0-9]+(-[a-z0-9]+)*$")
+_VALID_VIRTUAL_PATH_RE = re.compile(r"/virtual/[a-z0-9]+(-[a-z0-9]+)*")
 
 
 def _normalize_virtual_path(
@@ -175,7 +171,7 @@ def _normalize_virtual_path(
     else:
         normalized = f"/virtual/{raw_path}"
 
-    if not _VALID_VIRTUAL_PATH_RE.match(normalized):
+    if not _VALID_VIRTUAL_PATH_RE.fullmatch(normalized):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
@@ -397,6 +393,7 @@ async def create_virtual_server(
         config = await service.create_virtual_server(
             request=request,
             created_by=created_by,
+            owner_id=user_owner_id(user_context),
         )
         logger.info(
             f"Created virtual server '{config.server_name}' at {config.path} by {created_by}"

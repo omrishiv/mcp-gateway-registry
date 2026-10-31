@@ -249,6 +249,15 @@ resource "aws_iam_role_policy" "rds_proxy_policy" {
           "secretsmanager:GetSecretValue"
         ]
         Resource = aws_secretsmanager_secret.keycloak_db_secret.arn
+      },
+      {
+        # The proxy reads keycloak_db_secret, which is encrypted with the RDS
+        # CMK, so GetSecretValue also needs kms:Decrypt on that key.
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt"
+        ]
+        Resource = aws_kms_key.rds.arn
       }
     ]
   })

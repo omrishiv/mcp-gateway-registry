@@ -36,8 +36,8 @@ logger = logging.getLogger(__name__)
 
 TYPE = "workflow"
 ADMIN = {"username": "admin", "is_admin": True}
-BOB = {"username": "bob", "is_admin": False, "groups": []}
-EVE = {"username": "eve", "is_admin": False, "groups": []}
+BOB = {"username": "bob", "owner_id": "idp|bob", "is_admin": False, "groups": []}
+EVE = {"username": "eve", "owner_id": "idp|eve", "is_admin": False, "groups": []}
 
 
 def _descriptor() -> CustomTypeDescriptor:
@@ -349,6 +349,7 @@ class TestUpdateRecordUpstreamHeaders:
         svc, entities, search, _ = service
         existing = _record(
             owner="bob",
+            owner_id="idp|bob",  # already bound: nothing to backfill
             is_proxied=True,
             proxy_target_url="https://x.example.com/api",
         )

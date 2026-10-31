@@ -1543,8 +1543,9 @@ def _generate_csv(events: list[dict[str, Any]]):
             "is_admin": identity.get("is_admin", False),
             "method": event.get("request", {}).get("method", ""),
             "path": event.get("request", {}).get("path", ""),
-            "status_code": event.get("response", {}).get("status_code", ""),
-            "duration_ms": event.get("response", {}).get("duration_ms", ""),
+            # A pending record (outcome never written) stores response as null.
+            "status_code": (event.get("response") or {}).get("status_code", ""),
+            "duration_ms": (event.get("response") or {}).get("duration_ms", ""),
             "operation": event.get("action", {}).get("operation", "")
             if event.get("action")
             else "",

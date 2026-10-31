@@ -25,6 +25,7 @@ def _non_admin():
     """
     return {
         "username": "non-admin",
+        "owner_id": "idp|non-admin",
         "groups": ["engineering"],
         "scopes": [],
         "is_admin": False,
@@ -43,6 +44,7 @@ def _non_admin_with_execute():
     """
     return {
         "username": "execute-user",
+        "owner_id": "idp|execute-user",
         "groups": ["engineering"],
         "scopes": ["some-server/execute"],
         "is_admin": False,
@@ -534,6 +536,7 @@ class TestRemoveServiceDeletePermissionKey:
         def factory():
             return {
                 "username": "deleter",
+                "owner_id": "idp|deleter",
                 "groups": ["engineering"],
                 "scopes": [],
                 "is_admin": False,

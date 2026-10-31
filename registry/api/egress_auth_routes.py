@@ -240,6 +240,16 @@ def _callback_url() -> str:
     return settings.egress_oauth_callback_base.rstrip("/") + "/oauth2/egress/callback"
 
 
+def _callback_sign_in_required() -> HTMLResponse:
+    """Response for a consent callback completed by a browser with no live session."""
+    return HTMLResponse(
+        "<h3>Connection not saved: you are not signed in.</h3>"
+        "<p>Sign in to the registry in this browser as the user who started the "
+        "connection, then start connecting again.</p>",
+        status_code=401,
+    )
+
+
 def _build_connect_url(server_path: str) -> str:
     """Build the session-verified elicitation front-door URL for a server.
 
@@ -1503,9 +1513,11 @@ async def egress_callback(
     code: str = "",
     state: str = "",
 ):
-    """Provider redirect target. No ingress auth -- the signed+encrypted state is
-    the authority. Verifies state (TTL + single-use + account-swap), exchanges the
-    code, and stores the token. Reached via nginx -> registry (no /validate)."""
+    """Provider redirect target. No ingress auth (reached via nginx -> registry,
+    no /validate), so the browser's session cookie is resolved here: the token is
+    stored only when that browser is authenticated as the principal bound in the
+    signed+encrypted state. Verifies state (TTL + single-use + account-swap),
+    exchanges the code, and stores the token."""
     if not code or not state:
         return HTMLResponse("<h3>Connection failed: missing code/state.</h3>", status_code=400)
 
@@ -1538,27 +1550,27 @@ async def egress_callback(
         oauth_cfg = server.get("egress_oauth")
     if not oauth_cfg:
         return HTMLResponse("<h3>Connection failed: server not configured.</h3>", status_code=400)
-    # Account-swap guard: cross-check the live session principal when present.
-    # The provider redirect often lands in a fresh tab with a valid session
-    # cookie (same browser), in which case we enforce it; if there is no live
-    # session, the signed+single-use state remains the authority (handle_callback
-    # still enforces TTL + replay + the state-bound (user, auth_method)).
-    current_user = None
-    current_method = None
+    # Account-swap guard: the browser completing the provider redirect must be
+    # live as the principal bound in the state. Fail closed with no session or an
+    # unresolvable one: otherwise a consent link minted by one user and opened in
+    # another (unauthenticated) browser stores the second browser's upstream
+    # token in the first user's bucket.
     session_cookie = request.cookies.get(settings.session_cookie_name)
-    if session_cookie:
-        try:
-            # Pass the cookie explicitly: nginx_proxied_auth's `session` is a
-            # FastAPI Cookie(...) param only populated by dependency injection, so
-            # a direct call without it always sees session=None (the account-swap
-            # guard would silently never engage).
-            ctx = await nginx_proxied_auth(request, session=session_cookie)
-            # Compare on the canonical egress user (OIDC sub, else username) so the
-            # account-swap guard matches the id the consent state was built with.
-            current_user = ctx.get("egress_user") or ctx.get("username")
-            current_method = ctx.get("auth_method")
-        except Exception:  # nosec B110 - best-effort auth context for account-swap guard
-            pass
+    if not session_cookie:
+        return _callback_sign_in_required()
+    try:
+        # Pass the cookie explicitly: nginx_proxied_auth's `session` is a
+        # FastAPI Cookie(...) param only populated by dependency injection, so
+        # a direct call without it always sees session=None.
+        ctx = await nginx_proxied_auth(request, session=session_cookie)
+    except HTTPException:
+        return _callback_sign_in_required()
+    # Compare on the canonical egress user (OIDC sub, else username) so the
+    # account-swap guard matches the id the consent state was built with.
+    current_user = ctx.get("egress_user") or ctx.get("username")
+    current_method = ctx.get("auth_method")
+    if not current_user or not current_method:
+        return _callback_sign_in_required()
 
     try:
         conn = await get_egress_auth_service().handle_callback(

@@ -777,6 +777,17 @@ async def management_create_group(
             agent_access, ui_permissions
         )
 
+        # Last-admin guard: create upserts, so it can overwrite the scope that
+        # makes the remaining administrators admin.
+        try:
+            await admin_safety.assert_scope_change_keeps_an_admin(
+                payload.name,
+                group_mappings=[group_mapping_id],
+                ui_permissions=ui_permissions,
+            )
+        except AdminSafetyError as exc:
+            raise _admin_safety_http(exc) from exc
+
         import_success = await scope_service.import_group(
             scope_name=payload.name,
             description=payload.description or "",
@@ -878,6 +889,17 @@ async def management_delete_group(
         is_idp_managed = True
         if existing_group is not None:
             is_idp_managed = bool(existing_group.get("is_idp_managed", True))
+
+        # Last-admin guard, before any IdP or scope side effect. Deleting the
+        # IdP group also strips its membership from every principal.
+        try:
+            await admin_safety.assert_scope_change_keeps_an_admin(
+                group_name,
+                delete=True,
+                revoked_group=group_name if is_idp_managed else None,
+            )
+        except AdminSafetyError as exc:
+            raise _admin_safety_http(exc) from exc
 
         if is_idp_managed:
             try:
@@ -1115,6 +1137,16 @@ async def management_update_group(
         agent_access, ui_permissions = _normalize_agent_paths_in_scope_config(
             agent_access, ui_permissions
         )
+
+        # Last-admin guard on the exact values about to be persisted.
+        try:
+            await admin_safety.assert_scope_change_keeps_an_admin(
+                group_name,
+                group_mappings=group_mappings,
+                ui_permissions=ui_permissions,
+            )
+        except AdminSafetyError as exc:
+            raise _admin_safety_http(exc) from exc
 
         # Use import_group to update the scope data.
         # Preserve is_idp_managed across edits (import_group replaces the whole doc).

@@ -198,6 +198,10 @@ class VirtualServerConfig(BaseModel):
         None,
         description="Username of the creator",
     )
+    owner_id: str | None = Field(
+        None,
+        description="Immutable ownership identity of the creator (server-managed)",
+    )
     created_at: datetime = Field(
         default_factory=_utc_now,
         description="Creation timestamp",
@@ -220,7 +224,7 @@ class VirtualServerConfig(BaseModel):
         segment = v[len("/virtual/") :]
         if not segment:
             raise ValueError("Virtual server path must have a name after '/virtual/'")
-        if not re.match(r"^[a-z0-9]+(-[a-z0-9]+)*$", segment):
+        if not re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", segment):
             raise ValueError(
                 "Virtual server path segment must be lowercase alphanumeric "
                 "with single hyphens, not starting or ending with hyphen"

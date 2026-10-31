@@ -98,6 +98,42 @@ export AWS_PROFILE=your_profile_name
 - ARNs shown in deployment output
 - CloudWatch logs for monitoring
 
+## Security Configuration
+
+Both agents authenticate every request except `/ping`, `/api/health` and the
+public agent card. Each agent also checks every tool call the model makes before
+it runs. These environment variables control that behaviour:
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `AGENT_AUDIENCE` | `flight-booking-agent` / `travel-assistant-agent` | Expected `aud` claim of inbound bearer JWTs. The audience is always checked: a realm token minted for another client, or one without `aud`, is rejected with 401. Callers (and the gateway) must present a token whose audience is this agent's client id, or you set this to the audience your tokens carry. |
+| `AGENT_ALLOW_MUTATING_TOOLS` | `false` | Operator opt-in that lets the model run mutating tools without human confirmation. Leave unset outside a trusted demo or sandbox. |
+| `AGENT_AUTH_PRESENCE_ONLY` | `false` | Test/demo shim: accept any non-empty bearer without verifying it. |
+| `AGENT_AUTH_DISABLED` | `false` | Turn authentication off (loopback only). |
+
+**Tool confirmation.** The model's tool calls are untrusted: an inbound message,
+a remote agent's reply or a tool result can steer it. Each tool call is
+classified at execution time. Read-only calls run. Mutating calls are denied,
+because an A2A server has no channel to ask a human, and the model is told the
+action needs confirmation outside the conversation. A tool argument the model
+fills in never counts as confirmation.
+
+- Flight Booking: `check_availability` and `manage_reservation` with
+  `action="view"` are read-only. `reserve_flight`, `confirm_booking`,
+  `process_payment` and `manage_reservation` with `action="cancel"` are mutating.
+- Travel Assistant: `search_flights`, `check_prices`, `get_recommendations`,
+  `discover_remote_agents` and `view_cached_remote_agents` are read-only.
+  `create_trip_plan` (writes the database) and `invoke_remote_agent` (can make
+  the remote agent act) are mutating.
+- Any tool not listed as read-only is treated as mutating.
+
+The `/api/*` endpoints are direct calls from an authenticated client, not model
+tool calls, so the guard does not apply to them. An application that embeds an
+agent and does have a human in the loop can pass a `confirm` callback to
+`MutatingToolGuard` (`tool_guard.py`) instead of opting in globally.
+`docker-compose.local.yml` sets `AGENT_ALLOW_MUTATING_TOOLS=true` by default so
+the local booking demo works; override it with `AGENT_ALLOW_MUTATING_TOOLS=false`.
+
 ## Testing
 
 > **Testing A2A reverse-proxy routing** (agent discovers + invokes another agent entirely

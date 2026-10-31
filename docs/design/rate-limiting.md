@@ -353,6 +353,7 @@ Two replicas racing on the boundary both go through the same atomic compare-and-
 ## Failure Modes
 
 - **Backend error or timeout → fail open by default.** Each counter op runs under a hard timeout (`RATE_LIMIT_BACKEND_TIMEOUT_MS`, default 250 ms). On error or timeout, the limiter logs a warning, emits an error metric, and **allows** the request — unless the specific limit is marked `fail_closed`, or the global `RATE_LIMIT_FAIL_OPEN` is `false`. A slow store therefore fails *fast* into "not limiting," never into "every authenticated request hangs."
+- **Membership or definitions read error → global policy.** When the limiter cannot read the caller's rate-limit memberships or the applicable limit definitions (after the cache), it does not know which gates apply, so no per-definition `fail_closed` flag can be consulted. With `RATE_LIMIT_FAIL_OPEN=true` the request is allowed; with `false` it is denied as a throttle (403 with the throttle marker, rewritten by nginx to `429` with `Retry-After: 1`). A failed membership read with `RATE_LIMIT_QUARANTINE_FAIL_CLOSED=true` denies as a quarantine (plain `403`), because caller quarantine membership is unknown. Both log a warning and increment `mcpgw_rate_limit_errors_total{axis="meta"}`.
 - **A malformed definition is skipped**, logged, and never breaks the auth path.
 - **An unexpected error in the enforcement wrapper is swallowed** — rate limiting must never turn into a 500 on `/validate`.
 - **Feature disabled → complete no-op.** No DB access, no import cost.
@@ -380,7 +381,7 @@ All labels are bounded (no per-user/per-server *name* labels, which would be unb
 | `mcpgw_rate_limit_quarantine_denied_total` | Counter | `scope` (`caller` / `target`), `entity_type` | Requests dropped because a caller or target is **quarantined** (kill switch). "How many calls were blocked by quarantine, split by whether the caller or the target was quarantined?" |
 | `mcpgw_rate_limit_quarantine_members` | ObservableGauge | `group` (`quarantine-callers` / `quarantine-targets`) | Current member count of each kill-switch group, sampled each export cycle (correct across replicas; not on the request path). "How many callers / targets are currently quarantined?" |
 | `mcpgw_rate_limit_checks_total` | Counter | `axis`, `entity_type`, `outcome` | Total gate checks (allow/deny) — the denominator for a throttle rate. `ctg` appears in `axis`. |
-| `mcpgw_rate_limit_errors_total` | Counter | `axis` (incl. `qtn` for a quarantine-read error) | Backend errors (fail-open/closed events). |
+| `mcpgw_rate_limit_errors_total` | Counter | `axis` (incl. `qtn` for a quarantine-read error, `meta` for a memberships/definitions read error) | Backend errors (fail-open/closed events). |
 | `mcpgw_rate_limit_backend_duration_ms` | Histogram | `backend`, `op` | Per-op latency of the counter-store round trip. |
 
 The new caller_target axis needs **no new throttle metric** — it reuses `mcpgw_rate_limit_throttled_total` with `axis="ctg"`. Quarantine adds two dedicated series (`_quarantine_denied_total`, `_quarantine_members`). All labels stay bounded (no subject-name label); per-subject attribution stays in the WARNING app log and the `GET /api/rate-limit-quarantine` list.

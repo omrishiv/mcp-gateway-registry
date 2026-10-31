@@ -794,7 +794,7 @@ def test_generate_transport_location_blocks_streamable_http(nginx_service):
     blocks = nginx_service._generate_transport_location_blocks("/test", server_info)
 
     assert len(blocks) == 1
-    assert "location {{ROOT_PATH}}/test" in blocks[0]
+    assert "location /test" in blocks[0]
     # Issue #1026 - MCP traffic is routed through auth_server mcp-proxy.
     assert "proxy_pass http://auth-server:8888/mcp-proxy/test/" in blocks[0]
     # $backend_url is set in the rewrite phase so the /validate
@@ -879,7 +879,7 @@ def test_generate_transport_location_blocks_sse(nginx_service):
     blocks = nginx_service._generate_transport_location_blocks("/test", server_info)
 
     assert len(blocks) == 1
-    assert "location {{ROOT_PATH}}/test" in blocks[0]
+    assert "location /test" in blocks[0]
     # Issue #1026 - MCP traffic is routed through auth_server mcp-proxy.
     assert "proxy_pass http://auth-server:8888/mcp-proxy/test/" in blocks[0]
     assert 'set $backend_url "http://localhost:8000/sse"' in blocks[0]
@@ -898,7 +898,7 @@ def test_generate_transport_location_blocks_both_transports(nginx_service):
 
     # Should prefer streamable-http
     assert len(blocks) == 1
-    assert "location {{ROOT_PATH}}/test" in blocks[0]
+    assert "location /test" in blocks[0]
 
 
 @pytest.mark.unit
@@ -913,7 +913,7 @@ def test_generate_transport_location_blocks_no_transports(nginx_service):
 
     # Should default to streamable-http
     assert len(blocks) == 1
-    assert "location {{ROOT_PATH}}/test" in blocks[0]
+    assert "location /test" in blocks[0]
 
 
 # =============================================================================
@@ -928,7 +928,7 @@ def test_create_location_block_streamable_http(nginx_service):
         "/test", "http://localhost:8000/mcp", "streamable-http"
     )
 
-    assert "location {{ROOT_PATH}}/test" in block
+    assert "location /test" in block
     # Issue #1026 - proxy hop lands on auth_server mcp-proxy, upstream goes in header.
     assert "proxy_pass http://auth-server:8888/mcp-proxy/test/" in block
     assert 'set $backend_url "http://localhost:8000/mcp"' in block
@@ -991,7 +991,7 @@ def test_create_location_block_sse(nginx_service):
     """Test creating location block for SSE."""
     block = nginx_service._create_location_block("/test", "http://localhost:8000/sse", "sse")
 
-    assert "location {{ROOT_PATH}}/test" in block
+    assert "location /test" in block
     # Issue #1026 - proxy hop lands on auth_server mcp-proxy, upstream goes in header.
     assert "proxy_pass http://auth-server:8888/mcp-proxy/test/" in block
     assert 'set $backend_url "http://localhost:8000/sse"' in block
@@ -1007,7 +1007,7 @@ def test_create_location_block_external_service(nginx_service):
         "/test", "https://api.example.com/mcp", "streamable-http"
     )
 
-    assert "location {{ROOT_PATH}}/test" in block
+    assert "location /test" in block
     # Issue #1026 - proxy hop lands on auth_server mcp-proxy, upstream goes in header.
     assert "proxy_pass http://auth-server:8888/mcp-proxy/test/" in block
     assert 'set $backend_url "https://api.example.com/mcp"' in block
@@ -1023,7 +1023,7 @@ def test_create_location_block_internal_service(nginx_service):
         "/test", "http://backend:8000/mcp", "streamable-http"
     )
 
-    assert "location {{ROOT_PATH}}/test" in block
+    assert "location /test" in block
     # Issue #1026 - proxy hop lands on auth_server mcp-proxy, upstream goes in header.
     assert "proxy_pass http://auth-server:8888/mcp-proxy/test/" in block
     assert 'set $backend_url "http://backend:8000/mcp"' in block
@@ -1065,7 +1065,7 @@ def test_create_location_block_direct_transport(nginx_service):
     """Test creating location block for direct transport."""
     block = nginx_service._create_location_block("/test", "http://localhost:8000", "direct")
 
-    assert "location {{ROOT_PATH}}/test" in block
+    assert "location /test" in block
     # Issue #1026 - proxy hop lands on auth_server mcp-proxy, upstream goes in header.
     assert "proxy_pass http://auth-server:8888/mcp-proxy/test/" in block
     assert 'set $backend_url "http://localhost:8000"' in block
@@ -1084,9 +1084,9 @@ def test_create_location_block_appends_trailing_slash(nginx_service):
     )
 
     # The location directive is normalised to end with a slash ...
-    assert "location {{ROOT_PATH}}/a/ {" in block
+    assert "location /a/ {" in block
     # ... and must NOT emit the bare-path form that prefix-matches /api, /auth, etc.
-    assert "location {{ROOT_PATH}}/a {" not in block
+    assert "location /a {" not in block
 
 
 @pytest.mark.unit
@@ -1096,8 +1096,8 @@ def test_create_location_block_preserves_single_trailing_slash(nginx_service):
         "/test/", "http://localhost:8000/mcp", "streamable-http"
     )
 
-    assert "location {{ROOT_PATH}}/test/ {" in block
-    assert "location {{ROOT_PATH}}/test// {" not in block
+    assert "location /test/ {" in block
+    assert "location /test// {" not in block
 
 
 @pytest.mark.unit
@@ -1108,8 +1108,8 @@ def test_create_location_block_normalises_multi_segment_path(nginx_service):
         "/peer-registry/server-name", "http://localhost:8000/mcp", "streamable-http"
     )
 
-    assert "location {{ROOT_PATH}}/peer-registry/server-name/ {" in block
-    assert "location {{ROOT_PATH}}/peer-registry/server-name {" not in block
+    assert "location /peer-registry/server-name/ {" in block
+    assert "location /peer-registry/server-name {" not in block
 
 
 def _location_bodies(block: str) -> dict[str, str]:
@@ -1136,17 +1136,14 @@ def test_create_location_block_root_endpoint_serves_bare_path(nginx_service):
 
     bodies = _location_bodies(block)
     assert set(bodies) == {
-        "location {{ROOT_PATH}}/aws-knowledge/ {",
-        "location = {{ROOT_PATH}}/aws-knowledge {",
+        "location /aws-knowledge/ {",
+        "location = /aws-knowledge {",
     }
     # Same auth_request, rate limits, body capture and headers: one body, rendered twice.
-    assert (
-        bodies["location = {{ROOT_PATH}}/aws-knowledge {"]
-        == (bodies["location {{ROOT_PATH}}/aws-knowledge/ {"])
-    )
-    assert "auth_request /validate;" in bodies["location = {{ROOT_PATH}}/aws-knowledge {"]
+    assert bodies["location = /aws-knowledge {"] == (bodies["location /aws-knowledge/ {"])
+    assert "auth_request /validate;" in bodies["location = /aws-knowledge {"]
     # Never the bare prefix form that issue #1501 removed.
-    assert "location {{ROOT_PATH}}/aws-knowledge {" not in block
+    assert "location /aws-knowledge {" not in block
 
 
 @pytest.mark.unit
@@ -1160,7 +1157,7 @@ def test_create_location_block_no_bare_path_unless_root_endpoint(nginx_service, 
         server_info,
     )
 
-    assert list(_location_bodies(block)) == ["location {{ROOT_PATH}}/aws-knowledge/ {"]
+    assert list(_location_bodies(block)) == ["location /aws-knowledge/ {"]
 
 
 @pytest.mark.unit
@@ -1173,7 +1170,7 @@ def test_create_location_block_skips_bare_path_the_template_owns(nginx_service, 
         path, "https://backend.example.com", "streamable-http", {"append_mcp_path": False}
     )
 
-    assert list(_location_bodies(block)) == [f"location {{{{ROOT_PATH}}}}{path}/ {{"]
+    assert list(_location_bodies(block)) == [f"location {path}/ {{"]
 
 
 @pytest.mark.unit

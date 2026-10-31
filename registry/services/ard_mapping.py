@@ -58,6 +58,30 @@ def _sanitize_name(
     return cleaned
 
 
+def public_record_leaf(
+    kind: str,
+    path: str,
+) -> str:
+    """Return the unique ``{leaf}`` of a record's anonymous public URL.
+
+    The leaf is the full stored path without its surrounding slashes, so two
+    records never share a URL. Skill paths always start with ``/skills/``, so
+    that constant prefix is dropped (``/api/public/skills/skills/x`` would be
+    redundant) without making two skills collide.
+
+    Args:
+        kind: One of ``servers``, ``agents`` or ``skills``.
+        path: The record's stored path.
+
+    Returns:
+        The decoded leaf; percent-encode it before putting it in a URL.
+    """
+    leaf = path.strip("/")
+    if kind == "skills" and leaf.startswith("skills/"):
+        leaf = leaf[len("skills/") :]
+    return leaf
+
+
 def _build_urn(
     publisher: str,
     namespace: str,

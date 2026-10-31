@@ -4,7 +4,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 from ..core.metrics import ASSET_ID_CONFLICT_TOTAL
-from ..exceptions import AssetIdConflictError
+from ..core.schemas import is_valid_version_label
+from ..exceptions import AssetIdConflictError, UrlValidationError
 from ..repositories.factory import get_server_repository
 from ..repositories.interfaces import ServerRepositoryBase
 from ..schemas.security import ToolOverride
@@ -12,7 +13,7 @@ from ..utils.credential_encryption import (
     _migrate_auth_type_to_auth_scheme,
     strip_credentials_from_dict,
 )
-from ..utils.path_utils import make_version_id
+from ..utils.path_utils import VERSION_ID_SEPARATOR, make_version_id
 from ..utils.url_guard import (
     proxy_profile_for_entity_target,
     validate_proxy_pass_url,
@@ -126,6 +127,19 @@ class ServerService:
         # nginx metacharacters so a crafted path cannot inject config.
         if path:
             validate_server_path(path)
+            # ':' delimits version document ids (make_version_id builds
+            # "/<path>:<version>"). validate_server_path accepts it because it also
+            # validates those ids, so a server path must be refused here, or a
+            # registration could create (or shadow) another server's version doc.
+            if VERSION_ID_SEPARATOR in path:
+                raise UrlValidationError(
+                    path, f"server path must not contain {VERSION_ID_SEPARATOR!r}"
+                )
+
+        # The version label is routed on by nginx (X-MCP-Server-Version) and
+        # becomes part of the version document id; only version-shaped labels.
+        if new_version and not is_valid_version_label(new_version):
+            raise UrlValidationError(str(new_version), "invalid server version label")
 
         # Check if server with this path already exists
         existing_server = await self._repo.get(path)
@@ -1051,6 +1065,10 @@ class ServerService:
             "tags": active_server.get("tags", []),
             "supported_transports": active_server.get("supported_transports", []),
             "is_enabled": active_server.get("is_enabled", False),
+            # A version belongs to its server's owner; without these a later
+            # promotion would leave the server with no owner (admin-only).
+            "registered_by": active_server.get("registered_by"),
+            "owner_id": active_server.get("owner_id"),
         }
 
         # Create the new version document
@@ -1180,6 +1198,10 @@ class ServerService:
         new_active["path"] = path
         new_active["is_active"] = True
         new_active.pop("active_version_id", None)
+        # Ownership is the server's, not the version's: keep the current owner
+        # so promoting a version never transfers or drops ownership.
+        new_active["registered_by"] = current_active.get("registered_by")
+        new_active["owner_id"] = current_active.get("owner_id")
         # Update other_version_ids: remove target, add current
         other_versions = list(current_active.get("other_version_ids", []))
         if target_version_id in other_versions:

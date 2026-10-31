@@ -10,7 +10,7 @@ from urllib.parse import urlencode
 import jwt
 import requests
 
-from .base import AuthProvider, normalize_groups_claim
+from .base import AuthProvider, normalize_groups_claim, self_signed_owner_id, with_owner_id
 
 JWT_ISSUER = os.environ.get("JWT_ISSUER", "mcp-auth-server")
 JWT_AUDIENCE = os.environ.get("JWT_AUDIENCE", "mcp-registry")
@@ -136,6 +136,11 @@ class PingFederateProvider(AuthProvider):
         """Issuer identifier from discovery."""
         return self._get_openid_configuration()["issuer"]
 
+    @property
+    def owner_issuer(self) -> str:
+        """The discovered issuer."""
+        return self.issuer
+
     @lru_cache(maxsize=1)
     def _get_openid_configuration(self) -> dict[str, Any]:
         """Fetch and cache the OpenID Connect discovery document.
@@ -207,18 +212,21 @@ class PingFederateProvider(AuthProvider):
                 f"groups: {groups}, scopes: {scopes}"
             )
 
-            return {
-                "valid": True,
-                "method": "self_signed",
-                "data": claims,
-                "client_id": claims.get("client_id", "user-generated"),
-                "username": claims.get("sub", ""),
-                "email": claims.get("email", ""),
-                "expires_at": claims.get("exp"),
-                "scopes": scopes,
-                "groups": groups,
-                "token_type": "user_generated",
-            }
+            return with_owner_id(
+                {
+                    "valid": True,
+                    "method": "self_signed",
+                    "data": claims,
+                    "client_id": claims.get("client_id", "user-generated"),
+                    "username": claims.get("sub", ""),
+                    "email": claims.get("email", ""),
+                    "expires_at": claims.get("exp"),
+                    "scopes": scopes,
+                    "groups": groups,
+                    "token_type": "user_generated",
+                },
+                self_signed_owner_id(claims),
+            )
 
         except jwt.ExpiredSignatureError:
             logger.warning("Self-signed token validation failed: Token has expired")
@@ -335,16 +343,19 @@ class PingFederateProvider(AuthProvider):
             else:
                 scopes = scope_claim.split() if scope_claim else []
 
-            return {
-                "valid": True,
-                "username": claims.get("sub", claims.get("preferred_username", "")),
-                "email": claims.get("email", ""),
-                "groups": groups,
-                "scopes": scopes,
-                "client_id": claims.get("client_id", claims.get("cid", self.client_id)),
-                "method": "pingfederate",
-                "data": claims,
-            }
+            return with_owner_id(
+                {
+                    "valid": True,
+                    "username": claims.get("sub", claims.get("preferred_username", "")),
+                    "email": claims.get("email", ""),
+                    "groups": groups,
+                    "scopes": scopes,
+                    "client_id": claims.get("client_id", claims.get("cid", self.client_id)),
+                    "method": "pingfederate",
+                    "data": claims,
+                },
+                self.owner_id_from_claims(claims),
+            )
 
         except jwt.ExpiredSignatureError:
             logger.warning("Token validation failed: Token has expired")

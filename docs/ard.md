@@ -38,10 +38,17 @@ GET /.well-known/ai-catalog.json        # public, no auth, Cache-Control: public
   fields (backend URLs, auth schemes, group lists, owner) and 404 for anything non-public:
 
   ```
-  GET /api/public/servers/{name}/server.json
-  GET /api/public/agents/{name}
-  GET /api/public/skills/{name}
+  GET /api/public/servers/{path}/server.json
+  GET /api/public/agents/{path}
+  GET /api/public/skills/{path}
   ```
+
+  `{path}` is the record's full stored path without its leading slash (skills also drop
+  the constant `skills/` prefix), so a server at `/team-a/github` is served at
+  `/api/public/servers/team-a/github/server.json` and never collides with `/github`. The
+  lookup is exact and case-sensitive. A single-segment URL that matches no path exactly
+  (the older last-segment form) still resolves when exactly one public record ends in
+  that segment, and returns 404 when several do.
 
 Example (trimmed to one entry):
 

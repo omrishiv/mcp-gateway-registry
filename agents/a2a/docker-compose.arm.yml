@@ -20,6 +20,8 @@ services:
       - AGENTCORE_RUNTIME_URL=http://travel-assistant-agent:9000/
       - KEYCLOAK_URL=${KEYCLOAK_URL:-}
       - KEYCLOAK_REALM=${KEYCLOAK_REALM:-}
+      # Mutating tools are denied unless an operator opts in (trusted demo only).
+      - AGENT_ALLOW_MUTATING_TOOLS=${AGENT_ALLOW_MUTATING_TOOLS:-false}
       - MCP_REGISTRY_URL=${MCP_REGISTRY_URL:-http://registry}
       - REGISTRY_JWT_TOKEN=${REGISTRY_JWT_TOKEN:-}
       - M2M_CLIENT_ID=${TRAVEL_AGENT_M2M_CLIENT_ID:-}
@@ -54,6 +56,8 @@ services:
       - AGENTCORE_RUNTIME_URL=http://flight-booking-agent:9000/
       - KEYCLOAK_URL=${KEYCLOAK_URL:-}
       - KEYCLOAK_REALM=${KEYCLOAK_REALM:-}
+      # Mutating tools are denied unless an operator opts in (trusted demo only).
+      - AGENT_ALLOW_MUTATING_TOOLS=${AGENT_ALLOW_MUTATING_TOOLS:-false}
       - MCP_REGISTRY_URL=${MCP_REGISTRY_URL:-http://registry}
       - REGISTRY_JWT_TOKEN=${REGISTRY_JWT_TOKEN:-}
       - M2M_CLIENT_ID=${FLIGHT_BOOKING_M2M_CLIENT_ID:-}

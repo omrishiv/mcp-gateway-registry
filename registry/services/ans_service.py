@@ -10,6 +10,7 @@ from typing import Any
 
 import httpx
 
+from registry.auth.ownership import OWNER_ID_FIELD, is_owner, legacy_owner_id_claim
 from registry.repositories.factory import (
     get_agent_repository,
     get_server_repository,
@@ -39,6 +40,43 @@ def _as_dict(record: Any) -> dict[str, Any]:
     if hasattr(record, "model_dump"):
         return record.model_dump()
     return record
+
+
+def _caller(
+    username: str | None,
+    owner_id: str | None,
+) -> dict[str, Any]:
+    """Build the identity half of a user context for an ownership check.
+
+    Args:
+        username: Authenticated user's username (display name).
+        owner_id: Authenticated user's immutable ownership identity.
+
+    Returns:
+        A minimal context accepted by :func:`registry.auth.ownership.is_owner`.
+    """
+    return {"username": username, "owner_id": owner_id}
+
+
+async def _bind_legacy_owner(
+    repo: Any,
+    path: str,
+    record: Any,
+    caller: dict[str, Any],
+    kind: str,
+) -> None:
+    """Persist the caller's owner_id on a legacy record after an owner-authorized write.
+
+    Args:
+        repo: The agent or server repository holding the record.
+        path: The record path.
+        record: The record as read before the write.
+        caller: The caller identity from :func:`_caller`.
+        kind: Record kind for the log line.
+    """
+    owner_id = legacy_owner_id_claim(record, caller, kind=kind, path=path)
+    if owner_id:
+        await repo.update_field(path, OWNER_ID_FIELD, owner_id)
 
 
 def _store_sync_history(
@@ -108,14 +146,16 @@ async def link_ans_to_agent(
     ans_agent_id: str,
     username: str | None = None,
     is_admin: bool = False,
+    owner_id: str | None = None,
 ) -> dict:
     """Link an ANS Agent ID to an AI Registry agent.
 
     Args:
         agent_path: Agent path in the registry
         ans_agent_id: ANS Agent ID to link
-        username: Authenticated user's username (for ownership check)
+        username: Authenticated user's username (legacy-record ownership check)
         is_admin: Whether the caller is an administrator (bypasses ownership)
+        owner_id: Authenticated user's ownership identity (ownership check)
 
     Returns:
         Dict with success, message, and ans_metadata
@@ -127,9 +167,9 @@ async def link_ans_to_agent(
         return {"success": False, "message": f"Agent not found: {agent_path}"}
 
     # Fail closed: only an admin, or the positively-established owner, may link.
-    # A missing username or a record with no owner must not pass for non-admins.
-    registered_by = getattr(agent, "registered_by", None)
-    if not is_admin and (not username or not registered_by or username != registered_by):
+    # A caller without an identity or a record with no owner must not pass.
+    caller = _caller(username, owner_id)
+    if not is_admin and not is_owner(agent, caller):
         return {"success": False, "message": "Not authorized: you are not the owner of this agent"}
 
     try:
@@ -146,6 +186,7 @@ async def link_ans_to_agent(
 
     metadata_dict = ans_metadata.model_dump(mode="json")
     await repo.update_field(agent_path, "ans_metadata", metadata_dict)
+    await _bind_legacy_owner(repo, agent_path, agent, caller, "agent")
 
     logger.info(
         f"ANS ID linked to agent {agent_path}: {ans_agent_id} (status: {ans_metadata.status})"
@@ -162,14 +203,16 @@ async def link_ans_to_server(
     ans_agent_id: str,
     username: str | None = None,
     is_admin: bool = False,
+    owner_id: str | None = None,
 ) -> dict:
     """Link an ANS Agent ID to an MCP server.
 
     Args:
         server_path: Server path in the registry
         ans_agent_id: ANS Agent ID to link
-        username: Authenticated user's username (for ownership check)
+        username: Authenticated user's username (legacy-record ownership check)
         is_admin: Whether the caller is an administrator (bypasses ownership)
+        owner_id: Authenticated user's ownership identity (ownership check)
 
     Returns:
         Dict with success, message, and ans_metadata
@@ -180,12 +223,9 @@ async def link_ans_to_server(
     if not server:
         return {"success": False, "message": f"Server not found: {server_path}"}
 
-    # repo.get() returns a dict, so read the owner with dict access; getattr on a
-    # dict looks for object attributes and would always yield None, silently
-    # disabling this ownership check. Fail closed: only an admin, or the
-    # positively-established owner, may link.
-    registered_by = server.get("registered_by")
-    if not is_admin and (not username or not registered_by or username != registered_by):
+    # Fail closed: only an admin, or the positively-established owner, may link.
+    caller = _caller(username, owner_id)
+    if not is_admin and not is_owner(server, caller):
         return {"success": False, "message": "Not authorized: you are not the owner of this server"}
 
     try:
@@ -202,6 +242,7 @@ async def link_ans_to_server(
 
     metadata_dict = ans_metadata.model_dump(mode="json")
     await repo.update_field(server_path, "ans_metadata", metadata_dict)
+    await _bind_legacy_owner(repo, server_path, server, caller, "server")
 
     logger.info(
         f"ANS ID linked to server {server_path}: {ans_agent_id} (status: {ans_metadata.status})"
@@ -217,13 +258,15 @@ async def unlink_ans_from_agent(
     agent_path: str,
     username: str | None = None,
     is_admin: bool = False,
+    owner_id: str | None = None,
 ) -> dict:
     """Remove ANS link from an agent.
 
     Args:
         agent_path: Agent path in the registry
-        username: Authenticated user's username (for ownership check)
+        username: Authenticated user's username (legacy-record ownership check)
         is_admin: Whether the caller is an administrator (bypasses ownership)
+        owner_id: Authenticated user's ownership identity (ownership check)
 
     Returns:
         Dict with success and message
@@ -234,11 +277,12 @@ async def unlink_ans_from_agent(
         return {"success": False, "message": f"Agent not found: {agent_path}"}
 
     # Fail closed: only an admin, or the positively-established owner, may unlink.
-    registered_by = getattr(agent, "registered_by", None)
-    if not is_admin and (not username or not registered_by or username != registered_by):
+    caller = _caller(username, owner_id)
+    if not is_admin and not is_owner(agent, caller):
         return {"success": False, "message": "Not authorized: you are not the owner of this agent"}
 
     await repo.update_field(agent_path, "ans_metadata", None)
+    await _bind_legacy_owner(repo, agent_path, agent, caller, "agent")
     logger.info(f"ANS link removed from agent: {agent_path}")
     return {"success": True, "message": "ANS link removed"}
 
@@ -247,13 +291,15 @@ async def unlink_ans_from_server(
     server_path: str,
     username: str | None = None,
     is_admin: bool = False,
+    owner_id: str | None = None,
 ) -> dict:
     """Remove ANS link from a server.
 
     Args:
         server_path: Server path in the registry
-        username: Authenticated user's username (for ownership check)
+        username: Authenticated user's username (legacy-record ownership check)
         is_admin: Whether the caller is an administrator (bypasses ownership)
+        owner_id: Authenticated user's ownership identity (ownership check)
 
     Returns:
         Dict with success and message
@@ -263,13 +309,13 @@ async def unlink_ans_from_server(
     if not server:
         return {"success": False, "message": f"Server not found: {server_path}"}
 
-    # repo.get() returns a dict; use dict access (see link_ans_to_server).
     # Fail closed: only an admin, or the positively-established owner, may unlink.
-    registered_by = server.get("registered_by")
-    if not is_admin and (not username or not registered_by or username != registered_by):
+    caller = _caller(username, owner_id)
+    if not is_admin and not is_owner(server, caller):
         return {"success": False, "message": "Not authorized: you are not the owner of this server"}
 
     await repo.update_field(server_path, "ans_metadata", None)
+    await _bind_legacy_owner(repo, server_path, server, caller, "server")
     logger.info(f"ANS link removed from server: {server_path}")
     return {"success": True, "message": "ANS link removed"}
 

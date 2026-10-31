@@ -21,27 +21,21 @@ logger = logging.getLogger(__name__)
 
 
 _WILDCARD_SENTINEL = {"*"}
-_WILDCARD_VALUES = frozenset(("all", "*"))
+# Key under which access_resolver records `server: "*"` rules. Only "*" is a
+# cross-server wildcard (the gateway never honours `server: "all"`).
+_CROSS_SERVER_KEY = "*"
 
 
-def _is_admin_or_cross_server_wildcard(
+def _is_admin(
     user_context: dict,
 ) -> bool:
     """Return True when the caller bypasses per-tool filtering entirely.
 
-    Admin users, users whose accessible_servers contains the sentinel
-    "*" or "all", and users whose accessible_tools has the cross-server
-    sentinel `{"*"}` under key "*" all skip pruning.
+    Only admins skip pruning. A cross-server rule (`server: "*"`) does not:
+    the gateway still checks that rule's own `tools`, so its allowlist is
+    unioned into every server's lookup instead (see `_lookup_allowlist`).
     """
-    if user_context.get("is_admin"):
-        return True
-    servers = user_context.get("accessible_servers") or []
-    if any(s in _WILDCARD_VALUES for s in servers):
-        return True
-    accessible_tools = user_context.get("accessible_tools") or {}
-    if accessible_tools.get("*") == _WILDCARD_SENTINEL:
-        return True
-    return False
+    return bool(user_context.get("is_admin"))
 
 
 def _tool_identity(
@@ -119,33 +113,33 @@ def _lookup_allowlist(
     Scope rules may store a server under its technical name
     ("airegistry-tools"), a path-style name with slashes
     ("/airegistry-tools/"), or a display name ("AI Registry tools").
-    Callers pass as many candidate names as they have; we try each in
-    raw and slash-stripped form, and also try matching against the
-    slash-stripped forms of all existing keys.
+    Callers pass as many candidate names as they have. Every stored key
+    whose slash-stripped form equals a candidate's slash-stripped form
+    contributes, as does the cross-server key "*", and the result is the
+    UNION of their allowlists: the gateway allows a call when any matching
+    rule allows it, so no single spelling may hide another's grant, and
+    the result is independent of key order.
+
+    Returns:
+        The unioned allowlist (``{"*"}`` if any contributor is a
+        wildcard), or None when no key matches.
     """
     if not accessible_tools:
         return None
 
-    candidates: list[str] = []
-    for name in server_name_candidates:
-        if not name:
+    wanted = {name.strip("/") for name in server_name_candidates if name}
+    wanted.discard("")
+    wanted.add(_CROSS_SERVER_KEY)
+
+    allow: set[str] | None = None
+    for key, value in accessible_tools.items():
+        if not isinstance(key, str) or key.strip("/") not in wanted:
             continue
-        candidates.append(name)
-        stripped = name.strip("/")
-        if stripped and stripped != name:
-            candidates.append(stripped)
-
-    for candidate in candidates:
-        if candidate in accessible_tools:
-            return accessible_tools[candidate]
-
-    normalized_store = {k.strip("/"): v for k, v in accessible_tools.items()}
-    for candidate in candidates:
-        stripped = candidate.strip("/")
-        if stripped in normalized_store:
-            return normalized_store[stripped]
-
-    return None
+        names = set(value or ())
+        if "*" in names:
+            return set(_WILDCARD_SENTINEL)
+        allow = names if allow is None else allow | names
+    return allow
 
 
 def filter_tools_for_user(
@@ -159,9 +153,9 @@ def filter_tools_for_user(
     """Return the subset of `tools` the user is allowed to see.
 
     Pruning rules:
-        - Admin or cross-server wildcard (server: "*" or "all"): return
-          the input unchanged.
-        - Per-server wildcard (`{"*"}`): return the input unchanged.
+        - Admin: return the input unchanged.
+        - Per-server wildcard (`{"*"}`) on any matching key, including
+          the cross-server key "*": return the input unchanged.
         - No entry for this server OR empty allowlist (`set()`): return
           [] (fail-closed).
         - Otherwise: keep tools whose name (or tool_name) is in the
@@ -188,7 +182,7 @@ def filter_tools_for_user(
     """
     if tools is None:
         return []
-    if _is_admin_or_cross_server_wildcard(user_context):
+    if _is_admin(user_context):
         return tools
 
     accessible_tools = user_context.get("accessible_tools") or {}

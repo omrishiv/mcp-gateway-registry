@@ -25,6 +25,8 @@ allow, a permissive default, or a "temporary" bypass. A check that can be
 silently skipped (optional param, truthiness on a value that can be empty,
 sanitizer that isn't called) is equivalent to no check.
 
+- **Parse a classifier's output strictly and treat anything unrecognized as the unsafe outcome.** The security scanners returned "safe" unless they counted a critical or high finding, so a missing or unknown severity, a tool reporting `is_safe: false`, or output of an unexpected shape passed the registration gate. `registry/services/scanner_verdict.py` whitelists the known severities and result shapes for every scanner; anything else is unsafe or a failed scan.
+
 ## Secrets & signing keys
 
 - **Validate a shared signing secret for MISSING *and* WEAK, at every entrypoint
@@ -339,6 +341,11 @@ sanitizer that isn't called) is equivalent to no check.
   guarded client cannot protect — e.g. a scanner CLI) so a value that was rebound
   after registration, or that reached the connect through the override field, is
   still blocked before any credential is attached or process spawned.
+- **Test a guard against the component that acts on the value, and take the narrower reading when they disagree.** The guard parsed IPv4 literals with Python `int()` while libc `inet_aton` dialled them, so `9_3.184.216.34` was classified as a public address and then handed unpinned to the OS resolver. `normalize_url_identity` used the IDNA2003 codec while httpx dials the IDNA2008 form, and the NO_PROXY startup check accepted `*,foo` and `ip:80` entries that `urllib` (and so botocore) ignores. Each guard now parses the way its consumer does: a strict ASCII `inet_aton` grammar, `httpx.URL(...).raw_host`, and `urllib.request.getproxies_environment()` precedence. Pin the agreement with a differential property test that uses the consumer as the oracle.
+- **A transport must never modify the `httpx.Request` it was given.** httpx builds the next redirect hop from that object, so rewriting `request.url` to the pinned IP made the next hop's origin, `Host`, SNI, `Authorization` and NO_PROXY decisions follow the IP instead of the hostname. Send a per-hop copy that carries the pinned address, and set `sni_hostname` per hop (reset it for an IP-literal hop).
+- **Reserved-hostname comparisons strip a trailing root dot.** `mcpgw-server.` reaches the same service as `mcpgw-server`, so compare `hostname.rstrip(".")` against the reserved set.
+- **Percent-encode every segment of a data-derived path before building an outbound URL.** `derive_resource_url` interpolated skill manifest paths raw, so a file name containing `?`, `#` or `%2e%2e` changed which file the registry fetched with the skill's stored credential. Encode each segment with `quote(segment, safe="")` and reject dot or empty segments.
+- **nginx must never resolve a registrant backend hostname on its own.** The registry validates and pins a backend during the health check; if nginx resolves the name again at reload or per request, a rebinding DNS answer sends traffic to loopback. Every MCP backend location, virtual-server backends included, proxies to the auth-server `/mcp-proxy/` hop, which dials through the guarded client and forwards only to the upstream signed into its hop token.
 
 ## Injection (nginx config generation, NoSQL/regex)
 
@@ -365,6 +372,10 @@ sanitizer that isn't called) is equivalent to no check.
   return the handler's error shape, do not raise. Query parameters are lower risk
   (they don't traverse the path), but still reject absolute (`/`-leading) and
   `..`-containing values as defense-in-depth.
+- **Fill template placeholders in one pass over the template, before any registry data is inserted.** `_render_config_impl` ran each later `replace` over the whole rendered document, so a version label or virtual-server name containing `{{AGENT_LOCATION_BLOCKS}}` was expanded inside quoted strings and comments, and `nginx -t` then rejected the gateway config on every reload. Generated blocks must carry resolved values, never placeholders.
+- **Anchor every validator at the true end of the string.** Use `re.fullmatch` or end the pattern with `\Z`. With `re.match`, `$` also accepts a trailing newline, which reached nginx directive positions through agent paths, virtual-server paths and skill names. A sweep that appends every ASCII character to a valid seed catches the whole class.
+- **Render-time guards call the canonical predicate, not their own character list.** `_safe_generic_block` kept a shorter list than `contains_nginx_metacharacters`, so a `$` in an agent path let a client header expand into the `$entity_path` authorization key.
+- **Run the safety check on the final string you emit.** The doc renderer checked a link's scheme and then stripped `*` and `_`, which turned `java_script:` into a live `javascript:` href. Never transform a value after validating it.
 
 ## Authorization & ownership
 
@@ -567,12 +578,7 @@ sanitizer that isn't called) is equivalent to no check.
   keep native Graph hostnames public-only under the outbound URL guard. nginx
   may identify a group-lookup outage only from the auth-server's `/validate`
   response status and marker, never from an inbound client header.
-- **Protect the admin population from lockout and self-harm.** Admin user-mgmt
-  must refuse self-deletion, refuse removing/demoting the LAST admin (count
-  remaining admins first, fail closed if the population can't be enumerated), and
-  emit a distinct audit event on any admin-tier grant. Derive "who is admin" from
-  the SAME privileged-scope rule the request-time check uses, not a separate
-  notion.
+- **Protect the admin population from lockout and self-harm.** Admin user-mgmt must refuse self-deletion (M2M clients included, by client id or record name), refuse removing or demoting the LAST admin (count remaining admins first, fail closed if the population can't be enumerated), and emit a distinct audit event on any admin-tier grant. Derive "who is admin" from the SAME rule the request-time check uses (group, then scope `group_mappings`, then `ui_permissions` through `grant_confers_admin`), never from the broader privileged-write predicate, scope names or group names: counting read-only `"all"` grants as admin let the last real admin be deleted. Every write that can change who is admin needs the guard, simulated against the catalogue after the change: scope group create, update, delete and import (including `force`), and user and M2M group patch, disable and delete.
 - **A config/secrets export must be deny-by-default for sensitive values.** An
   admin "export configuration" endpoint that can emit secrets (SECRET_KEY, IdP
   client secrets, DB passwords, API keys) concentrates the whole system's
@@ -805,7 +811,18 @@ sanitizer that isn't called) is equivalent to no check.
   authorization path. Apply it in every provider, including the self-signed and
   userinfo paths, because a validator that one reading skips is the reading an
   attacker uses.
-- **A relaxed check for a name the gateway invents is safe only if the gateway answers that name on every path and never forwards it.** Issue #1860 added a synthetic `connect_mcpgw_<server>` tool that `tools/list` returns before egress consent. It is authorized like `tools/list`, so a user with access to the server can call it without a grant for that tool. If the gateway answered it only while consent was pending and forwarded it afterwards, a backend tool with the same name would run with the user's vaulted credential under the weaker check. The rule has three parts. Answer the invented name at the gateway in every state: `_connect_tool_local_result` in `auth_server/server.py` covers the connected, OBO and non-egress cases. Match on the one exact name derived for the server. Grant the relaxed check only on routes where every request reaches the answering hop: direct routes, which nginx always sends to `/mcp-proxy` (pinned by `test_direct_route_location_only_proxies_to_mcp_proxy`). Virtual routes get no exemption, because nginx proxies their non-egress backends straight to the backend. A hop token that lacks the route claim gets none either.
+- **A relaxed check for a name the gateway invents is safe only if the gateway answers that name on every path and never forwards it.** Issue #1860 added a synthetic `connect_mcpgw_<server>` tool that `tools/list` returns before egress consent. It is authorized like `tools/list`, so a user with access to the server can call it without a grant for that tool. If the gateway answered it only while consent was pending and forwarded it afterwards, a backend tool with the same name would run with the user's vaulted credential under the weaker check. The rule has three parts. Answer the invented name at the gateway in every state: `_connect_tool_local_result` in `auth_server/server.py` covers the connected, OBO and non-egress cases. Match on the one exact name derived for the server. Grant the relaxed check only on routes where every request reaches the answering hop: direct routes, which nginx always sends to `/mcp-proxy` (pinned by `test_direct_route_location_only_proxies_to_mcp_proxy`). Virtual routes get no exemption: a virtual backend call is authorized for the rewritten backing tool itself, never widened from the virtual binding. A hop token that lacks the route claim gets none either.
+- **One predicate per authorization decision, and never `in` on a value of unknown type.** `_user_is_admin` tested `"all" in value`, so a bare string such as `"reinstall"` conferred admin while `_grants_admin` disagreed; the gateway matched a string `tools` value the same way, so `tools: "install_all"` granted every tool. Check the type first (a list of strings) and call one shared function (`privileged_constants.grant_confers_admin`) wherever the decision is made. Normalize rule values per rule, so a malformed rule grants nothing for itself and cannot raise into a catch-all that revokes grants held through other scopes.
+- **Admin gates call the derived decision, never a group or scope name.** Seven route-level gates admitted `mcp-registry-admin`, `registry-admins` or `admin` by name, so a group whose scope had been demoted still opened admin endpoints, and the A2A bypass did the same in the auth server. Use `admin_safety.caller_is_admin(user_context, allowed_scopes)`, listing any extra scope explicitly per gate. Names outlive their grants.
+- **The registry's list views make the same decision as the gateway's call check.** The registry treated `server: "all"` as a wildcard and used the first matching slash spelling of a server key, while the gateway honoured only `"*"`, so users saw tools they could not call and missed tools they could. Both now use one wildcard (`"*"` only), the same slash normalization, and a union over every matching rule.
+- **Decide human versus machine with one classifier.** M2M group enrichment treated any groupless token with a `client_id` in its validation result as a machine, but providers fill that field from `azp`, so a human token inherited an M2M client's groups. Enrichment and rate limiting both use `mongodb_groups_enrichment.machine_client_id()`.
+- **A credential minted from a session re-checks that session on every use, and a narrowed token stays narrowed on every hop.** Self-signed tokens carried the user's full groups beside their narrowed `scope`, and the registry derived `is_admin` from those frozen groups, so a narrowed or demoted token kept admin until it expired. A session-backed token embeds its `session_id`; `/validate` re-reads the current groups (401 when the session is gone), and the registry intersects derived scopes with the hop token's `token_scopes`.
+- **Every second read path reuses the canonical gate and projection.** Search admitted servers on a display-name grant, gated virtual servers on the wrong permission and returned unredacted agent cards, and the public `server.json` carried `registered_by` and `allowed_groups`. Search, exports and public mirrors call the same visibility helper and response projection as the list or detail endpoint. A public identifier must be injective over records: build it from the full stored path and match it exactly.
+- **Federated records prove their origin with `sync_metadata.source_peer_id`, and local policy sets their owner.** Sync and peer removal selected records by the `/<peer_id>/` path prefix, so a local registration under that prefix was overwritten and later deleted, and the peer's `registered_by` was stored verbatim. Never infer provenance from a path, and never copy ownership fields from a peer.
+- **A callback that writes a credential must authenticate the browser as the principal it writes for.** The egress consent callback skipped its account check when the browser had no session, so a victim completing an attacker's consent link stored the victim's upstream token in the attacker's vault bucket. A signed, single-use state is not enough on its own; a missing or unresolvable session fails closed with 401.
+- **Strip reserved internal header families by prefix.** `_forward_headers` removed three exact `X-Internal-Token` names, so any future variant would reach upstreams. It now strips every name starting with `x-internal-token` or `x-body`, and locations that proxy to a registrant backend clear every header in `RESERVED_CUSTOM_HEADER_NAMES` except those forwarded by design.
+- **Parse request paths that must match nginx routing with `urlsplit`, not `urlparse`.** `urlparse` splits `;params` off the last segment, so the binding read `/a;x` as `/a` while nginx routed it elsewhere.
+- **Key ownership on an immutable identity, never on a display name, and let a falsy identity own nothing.** Ownership compared `registered_by` with a username taken from mutable or reusable claims (`preferred_username`, `email`, Auth0 `nickname`, GitHub `login`) with no issuer namespace, so two accounts could share an owner and a renamed account lost its records. It also used plain `==`, so `None == None` granted ownership. Ownership now compares `owner_id`, an injective percent-encoded `issuer|subject` derived by the auth server, through the one helper `registry/auth/ownership.is_owner`; an empty or non-string identity on either side never owns. Legacy records fall back to the username only for a caller that has an `owner_id`, and the first owner-authorized write binds them.
 
 ## Identity-provider self-registration (DCR)
 
@@ -854,6 +871,7 @@ surface.
   document's grants. Creating an IdP client scope named after an admin scope
   document is therefore equivalent to creating a requestable admin credential,
   which is how the two slash-free names above came to matter.
+- **Write the allowed-scopes policy for every client subtype, and keep every surface identical.** `init-keycloak.sh` restricted only the `anonymous` registration subtype, and the Helm job left `openid` out of its allowlist. The init script, the upgrade script and the Helm job now write the same allowlist for both the `anonymous` and `authenticated` subtypes, and `tests/unit/security/test_dcr_withheld_scopes.py` parses all three.
 
 ## Frontend (React) URL / href handling
 
@@ -923,12 +941,8 @@ surface.
   localhost-only). Setup scripts must force credential rotation (`temporary:
   true`) and never grant privileged scopes to anonymous dynamic client
   registration.
-- **IAM policies: least privilege, no wildcard Action or Resource.** Scope
-  `Action` to the exact operations the code actually calls (grep the client) and
-  `Resource` to specific ARNs (or an account/region-pinned pattern), never `*`.
-  Gate cross-account `sts:AssumeRole` behind an explicit configured role-ARN list
-  that defaults empty (fail closed — no trust when unset). Keep IaC surfaces
-  (Terraform + CDK) in parity.
+- **IAM policies: least privilege, no wildcard Action or Resource.** Scope `Action` to the exact operations the code actually calls (grep the client) and `Resource` to specific ARNs (or an account/region-pinned pattern), never `*`. Gate cross-account `sts:AssumeRole` behind an explicit configured role-ARN list that defaults empty (fail closed, no trust when unset). A task role holds only what the application's own SDK calls need; secrets injected through ECS `secrets` belong on the execution role, and a permission AWS grants only on `Resource: "*"` comes from the AWS managed policy rather than an inline copy. Keep IaC surfaces (Terraform + CDK) in parity: `tests/infra/test_iam_least_privilege.py` compares them per role, and a gap where CDK lacks a whole feature is listed in its `CDK_FEATURE_GAPS` with a check that the feature is still absent.
+- **"Unset means not checked" is a fail-open default.** The sample A2A agents skipped the JWT audience check whenever `AGENT_AUDIENCE` was unset, so any token from the realm worked. Default the expected audience to the service's own client id, and refuse to start when it is empty.
 
 ## Availability (DoS) & audit
 
@@ -942,11 +956,7 @@ surface.
   often default-off. Rate-limit-classifier maps key off the normalized `$uri`
   with a fail-safe empty default (a miss only broadens coverage). Choose generous
   defaults + burst so normal bursty clients aren't broken.
-- **Audit must be durable by default and attributable.** If audit is enabled but
-  no durable sink is available, fail closed at startup (loud opt-out for dev), and
-  emit a distinct CRITICAL log if a record is dropped at runtime (don't fail the
-  request — that's a self-DoS). Internal-service actions must be attributable to a
-  specific actor (per-instance/per-purpose `sub`), not a shared service identity.
+- **Audit must be durable by default and attributable.** If audit is enabled but no durable sink is available, fail closed at startup (loud opt-out for dev). At runtime a mutating request (any method other than GET, HEAD or OPTIONS) writes its audit record BEFORE the handler runs and is rejected with 500, without running the handler, if that write fails or the repository reports failure; the outcome is then written onto the same record, and a failed outcome update is logged CRITICAL and counted but never fails the committed request. Never fail a request after its side effect is committed. Safe reads stay best-effort. A path-based skip (static assets) applies to safe methods only, so a caller-chosen path such as `/skills/x.js` cannot hide a mutation. Internal-service actions must be attributable to a specific actor (per-instance/per-purpose `sub`), not a shared service identity.
   Tamper-evidence (append-only / HMAC chain) is best served by an immutable
   external store — infra, deferrable. **Run the durable-sink guard in EVERY
   process that initializes an audit logger, not just the main app's startup.** A
@@ -958,6 +968,7 @@ surface.
   fail-closed guard where each logger is constructed, re-raise past any generic
   `except`, and prime it at that process's startup so it fails to boot rather
   than lazily on first use.
+- **A rate limiter's own errors follow its fail policy.** With `RATE_LIMIT_FAIL_OPEN=false`, a definitions or memberships read error raised out of `RateLimiter.check`, and `/validate` treated the exception as allow. Errors now become a decision: allow when fail-open, deny when fail-closed.
 - **Client IP for audit/attribution: derive from a non-spoofable source, and
   scope the ASGI proxy-header trust to the real peer.** The left-most
   `X-Forwarded-For` entry is fully client-controlled — never use it. Resolve via
@@ -1103,6 +1114,11 @@ the drift between copies is the hole.
   `MCP_SCANNER_LLM_API_KEY`) or stdin. When an unavoidable third-party tool only
   accepts the secret on argv, keep it off every hop you control and record the
   external constraint as a scoped residual (see FOLLOWUPS F-19/F-20).
+- **Admin decisions → `registry/auth/privileged_constants.grant_confers_admin`** for a single grant, **`registry/services/admin_safety.caller_is_admin`** for a route gate, and **`admin_safety.resolve_admin_group_names`** for the admin population. Never test group or scope names.
+- **Human or machine caller → `auth_server/mongodb_groups_enrichment.machine_client_id`.** Never use a validation result's `client_id` as the machine signal.
+- **Scanner verdicts → `registry/services/scanner_verdict.py`.**
+- **LLM tool execution in the sample agents → the `MutatingToolGuard` hook in `agents/a2a/src/*/tool_guard.py`.** It allowlists read-only calls at the execution boundary and denies everything else without a human confirmation channel; an argument the model can set never counts as confirmation.
+- **Ownership checks → `registry/auth/ownership.is_owner`** (and `owner_query_clauses` for the matching Mongo filter). Never compare `registered_by` or `owner` to a username inline.
 
 When you add a NEW canonical helper, list it here so the next agent reaches for
 it instead of rebuilding it.

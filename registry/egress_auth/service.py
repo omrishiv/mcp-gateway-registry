@@ -325,8 +325,8 @@ class EgressAuthService:
         code: str,
         state_blob: str,
         egress_oauth: dict,
-        current_user_id: str | None = None,
-        current_auth_method: str | None = None,
+        current_user_id: str | None,
+        current_auth_method: str | None,
     ) -> EgressConnection:
         """Verify state, exchange the code, and store the token.
 
@@ -334,9 +334,13 @@ class EgressAuthService:
         - state decrypts/authenticates (AEAD) -- else InvalidState.
         - state is within TTL.
         - state nonce is single-use (replay guard).
-        - account-swap guard: the live principal (if provided) matches the
-          principal bound in the signed state -- bind to (user_id, auth_method),
-          NOT session_id (a legit "same user, new session" must still work).
+        - account-swap guard: the browser completing the callback must be
+          authenticated, and its live principal must match the principal bound
+          in the signed state. Bind to (user_id, auth_method), NOT session_id (a
+          legit "same user, new session" must still work). A missing live
+          principal fails closed: a consent link opened by an unauthenticated
+          browser would otherwise store that browser's upstream token in the
+          consenting user's bucket.
         """
         try:
             state = decode_state(state_blob)
@@ -360,10 +364,13 @@ class EgressAuthService:
         if not await self._replay.check_and_consume(state.nonce, self._state_ttl):
             raise EgressAuthError("state already used (replay)")
 
-        # Account-swap guard (bind to canonical principal, not session_id)
-        if current_user_id is not None and current_user_id != state.user_id:
+        # Account-swap guard (bind to canonical principal, not session_id). Fail
+        # closed when there is no live principal to compare.
+        if not current_user_id or not current_auth_method:
+            raise EgressAuthError("no live session for consent callback")
+        if current_user_id != state.user_id:
             raise EgressAuthError("state user mismatch")
-        if current_auth_method is not None and current_auth_method != state.auth_method:
+        if current_auth_method != state.auth_method:
             raise EgressAuthError("state auth_method mismatch")
 
         cfg = resolve_provider(egress_oauth)

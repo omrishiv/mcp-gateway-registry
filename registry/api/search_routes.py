@@ -18,6 +18,7 @@ from ..constants import DeploymentType
 from ..core.config import DeploymentMode, RegistryMode, settings
 from ..repositories.factory import get_search_repository, get_skill_repository
 from ..repositories.interfaces import SearchRepositoryBase
+from ..schemas.proxy_mixin import PROXY_FIELD_NAMES
 from ..services.agent_service import agent_service
 from ..services.custom_entity_scopes import entity_scope as _entity_scope
 from ..services.custom_entity_scopes import resolve_list_grant as _resolve_list_grant
@@ -25,6 +26,19 @@ from ..services.server_service import server_service
 from ..services.tool_blocks import blocked_names_for, hide_blocked_tools
 from ..services.virtual_server_service import get_virtual_server_service
 from ..utils.metadata import parse_and_validate_metadata_fields, project_metadata
+from .virtual_server_routes import _user_can_access_virtual_server
+
+# Proxy bookkeeping and upstream-header fields of a stored agent card. GET
+# /api/agents projects agents onto AgentInfo, which carries none of these, so
+# search drops them for every caller. The client-facing is_proxied,
+# proxy_client_url and proxy_connect_notes stay; proxy_target_url is gated per
+# caller by redact_proxy_backend_url, exactly as the list does.
+_AGENT_CARD_INTERNAL_FIELDS: frozenset[str] = PROXY_FIELD_NAMES - {
+    "is_proxied",
+    "proxy_target_url",
+    "proxy_client_url",
+    "proxy_connect_notes",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -603,6 +617,7 @@ async def _get_tool_schema_for_virtual_server(
 # don't have to change.
 from ..services.visibility import (
     redact_agent_backend_fields,
+    redact_proxy_backend_url,
     should_redact_backend_urls,
 )
 from ..services.visibility import (
@@ -612,11 +627,64 @@ from ..services.visibility import (
     user_can_access_custom_entity as _user_can_access_custom_entity,
 )
 from ..services.visibility import (
-    user_can_access_server as _user_can_access_server,
-)
-from ..services.visibility import (
     user_can_access_skill as _user_can_access_skill,
 )
+
+
+async def _user_can_list_server(
+    path: str,
+    user_context: dict,
+) -> bool:
+    """Return True iff GET /api/servers would list the server at ``path``.
+
+    Search applies the list endpoint's two gates: the ``list_service`` grant
+    names the server's technical name (path without slashes) or ``all``, and a
+    ``server_access`` grant matches the path (``*`` matches any existing
+    server). A grant matching only the display name admits nothing, because
+    display names are not unique and the gateway routes by path.
+
+    Args:
+        path: Server path from the search hit.
+        user_context: Authenticated user context.
+
+    Returns:
+        True when the caller may see the server and its tools in search.
+    """
+    if user_context.get("is_admin"):
+        return True
+    services = {
+        grant.strip("/")
+        for grant in user_context.get("accessible_services") or []
+        if isinstance(grant, str)
+    }
+    if "all" not in services and path.strip("/") not in services:
+        return False
+    accessible_servers = user_context.get("accessible_servers") or []
+    return await server_service.user_can_access_server_path(path, accessible_servers)
+
+
+def _project_agent_card(
+    agent_card: dict,
+    user_context: dict,
+    redact_backend: bool,
+) -> dict:
+    """Redact a search hit's agent card as GET /api/agents redacts the same agent.
+
+    Args:
+        agent_card: Dumped agent card, redacted in place.
+        user_context: Authenticated user context.
+        redact_backend: The per-request ``should_redact_backend_urls`` decision.
+
+    Returns:
+        The same dict without proxy bookkeeping, upstream headers, credentials
+        and, for callers who must not see it, the backend address.
+    """
+    for field in _AGENT_CARD_INTERNAL_FIELDS:
+        agent_card.pop(field, None)
+    agent_card.pop("auth_credential_encrypted", None)
+    if redact_backend:
+        redact_agent_backend_fields(agent_card)
+    return redact_proxy_backend_url(agent_card, user_context)
 
 
 def _compute_trust_verified(
@@ -822,11 +890,7 @@ async def semantic_search(
 
     filtered_servers: list[ServerSearchResult] = []
     for server in raw_results.get("servers", []):
-        if not await _user_can_access_server(
-            server.get("path", ""),
-            server.get("server_name", ""),
-            user_context,
-        ):
+        if not await _user_can_list_server(server.get("path", ""), user_context):
             continue
 
         # Issue #1026: prune matching_tools for this user before shaping
@@ -958,10 +1022,14 @@ async def semantic_search(
     # not issue a block lookup per row.
     blocked_cache: dict[str, set[str]] = {}
     append_mcp_cache: dict[str, bool | None] = {}
+    # One list-gate decision per server path for the same reason.
+    listable_cache: dict[str, bool] = {}
     for tool in raw_results.get("tools", []):
         server_path = tool.get("server_path", "")
         server_name = tool.get("server_name", "")
-        if not await _user_can_access_server(server_path, server_name, user_context):
+        if server_path not in listable_cache:
+            listable_cache[server_path] = await _user_can_list_server(server_path, user_context)
+        if not listable_cache[server_path]:
             continue
 
         # A security-blocked tool must not appear in search. intelligent_tool_finder
@@ -1024,12 +1092,11 @@ async def semantic_search(
             agent_card_obj.model_dump() if agent_card_obj else agent.get("agent_card", {})
         )
 
-        # Non-admins in with-gateway mode must never receive the internal backend
-        # (proxy_pass_url); strip it so search returns only the gateway-facing url.
-        # Mirrors the server-branch redaction above and the /api/agents/discover/
-        # semantic fix. Uses the same redact_backend decision computed once above.
-        if redact_backend and agent_card_dict:
-            redact_agent_backend_fields(agent_card_dict)
+        # Redact the card exactly as GET /api/agents redacts the same agent: no
+        # proxy bookkeeping or upstream headers for anyone, and no backend
+        # address for callers the list withholds it from.
+        if agent_card_dict:
+            _project_agent_card(agent_card_dict, user_context, redact_backend)
 
         # Ensure agent_card has the path for consistency
         if agent_card_dict and "path" not in agent_card_dict:
@@ -1075,7 +1142,12 @@ async def semantic_search(
         allowed_groups = skill.get("allowed_groups", [])
 
         if not await _user_can_access_skill(
-            skill_path, visibility, owner, allowed_groups, user_context
+            skill_path,
+            visibility,
+            owner,
+            allowed_groups,
+            user_context,
+            owner_id=skill.get("owner_id"),
         ):
             continue
 
@@ -1108,12 +1180,8 @@ async def semantic_search(
         if not vs_path:
             continue
 
-        # Virtual servers use the same access control as regular servers
-        if not await _user_can_access_server(
-            vs_path,
-            vs.get("server_name", ""),
-            user_context,
-        ):
+        # Same gate as GET /api/virtual-servers: the list_virtual_server grant.
+        if not _user_can_access_virtual_server(user_context, vs_path):
             continue
 
         # Issue #1026: prune matching_tools before shaping the response.
@@ -1246,7 +1314,11 @@ async def semantic_search(
         allowed_groups = record.get("allowed_groups", []) or []
 
         if not await _user_can_access_custom_entity(
-            visibility, owner, allowed_groups, user_context
+            visibility,
+            owner,
+            allowed_groups,
+            user_context,
+            owner_id=record.get("owner_id"),
         ):
             continue
 

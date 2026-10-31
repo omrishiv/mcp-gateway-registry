@@ -17,6 +17,7 @@ from registry.schemas.idp_m2m_client import (
     IdPM2MClient,
     IdPM2MClientUpdate,
 )
+from registry.services import admin_safety
 from registry.services.auth0_m2m_sync import get_auth0_m2m_sync
 
 logging.basicConfig(
@@ -57,15 +58,10 @@ def _require_admin(user_context: dict | None) -> None:
     if not user_context:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
-    # Use the canonical is_admin flag (derived from the mcp-registry-admin
-    # group/scope) as the primary check; keep the group-name fallbacks so the
-    # gate stays closed even if is_admin is somehow unset.
-    groups = user_context.get("groups", [])
-    if not (
-        user_context.get("is_admin")
-        or "mcp-registry-admin" in groups
-        or "registry-admins" in groups
-    ):
+    # The canonical request-time is_admin decision only. Group names are not an
+    # admin signal: a group can keep its name after its scope stops conferring
+    # admin, and a narrowed token carries the user's full groups.
+    if not admin_safety.caller_is_admin(user_context):
         raise HTTPException(
             status_code=403,
             detail="Admin access required",
@@ -219,6 +215,13 @@ async def update_client_groups(
         HTTPException: If user is not admin or update fails
     """
     _require_admin(user_context)
+
+    # Last-admin guard: replacing the client's groups can demote the last
+    # administrator.
+    try:
+        await admin_safety.would_remove_last_admin_via_groups(client_id, payload.groups)
+    except admin_safety.AdminSafetyError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     db = await get_documentdb_client()
     auth0_sync = get_auth0_m2m_sync(db)

@@ -183,6 +183,13 @@ def redact_url(url: str | None) -> str:
         port = parts.port
     except ValueError:
         return REDACTED
+    # Without a ``//`` authority marker urlsplit keeps any ``user:pass@host``
+    # in the scheme/path (``user:pass@proxy:3128`` parses with scheme ``user``;
+    # ``http:/user:pass@host`` and ``http:user:pass@host`` put it in the path),
+    # so the password would be logged verbatim. An ``@`` outside a parsed
+    # authority is treated as userinfo and the whole value is masked.
+    if not parts.netloc and "@" in url:
+        return REDACTED
     # IDNA-normalize the host and fail closed: an un-encodable host (empty label,
     # overlong label, illegal characters) is masked rather than logged raw.
     try:

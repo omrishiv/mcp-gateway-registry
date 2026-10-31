@@ -36,6 +36,7 @@ from ..audit.context import set_audit_action
 from ..auth.asset_permissions import user_has_asset_permission
 from ..auth.csrf import verify_csrf_token_flexible
 from ..auth.dependencies import nginx_proxied_auth
+from ..auth.ownership import OWNER_FIELD, is_owner, legacy_owner_id_update, user_owner_id
 from ..core.config import settings
 from ..core.metrics import ASSET_ID_SUPPLIED_TOTAL
 from ..exceptions import (
@@ -309,6 +310,7 @@ async def list_skills(
                 allowed_groups=s.allowed_groups,
                 registry_name=s.registry_name,
                 owner=s.owner,
+                owner_id=s.owner_id,
                 auth_scheme=s.auth_scheme,
                 auth_header_name=s.auth_header_name,
                 num_stars=s.num_stars,
@@ -998,7 +1000,10 @@ async def refresh_skill_resources(
         auth_header_name=auth_header_name,
     )
 
-    updates = {"resource_manifest": manifest.model_dump() if manifest else None}
+    updates: dict[str, Any] = {
+        "resource_manifest": manifest.model_dump() if manifest else None,
+    }
+    updates.update(_legacy_owner_binding(skill, user_context, normalized_path))
     await service.update_skill(normalized_path, updates)
 
     total = 0
@@ -1187,7 +1192,12 @@ async def register_skill(
     owner = user_context.get("username")
 
     try:
-        skill = await service.register_skill(request=request, owner=owner, validate_url=True)
+        skill = await service.register_skill(
+            request=request,
+            owner=owner,
+            validate_url=True,
+            owner_id=user_owner_id(user_context),
+        )
         logger.info(f"Registered skill: {skill.name} by {owner}")
         if request.id is not None:
             ASSET_ID_SUPPLIED_TOTAL.labels(asset_type="skill").inc()
@@ -1358,6 +1368,7 @@ async def update_skill(
         updates["auth_header_name"] = None
         updates["credential_updated_at"] = None
 
+    updates.update(_legacy_owner_binding(existing, user_context, normalized_path))
     updated = await service.update_skill(normalized_path, updates)
 
     if not updated:
@@ -1424,6 +1435,7 @@ async def update_skill_upstream_headers(
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
+    updates.update(_legacy_owner_binding(existing, user_context, normalized_path))
     updated = await service.update_skill(normalized_path, updates)
     if not updated:
         raise HTTPException(
@@ -1658,7 +1670,7 @@ def _user_can_access_skill(
         return True
 
     if visibility == VisibilityEnum.PRIVATE:
-        return skill.owner == user_context.get("username")
+        return is_owner(skill, user_context, legacy_field=OWNER_FIELD)
 
     if visibility == VisibilityEnum.GROUP:
         user_groups = set(user_context.get("groups", []))
@@ -1704,7 +1716,30 @@ def _user_can_modify_skill(
     if user_context.get("is_admin"):
         return True
 
-    return skill.owner == user_context.get("username")
+    return is_owner(skill, user_context, legacy_field=OWNER_FIELD)
+
+
+def _legacy_owner_binding(
+    skill: SkillCard,
+    user_context: dict,
+    path: str,
+) -> dict[str, str]:
+    """Return the ``owner_id`` update an owner-authorized skill write must carry.
+
+    Trust on first use: a legacy skill (no ``owner_id``) owned by the caller's
+    username is bound to the caller's ``owner_id`` by the write.
+
+    Args:
+        skill: The stored skill, already authorized for this write.
+        user_context: The authenticated request context.
+        path: The normalized skill path.
+
+    Returns:
+        ``{"owner_id": value}`` when the binding applies, else an empty dict.
+    """
+    return legacy_owner_id_update(
+        skill, user_context, kind="skill", path=path, legacy_field=OWNER_FIELD
+    )
 
 
 async def _perform_skill_security_scan_on_registration(

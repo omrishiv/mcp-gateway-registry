@@ -140,7 +140,10 @@ class TestSafetyDeterminationInvariant:
 
         # Build raw_output with findings
         findings = [_make_finding(sev, "static") for sev in severities]
-        raw_output = {"analysis_results": {"static": {"findings": findings}}}
+        raw_output = {
+            "analysis_results": {"static": {"findings": findings}},
+            "scan_results": {"findings": findings},
+        }
 
         is_safe, critical, high, medium, low = service._analyze_scan_results(raw_output)
 
@@ -252,10 +255,10 @@ class TestSkillScannerServiceUnit:
             )
 
     def test_analyze_empty_results(self):
-        """Empty analysis_results returns safe with zero counts."""
+        """A result document with no findings returns safe with zero counts."""
         service = _create_service()
         is_safe, critical, high, medium, low = service._analyze_scan_results(
-            {"analysis_results": {}}
+            {"analysis_results": {}, "scan_results": {"findings": []}}
         )
 
         assert is_safe is True

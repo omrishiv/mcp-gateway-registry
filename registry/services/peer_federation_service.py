@@ -52,6 +52,27 @@ def _as_dict(record: Any) -> dict[str, Any]:
     return record
 
 
+def _is_synced_from_peer(
+    record: Any,
+    peer_id: str,
+) -> bool:
+    """Return True only if a stored server or agent record was synced from ``peer_id``.
+
+    Sync and peer removal must never touch a local registration, or another
+    peer's record, that happens to sit under the ``/<peer_id>/`` path prefix.
+    The record's ``sync_metadata.source_peer_id`` is the only proof of origin.
+    """
+    if hasattr(record, "model_dump"):
+        sync_metadata = getattr(record, "sync_metadata", None)
+    elif isinstance(record, dict):
+        sync_metadata = record.get("sync_metadata")
+    else:
+        return False
+    if not isinstance(sync_metadata, dict):
+        return False
+    return sync_metadata.get("source_peer_id") == peer_id
+
+
 def _resolves_only_to_public_ips(
     endpoint: str,
 ) -> bool:
@@ -409,6 +430,9 @@ class PeerFederationService:
         """
         Delete all servers synced from a specific peer.
 
+        Only records whose sync_metadata.source_peer_id is ``peer_id`` are
+        deleted; local registrations under the peer's path prefix are kept.
+
         Args:
             peer_id: Peer identifier
 
@@ -416,15 +440,13 @@ class PeerFederationService:
             Number of servers deleted
         """
         deleted_count = 0
-        path_prefix = f"/{peer_id}/"
 
         try:
             # Get all servers from the repository
             all_servers = await server_service.get_all_servers()
 
-            # Find servers with paths starting with the peer prefix
-            for path in list(all_servers.keys()):
-                if path.startswith(path_prefix):
+            for path, server in list(all_servers.items()):
+                if _is_synced_from_peer(server, peer_id):
                     try:
                         success = await server_service.remove_server(path)
                         if success:
@@ -447,6 +469,9 @@ class PeerFederationService:
         """
         Delete all agents synced from a specific peer.
 
+        Only agents whose sync_metadata.source_peer_id is ``peer_id`` are
+        deleted; local registrations under the peer's path prefix are kept.
+
         Args:
             peer_id: Peer identifier
 
@@ -454,15 +479,13 @@ class PeerFederationService:
             Number of agents deleted
         """
         deleted_count = 0
-        path_prefix = f"/{peer_id}/"
 
         try:
             # Get all agents from the repository
             all_agents = await agent_service.get_all_agents()
 
-            # Find agents with paths starting with the peer prefix
             for agent in all_agents:
-                if agent.path.startswith(path_prefix):
+                if _is_synced_from_peer(agent, peer_id):
                     try:
                         success = await agent_service.delete_agent(agent.path)
                         if success:
@@ -1474,6 +1497,12 @@ class PeerFederationService:
                 server_data = strip_proxy_fields(server.copy())
                 server_data["path"] = prefixed_path
                 server_data["sync_metadata"] = sync_metadata
+                # Ownership is local policy, never the peer's choice: owner checks
+                # compare owner_id (or, for legacy records, registered_by) with the
+                # local caller, so a peer-sent value could name a local user as
+                # owner. A synced record has no local owner; only admins manage it.
+                server_data["registered_by"] = None
+                server_data["owner_id"] = None
 
                 # Ensure UUID id field exists - use from peer if present, generate if not
                 if "id" not in server_data or not server_data["id"]:
@@ -1483,6 +1512,16 @@ class PeerFederationService:
                 try:
                     existing_server = await server_service.get_server_info(prefixed_path)
                     if existing_server:
+                        # Only a record this peer synced may be updated: a local
+                        # registration (or another peer's record) at this path
+                        # is left untouched.
+                        if not _is_synced_from_peer(existing_server, peer_id):
+                            logger.warning(
+                                f"Federation: skipping server from peer '{peer_id}' - "
+                                f"{prefixed_path} exists and was not synced from this peer"
+                            )
+                            continue
+
                         # Check if locally overridden - if so, skip update
                         # get_server_info returns a dict
                         if self.is_locally_overridden(existing_server):
@@ -1582,6 +1621,10 @@ class PeerFederationService:
                 agent_data = strip_proxy_fields(agent.copy())
                 agent_data["path"] = prefixed_path
                 agent_data["sync_metadata"] = sync_metadata
+                # Ownership is local policy, never the peer's choice (see
+                # _store_synced_servers): a synced agent has no local owner.
+                agent_data["registered_by"] = None
+                agent_data["owner_id"] = None
 
                 # Ensure UUID id field exists - use from peer if present, generate if not
                 if "id" not in agent_data or not agent_data["id"]:
@@ -1592,6 +1635,16 @@ class PeerFederationService:
                     existing_agent = await agent_service.get_agent_info(prefixed_path)
 
                     if existing_agent:
+                        # Only an agent this peer synced may be updated: a local
+                        # registration (or another peer's agent) at this path
+                        # is left untouched.
+                        if not _is_synced_from_peer(existing_agent, peer_id):
+                            logger.warning(
+                                f"Federation: skipping agent from peer '{peer_id}' - "
+                                f"{prefixed_path} exists and was not synced from this peer"
+                            )
+                            continue
+
                         # Check if locally overridden - if so, skip update
                         # get_agent_info returns an AgentCard, convert to dict for is_locally_overridden
                         if self.is_locally_overridden(existing_agent.model_dump()):

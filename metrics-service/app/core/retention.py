@@ -40,7 +40,8 @@ ALLOWED_TIMESTAMP_COLUMNS: Set[str] = {
 }
 
 # Security: Regex pattern for valid SQL identifiers (alphanumeric and underscore only)
-_VALID_IDENTIFIER_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+# fullmatch is required: with match(), "$" also matches before a trailing newline.
+_VALID_IDENTIFIER_PATTERN = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]*")
 
 # Security: A retention window must be at least one day. A value of 0 (delete
 # everything older than "now") or a negative value (which would push the cutoff
@@ -186,7 +187,7 @@ def _validate_identifier(identifier: str) -> str:
     Raises:
         ValueError: If identifier contains invalid characters
     """
-    if not identifier or not _VALID_IDENTIFIER_PATTERN.match(identifier):
+    if not identifier or not _VALID_IDENTIFIER_PATTERN.fullmatch(identifier):
         raise ValueError(
             f"Invalid SQL identifier: '{identifier}'. "
             "Identifiers must start with a letter or underscore and "

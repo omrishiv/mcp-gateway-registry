@@ -356,7 +356,14 @@ class RegistryApiAccessRecord(BaseModel):
     )
     identity: Identity = Field(description="Identity of the requester")
     request: Request = Field(description="HTTP request details")
-    response: Response = Field(description="HTTP response details")
+    response: Response | None = Field(
+        default=None,
+        description=(
+            "HTTP response details. None while the outcome is pending: a "
+            "mutating request's record is written before the handler runs and "
+            "completed by an outcome update afterwards."
+        ),
+    )
     action: Action | None = Field(default=None, description="Business-level action context")
     authorization: Authorization | None = Field(
         default=None, description="Authorization decision details"

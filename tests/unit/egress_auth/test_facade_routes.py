@@ -15,6 +15,7 @@ import registry.api.egress_oauth_facade_routes as facade
 REGISTRY_URL = "https://gw.example.com"
 USER = {
     "username": "alice",
+    "owner_id": "idp|alice",
     "auth_method": "oauth2",
     "client_id": "web",
     "groups": ["mcp-registry-user"],

@@ -76,7 +76,7 @@ class TestGenerateAgentLocationBlocks:
 
         result = await service._generate_agent_location_blocks()
 
-        assert "{{ROOT_PATH}}/agent/flight-booking-agent/" in result
+        assert "/agent/flight-booking-agent/" in result
 
     @pytest.mark.asyncio
     async def test_includes_agent_card_discovery_location(self, patched_agent_service):
@@ -87,7 +87,7 @@ class TestGenerateAgentLocationBlocks:
 
         result = await service._generate_agent_location_blocks()
 
-        assert "{{ROOT_PATH}}/agent/flight-booking-agent/.well-known/agent-card.json" in result
+        assert "/agent/flight-booking-agent/.well-known/agent-card.json" in result
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -311,7 +311,7 @@ class TestGenerateAgentLocationBlocks:
 
         result = await service._generate_agent_location_blocks()
 
-        # Routes are emitted with the {{ROOT_PATH}} placeholder, substituted later.
+        # Routes are emitted under the resolved ROOT_PATH (empty here).
         assert "/agent/evcharger2/ {" in result
         # The encoded ARN must survive into proxy_pass verbatim; re-encoding or
         # stripping it would point the route at a non-existent runtime.
@@ -423,7 +423,7 @@ class TestGenerateAgentLocationBlocks:
 
             result = await service._generate_agent_location_blocks()
 
-        assert "{{ROOT_PATH}}/agent/flight-booking-agent/" in result
+        assert "/agent/flight-booking-agent/" in result
 
     @pytest.mark.asyncio
     async def test_skips_non_a2a_protocol_agent(self, patched_agent_service):
@@ -466,8 +466,8 @@ class TestGenerateAgentLocationBlocks:
 
         result = await service._generate_agent_location_blocks()
 
-        assert "{{ROOT_PATH}}/agent/flight-booking-agent/" in result
-        assert "{{ROOT_PATH}}/agent/travel-assistant-agent/" in result
+        assert "/agent/flight-booking-agent/" in result
+        assert "/agent/travel-assistant-agent/" in result
 
     @pytest.mark.asyncio
     async def test_generation_failure_returns_empty(self, patched_agent_service):
@@ -562,10 +562,7 @@ class TestCreateAgentLocationBlock:
             "Flight Booking Agent",
         )
 
-        assert (
-            "location = {{ROOT_PATH}}/agent/flight-booking-agent/.well-known/agent-card.json"
-            in block
-        )
+        assert "location = /agent/flight-booking-agent/.well-known/agent-card.json" in block
 
     def test_card_proxy_pass_has_no_double_slash(self):
         """The agent-card proxy_pass targets the backend without a double slash."""
@@ -651,7 +648,7 @@ class TestCreateAgentLocationBlock:
             "Travel",
         )
 
-        assert "{{ROOT_PATH}}/agent/lob1/travel/" in block
+        assert "/agent/lob1/travel/" in block
 
     def test_strips_gateway_credential_but_forwards_target_authorization(self):
         """A2A egress trust model (Design A, spec-native passthrough).

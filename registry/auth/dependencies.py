@@ -11,7 +11,8 @@ from .access_resolver import (
     resolve_scope_access,
 )
 from .asset_permissions import accessible_resources_for
-from .privileged_constants import ADMIN_ACTION_PREFIXES, is_admin_conferring_action
+from .ownership import normalize_identity
+from .privileged_constants import ADMIN_ACTION_PREFIXES, grant_confers_admin
 from .proxied_token import (
     _api_auth_request_enabled,
     verify_registry_ui_token,
@@ -436,6 +437,10 @@ def _user_is_admin(
 
     See GitHub issue #663 for the motivation behind this design.
 
+    Only a list grant holding the element "all" counts; a bare string or dict
+    value never confers admin (see ``grant_confers_admin``, shared with the
+    privileged-write guard ``_grants_admin``).
+
     Args:
         ui_permissions: Dict mapping UI actions to lists of allowed resources.
             Example: {'list_service': ['all'], 'register_service': ['all']}
@@ -444,7 +449,7 @@ def _user_is_admin(
         True if user has admin-level management permissions, False otherwise.
     """
     for action, resources in ui_permissions.items():
-        if is_admin_conferring_action(action) and "all" in resources:
+        if grant_confers_admin(action, resources):
             logger.debug(f"Admin check: action '{action}' with 'all' grants admin status")
             return True
 
@@ -546,6 +551,8 @@ async def _derive_user_context(
     client_id: str = "",
     egress_user: str = "",
     email: str = "",
+    token_scopes: list[str] | None = None,
+    owner_id: str | None = None,
 ) -> dict[str, Any]:
     """Build the canonical user_context dict from authenticated identity inputs.
 
@@ -562,10 +569,25 @@ async def _derive_user_context(
     `auth_method == "federation-static"` short-circuits to a no-access
     context (federation static tokens get scoped access via separate routing,
     not registry-side derivation).
+
+    `token_scopes` narrows the result: when it is a list (the caller presented
+    a token minted for those scopes only), the derived `scopes` are intersected
+    with it BEFORE ui_permissions, servers/tools and is_admin are derived, and
+    group membership no longer short-circuits `can_modify_servers`. None means
+    no narrowing.
+
+    `owner_id` is the immutable ownership identity the auth_server derives from
+    the token's (issuer, subject). It is set in the result only when it is a
+    non-empty string; an absent key means the caller owns no record.
     """
+    if token_scopes is not None:
+        requested = set(token_scopes)
+        scopes = [scope for scope in scopes if scope in requested]
+    owner_fields = _owner_id_fields(owner_id)
     if auth_method == "federation-static":
         return {
             "username": username,
+            **owner_fields,
             "email": email,
             "client_id": client_id,
             "groups": groups,
@@ -587,9 +609,14 @@ async def _derive_user_context(
     # Resolve servers + tools in a single scope-repo pass (Issue #1026).
     access = await resolve_scope_access(scopes)
     ui_permissions = await get_ui_permissions_for_user(scopes)
+    # A narrowed token must not regain privilege through group-name shortcuts.
+    modify_groups = groups if token_scopes is None else []
 
     return {
         "username": username,
+        # Ownership identity (see registry/auth/ownership.py); absent when the
+        # auth_server could not derive one.
+        **owner_fields,
         # Human-readable email for audit records (preferred over username, which
         # is the OIDC sub on some paths). Empty when the source carried none.
         "email": email,
@@ -611,7 +638,7 @@ async def _derive_user_context(
         "accessible_agents": get_accessible_agents_for_user(ui_permissions),
         "accessible_skills": get_accessible_skills_for_user(ui_permissions),
         "ui_permissions": ui_permissions,
-        "can_modify_servers": user_can_modify_servers(groups, scopes),
+        "can_modify_servers": user_can_modify_servers(modify_groups, scopes),
         "is_admin": _user_is_admin(ui_permissions),
     }
 
@@ -626,6 +653,8 @@ async def _resolve_context_from_groups(
     client_id: str = "",
     egress_user: str = "",
     email: str = "",
+    token_scopes: list[str] | None = None,
+    owner_id: str | None = None,
 ) -> dict[str, Any]:
     """Derive the canonical user_context from groups, server-side.
 
@@ -633,7 +662,8 @@ async def _resolve_context_from_groups(
     ``nginx_proxied_auth`` (signed-token path): both map the same ``groups`` to
     scopes via ``map_cognito_groups_to_scopes`` and then ``_derive_user_context``,
     so a given user produces an identical authorization result regardless of how
-    they were authenticated (guards #933).
+    they were authenticated (guards #933). ``token_scopes`` is forwarded to
+    ``_derive_user_context`` to narrow the result to a scope-limited token.
     """
     scopes = await map_cognito_groups_to_scopes(groups)
     logger.info(f"User {username} with {len(groups)} groups mapped to {len(scopes)} scopes")
@@ -651,7 +681,49 @@ async def _resolve_context_from_groups(
         client_id=client_id,
         egress_user=egress_user,
         email=email,
+        token_scopes=token_scopes,
+        owner_id=owner_id,
     )
+
+
+def _owner_id_fields(
+    owner_id: Any,
+) -> dict[str, str]:
+    """Return the ``owner_id`` user_context entry, or nothing when unusable.
+
+    Args:
+        owner_id: The raw ``owner_id`` from the session record or token claim.
+
+    Returns:
+        ``{"owner_id": value}`` for a non-empty string, else an empty dict.
+    """
+    normalized = normalize_identity(owner_id)
+    return {"owner_id": normalized} if normalized else {}
+
+
+def _token_scopes_claim(
+    claims: dict[str, Any],
+) -> list[str] | None:
+    """Return the registry-UI token's ``token_scopes`` narrowing claim.
+
+    The auth_server sets ``token_scopes`` to the scopes a narrowed (scope-limited)
+    token was requested for, or None when the request was not made with one. A
+    missing claim (tokens minted before the claim existed) means no narrowing.
+
+    Raises:
+        HTTPException: 401 when the claim is present but not None or a list of
+            strings; a malformed narrowing claim must never widen access.
+    """
+    value = claims.get("token_scopes")
+    if value is None:
+        return None
+    if not isinstance(value, list) or not all(isinstance(s, str) for s in value):
+        logger.warning("signed-token auth: malformed token_scopes claim; rejecting")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+        )
+    return value
 
 
 async def _context_from_internal_token(
@@ -672,9 +744,13 @@ async def _context_from_internal_token(
     - Bearer/static-token callers (no ``session_id``): use the claim's ``groups``
       directly -- the auth_server is the single point of group enrichment.
 
+    In both cases a ``token_scopes`` list claim (the caller used a scope-limited
+    token) narrows the derived scopes to it; see ``_token_scopes_claim``.
+
     Raises HTTPException(401) on any token failure (verification raises it directly).
     """
     claims = verify_registry_ui_token(token)  # raises 401/500 on failure
+    token_scopes = _token_scopes_claim(claims)
     username = claims.get("sub") or ""
     session_id = claims.get("session_id") or ""
 
@@ -699,6 +775,10 @@ async def _context_from_internal_token(
             egress_user=claims.get("egress_user") or "",
             # Human-readable email for audit records (from the session or claim).
             email=session_data.get("email") or claims.get("email") or "",
+            token_scopes=token_scopes,
+            # Ownership identity: the session record is authoritative, the
+            # token claim covers sessions written before the field existed.
+            owner_id=session_data.get("owner_id") or claims.get("owner_id"),
         )
 
     # No session row (bearer / IdP-JWT / static-token caller): trust the claim's
@@ -713,6 +793,8 @@ async def _context_from_internal_token(
         egress_user=claims.get("egress_user") or "",
         # Human-readable email for audit records when the claim carries it.
         email=claims.get("email") or "",
+        token_scopes=token_scopes,
+        owner_id=claims.get("owner_id"),
     )
 
 
@@ -747,6 +829,7 @@ async def enhanced_auth(
         egress_user=session_data.get("subject") or "",
         # Human-readable email for audit records (session store persists it).
         email=session_data.get("email") or "",
+        owner_id=session_data.get("owner_id"),
     )
 
     # Set user context on request state for audit logging middleware

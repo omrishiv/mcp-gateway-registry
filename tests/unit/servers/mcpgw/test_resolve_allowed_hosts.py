@@ -64,15 +64,18 @@ class TestResolveAllowedHosts:
         assert protection is False
         assert hosts is None
 
-    def test_empty_disables_protection(self, resolve_allowed_hosts) -> None:
+    def test_empty_keeps_protection_on_with_default_host(self, resolve_allowed_hosts) -> None:
+        # Fail closed: only an explicit "*" disables protection.
         protection, hosts = resolve_allowed_hosts("")
-        assert protection is False
-        assert hosts is None
+        assert protection is True
+        assert hosts == ["mcpgw-server"]
 
-    def test_whitespace_only_disables_protection(self, resolve_allowed_hosts) -> None:
-        protection, hosts = resolve_allowed_hosts("   ")
-        assert protection is False
-        assert hosts is None
+    def test_whitespace_only_keeps_protection_on_with_default_host(
+        self, resolve_allowed_hosts
+    ) -> None:
+        protection, hosts = resolve_allowed_hosts(" , ")
+        assert protection is True
+        assert hosts == ["mcpgw-server"]
 
     def test_comma_separated_list_is_parsed_and_trimmed(self, resolve_allowed_hosts) -> None:
         protection, hosts = resolve_allowed_hosts("mcpgw-server, my-mcpgw.svc ,other")

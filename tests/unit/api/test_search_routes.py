@@ -27,9 +27,9 @@ from registry.api.search_routes import (
     ToolSearchResult,
     _compute_endpoint_url,
     _user_can_access_agent,
-    _user_can_access_server,
     semantic_search,
 )
+from registry.services.visibility import user_can_access_server as _user_can_access_server
 from tests.fixtures.factories import AgentCardFactory
 
 logger = logging.getLogger(__name__)
@@ -178,10 +178,14 @@ def regular_user_context() -> dict[str, Any]:
     """
     return {
         "username": "regular_user",
+        "owner_id": "idp|regular_user",
         "is_admin": False,
         "groups": ["registry-users-lob1"],
         "scopes": ["registry-users-lob1"],
-        "accessible_servers": ["currenttime", "mcpgw"],
+        # Search admits a server by its path (never its display name) and only
+        # with its list_service grant, as GET /servers does.
+        "accessible_servers": ["servers/currenttime", "servers/mcpgw"],
+        "accessible_services": ["servers/currenttime", "servers/mcpgw"],
         "accessible_tools": {
             "currenttime": {"*"},
             "mcpgw": {"*"},
@@ -582,9 +586,10 @@ class TestUserCanAccessServer:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_user_with_all_accessible_servers(self):
-        """Test user with 'all' in accessible_servers can access any server."""
+    async def test_user_with_all_accessible_servers_is_not_a_wildcard(self, mock_server_service):
+        """A literal 'all' in accessible_servers is not a wildcard (the gateway honours only '*')."""
         # Arrange
+        mock_server_service.user_can_access_server_path = AsyncMock(return_value=False)
         user_context = {
             "is_admin": False,
             "accessible_servers": ["all"],
@@ -594,7 +599,7 @@ class TestUserCanAccessServer:
         result = await _user_can_access_server("/servers/test", "test-server", user_context)
 
         # Assert
-        assert result is True
+        assert result is False
 
     @pytest.mark.asyncio
     async def test_user_with_no_accessible_servers(self):
@@ -811,6 +816,7 @@ class TestUserCanAccessAgent:
         user_context = {
             "is_admin": False,
             "username": "testuser",
+            "owner_id": "idp|testuser",
             "accessible_agents": ["/agents/test"],
         }
 
@@ -829,6 +835,7 @@ class TestUserCanAccessAgent:
         user_context = {
             "is_admin": False,
             "username": "otheruser",
+            "owner_id": "idp|otheruser",
             "accessible_agents": ["/agents/test"],
         }
 
@@ -1409,7 +1416,7 @@ class TestEndpointUrlAppendMcpPath:
             },
         )
         locations = [
-            (bool(exact), location.replace("{{ROOT_PATH}}", ""))
+            (bool(exact), location)
             for exact, location in re.findall(
                 r"^\s*location\s+(=\s+)?(\S+)\s+\{", "\n".join(blocks), re.MULTILINE
             )
@@ -1532,7 +1539,7 @@ class TestEndpointUrlAppendMcpPath:
         with (
             self._with_gateway(),
             patch(
-                "registry.api.search_routes._user_can_access_server",
+                "registry.api.search_routes._user_can_list_server",
                 new=AsyncMock(return_value=True),
             ),
         ):

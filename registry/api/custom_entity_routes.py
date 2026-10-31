@@ -25,6 +25,7 @@ from ..audit.context import set_audit_action
 from ..auth.asset_permissions import user_has_asset_permission
 from ..auth.csrf import verify_csrf_token_flexible
 from ..auth.dependencies import nginx_proxied_auth
+from ..auth.ownership import user_owner_id
 from ..schemas.custom_entity_models import (
     CustomEntityCreate,
     CustomEntityRecord,
@@ -283,7 +284,9 @@ async def create_custom_entity(
     service = _get_service()
     owner = user_context.get("username")  # server-derived, never from body
     try:
-        created = await service.create_record(type, body, owner=owner)
+        created = await service.create_record(
+            type, body, owner=owner, owner_id=user_owner_id(user_context)
+        )
     except UnknownCustomTypeError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except CustomTypeRecordCapError as e:

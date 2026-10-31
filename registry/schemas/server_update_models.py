@@ -25,6 +25,7 @@ SERVER_REGISTRANT_ONLY_FIELDS: frozenset[str] = frozenset(
         "id",
         "path",
         "registered_by",
+        "owner_id",
         "registered_at",
         "updated_at",
         "is_enabled",

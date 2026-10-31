@@ -172,19 +172,14 @@ export class ObservabilityPipeline extends Construct {
     // Section 3: Metrics-Service ECS (with ADOT sidecar)
     // ================================================================
 
-    // --- IAM policy: AMP remote write ---
+    // --- IAM policy: AMP remote write (the ADOT prometheusremotewrite exporter only writes) ---
 
     const ampRemoteWritePolicy = new iam.ManagedPolicy(this, 'AmpRemoteWritePolicy', {
       statements: [
         new iam.PolicyStatement({
           sid: 'AmpRemoteWrite',
           effect: iam.Effect.ALLOW,
-          actions: [
-            'aps:RemoteWrite',
-            'aps:GetSeries',
-            'aps:GetLabels',
-            'aps:GetMetricMetadata',
-          ],
+          actions: ['aps:RemoteWrite'],
           resources: [ampWorkspace.attrArn],
         }),
       ],

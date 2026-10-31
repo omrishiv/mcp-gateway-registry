@@ -82,8 +82,10 @@ Request lifecycle (validate -> resolve -> pin -> re-validate per redirect)::
                                          |    yes -> _is_blocked_ip -> deny metadata/private
                                          |    no  -> _resolve_public_ips (DNS now)
                                          v         every A/AAAA classified, else deny
-                                      rewrite connect host -> pinned public IP
-                                         | keep Host header + TLS SNI = original name
+                                      per-hop copy dials the pinned public IP
+                                         | keep Host header + TLS SNI = original name;
+                                         | the caller's request (which httpx builds
+                                         | the next redirect hop from) is untouched
                                          v
                                       super().handle_request  (only public IP is dialed)
                                          |
@@ -149,14 +151,16 @@ import http.cookiejar
 import ipaddress
 import logging
 import os
+import re
 import socket
 import ssl
 import threading
+import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import TYPE_CHECKING
-from urllib.parse import urlparse, urlsplit, urlunsplit
+from urllib.parse import unquote, urlparse, urlsplit, urlunsplit
 
 import certifi
 import httpx
@@ -249,25 +253,31 @@ _CREDENTIAL_ENDPOINT_IPS: frozenset[str] = frozenset(
 )
 
 
+# Strict ASCII grammar for one inet_aton part: ``0x``/``0X`` hex, leading-``0``
+# octal, or decimal. Python's ``int()`` is a lenient superset (``_`` digit
+# groups, signs, ``0o``/``0b`` prefixes, surrounding whitespace, Unicode
+# digits) that libc rejects; accepting those would classify a string libc never
+# reads as an address, so the parts are matched against these patterns first.
+_INET_ATON_HEX_PART = re.compile(r"0[xX][0-9a-fA-F]+")
+_INET_ATON_OCT_PART = re.compile(r"0[0-7]*")
+_INET_ATON_DEC_PART = re.compile(r"[1-9][0-9]*")
+
+
 def _parse_inet_aton_part(part: str) -> int | None:
     """Parse one IPv4 part with inet_aton radix rules, or None if not numeric.
 
     inet_aton reads ``0x``-prefixed parts as hex, other leading-``0`` parts as
-    OCTAL (so ``0251`` == 169, not 251), and the rest as decimal. Python's
-    ``int(x, 0)`` rejects bare leading-zero octal (``0251``), so we handle the
-    radices explicitly to match glibc/nginx exactly.
+    OCTAL (so ``0251`` == 169, not 251), and the rest as decimal. Only ASCII
+    digits in exactly those three spellings are accepted, matching glibc, musl
+    and nginx; anything else is not an IPv4 part.
     """
-    if part == "":
-        return None
-    low = part.lower()
-    try:
-        if low.startswith("0x"):
-            return int(part, 16)
-        if part.startswith("0") and part != "0":
-            return int(part, 8)
+    if _INET_ATON_HEX_PART.fullmatch(part):
+        return int(part[2:], 16)
+    if _INET_ATON_OCT_PART.fullmatch(part):
+        return int(part, 8)
+    if _INET_ATON_DEC_PART.fullmatch(part):
         return int(part, 10)
-    except ValueError:
-        return None
+    return None
 
 
 def coerce_ip_literal(
@@ -280,10 +290,10 @@ def coerce_ip_literal(
     (``2852039166``), octal (``0251.0376.0251.0376``), hex (``0xA9FEA9FE``), or
     trailing-dot (``169.254.169.254.``) literal — all of which ``inet_aton`` (and
     therefore glibc's resolver and nginx) interpret as a real IPv4 address. We
-    match inet_aton for all realistic literal spellings; Python's ``int()`` is a
-    lenient superset on exotic inputs (underscores, ``0o`` prefixes), but only in
-    the safe direction — those parse to a number and get category-checked (more
-    denial), never fewer.
+    match inet_aton for all realistic literal spellings and parse each part with a
+    strict ASCII grammar, so a string libc rejects (underscores, ``0o`` prefixes,
+    signs, whitespace, Unicode digits) is never assigned an address: it is left
+    to the resolver path, whose answers are classified and pinned.
 
     Args:
         host: The host portion of a URL (brackets already stripped).
@@ -304,9 +314,9 @@ def coerce_ip_literal(
     if not (1 <= len(parts) <= 4):
         return None
     parsed = [_parse_inet_aton_part(p) for p in parts]
-    if any(v is None or v < 0 for v in parsed):
+    if any(v is None for v in parsed):
         return None
-    values = [v for v in parsed if v is not None]  # None/negative ruled out above
+    values = [v for v in parsed if v is not None]  # None ruled out above
 
     # inet_aton packing: the last part absorbs all remaining low-order bytes;
     # earlier parts are one byte each.
@@ -385,23 +395,32 @@ def _ip_denial_reason(
         return None if allow_private or explicitly_allowed else "loopback"
     if ip.is_reserved:
         return "reserved"
-    if ip.is_private or (isinstance(ip, ipaddress.IPv4Address) and ip in _CGNAT_NET):
+    # Deprecated IPv6 site-local (fec0::/10, RFC 3879) is still routed as an
+    # internal scope on some networks, but CPython classifies it as neither
+    # private nor reserved. Treat it like private-unicast.
+    is_site_local = isinstance(ip, ipaddress.IPv6Address) and ip.is_site_local
+    if (
+        ip.is_private
+        or is_site_local
+        or (isinstance(ip, ipaddress.IPv4Address) and ip in _CGNAT_NET)
+    ):
         return None if allow_private or explicitly_allowed else "private"
     return None
 
 
-# Server path names that collide with the cross-server wildcard sentinels. A
-# registration path like ``/all`` or ``/*`` normalizes (lstrip("/")) to the
-# server-scope value ``all`` / ``*``, which the scope resolver promotes to a
-# full cross-server wildcard, silently granting the registrant access to every
-# server. These names are therefore reserved and rejected at registration.
+# Server path names that collide with wildcard sentinels. A registration path
+# like ``/*`` normalizes (lstrip("/")) to the server-scope value ``*``, which the
+# scope resolver treats as the cross-server wildcard, silently granting the
+# registrant access to every server. ``all`` is no longer a cross-server
+# wildcard but stays reserved: it is the per-server tool wildcard and was one
+# historically, so a server named ``all`` would read as a wildcard grant.
 #
 # Kept case-insensitive on match: lstrip("/") preserves case, and while the
 # current resolver compare is case-sensitive, we reject the whole family so a
 # future or operator-UI case-insensitive compare cannot reopen the escalation.
 #
-# MUST stay in sync with registry.auth.access_resolver._WILDCARD_VALUES (the
-# read-side sentinel set). Defined locally rather than imported to keep this
+# MUST contain registry.auth.access_resolver.CROSS_SERVER_WILDCARD (the
+# read-side sentinel). Defined locally rather than imported to keep this
 # low-level util free of a dependency on the auth/repository layers.
 _RESERVED_SERVER_PATH_NAMES: frozenset[str] = frozenset({"all", "*"})
 
@@ -564,8 +583,8 @@ def _env_first(
     """Return the first non-empty environment value among ``names``, or None.
 
     Callers pass the upper-case spelling first, so upper case wins over lower
-    case. That matches curl and httpx. Deliberate: do not "fix" it to prefer the
-    lower-case form, which some other tooling does for ``no_proxy``.
+    case. That matches curl. Used for HTTP_PROXY / HTTPS_PROXY only: NO_PROXY is
+    read with urllib's precedence (see ``_no_proxy_from_environment``).
     """
     for name in names:
         value = os.environ.get(name)
@@ -574,21 +593,45 @@ def _env_first(
     return None
 
 
+def _no_proxy_from_environment() -> str:
+    """Return the raw NO_PROXY value exactly as urllib (and so botocore) reads it.
+
+    urllib lets a lower-case ``no_proxy`` override ``NO_PROXY``, and an EMPTY
+    lower-case value removes the setting entirely. botocore and httpx both take
+    their bypass list from urllib, so the startup credential-endpoint check must
+    read the same value or it would approve a NO_PROXY the SDK never sees. The
+    value is not stripped: urllib's ``*`` wildcard is an exact-string test.
+    """
+    return urllib.request.getproxies_environment().get("no", "")
+
+
 def _parse_no_proxy(
     raw: str,
 ) -> tuple[str, ...]:
-    """Parse NO_PROXY into normalized match patterns.
+    """Parse NO_PROXY into normalized match patterns, never wider than urllib.
 
     A leading dot is stripped so ``.example.com`` and ``example.com`` behave
-    identically, matching curl. A CIDR-shaped entry is kept (it can still match
-    an exact IP literal) but warned about, because neither curl nor httpx expands
-    a CIDR, so ``10.0.0.0/8`` silently fails to match ``10.1.2.3`` and sends
+    identically, matching urllib and curl. The ``*`` wildcard is honoured only
+    when it is the WHOLE value, as urllib requires; a ``*`` inside a list is
+    dropped with a warning, because botocore would still send credential
+    requests to the proxy. A CIDR-shaped entry is kept (it can still match an
+    exact IP literal) but warned about, because neither curl nor httpx expands a
+    CIDR, so ``10.0.0.0/8`` silently fails to match ``10.1.2.3`` and sends
     in-cluster traffic to the corporate proxy.
     """
+    if raw == "*":
+        return ("*",)
     patterns: list[str] = []
     for entry in (raw or "").split(","):
         cleaned = entry.strip().lower().lstrip(".")
         if not cleaned:
+            continue
+        if cleaned == "*":
+            logger.warning(
+                "SSRF guard: NO_PROXY contains '*' inside a list, which urllib "
+                "(and therefore the AWS SDK) does not honour; ignoring it. Set "
+                "NO_PROXY=* on its own to bypass the proxy for every host.",
+            )
             continue
         if "/" in cleaned:
             logger.warning(
@@ -629,7 +672,7 @@ def _forward_proxy_config() -> _ForwardProxyConfig:
         )
         return _ForwardProxyConfig()
 
-    no_proxy = _parse_no_proxy(_env_first("NO_PROXY", "no_proxy") or "")
+    no_proxy = _parse_no_proxy(_no_proxy_from_environment())
     logger.info(
         "SSRF guard: forward proxy enabled (http=%s https=%s no_proxy_entries=%d). "
         "IP-rebind pinning is relaxed for targets that resolve exclusively public.",
@@ -720,6 +763,11 @@ def _forward_proxy_ssl_context() -> ssl.SSLContext | bool:
     return context
 
 
+# Scheme-default ports. A NO_PROXY ``host:port`` entry naming one never matches;
+# see ``_no_proxy_matches``.
+_DEFAULT_PORTS: frozenset[int] = frozenset({80, 443})
+
+
 def _no_proxy_matches(
     patterns: tuple[str, ...],
     hostname: str,
@@ -727,11 +775,19 @@ def _no_proxy_matches(
 ) -> bool:
     """Return True if the target is excluded from proxying by NO_PROXY.
 
-    Supports the conventional forms: ``*`` (everything direct), an exact host, a
-    ``host:port`` pair, and a domain suffix (``example.com``, which matches
-    ``a.example.com``; a leading dot was already stripped by ``_parse_no_proxy``).
-    CIDR entries are NOT expanded, matching curl and httpx; ``_parse_no_proxy``
-    warns about one.
+    Supports the conventional forms: ``*`` (everything direct, only when it was
+    the whole NO_PROXY value), an exact host, a ``host:port`` pair, and a domain
+    suffix (``example.com``, which matches ``a.example.com``; a leading dot was
+    already stripped by ``_parse_no_proxy``). CIDR entries are NOT expanded,
+    matching curl and httpx; ``_parse_no_proxy`` warns about one.
+
+    ``port`` is the effective port. A ``host:port`` entry matches only a
+    non-default port: httpx drops a scheme-default port from the URL before
+    matching, and urllib compares against the bare host for a URL without one
+    (which is how botocore names the credential endpoints), so neither honours
+    ``host:80`` or ``host:443`` for an ordinary request. Claiming an exclusion
+    they ignore would let the startup credential-endpoint check pass while the
+    SDK still sends those requests to the proxy.
 
     Module-level rather than a method because both the guarded transports and the
     plain proxy-routed transport need it, and one matcher is the point.
@@ -739,7 +795,7 @@ def _no_proxy_matches(
     if not patterns:
         return False
     host = hostname.lower()
-    host_port = f"{host}:{port}"
+    host_port = None if port in _DEFAULT_PORTS else f"{host}:{port}"
     for pattern in patterns:
         if pattern == "*":
             return True
@@ -981,13 +1037,24 @@ def _record_egress_route(
         logger.debug("SSRF guard: failed to record egress route metric", exc_info=True)
 
 
+# A ``%XX`` escape in a host httpx percent-encoded (see normalize_url_identity).
+_PERCENT_ESCAPE = re.compile(r"%[0-9a-fA-F]{2}")
+
+
 def normalize_url_identity(url: str) -> str:
     """Return the canonical full URL used for target identity comparisons.
 
-    Scheme and hostname are lower-cased, IDNs are converted to ASCII, default
-    ports are omitted, an empty path becomes ``/``, and the complete path and
-    query are preserved. Userinfo and fragments are rejected because neither is
-    a legitimate proxy target and both create ambiguous/log-sensitive identities.
+    Scheme and hostname are lower-cased, default ports are omitted, an empty
+    path becomes ``/``, and the complete path and query are preserved. Userinfo
+    and fragments are rejected because neither is a legitimate proxy target and
+    both create ambiguous/log-sensitive identities.
+
+    The host is the one httpx will dial: it is taken from ``httpx.URL``, so IDNs
+    get httpx's IDNA2008 encoding (the stdlib ``idna`` codec is IDNA2003, which
+    maps deviation characters such as ``ß`` to a different host) and host
+    characters httpx percent-encodes are encoded the same way. A URL whose port
+    or userinfo httpx reads differently from ``urlsplit`` is rejected as
+    ambiguous.
     """
     if not url or not isinstance(url, str):
         raise UrlValidationError(str(url), "URL is empty or not a string")
@@ -1004,16 +1071,25 @@ def normalize_url_identity(url: str) -> str:
         raise UrlValidationError(url, "URL userinfo is not allowed")
     if parsed.fragment:
         raise UrlValidationError(url, "URL fragments are not allowed")
-    hostname = parsed.hostname
-    if not hostname:
+    if not parsed.hostname:
         raise UrlValidationError(url, "URL has no hostname")
 
     try:
-        normalized_host = hostname.encode("idna").decode("ascii").lower()
-    except UnicodeError as exc:
+        dialled = httpx.URL(url)
+        # Fold case the way httpx does (it lower-cases a name before encoding),
+        # but keep percent escapes in RFC 3986 upper-case hex so normalizing an
+        # identity again is a no-op. Hostnames compare case-insensitively.
+        normalized_host = _PERCENT_ESCAPE.sub(
+            lambda m: m.group(0).upper(), dialled.raw_host.decode("ascii").lower()
+        )
+    except (httpx.InvalidURL, UnicodeError, ValueError) as exc:
         raise UrlValidationError(url, f"hostname is invalid: {exc}") from exc
-    host_for_netloc = f"[{normalized_host}]" if ":" in normalized_host else normalized_host
+    if not normalized_host:
+        raise UrlValidationError(url, "URL has no hostname")
     default_port = 443 if scheme == "https" else 80
+    if dialled.userinfo or (dialled.port or default_port) != (port or default_port):
+        raise UrlValidationError(url, "URL authority is ambiguous")
+    host_for_netloc = f"[{normalized_host}]" if ":" in normalized_host else normalized_host
     netloc = host_for_netloc if port in (None, default_port) else f"{host_for_netloc}:{port}"
     return urlunsplit((scheme, netloc, parsed.path or "/", parsed.query, ""))
 
@@ -1432,9 +1508,10 @@ def validate_url(
     # ``mcpgw-server`` is a first-party internal identity, not a globally trusted
     # destination. Ordinary entities are rejected even before DNS; only the
     # exact airegistry-tools entity/path/full-target selector receives the
-    # dedicated profile that can admit it.
+    # dedicated profile that can admit it. A trailing root dot names the same
+    # host to the resolver (``mcpgw-server.``), so it is stripped for the check.
     if (
-        hostname_lower in _RESERVED_BUILTIN_PROXY_HOSTS
+        hostname_lower.rstrip(".") in _RESERVED_BUILTIN_PROXY_HOSTS
         and profile is not BUILTIN_AIREGISTRY_TOOLS_PROFILE
     ):
         raise UrlValidationError(
@@ -1515,14 +1592,21 @@ def validate_server_path(
 
     Raises:
         UrlValidationError: If the path is empty, contains disallowed nginx
-            metacharacters, normalizes to an empty (slashes-only) path, or
-            normalizes to a reserved cross-server wildcard or monitoring-route
-            name.
+            metacharacters or a ``.``/``..`` segment, normalizes to an empty
+            (slashes-only) path, or normalizes to a reserved cross-server
+            wildcard or monitoring-route name.
     """
     if not path or not isinstance(path, str):
         raise UrlValidationError(str(path), "server path is empty or not a string")
     if contains_nginx_metacharacters(path):
         raise UrlValidationError(path, "server path contains disallowed nginx metacharacters")
+
+    # A ``.`` or ``..`` segment (also percent-encoded, which nginx decodes before
+    # normalizing) makes the registered path differ from the path nginx and
+    # normalize_request_path route on: ``/peer/../github`` is served as
+    # ``/github``. Registration paths must already be in normal form.
+    if any(unquote(segment) in (".", "..") for segment in path.split("/")):
+        raise UrlValidationError(path, "server path must not contain '.' or '..' segments")
 
     # Normalize the same way the scope layer does (add_server_scope does
     # server_path.lstrip("/")), then also drop trailing slashes so "/all/" and
@@ -1596,18 +1680,44 @@ class _PinnedResolverMixin:
         return url, scheme, hostname, port, allowlist
 
     @staticmethod
-    def _rewrite_to_pinned_ip(
+    def _hop_request(
         request: httpx.Request,
-        url: httpx.URL,
-        hostname: str,
-        pinned_ip: str,
+        pinned_ip: str | None,
     ) -> httpx.Request:
-        """Rewrite only the connect host, retaining Host and TLS SNI identity."""
-        request.url = url.copy_with(host=pinned_ip)
-        request.headers["Host"] = hostname if url.port is None else f"{hostname}:{url.port}"
-        request.extensions = dict(request.extensions)
-        request.extensions["sni_hostname"] = hostname
-        return request
+        """Return the request handed to the network for this ONE hop.
+
+        The caller's ``request`` is never modified. httpx builds the next
+        redirect hop from it: ``request.url.join(Location)`` for the target,
+        ``request.url`` for the same-origin test that decides whether
+        ``Authorization`` survives and ``Host`` is rewritten, and
+        ``request.extensions`` copied verbatim. Rewriting it to the pinned IP
+        would make every later hop derive its Host, SNI, credential and
+        NO_PROXY decisions from that IP instead of from the hop's hostname.
+
+        With ``pinned_ip`` the copy dials that address while ``Host`` and the
+        ``sni_hostname`` extension name the logical host. Without it (an IP
+        literal target, or a proxied hop that the tunnel names by URL) the URL
+        is kept and any ``sni_hostname`` is dropped, so a server name from an
+        earlier hop can never ride into this one.
+        """
+        url = request.url
+        headers = httpx.Headers(request.headers)
+        extensions = {k: v for k, v in request.extensions.items() if k != "sni_hostname"}
+        if pinned_ip is not None:
+            headers["Host"] = url.netloc.decode("ascii")
+            extensions["sni_hostname"] = url.raw_host.decode("ascii")
+            url = url.copy_with(host=pinned_ip)
+        wire = httpx.Request(
+            request.method,
+            url,
+            headers=headers,
+            stream=request.stream,
+            extensions=extensions,
+        )
+        if isinstance(request.stream, httpx.ByteStream):
+            # Expose ``.content`` like the original; a ByteStream re-reads freely.
+            wire.read()
+        return wire
 
     def _pin_request(
         self,
@@ -1618,11 +1728,11 @@ class _PinnedResolverMixin:
         if coerce_ip_literal(hostname) is not None:
             if _is_blocked_ip(hostname, allowlist, allow_private=self._guard_profile.allow_private):
                 raise UrlValidationError(str(url), f"targets blocked/private IP {hostname}")
-            return request
+            return self._hop_request(request, None)
         pinned_ip = _resolve_public_ips(
             hostname, port, allowlist, allow_private=self._guard_profile.allow_private
         )[0]
-        return self._rewrite_to_pinned_ip(request, url, hostname, pinned_ip)
+        return self._hop_request(request, pinned_ip)
 
     async def _pin_request_async(
         self,
@@ -1633,13 +1743,13 @@ class _PinnedResolverMixin:
         if coerce_ip_literal(hostname) is not None:
             if _is_blocked_ip(hostname, allowlist, allow_private=self._guard_profile.allow_private):
                 raise UrlValidationError(str(url), f"targets blocked/private IP {hostname}")
-            return request
+            return self._hop_request(request, None)
         pinned_ip = (
             await _resolve_public_ips_async(
                 hostname, port, allowlist, allow_private=self._guard_profile.allow_private
             )
         )[0]
-        return self._rewrite_to_pinned_ip(request, url, hostname, pinned_ip)
+        return self._hop_request(request, pinned_ip)
 
     # -- Forward-proxy routing (see the module docstring) --------------------
 
@@ -1783,10 +1893,9 @@ class _PinnedResolverMixin:
             )
             _record_egress_route(self._guard_profile.name, "direct", "ok")
             if coerce_ip_literal(hostname) is not None:
-                return _RoutedRequest(request, None)  # already an address, nothing to pin
-            return _RoutedRequest(
-                self._rewrite_to_pinned_ip(request, url, hostname, addresses[0]), None
-            )
+                # Already an address, nothing to pin.
+                return _RoutedRequest(self._hop_request(request, None), None)
+            return _RoutedRequest(self._hop_request(request, addresses[0]), None)
 
         # Public destination. The resolved addresses are logged at DEBUG and then
         # deliberately discarded: they are the only forensic handle on the
@@ -1799,9 +1908,9 @@ class _PinnedResolverMixin:
             addresses,
         )
         _record_egress_route(self._guard_profile.name, "proxied", "ok")
-        # Handed over UNMODIFIED so the tunnel can name the host and verify its
-        # certificate against that name.
-        return _RoutedRequest(request, candidate)
+        # Keeps the hostname in the URL so the tunnel can name the host and
+        # verify its certificate against that name.
+        return _RoutedRequest(self._hop_request(request, None), candidate)
 
     def _excluded_from_proxy(
         self,

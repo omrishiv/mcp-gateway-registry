@@ -94,6 +94,10 @@ async def resolve_session(session_id: str) -> dict[str, Any] | None:
         # path (cookie session, no internal token) keys the vault on this stable
         # subject so it matches the vend path's egress_user claim. See #933.
         "subject": doc.get("subject"),
+        # Immutable ownership identity derived from (issuer, subject) and set by
+        # the auth_server when the session is created. Absent on sessions
+        # written before the field existed.
+        "owner_id": doc.get("owner_id"),
     }
 
     encrypted = doc.get("id_token_encrypted")

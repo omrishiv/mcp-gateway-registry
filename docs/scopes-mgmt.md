@@ -272,7 +272,9 @@ Authorization is uniform across all four asset families (servers, agents, skills
 
 **Dual gate (mutations).** Modify, delete, and toggle each require the caller to hold the scope for the specific resource (or `"all"`) **AND** be the resource's owner. Both halves are required: a scope grant alone does not let a non-admin mutate a resource someone else owns, and ownership alone does not let them mutate it without the scope. This is identical across servers, agents, skills, and custom entities.
 
-**Ownership** is the `registered_by` field for servers and agents, and the `owner` field for skills and custom entities (set to the creating user at registration).
+**Ownership** is the `owner_id` field on servers, agents, skills and custom entities. The auth server derives it at sign-in and on every bearer token from the identity provider's issuer and the user's subject (`sub`), so it does not change when a user edits their display name or email, and two accounts with the same username at different identity providers never share it. The `registered_by` field (servers and agents) and the `owner` field (skills and custom entities) still record the creating user's username for display.
+
+Records created before `owner_id` existed have only the username field. For those, the registry falls back to comparing usernames, but only for a caller that has an `owner_id`, and the first change the owner makes binds the record to that caller's `owner_id` (logged as `Ownership backfill (trust on first use)`). After that, the username no longer matters for that record. A record whose owner field is empty is owned by nobody, so only an admin can change it; records synced from a federation peer are in this state. To claim legacy records before an attacker with a colliding username can, ask each owner to make one edit after upgrading, or have an admin review records that still lack `owner_id`.
 
 **Discovery (`list_*`) is scope-only and fail-closed.** A caller without the `list_` grant for a family sees zero resources of that family, including public ones. Discovery does not depend on ownership.
 

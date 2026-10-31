@@ -100,9 +100,22 @@ def client_admin(mock_settings, admin_user_context, mock_service):
     from registry.main import app
 
     _override_auth(admin_user_context)
-    with patch(
-        "registry.api.m2m_management_routes._get_service",
-        new=AsyncMock(return_value=mock_service),
+    # The last-admin guards are neutralized so these tests exercise the CRUD
+    # path; the guards are covered by
+    # tests/unit/services/test_admin_lifecycle_state_machine.py.
+    with (
+        patch(
+            "registry.api.m2m_management_routes._get_service",
+            new=AsyncMock(return_value=mock_service),
+        ),
+        patch(
+            "registry.api.m2m_management_routes.admin_safety.assert_not_last_admin",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "registry.api.m2m_management_routes.admin_safety.would_remove_last_admin_via_groups",
+            new=AsyncMock(return_value=None),
+        ),
     ):
         client = TestClient(app, cookies={"mcp_gateway_session": "test-session"})
         yield client, mock_service

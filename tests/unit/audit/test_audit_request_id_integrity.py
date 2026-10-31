@@ -188,10 +188,11 @@ class TestMiddlewareDoesNotTrustClientHeader:
         middleware = self._build_middleware()
         captured: list = []
 
-        async def _fake_log_event(record):
+        async def _fake_log_event(record, fail_closed=False):
             captured.append(record)
 
         middleware.audit_logger.log_event = AsyncMock(side_effect=_fake_log_event)
+        middleware.audit_logger.update_outcome = AsyncMock()
 
         request = MagicMock()
         request.url.path = "/api/registry/servers"

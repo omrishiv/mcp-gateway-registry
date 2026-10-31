@@ -223,6 +223,13 @@ class SkillCard(ProxyableMixin):
         default_factory=list, description="Groups allowed to view (when visibility=group)"
     )
     owner: str | None = Field(None, description="Owner email/username for private visibility")
+    owner_id: str | None = Field(
+        None,
+        description=(
+            "Immutable ownership identity of the owner, derived from the token's "
+            "(issuer, subject). Ownership checks use this. Server-managed."
+        ),
+    )
 
     # Source authentication (for private Git repos)
     # Literal keeps the wire-format strings compatible with existing clients
@@ -303,7 +310,7 @@ class SkillCard(ProxyableMixin):
         """Validate name follows Agent Skills spec."""
         import re
 
-        if not re.match(r"^[a-z0-9]+(-[a-z0-9]+)*$", v):
+        if not re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", v):
             raise ValueError(
                 "Name must be lowercase alphanumeric with single hyphens, "
                 "not starting or ending with hyphen"
@@ -368,6 +375,9 @@ class SkillInfo(BaseModel):
     registry_name: str = "local"
     owner: str | None = Field(
         None, description="Owner email/username for private visibility access control"
+    )
+    owner_id: str | None = Field(
+        None, description="Immutable ownership identity of the owner (server-managed)"
     )
     auth_scheme: Literal["none", "global_credentials", "bearer", "api_key"] = Field(
         default="none",
@@ -506,7 +516,7 @@ class SkillRegistrationRequest(ProxyableMixin):
         """Validate name follows Agent Skills spec."""
         import re
 
-        if not re.match(r"^[a-z0-9]+(-[a-z0-9]+)*$", v):
+        if not re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", v):
             raise ValueError(
                 "Name must be lowercase alphanumeric with single hyphens, "
                 "not starting or ending with hyphen"

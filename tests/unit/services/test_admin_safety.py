@@ -55,22 +55,6 @@ class TestGroupsConferAdmin:
 class TestResolveAdminGroupNames:
     """Tests for admin-conferring group resolution from scope docs."""
 
-    async def test_identifies_privileged_scope_name(self):
-        # "readers" grants only scoped (non-"all") access, so it is NOT
-        # admin-conferring. mcp-registry-admin is a privileged scope name.
-        groups = {
-            "mcp-registry-admin": {"ui_scopes": {}, "mappings": []},
-            "readers": {"ui_scopes": {"list_service": ["some-server"]}, "mappings": []},
-        }
-        with patch(
-            "registry.services.admin_safety.scope_service.list_groups",
-            new=AsyncMock(return_value=groups),
-        ):
-            result = await admin_safety.resolve_admin_group_names()
-        assert "mcp-registry-admin" in result
-        # A scoped (non-"all") grant does not confer admin.
-        assert "readers" not in result
-
     async def test_identifies_admin_via_ui_permissions(self):
         groups = {
             "custom-admins": {
@@ -83,9 +67,9 @@ class TestResolveAdminGroupNames:
             new=AsyncMock(return_value=groups),
         ):
             result = await admin_safety.resolve_admin_group_names()
-        assert "custom-admins" in result
-        # Mapped IdP group name is also treated as admin-conferring.
-        assert "idp-admin-group" in result
+        # The mapped IdP group confers admin; the scope's own name is not a
+        # group a caller holds, so it is not counted.
+        assert result == {"idp-admin-group"}
 
     async def test_fails_closed_on_error_result(self):
         with patch(

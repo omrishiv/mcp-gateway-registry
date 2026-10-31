@@ -26,6 +26,7 @@ def user_context() -> dict[str, Any]:
     """Owner of /test-server (matches sample_existing.registered_by)."""
     return {
         "username": "alice",
+        "owner_id": "idp|alice",
         "groups": ["g"],
         "scopes": ["modify_service"],
         "auth_method": "session",
@@ -43,6 +44,7 @@ def user_context() -> dict[str, Any]:
 def admin_context() -> dict[str, Any]:
     return {
         "username": "admin",
+        "owner_id": "idp|admin",
         "groups": ["mcp-registry-admin"],
         "scopes": ["admin"],
         "auth_method": "session",

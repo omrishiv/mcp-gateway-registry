@@ -9,7 +9,7 @@ create a circular import — search_routes imports services).
 Each helper returns True iff the caller is allowed to *view* the
 entity, given the visibility metadata of that entity and the
 caller's auth context (``is_admin``, ``accessible_*`` scope lists,
-``username``, ``groups``).
+``owner_id``/``username`` via :mod:`registry.auth.ownership`, ``groups``).
 """
 
 import logging
@@ -17,6 +17,7 @@ from collections.abc import Sequence
 from typing import Any
 from urllib.parse import urlsplit
 
+from ..auth.ownership import OWNER_FIELD, is_owner
 from ..core.config import DeploymentMode, settings
 from ..exceptions import UrlValidationError
 from ..schemas.agent_models import AgentInterface
@@ -131,9 +132,8 @@ def redact_oauth_config_for_non_owner(
     """
     if user_context and user_context.get("is_admin"):
         return server_dict
-    username = (user_context or {}).get("username")
-    # Fails closed: an absent username or registered_by cannot establish ownership.
-    if username and server_dict.get("registered_by") == username:
+    # Fails closed: a caller or record without an ownership identity is no owner.
+    if is_owner(server_dict, user_context):
         return server_dict
     for field in ("backend_oauth", "oauth_discovery"):
         server_dict.pop(field, None)
@@ -338,8 +338,6 @@ async def user_can_access_server(
         return True
 
     accessible_servers = user_context.get("accessible_servers") or []
-    if "all" in accessible_servers:
-        return True
     if not accessible_servers:
         return False
 
@@ -367,14 +365,15 @@ def user_can_access_server_from_doc(
     have already fetched the server (e.g. the ANS status endpoints), so it
     performs the ``accessible_servers`` comparison purely in memory instead of
     re-fetching the server through ``server_service`` just to re-confirm it
-    exists. The ``"*"`` wildcard grants access here because the caller has
-    proven the server exists by holding its document.
+    exists. The ``"*"`` wildcard (from a ``server: "*"`` scope rule) grants
+    access here because the caller has proven the server exists by holding its
+    document. ``"all"`` is not a server wildcard (the gateway never honours it).
     """
     if user_context.get("is_admin"):
         return True
 
     accessible_servers = user_context.get("accessible_servers") or []
-    if "all" in accessible_servers or "*" in accessible_servers:
+    if "*" in accessible_servers:
         return True
     if not accessible_servers:
         return False
@@ -414,7 +413,7 @@ async def user_can_access_agent(
     if agent_card.visibility == "public":
         return True
     if agent_card.visibility == "private":
-        return agent_card.registered_by == user_context.get("username")
+        return is_owner(agent_card, user_context)
     if agent_card.visibility == "group-restricted":
         allowed_groups = set(agent_card.allowed_groups)
         user_groups = set(user_context.get("groups", []))
@@ -447,19 +446,14 @@ def user_can_access_agent_from_doc(
         return False
 
     agent_card = document.get("agent_card")
-    if isinstance(agent_card, dict):
-        visibility = str(agent_card.get("visibility") or "")
-        registered_by = str(agent_card.get("registered_by") or "")
-        allowed_groups = list(agent_card.get("allowed_groups") or [])
-    else:
-        visibility = str(document.get("visibility") or "")
-        registered_by = str(document.get("registered_by") or "")
-        allowed_groups = list(document.get("allowed_groups") or [])
+    record = agent_card if isinstance(agent_card, dict) else document
+    visibility = str(record.get("visibility") or "")
+    allowed_groups = list(record.get("allowed_groups") or [])
 
     if visibility == "public":
         return True
     if visibility == "private":
-        return registered_by == user_context.get("username")
+        return is_owner(record, user_context)
     if visibility == "group-restricted":
         user_groups = set(user_context.get("groups", []))
         return bool(set(allowed_groups) & user_groups)
@@ -472,11 +466,12 @@ async def user_can_access_skill(
     owner: str,
     allowed_groups: list[Any],
     user_context: dict,
+    owner_id: str | None = None,
 ) -> bool:
     """Visibility check for a skill.
 
-    Takes visibility / owner / allowed_groups as arguments rather
-    than looking them up — every caller already has these fields
+    Takes visibility / owner / owner_id / allowed_groups as arguments
+    rather than looking them up — every caller already has these fields
     from the search hit or repo dump.
     """
     if user_context.get("is_admin"):
@@ -484,7 +479,9 @@ async def user_can_access_skill(
     if visibility == "public":
         return True
     if visibility == "private":
-        return owner == user_context.get("username")
+        return is_owner(
+            {OWNER_FIELD: owner, "owner_id": owner_id}, user_context, legacy_field=OWNER_FIELD
+        )
     if visibility == "group":
         user_groups = set(user_context.get("groups", []))
         skill_groups = set(allowed_groups or [])
@@ -497,6 +494,7 @@ async def user_can_access_custom_entity(
     owner: str,
     allowed_groups: list[Any],
     user_context: dict,
+    owner_id: str | None = None,
 ) -> bool:
     """Visibility check for a custom entity record.
 
@@ -511,7 +509,9 @@ async def user_can_access_custom_entity(
     if visibility == "public":
         return True
     if visibility == "private":
-        return owner == user_context.get("username")
+        return is_owner(
+            {OWNER_FIELD: owner, "owner_id": owner_id}, user_context, legacy_field=OWNER_FIELD
+        )
     if visibility == "group-restricted":
         user_groups = set(user_context.get("groups", []) or [])
         return bool(user_groups & set(allowed_groups or []))

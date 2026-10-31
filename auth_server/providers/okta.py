@@ -10,7 +10,13 @@ from urllib.parse import urlencode
 import jwt
 import requests
 
-from .base import AuthProvider, normalize_groups_claim
+from .base import (
+    AuthProvider,
+    make_owner_id,
+    normalize_groups_claim,
+    self_signed_owner_id,
+    with_owner_id,
+)
 
 # Constants for self-signed token validation
 JWT_ISSUER = os.environ.get("JWT_ISSUER", "mcp-auth-server")
@@ -214,16 +220,19 @@ class OktaProvider(AuthProvider):
             else:
                 scopes = scope_claim.split() if scope_claim else []
 
-            return {
-                "valid": True,
-                "username": claims.get("sub", claims.get("preferred_username", "")),
-                "email": claims.get("email", ""),
-                "groups": groups,
-                "scopes": scopes,
-                "client_id": claims.get("cid", self.client_id),
-                "method": "okta",
-                "data": claims,
-            }
+            return with_owner_id(
+                {
+                    "valid": True,
+                    "username": claims.get("sub", claims.get("preferred_username", "")),
+                    "email": claims.get("email", ""),
+                    "groups": groups,
+                    "scopes": scopes,
+                    "client_id": claims.get("cid", self.client_id),
+                    "method": "okta",
+                    "data": claims,
+                },
+                self.owner_id_from_claims(claims),
+            )
 
         except jwt.ExpiredSignatureError:
             logger.warning("Token validation failed: Token has expired")
@@ -234,6 +243,29 @@ class OktaProvider(AuthProvider):
         except Exception as e:
             logger.error(f"Okta token validation error: {e}")
             raise ValueError(f"Token validation failed: {e}")
+
+    @property
+    def owner_issuer(self) -> str:
+        """The configured Okta authorization server issuer."""
+        return self.issuer
+
+    def owner_id_from_claims(self, claims: dict[str, Any]) -> str | None:
+        """Derive the owner_id from an Okta access token, keyed on the user id.
+
+        An Okta user access token's ``sub`` is the user's login (an editable
+        username, often the email); the immutable user id, which is the
+        id_token ``sub`` the login path keys on, is the ``uid`` claim. A
+        client-credentials token has no ``uid``, and its ``sub`` is the client id.
+
+        Args:
+            claims: The signature-verified access token claims.
+
+        Returns:
+            The owner_id, or ``None`` when the token has neither claim.
+        """
+        uid = claims.get("uid")
+        subject = uid if isinstance(uid, str) and uid else claims.get("sub")
+        return make_owner_id(self.owner_issuer, subject)
 
     def validate_id_token(
         self,
@@ -318,18 +350,21 @@ class OktaProvider(AuthProvider):
                 f"groups: {groups}, scopes: {scopes}"
             )
 
-            return {
-                "valid": True,
-                "method": "self_signed",
-                "data": claims,
-                "client_id": claims.get("client_id", "user-generated"),
-                "username": claims.get("sub", ""),
-                "email": claims.get("email", ""),
-                "expires_at": claims.get("exp"),
-                "scopes": scopes,
-                "groups": groups,
-                "token_type": "user_generated",
-            }
+            return with_owner_id(
+                {
+                    "valid": True,
+                    "method": "self_signed",
+                    "data": claims,
+                    "client_id": claims.get("client_id", "user-generated"),
+                    "username": claims.get("sub", ""),
+                    "email": claims.get("email", ""),
+                    "expires_at": claims.get("exp"),
+                    "scopes": scopes,
+                    "groups": groups,
+                    "token_type": "user_generated",
+                },
+                self_signed_owner_id(claims),
+            )
 
         except jwt.ExpiredSignatureError:
             logger.warning("Self-signed token validation failed: Token has expired")

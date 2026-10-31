@@ -42,9 +42,10 @@ class EnvSettings:
         self.keycloak_url: str = os.getenv("KEYCLOAK_URL", "http://localhost:8080")
         self.keycloak_realm: str = os.getenv("KEYCLOAK_REALM", "mcp-gateway")
 
-        # Expected audience for inbound bearer tokens. When unset, audience is not
-        # enforced (set AGENT_AUDIENCE in production to bind tokens to this agent).
-        self.agent_audience: str | None = os.getenv("AGENT_AUDIENCE") or None
+        # Expected audience for inbound bearer tokens. Always enforced: when unset
+        # it defaults to this agent's client id, so a realm token minted for any
+        # other client is rejected.
+        self.agent_audience: str = os.getenv("AGENT_AUDIENCE") or "flight-booking-agent"
 
         logger.info(
             f"EnvSettings initialized: agent_name={self.agent_name}, version={self.agent_version}"

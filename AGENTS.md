@@ -339,12 +339,28 @@ working in those areas.
   on a different host or nonstandard port without publishing it as agent `url`.
 - **Injection:** sanitize at EVERY interpolation site AND validate at the source
   (a sanitizer that exists but isn't called is worthless); `re.escape` user input
-  in regex/`$regex` queries.
+  in regex/`$regex` queries. Fill template placeholders in one pass before any
+  registry data is inserted; anchor validators with `re.fullmatch` or `\Z`, never
+  `$` with `re.match`; run a safety check on the final string you emit.
+- **Parse like the consumer:** a guard that classifies a value another component
+  acts on (libc `inet_aton`, httpx host encoding, `urllib` NO_PROXY, nginx `$uri`)
+  must read it the way that component does, and take the narrower reading when
+  they differ. A transport never mutates the `httpx.Request` it was given.
 - **Authorization:** deny by default; never treat a broad/execute scope as admin;
   enforce ownership server-side before every mutation across the whole endpoint
   family; `dict.get("k")` not `getattr(dict, "k")`; no substring matching for
   privilege decisions; verify externally-supplied JWTs (sig/iss/aud/exp) before
   trusting claims; attach shared/global credentials only on explicit admin opt-in.
+  One predicate per decision: admin through `grant_confers_admin` /
+  `admin_safety.caller_is_admin` (never a group or scope name), human versus
+  machine through `machine_client_id`, and never `in` on a stored value of unknown
+  type. The registry's list views must make the gateway's call decision (`"*"` is
+  the only server wildcard). A session-minted token re-checks the session on use,
+  and a narrowed token stays narrowed on every hop.
+- **Ownership:** compare `owner_id` (issuer plus subject) through
+  `registry/auth/ownership.is_owner`, never a username; a falsy identity owns
+  nothing. Federated records get their provenance from `source_peer_id`, never a
+  path prefix, and local policy sets their owner.
 - **Virtual backend grants:** internal subrequests that rewrite the backing URL
   must preserve any resource-bound token's virtual URI in a trusted nginx-only
   header (clear client copies on normal routes), require the nginx marker and
@@ -386,9 +402,12 @@ working in those areas.
   enforce audience against a config allowlist, fail closed. Never auto-grant
   groups/admin from a code-shipped mapping (config-driven, fail closed).
 - **Admin ops:** refuse self-delete + last-admin removal/demotion (fail closed if
-  the admin population can't be counted); audit admin-tier grants. A config/secrets
-  export must deny sensitive values by default. Gate them behind a SEPARATE
-  explicit acknowledgement (not just `include_sensitive`) and fail closed.
+  the admin population can't be counted), for M2M clients too, on every write that
+  can change who is admin (scope group create/update/delete/import, user and M2M
+  group edits); count admins with the request-time rule; audit admin-tier grants.
+  A config/secrets export must deny sensitive values by default (URL userinfo
+  included). Gate them behind a SEPARATE explicit acknowledgement (not just
+  `include_sensitive`) and fail closed.
 - **Never put a secret on subprocess argv** (world-readable via `ps`). Pass via
   `env=`/stdin. **Trust forwarded metadata only from the proxy hop:** rightmost/
   trusted XFF (not leftmost), allowlist `Host` before building a redirect_uri.
@@ -420,8 +439,12 @@ working in those areas.
   (`X-Registry-Api-Auth`, `X-Resolved-Upstream`, `X-Resolved-Generic-Upstream`);
   each is a plain header a direct auth-server caller can send.
 - **DoS:** rate-limit at the inbound edge (nginx `limit_req`), never the shared
-  `/validate` subrequest; cover all deploy modes. **Audit:** durable-by-default
-  (fail closed), attributable to a specific actor.
+  `/validate` subrequest; cover all deploy modes; a limiter's own errors follow
+  its fail policy. **Audit:** durable-by-default: fail closed at startup, and a
+  mutating request is rejected before its handler runs if its audit record cannot
+  be written; attributable to a specific actor.
+- **Classifier output** (scanner verdicts, LLM analyzers) is parsed strictly: an
+  unknown severity, shape or `is_safe` value is the unsafe outcome.
 - **OAuth CSRF `state`:** validate at the token-exchange point, not a post-hoc
   check that may be dead code; OAuth discovery metadata → `Cache-Control: no-store`.
 - **Frontend:** one shared URL-scheme guard on every dynamic href/`window.open`/

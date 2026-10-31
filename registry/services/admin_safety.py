@@ -9,13 +9,17 @@ lockout classes that admin authorization alone does not prevent:
   would leave the deployment with no one able to manage users, groups, or
   scopes.
 
-The admin population is derived from the same privileged-scope rules used by
-the authorization layer (:mod:`registry.auth.privileged_constants` +
-:func:`registry.services.scope_service._import_touches_privileged_scope`), so a
-group is "admin-conferring" here for exactly the same reason a request bearing
-it is treated as ``is_admin`` at request time. This keeps the guard aligned with
-the admin-derivation rule instead of hard-coding a separate group list that can
-drift.
+The admin population is derived from the same rule the request path uses to set
+``is_admin``: an IdP group reaches scopes through their ``group_mappings``, the
+scopes' ui_permissions are merged, and :func:`registry.auth.dependencies._user_is_admin`
+decides from the merged grants (via
+:func:`registry.auth.privileged_constants.is_admin_conferring_action`). A group is
+"admin-conferring" here exactly when a request bearing it is ``is_admin``. The
+broader privileged-write predicate
+(:func:`registry.services.scope_service._import_touches_privileged_scope`) is
+deliberately NOT used here: it also matches read-only ``"all"`` grants and
+privileged scope names, which would count non-admins (for example the
+``federation-service`` seed) as administrators and let the last real admin go.
 
 Fail-closed: if the admin population cannot be determined (IdP/DB error, empty
 result), the caller must treat the operation as removing the last admin and
@@ -26,8 +30,8 @@ from __future__ import annotations
 
 import logging
 
+from ..auth.privileged_constants import is_admin_conferring_action
 from ..services import scope_service
-from ..services.scope_service import _import_touches_privileged_scope
 from ..utils.iam_manager import get_iam_manager
 
 logger = logging.getLogger(__name__)
@@ -74,18 +78,61 @@ def is_self_target(actor_username: str | None, target_username: str) -> bool:
     return actor == _normalize(target_username)
 
 
-async def resolve_admin_group_names() -> set[str]:
-    """Return the set of group/scope names that confer admin, case-folded.
+def scope_confers_admin(ui_permissions: object) -> bool:
+    """Return True if a scope's ui_permissions make its holders ``is_admin``.
 
-    A group confers admin when its scope definition is privileged under the
-    shared authorization rules: the scope name (or any of its group mappings) is
-    a privileged scope name, or its ui_permissions grant a mutating action to
-    ``all`` resources. This is the same predicate the request-time admin check
-    and the privileged-write guard use.
+    Mirrors the request path exactly: ``get_ui_permissions_for_user`` keeps a
+    grant as ``"all"`` only when the stored value is a list containing
+    ``"all"`` (a bare string is ignored), and ``_user_is_admin`` requires an
+    admin-conferring action holding ``"all"``. Because the request path merges
+    scopes by union, a principal is admin iff ANY one of its scopes satisfies
+    this predicate.
+
+    Args:
+        ui_permissions: The scope's stored ``ui_permissions`` mapping.
+    """
+    if not isinstance(ui_permissions, dict):
+        return False
+    for action, resources in ui_permissions.items():
+        if (
+            isinstance(action, str)
+            and is_admin_conferring_action(action)
+            and isinstance(resources, list)
+            and "all" in resources
+        ):
+            return True
+    return False
+
+
+def admin_group_names_from_catalogue(groups: dict) -> set[str]:
+    """Return the case-folded IdP group names that confer admin in ``groups``.
+
+    Args:
+        groups: Scope catalogue in the :func:`scope_service.list_groups` shape
+            (scope name to ``{"mappings": [...], "ui_scopes": {...}}``).
+
+    Returns:
+        Case-folded names of every group mapped by an admin-conferring scope.
+        A scope's own name is not included: at request time a caller reaches a
+        scope only through ``group_mappings``.
+    """
+    admin_names: set[str] = set()
+    for scope_name, meta in groups.items():
+        if not isinstance(scope_name, str) or not isinstance(meta, dict):
+            continue
+        if not scope_confers_admin(meta.get("ui_scopes")):
+            continue
+        for mapped in meta.get("mappings") or []:
+            if isinstance(mapped, str) and _normalize(mapped):
+                admin_names.add(_normalize(mapped))
+    return admin_names
+
+
+async def _list_scope_catalogue() -> dict:
+    """Read the scope catalogue, failing closed on any error.
 
     Raises:
-        AdminSafetyError: If the scope catalogue cannot be read. Fails closed so
-            callers do not proceed on an incomplete admin picture.
+        AdminSafetyError: If the scope catalogue cannot be read.
     """
     try:
         groups = await scope_service.list_groups()
@@ -102,25 +149,29 @@ async def resolve_admin_group_names() -> set[str]:
             status_code=503,
             detail="Unable to verify administrator population; operation refused",
         )
+    return groups
 
-    admin_names: set[str] = set()
-    for scope_name, meta in groups.items():
-        if not isinstance(scope_name, str) or not isinstance(meta, dict):
-            continue
-        group_mappings = meta.get("mappings") or []
-        ui_permissions = meta.get("ui_scopes") or {}
-        if _import_touches_privileged_scope(scope_name, group_mappings, ui_permissions):
-            admin_names.add(_normalize(scope_name))
-            for mapped in group_mappings:
-                if isinstance(mapped, str):
-                    admin_names.add(_normalize(mapped))
 
+async def resolve_admin_group_names() -> set[str]:
+    """Return the set of IdP group names that confer admin, case-folded.
+
+    A group confers admin when some scope maps it and that scope's
+    ui_permissions satisfy :func:`scope_confers_admin`, which is the
+    request-time ``is_admin`` rule.
+
+    Raises:
+        AdminSafetyError: If the scope catalogue cannot be read, or it yields
+            no admin-conferring group. Fails closed so callers do not proceed on
+            an incomplete admin picture.
+    """
+    groups = await _list_scope_catalogue()
+    admin_names = admin_group_names_from_catalogue(groups)
     # Fail closed on an empty result. A scope catalogue that lists groups but
-    # matches ZERO admin-conferring scopes means our privileged-scope predicate
-    # has drifted from the catalogue shape (or the catalogue is incomplete) — not
-    # that the deployment genuinely has no admin groups. Proceeding would make
-    # every user look non-admin and silently disable the last-admin guard, so we
-    # refuse rather than derive a lockout decision from an unverifiable picture.
+    # maps ZERO admin-conferring scopes to a group means the catalogue is
+    # incomplete or unreadable, not that the deployment genuinely has no admin
+    # groups. Proceeding would make every user look non-admin and silently
+    # disable the last-admin guard, so we refuse rather than derive a lockout
+    # decision from an unverifiable picture.
     if not admin_names:
         logger.error(
             "admin_safety: scope catalogue yielded ZERO admin-conferring groups "
@@ -201,6 +252,11 @@ async def _m2m_admin_identities(admin_group_names: set[str]) -> list[frozenset[s
     for doc in docs or []:
         if not isinstance(doc, dict):
             continue
+        # The auth server ignores a record whose ``enabled`` is present and not
+        # the boolean True (mongodb_groups_enrichment._is_record_enabled), so
+        # such a client is not admin at request time and must not be counted.
+        if "enabled" in doc and doc["enabled"] is not True:
+            continue
         if not groups_confer_admin(doc.get("groups"), admin_group_names):
             continue
         aliases = {_normalize(key) for key in (doc.get("name"), doc.get("client_id")) if key}
@@ -211,28 +267,15 @@ async def _m2m_admin_identities(admin_group_names: set[str]) -> list[frozenset[s
     return m2m_admins
 
 
-async def list_admin_identities() -> list[frozenset[str]]:
-    """Return one alias-set per current administrator.
+async def _admin_identities_for(admin_group_names: set[str]) -> list[frozenset[str]]:
+    """Return one alias-set per principal whose groups intersect ``admin_group_names``.
 
-    Each element is the set of case-folded identifiers by which one admin can be
-    addressed: a single username for an IdP user, or ``{name, client_id}`` for an
-    M2M service account (which a delete may target by either). Returning one entry
-    PER ADMIN — rather than a flat set of identifiers — is what lets the guards
-    both (a) recognise the target by any of its aliases and (b) count distinct
-    admins correctly (a flat identifier set would count a two-alias M2M admin
-    twice and re-open the last-admin fail-open).
-
-    Cross-references the IdP/DB user listing AND the MongoDB ``idp_m2m_clients``
-    store against the admin-conferring group set, so the population matches what
-    the user-management list handler shows (M2M-only admins included). Fails closed
-    on any error enumerating the primary IdP listing, and on an empty population.
+    Reads the IdP/DB user listing and the MongoDB ``idp_m2m_clients`` store. No
+    empty-population check: callers decide what an empty result means.
 
     Raises:
-        AdminSafetyError: If users/groups cannot be enumerated, or the resolved
-            population is empty (treated as unverifiable, not a genuine zero).
+        AdminSafetyError: If the IdP user listing cannot be read.
     """
-    admin_group_names = await resolve_admin_group_names()
-
     iam = get_iam_manager()
     try:
         users = await iam.list_users(max_results=1000, include_groups=True)
@@ -257,6 +300,31 @@ async def list_admin_identities() -> list[frozenset[str]]:
     # the count matches management_list_users and an M2M-only admin is not
     # invisible to the last-admin guard.
     admins.extend(await _m2m_admin_identities(admin_group_names))
+    return admins
+
+
+async def list_admin_identities() -> list[frozenset[str]]:
+    """Return one alias-set per current administrator.
+
+    Each element is the set of case-folded identifiers by which one admin can be
+    addressed: a single username for an IdP user, or ``{name, client_id}`` for an
+    M2M service account (which a delete may target by either). Returning one entry
+    PER ADMIN, rather than a flat set of identifiers, is what lets the guards
+    both (a) recognise the target by any of its aliases and (b) count distinct
+    admins correctly (a flat identifier set would count a two-alias M2M admin
+    twice and re-open the last-admin fail-open).
+
+    Cross-references the IdP/DB user listing AND the MongoDB ``idp_m2m_clients``
+    store against the admin-conferring group set, so the population matches what
+    the user-management list handler shows (M2M-only admins included). Fails closed
+    on any error enumerating the primary IdP listing, and on an empty population.
+
+    Raises:
+        AdminSafetyError: If users/groups cannot be enumerated, or the resolved
+            population is empty (treated as unverifiable, not a genuine zero).
+    """
+    admin_group_names = await resolve_admin_group_names()
+    admins = await _admin_identities_for(admin_group_names)
 
     # Fail closed on an empty admin population. We already know at least one
     # admin-conferring group exists (resolve_admin_group_names raises otherwise),
@@ -372,3 +440,170 @@ async def desired_groups_grant_admin(desired_groups: list[str] | None) -> bool:
     """
     admin_group_names = await resolve_admin_group_names()
     return groups_confer_admin(desired_groups, admin_group_names)
+
+
+async def assert_scope_change_keeps_an_admin(
+    scope_name: str,
+    *,
+    group_mappings: list[str] | None = None,
+    ui_permissions: dict | None = None,
+    delete: bool = False,
+    revoked_group: str | None = None,
+) -> None:
+    """Refuse a scope-group write or delete that would leave zero administrators.
+
+    Applies the proposed change to the current scope catalogue, recomputes the
+    admin-conferring groups, and counts the principals (IdP users and M2M
+    clients) that would still be admin. Call it with the exact values the route
+    is about to persist, after any normalization.
+
+    Args:
+        scope_name: The scope document being written or deleted.
+        group_mappings: The new ``group_mappings``. ``None`` means the
+            repository default (``[scope_name]``).
+        ui_permissions: The new ``ui_permissions``. ``None`` is treated as no
+            grants (the repository default confers nothing).
+        delete: True when the scope document is being deleted.
+        revoked_group: An IdP group the operation also deletes. Every
+            principal is treated as losing it (fail closed).
+
+    Raises:
+        AdminSafetyError: 409 if no principal would remain admin; 503 if the
+            scope catalogue or the principal listing cannot be read, or the
+            current population is itself empty (unverifiable).
+    """
+    catalogue = await _list_scope_catalogue()
+    current_names = admin_group_names_from_catalogue(catalogue)
+    # The caller passed an is_admin gate, so the real catalogue maps at least one
+    # admin-conferring group. An empty set means the read was incomplete; a
+    # change judged against it could delete the real admin scope unchecked.
+    if not current_names:
+        logger.error(
+            "admin_safety: scope catalogue yielded ZERO admin-conferring groups "
+            "before change to '%s'; refusing",
+            scope_name,
+        )
+        raise AdminSafetyError(
+            status_code=503,
+            detail="Unable to verify administrator population; operation refused",
+        )
+
+    proposed: dict = {
+        name: meta
+        for name, meta in catalogue.items()
+        if not (isinstance(name, str) and name == scope_name)
+    }
+    if not delete:
+        if group_mappings is None:
+            mappings = [scope_name]
+        elif isinstance(group_mappings, list):
+            mappings = list(group_mappings)
+        else:
+            # Malformed input: assume it maps nobody (fail closed).
+            mappings = []
+        proposed[scope_name] = {
+            "mappings": mappings,
+            "ui_scopes": ui_permissions if isinstance(ui_permissions, dict) else {},
+        }
+    revoked = _normalize(revoked_group)
+    if revoked:
+        proposed = {
+            name: {
+                **meta,
+                "mappings": [
+                    mapped
+                    for mapped in meta.get("mappings") or []
+                    if not (isinstance(mapped, str) and _normalize(mapped) == revoked)
+                ],
+            }
+            if isinstance(meta, dict)
+            else meta
+            for name, meta in proposed.items()
+        }
+    proposed_names = admin_group_names_from_catalogue(proposed)
+
+    # No admin-conferring group is lost, so no principal loses admin.
+    if current_names <= proposed_names:
+        return
+
+    refusal = AdminSafetyError(
+        status_code=409,
+        detail=(
+            f"Refusing to change scope group '{scope_name}': it would leave no "
+            "administrator. Grant admin to another account through a different "
+            "group first."
+        ),
+    )
+    if not proposed_names:
+        raise refusal
+    if await _admin_identities_for(proposed_names):
+        return
+    if not await _admin_identities_for(current_names):
+        logger.error(
+            "admin_safety: no administrator accounts found before scope change to "
+            "'%s'; refusing (user listing likely incomplete)",
+            scope_name,
+        )
+        raise AdminSafetyError(
+            status_code=503,
+            detail="Unable to verify administrator population; operation refused",
+        )
+    raise refusal
+
+
+def caller_is_admin(
+    user_context: dict | None,
+    allowed_scopes: frozenset[str] = frozenset(),
+) -> bool:
+    """Return True if a route-level admin gate should admit ``user_context``.
+
+    The canonical admin decision is the request-time ``is_admin`` flag derived
+    by :func:`registry.auth.dependencies._derive_user_context`. Group or scope
+    NAMES never stand in for it: a scope named ``mcp-registry-admin`` whose
+    grants were narrowed no longer makes its holders admin. A gate may admit a
+    documented extra credential through ``allowed_scopes`` (for example the
+    federation static token's ``federation/peers``).
+
+    Args:
+        user_context: The authenticated request context, or None.
+        allowed_scopes: Exact scope names this gate also accepts.
+    """
+    if not isinstance(user_context, dict):
+        return False
+    if user_context.get("is_admin") is True:
+        return True
+    if not allowed_scopes:
+        return False
+    scopes = user_context.get("scopes")
+    if not isinstance(scopes, list):
+        return False
+    return any(isinstance(scope, str) and scope in allowed_scopes for scope in scopes)
+
+
+def is_self_principal(
+    user_context: dict | None,
+    *target_identifiers: str | None,
+) -> bool:
+    """Return True when the caller is the principal named by any target identifier.
+
+    Compares the caller's ``username`` and ``client_id`` (an M2M token's
+    principal may be addressed by either) against every identifier of the
+    target, case- and whitespace-insensitively. Empty values never match.
+
+    Args:
+        user_context: The authenticated request context.
+        target_identifiers: Names by which the target principal is addressed.
+    """
+    if not isinstance(user_context, dict):
+        return False
+    actor = {
+        _normalize(value)
+        for value in (user_context.get("username"), user_context.get("client_id"))
+        if isinstance(value, str) and _normalize(value)
+    }
+    targets = {
+        _normalize(value)
+        for value in target_identifiers
+        if isinstance(value, str) and _normalize(value)
+    }
+    return bool(actor & targets)

@@ -29,7 +29,7 @@ from functools import lru_cache, wraps
 from pathlib import Path
 from string import Template
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit
 
 import boto3
 import httpx
@@ -54,6 +54,7 @@ from internal_request_token import (
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from jwt.api_jwk import PyJWK
 from metrics_middleware import add_auth_metrics_middleware
+from mongodb_groups_enrichment import machine_client_id
 from starlette.background import BackgroundTask
 
 try:
@@ -100,7 +101,12 @@ except ImportError:
     )
 
 # Import provider factory
-from providers.base import normalize_groups_claim
+from providers.base import (
+    make_owner_id,
+    normalize_groups_claim,
+    self_signed_owner_id,
+    with_owner_id,
+)
 from providers.factory import get_auth_provider
 from pydantic import (
     BaseModel,
@@ -740,11 +746,13 @@ def _registered_proxy_url_matches(
     carries the raw ``$request_uri``, so the raw path is canonicalized the same
     way first (decoded once, slashes merged, dot-segments resolved; the trailing
     slash kept, as in ``$uri``). Otherwise ``//jira/mcp``, which nginx routes to
-    ``/jira/``, would be refused here.
+    ``/jira/``, would be refused here. The path is taken with ``urlsplit``, not
+    ``urlparse``: urlparse splits ``;params`` off the last segment, so ``/jira;x``
+    would read as ``/jira`` although nginx routes it to the catch-all.
     """
     if not registered_path.startswith("/") or not registered_path.strip("/"):
         return False
-    raw_path = urlparse(original_url).path
+    raw_path = urlsplit(original_url).path
     path = normalize_request_path(raw_path)
     if raw_path.endswith("/") and not path.endswith("/"):
         path += "/"
@@ -869,6 +877,7 @@ def _attach_mcp_proxy_token(
     auth_method: str = "",
     egress_user: str = "",
     audit_identity: dict | None = None,
+    owner_id: str = "",
 ) -> None:
     """Mint and attach the X-Internal-Token for the /mcp-proxy hop.
 
@@ -888,6 +897,9 @@ def _attach_mcp_proxy_token(
     mcp-proxy hop attribute its OBO token-mint record without trusting the raw
     ingress header. Omitted by the static-credential callers (federation-static /
     network-trusted), which authenticate a machine credential with no IdP claims.
+
+    ``owner_id`` is the caller's ownership identity (``validation_result``'s
+    ``owner_id``); omitted from the token when empty.
 
     The token is minted ONLY if nginx force-set the matching
     ``X-Validate-Source-Secret`` on this subrequest, and never when no marker is
@@ -942,6 +954,7 @@ def _attach_mcp_proxy_token(
             audit_identity=audit_identity,
             version_id=version_id,
             virtual_backend=virtual_backend,
+            owner_id=owner_id,
         )
     except ValueError as exc:
         logger.error(f"/validate: could not mint mcp-proxy token: {exc}")
@@ -959,6 +972,7 @@ def _attach_generic_proxy_token(
     http_method: str,
     streaming: bool = False,
     has_upstream_auth: bool = False,
+    owner_id: str = "",
 ) -> None:
     """Mint and attach the X-Internal-Token-Generic for the generic-proxy hop.
 
@@ -990,6 +1004,8 @@ def _attach_generic_proxy_token(
     marker) is likewise bound in so the hop fetches + injects the entity's
     decrypted upstream headers only on the signed claim.
 
+    ``owner_id`` is the caller's ownership identity; omitted when empty.
+
     SECURITY: the caller MUST ensure this is wired ONLY into the main 200-path,
     never the static-credential short-circuits (federation-static / network-
     trusted), which compute no cookie/Bearer discriminator and thus cannot run
@@ -1020,6 +1036,7 @@ def _attach_generic_proxy_token(
             http_method=http_method,
             streaming=streaming,
             has_upstream_auth=has_upstream_auth,
+            owner_id=owner_id,
         )
     except ValueError as exc:
         logger.error(f"/validate: could not mint generic-proxy token: {exc}")
@@ -1036,6 +1053,8 @@ def _attach_registry_ui_token(
     auth_method: str,
     client_id: str,
     egress_user: str = "",
+    token_scopes: list[str] | None = None,
+    owner_id: str = "",
 ) -> None:
     """Mint and attach the X-Internal-Token-Registry for the registry /api/ hop.
 
@@ -1056,6 +1075,12 @@ def _attach_registry_ui_token(
     A session-backed caller's token carries no groups: the registry resolves
     them from the session store whenever ``session_id`` is set and never reads
     the claim, so encoding them would only grow the auth_request response.
+
+    ``token_scopes`` bounds the registry's derived scopes for a request made
+    with a scope-narrowed token (see ``mint_registry_ui_token``); None = no bound.
+
+    ``owner_id`` is the caller's ownership identity, which the registry keys
+    record ownership on; omitted from the token when empty (owns nothing).
     """
     if not request.headers.get("X-Registry-Api-Auth"):
         return
@@ -1073,6 +1098,8 @@ def _attach_registry_ui_token(
             auth_method=auth_method,
             client_id=client_id,
             egress_user=egress_user,
+            token_scopes=token_scopes,
+            owner_id=owner_id,
         )
     except ValueError as exc:
         logger.error(f"/validate: could not mint registry-ui token: {exc}")
@@ -2155,15 +2182,18 @@ async def validate_session_cookie(cookie_value: str) -> dict[str, Any]:
 
         logger.info(f"Session cookie validated for user: {hash_username(username)}")
 
-        return {
-            "valid": True,
-            "username": username,
-            "scopes": scopes,
-            "method": "session_cookie",
-            "groups": groups,
-            "client_id": "",  # Not applicable for session
-            "data": session_data,
-        }
+        return with_owner_id(
+            {
+                "valid": True,
+                "username": username,
+                "scopes": scopes,
+                "method": "session_cookie",
+                "groups": groups,
+                "client_id": "",  # Not applicable for session
+                "data": session_data,
+            },
+            session_data.get("owner_id"),
+        )
     except SignatureExpired:
         logger.warning("Session cookie has expired")
         raise ValueError("Session cookie has expired")
@@ -2175,6 +2205,78 @@ async def validate_session_cookie(cookie_value: str) -> dict[str, Any]:
     except Exception as e:
         logger.error(f"Session cookie validation error: {e}")
         raise ValueError(f"Session cookie validation failed: {e}")
+
+
+# Claim a session-backed self-signed user token carries: the login session it was
+# minted from. /validate re-resolves that session on every use so the token
+# tracks the user's CURRENT groups instead of the groups frozen at mint time.
+SELF_SIGNED_SESSION_CLAIM: str = "sid"
+
+
+async def _rebind_self_signed_to_session(
+    validation_result: dict[str, Any],
+) -> None:
+    """Re-derive a session-backed self-signed token's groups and scopes on use.
+
+    A self-signed token minted from a login session embeds that session's id
+    (``SELF_SIGNED_SESSION_CLAIM``). Its ``groups`` claim is a mint-time
+    snapshot, so trusting it would let a demoted user keep admin for the token's
+    whole lifetime. Instead the session is resolved again: its current groups
+    replace the claim, scopes are re-derived from them, and the derived scopes
+    are intersected with the token's requested ``scope`` claim when that claim is
+    non-empty, so the token never exceeds either what was requested or what the
+    user holds now. A token without the claim (minted for a non-session caller,
+    or before the claim existed) is left unchanged.
+
+    Args:
+        validation_result: Result of ``validate_self_signed_token``; updated in
+            place (``groups`` and ``scopes``).
+
+    Raises:
+        ValueError: The claim is malformed or the session no longer resolves
+            (logged out or expired). /validate turns this into a 401.
+    """
+    claims = validation_result.get("data") or {}
+    session_id = claims.get(SELF_SIGNED_SESSION_CLAIM)
+    if session_id is None:
+        return
+    if not isinstance(session_id, str) or not session_id:
+        raise ValueError("Self-signed token carries a malformed session claim")
+
+    from session_store import resolve_session
+
+    session_data = await resolve_session(session_id)
+    if not session_data:
+        raise ValueError("Self-signed token's login session no longer resolves")
+
+    current_groups = normalize_groups_claim(session_data.get("groups"), source="session groups")
+    derived_scopes = await map_groups_to_scopes(current_groups)
+    requested_scopes = validation_result.get("scopes") or []
+    if requested_scopes:
+        requested = set(requested_scopes)
+        derived_scopes = [s for s in derived_scopes if s in requested]
+    validation_result["groups"] = current_groups
+    validation_result["scopes"] = derived_scopes
+
+
+def _self_signed_token_scopes(
+    validation_result: dict[str, Any],
+) -> list[str] | None:
+    """Return the registry scope bound for a request made with a narrowed token.
+
+    A self-signed token whose ``scope`` claim is non-empty was minted for those
+    requested scopes, so the registry must not derive more than them from the
+    token's groups. Every other credential (and a self-signed token with an
+    empty claim, which requested no narrowing) gets ``None``: no bound.
+    """
+    if validation_result.get("method") != AUTH_METHOD_SELF_SIGNED:
+        return None
+    scope_claim = (validation_result.get("data") or {}).get("scope") or ""
+    if not isinstance(scope_claim, str):
+        # Unreachable for a token validate_self_signed_token accepted; bound the
+        # registry to nothing rather than to everything (fail closed).
+        return []
+    return scope_claim.split() or None
 
 
 def parse_server_and_tool_from_url(original_url: str) -> tuple[str | None, str | None]:
@@ -2233,19 +2335,10 @@ def _resolve_rate_limit_caller(
 
     The rate limiter classifies a caller as an AGENT when ``client_id`` is set,
     else a USER, and keys the per-caller counter on that identity. But
-    ``validation_result['client_id']`` is NOT a reliable agent signal, and the
-    right discriminator is **provider-specific**:
-
-    - Keycloak / Entra / Auth0: a user (browser / password-grant) token carries
-      the OAuth client only as ``azp`` (copied into ``validation_result``), while
-      a machine (``client_credentials``) token additionally carries a top-level
-      ``client_id`` **claim** and a ``service-account-*`` subject. So the agent
-      signal is a top-level ``client_id`` claim (or a ``service-account-*``
-      ``preferred_username``).
-    - Cognito: BOTH user access tokens and M2M tokens carry a ``client_id``
-      claim, so ``client_id`` cannot discriminate. A Cognito user access token
-      carries a ``username`` claim; a Cognito M2M (``client_credentials``) token
-      does not. So the agent signal on Cognito is the ABSENCE of ``username``.
+    ``validation_result['client_id']`` is NOT a reliable agent signal (every
+    provider copies ``azp`` / ``cid`` into it), so the machine decision is
+    delegated to ``machine_client_id``: the one classifier also gating M2M group
+    enrichment, so a caller enriched as a machine is always limited as one.
 
     Using ``client_id`` alone would misclassify every human as an agent (picking
     the group's agent limit, and bucketing all web users under one shared client
@@ -2256,32 +2349,9 @@ def _resolve_rate_limit_caller(
     ``(username, None)``; for an agent, ``(username_or_None, client_id)`` so the
     limiter's agent branch is taken and keys on the client.
     """
-    username = validation_result.get("username")
-    client_id = validation_result.get("client_id")
-    method = validation_result.get("method")
-    claims = validation_result.get("data") or {}
-    if not isinstance(claims, dict):
-        claims = {}
-
-    token_client_id = claims.get("client_id")
-
-    if method == "cognito":
-        # Cognito: M2M (client_credentials) access token has no end-user
-        # ``username`` claim; a user access token always does.
-        is_machine = bool(token_client_id) and "username" not in claims
-    else:
-        # Keycloak / Entra / Auth0 (and any OIDC provider that copies azp into
-        # client_id): only a client_credentials token carries a top-level
-        # client_id claim or a service-account-* subject.
-        preferred = claims.get("preferred_username") or ""
-        is_machine = bool(token_client_id) or preferred.startswith("service-account-")
-
-    if is_machine:
-        return username, (token_client_id or client_id)
-
-    # Human user: key on username; drop the azp/client_id so the limiter's user
-    # branch is taken.
-    return username, None
+    # Human user: machine_client_id is None, so the limiter's user branch is
+    # taken and the azp/client_id is dropped.
+    return validation_result.get("username"), machine_client_id(validation_result)
 
 
 async def _enforce_rate_limit(
@@ -2293,17 +2363,25 @@ async def _enforce_rate_limit(
 
     Keys strictly on the validated-token identity (``client_id`` or ``username`` from
     ``validation_result``) -- NEVER a client-supplied header. No-op unless
-    ``RATE_LIMITING_ENABLED`` is set. Any unexpected limiter error is swallowed
-    (the limiter itself already fails open per-gate); rate limiting must never
-    turn into a 500 on the auth path.
+    ``RATE_LIMITING_ENABLED`` is set. An unexpected limiter error never turns into
+    a 500 on the auth path: it follows ``RATE_LIMIT_FAIL_OPEN``, allowing the
+    request when fail-open and denying it (plain 403) when fail-closed.
     """
     # Dual import context (matches the observability/egress_obo pattern above):
     # the deployed container runs server.py with /app as the module root (top-level
     # import), while the repo-root/test context sees the auth_server package.
     try:
-        from rate_limiting_config import RATE_LIMITING_ENABLED, get_rate_limiter
+        from rate_limiting_config import (
+            RATE_LIMIT_FAIL_OPEN,
+            RATE_LIMITING_ENABLED,
+            get_rate_limiter,
+        )
     except ImportError:
-        from auth_server.rate_limiting_config import RATE_LIMITING_ENABLED, get_rate_limiter
+        from auth_server.rate_limiting_config import (
+            RATE_LIMIT_FAIL_OPEN,
+            RATE_LIMITING_ENABLED,
+            get_rate_limiter,
+        )
 
     if not RATE_LIMITING_ENABLED:
         return
@@ -2342,8 +2420,16 @@ async def _enforce_rate_limit(
             target_name=target_name,
         )
     except Exception as exc:
-        # The limiter fails open internally; this is a last-resort guard so an
-        # unexpected error here can never 500 the /validate path.
+        # Last-resort guard so an unexpected error can never 500 the /validate
+        # path. The configured fail policy still decides: an operator who set
+        # RATE_LIMIT_FAIL_OPEN=false must not get unlimited traffic because the
+        # limiter raised instead of returning a decision.
+        if not RATE_LIMIT_FAIL_OPEN:
+            logger.warning(f"rate-limit check failed, denying (fail-closed): {exc}")
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "rate_limit_unavailable"},
+            ) from exc
         logger.warning(f"rate-limit enforcement skipped due to error: {exc}")
         return
 
@@ -2409,6 +2495,22 @@ def _server_names_match(name1: str, name2: str) -> bool:
     if normalized_name1 == "*":
         return True
     return normalized_name1 == _normalize_server_name(name2)
+
+
+def _rule_names(value: Any) -> list[str]:
+    """Return the names a stored ``methods`` / ``tools`` rule value grants.
+
+    A list grants its string elements; a bare string grants exactly that one
+    name (never its substrings or characters); anything else (null, a number,
+    a dict) grants nothing. Normalizing here keeps a malformed rule from
+    raising inside the scope loop, where the catch-all would deny the whole
+    request and so let one bad scope revoke grants held through other scopes.
+    """
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, str)]
+    return []
 
 
 async def _resolve_server_path(server_name: str) -> str:
@@ -2483,8 +2585,9 @@ def _scope_check_target(
     as ``tools/list``: the caller still needs access to the server, but not a
     grant for a tool the backend does not have. This is safe only because every
     direct-route MCP request passes through the mcp-proxy hop, which answers
-    the connect tool locally. Virtual routes never get the exemption: nginx
-    proxies a virtual route's non-egress backends straight to the backend.
+    the connect tool locally. Virtual routes never get the exemption: a virtual
+    backend call is authorized for the rewritten backing tool itself, never
+    widened from the virtual binding.
 
     Args:
         server_path: The registered server path being authorized.
@@ -2576,6 +2679,9 @@ async def validate_server_tool_access(
             for server_config in scope_config:
                 logger.debug(f"  Examining server config: {server_config}")
                 server_config_name = server_config.get("server")
+                if not isinstance(server_config_name, str):
+                    logger.debug("  Server rule has no string server name; skipping")
+                    continue
                 logger.debug(
                     f"  Server name in config: '{server_config_name}' vs requested: '{server_name}'"
                 )
@@ -2584,7 +2690,7 @@ async def validate_server_tool_access(
                     logger.debug("  Server name matches")
 
                     # Check methods first
-                    allowed_methods = server_config.get("methods", [])
+                    allowed_methods = _rule_names(server_config.get("methods"))
                     logger.debug(f"  Allowed methods for server '{server_name}': {allowed_methods}")
                     logger.debug(f"  Checking if method '{method}' is in allowed methods...")
 
@@ -2636,7 +2742,7 @@ async def validate_server_tool_access(
                         continue
 
                     # Check tools if method not found in methods
-                    allowed_tools = server_config.get("tools", [])
+                    allowed_tools = _rule_names(server_config.get("tools"))
                     logger.debug(f"  Allowed tools for server '{server_name}': {allowed_tools}")
 
                     # Check if all tools are allowed (wildcard support)
@@ -3497,17 +3603,20 @@ class SimplifiedCognitoValidator:
                 f"groups: {groups}"
             )
 
-            return {
-                "valid": True,
-                "method": AUTH_METHOD_SELF_SIGNED,
-                "data": claims,
-                "client_id": claims.get("client_id", "user-generated"),
-                "username": claims.get("sub", ""),
-                "expires_at": claims.get("exp"),
-                "scopes": scopes,
-                "groups": groups,
-                "token_type": "user_generated",
-            }
+            return with_owner_id(
+                {
+                    "valid": True,
+                    "method": AUTH_METHOD_SELF_SIGNED,
+                    "data": claims,
+                    "client_id": claims.get("client_id", "user-generated"),
+                    "username": claims.get("sub", ""),
+                    "expires_at": claims.get("exp"),
+                    "scopes": scopes,
+                    "groups": groups,
+                    "token_type": "user_generated",
+                },
+                self_signed_owner_id(claims),
+            )
 
         except jwt.ExpiredSignatureError:
             error_msg = "Self-signed token has expired"
@@ -3561,18 +3670,25 @@ class SimplifiedCognitoValidator:
             if "scope" in jwt_claims:
                 scopes = jwt_claims["scope"].split() if jwt_claims["scope"] else []
 
-            return {
-                "valid": True,
-                "method": "jwt",
-                "data": jwt_claims,
-                "client_id": jwt_claims.get("client_id") or "",
-                "username": jwt_claims.get("cognito:username") or jwt_claims.get("username") or "",
-                "expires_at": jwt_claims.get("exp"),
-                "scopes": scopes,
-                "groups": normalize_groups_claim(
-                    jwt_claims.get("cognito:groups"), source="cognito jwt groups"
-                ),
-            }
+            # validate_jwt_token pinned ``iss`` to this pool's issuer, the same
+            # value CognitoProvider.owner_issuer names.
+            return with_owner_id(
+                {
+                    "valid": True,
+                    "method": "jwt",
+                    "data": jwt_claims,
+                    "client_id": jwt_claims.get("client_id") or "",
+                    "username": jwt_claims.get("cognito:username")
+                    or jwt_claims.get("username")
+                    or "",
+                    "expires_at": jwt_claims.get("exp"),
+                    "scopes": scopes,
+                    "groups": normalize_groups_claim(
+                        jwt_claims.get("cognito:groups"), source="cognito jwt groups"
+                    ),
+                },
+                make_owner_id(jwt_claims.get("iss"), jwt_claims.get("sub")),
+            )
 
         except ValueError as jwt_error:
             logger.debug(f"JWT validation failed: {jwt_error}, trying boto3")
@@ -3676,19 +3792,45 @@ def _get_a2a_agent_path(
     return "/" + "/".join(agent_segments)
 
 
-# Admin scope/group markers that grant A2A invoke regardless of scope-doc shape.
-# Backwards compatibility: scope docs seeded before the {agent, actions} schema
-# (#1434) use the legacy nested {"agents": {"actions": [...]}} shape, which has no
-# invoke_agent action at all, so an admin on such a doc would otherwise be denied
-# invoke. Admins are allowed via these markers so operators need not re-seed their
-# group definitions. Non-admins on the legacy shape must use the new
-# {agent, actions} rule (or re-seed). Keyed only on the admin markers -- never on a
-# broad server grant -- so an MCP server scope never gates agent invoke. The set
-# matches the registry's own admin determination (registry/auth/dependencies.py
-# _user_is_admin): both the "mcp-registry-admin" scope and the "registry-admins"
-# bootstrap group/scope count as admin. Sourced from the shared single source of
-# truth so this cannot drift from the other layers that gate on admin groups.
+# A2A admin bypass. Backwards compatibility: scope docs seeded before the
+# {agent, actions} schema (#1434) use the legacy nested {"agents": {"actions":
+# [...]}} shape, which has no invoke_agent action at all, so an admin on such a
+# doc would otherwise be denied invoke. Admins are allowed so operators need not
+# re-seed their group definitions; non-admins on the legacy shape must use the new
+# {agent, actions} rule (or re-seed). "Admin" is the registry's DERIVED decision
+# (registry/auth/dependencies.py _user_is_admin, via the shared
+# grant_confers_admin rule), never a group or scope name: a caller whose admin
+# grant was demoted keeps the marker name but must lose the bypass.
 from registry.auth.privileged_constants import ADMIN_GROUP_MARKERS as _A2A_ADMIN_MARKERS
+from registry.auth.privileged_constants import grant_confers_admin
+
+
+async def _scopes_derive_admin(
+    scope_repo: Any,
+    user_scopes: list[str],
+) -> bool:
+    """Return True when the caller's scopes derive registry admin.
+
+    Same rule as the registry's ``_user_is_admin`` over the merged UI
+    permissions: some scope grants an admin-conferring action on the list
+    element ``"all"`` (``grant_confers_admin``). Holding a scope or group merely
+    NAMED like an admin marker confers nothing. Any lookup failure or malformed
+    document is a denial (fail closed).
+    """
+    try:
+        ui_scopes = await scope_repo.get_ui_scopes_bulk(user_scopes)
+    except Exception as exc:
+        logger.warning(f"A2A access: failed to resolve UI scopes for admin check: {exc}")
+        return False
+    if not isinstance(ui_scopes, dict):
+        return False
+    for scope in user_scopes:
+        ui_permissions = ui_scopes.get(scope)
+        if not isinstance(ui_permissions, dict):
+            continue
+        if any(grant_confers_admin(a, r) for a, r in ui_permissions.items()):
+            return True
+    return False
 
 
 async def validate_a2a_agent_access(
@@ -3707,25 +3849,24 @@ async def validate_a2a_agent_access(
     whose ``agent`` matches (exact path, or ``*``/``all`` wildcard) and whose
     ``actions`` include ``invoke_agent`` (or the ``all``/``*`` wildcard).
 
-    Backwards compatibility: an admin (see ``_A2A_ADMIN_MARKERS``) is always
-    allowed, so a deployment whose admin scope doc still uses the legacy nested
+    Backwards compatibility: a caller whose scopes derive registry admin (the
+    registry's own rule, see ``_scopes_derive_admin``) is always allowed, so a
+    deployment whose admin scope doc still uses the legacy nested
     ``{"agents": {...}}`` shape (which predates ``invoke_agent``) keeps working
-    without re-seeding.
+    without re-seeding. Group or scope NAMES never confer admin here: a caller
+    whose admin grant was demoted must not keep invoke through the name alone.
 
     Args:
         agent_path: Agent path with leading slash (e.g. "/travel").
         user_scopes: Scope names resolved for the caller (from group mappings).
-        user_groups: IdP group names for the caller, used only for the admin
-            marker check (some deployments carry the admin marker as a group).
+        user_groups: IdP group names for the caller. Not an admin signal (admin
+            is derived from the scopes those groups map to); accepted so the
+            /validate call site passes the full caller identity.
 
     Returns:
-        True if any scope grants ``invoke_agent`` on this agent, else False.
+        True if any scope grants ``invoke_agent`` on this agent, or the scopes
+        derive admin, else False.
     """
-    # Admin bypass (legacy-schema backwards compatibility -- see _A2A_ADMIN_MARKERS).
-    markers = set(user_scopes or []) | set(user_groups or [])
-    if markers & _A2A_ADMIN_MARKERS:
-        logger.info(f"A2A invoke allowed for admin caller to agent {agent_path}")
-        return True
 
     if not user_scopes:
         return False
@@ -3758,6 +3899,13 @@ async def validate_a2a_agent_access(
                 continue
             if "invoke_agent" in actions or "all" in actions or "*" in actions:
                 return True
+
+    # Admin bypass (legacy-schema backwards compatibility; see the comment above
+    # _scopes_derive_admin). Checked after the rules so the common non-admin
+    # path costs a single round-trip.
+    if await _scopes_derive_admin(scope_repo, user_scopes):
+        logger.info(f"A2A invoke allowed for admin caller to agent {agent_path}")
+        return True
     return False
 
 
@@ -4462,6 +4610,13 @@ async def validate_request(request: Request):
                         logger.info("Token validated as self-signed (iss=mcp-auth-server)")
                 except Exception as e:
                     logger.debug(f"Self-signed check failed, continuing to provider: {e}")
+
+                # A session-backed self-signed token tracks the user's CURRENT
+                # groups: re-resolve its login session (ValueError -> 401 when the
+                # session is gone). Outside the try above so a failure here can
+                # never fall through to provider validation.
+                if validation_result and validation_result.get("method") == AUTH_METHOD_SELF_SIGNED:
+                    await _rebind_self_signed_to_session(validation_result)
 
                 if not validation_result:
                     auth_provider = get_auth_provider()
@@ -5306,6 +5461,7 @@ async def validate_request(request: Request):
             # as `rid` so that hop's token_mint record can be joined to the
             # mcp_server_access record this request writes above.
             audit_identity=_audit_identity_token_claim(validation_result, request_id),
+            owner_id=validation_result.get("owner_id") or "",
         )
 
         # Generic-proxy hop token (proxied non-MCP entities). Keyed on the
@@ -5324,6 +5480,7 @@ async def validate_request(request: Request):
             http_method=original_method,
             streaming=generic_streaming,
             has_upstream_auth=generic_has_upstream_auth,
+            owner_id=validation_result.get("owner_id") or "",
         )
 
         # Registry /api/ hop token. Discriminate cookie vs JWT-bearer: the cookie
@@ -5346,6 +5503,8 @@ async def validate_request(request: Request):
             auth_method=_canon_auth_method,
             client_id=validation_result.get("client_id") or "",
             egress_user=_egress_user,
+            token_scopes=_self_signed_token_scopes(validation_result),
+            owner_id=validation_result.get("owner_id") or "",
         )
 
         return _enforce_validate_header_budget(
@@ -5755,6 +5914,37 @@ async def _reconcile_context_against_session(
     )
 
 
+async def _mint_owner_id(
+    user_context: dict[str, Any],
+) -> str | None:
+    """Return the owner_id a self-signed user token is minted with.
+
+    Mirrors ``_reconcile_context_against_session``'s trust boundary: a
+    session-backed mint takes the owner_id the login stored in the session and
+    ignores the body; a caller with no session (it holds the internal signing
+    key) may assert its own ``owner_id`` in the body, as it may ``egress_user``.
+    A session that no longer resolves, or a missing or non-string value, yields
+    ``None`` (fail closed: the token owns nothing).
+
+    Args:
+        user_context: The mint request's user context.
+
+    Returns:
+        The non-empty owner_id, or ``None``.
+    """
+    session_id = user_context.get("session_id")
+    if session_id:
+        from session_store import resolve_session
+
+        session_data = await resolve_session(session_id) or {}
+        owner_id = session_data.get("owner_id")
+    else:
+        owner_id = user_context.get("owner_id")
+    if isinstance(owner_id, str) and owner_id:
+        return owner_id
+    return None
+
+
 @internal_router.post("/tokens", response_model=GenerateTokenResponse)
 async def generate_user_token(
     body: GenerateTokenRequest,
@@ -5954,6 +6144,22 @@ async def generate_user_token(
             # token rather than key the vault on its username ``sub``.
             if egress_user:
                 jwt_claims["egress_user"] = egress_user
+
+            # Ownership identity of the user this token is minted for, so the
+            # bearer path keys ownership on the same value as the session.
+            # Omitted when the user has none (the token then owns nothing).
+            mint_owner_id = await _mint_owner_id(user_context)
+            if mint_owner_id:
+                jwt_claims["owner_id"] = mint_owner_id
+
+            # Session-backed mint: bind the token to the login session so every
+            # use re-resolves the user's CURRENT groups (and is refused once the
+            # session is gone) instead of trusting the groups frozen above. See
+            # _rebind_self_signed_to_session. _reconcile_context_against_session
+            # already proved this session resolves.
+            mint_session_id = user_context.get("session_id")
+            if isinstance(mint_session_id, str) and mint_session_id:
+                jwt_claims[SELF_SIGNED_SESSION_CLAIM] = mint_session_id
 
             # For resource-bound tokens, add resource_type and resource_id
             # claims. Authorization that the user can reach this resource is
@@ -6674,6 +6880,46 @@ def _pkce_code_challenge(code_verifier: str) -> str:
     return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 
 
+# OAuth2 login providers that are not OIDC issuers: their owner_ids are
+# namespaced by this fixed alias, and the subject is the provider's stable
+# account id (``subject_claim`` in oauth2_providers.yml: GitHub ``id``, Google
+# ``id``, which is its OIDC ``sub``). An OIDC issuer is a URL, so an alias can
+# never equal one.
+_OAUTH_ONLY_OWNER_ISSUERS: dict[str, str] = {
+    "github": "github",
+    "google": "google",
+}
+
+
+def _login_owner_id(
+    provider: str,
+    subject: object,
+) -> str | None:
+    """Derive the owner_id a login session is created with.
+
+    The issuer is the login provider's canonical issuer
+    (``AuthProvider.owner_issuer``, the same value its bearer path uses) or the
+    fixed alias of a non-OIDC OAuth provider. Fails closed: a provider with no
+    resolvable issuer, or a login with no subject, yields ``None`` and the
+    session owns nothing.
+
+    Args:
+        provider: The login provider key.
+        subject: The IdP's immutable account id from the verified login claims.
+
+    Returns:
+        The owner_id, or ``None``.
+    """
+    issuer = _OAUTH_ONLY_OWNER_ISSUERS.get(provider)
+    if issuer is None:
+        try:
+            issuer = get_auth_provider(provider).owner_issuer
+        except Exception as e:
+            logger.warning("No owner issuer for login provider %s (%s)", provider, type(e).__name__)
+            return None
+    return make_owner_id(issuer, subject)
+
+
 def _verify_id_token_or_deny(
     provider: str,
     id_token: str,
@@ -6836,6 +7082,9 @@ async def oauth2_callback(
                             "subject": token_validation.get("sub")
                             or token_validation.get("username"),
                             "groups": token_validation.get("groups", []),
+                            # The owner_id keys on the verified token's sub, never
+                            # on the username fallback "subject" may take above.
+                            "owner_subject": (token_validation.get("data") or {}).get("sub"),
                         }
                         logger.info(
                             "User extracted from Cognito JWT token: %s",
@@ -7236,6 +7485,20 @@ async def oauth2_callback(
                 "for the provider)",
                 provider,
             )
+        # Ownership identity: the provider's issuer plus the IdP's immutable
+        # account id. Every branch above maps that id to "subject" except the
+        # Cognito token path, which names it separately.
+        owner_id = _login_owner_id(
+            provider,
+            mapped_user["owner_subject"]
+            if "owner_subject" in mapped_user
+            else mapped_user.get("subject"),
+        )
+        if not owner_id:
+            logger.warning(
+                "OAuth2 login via %s yielded no owner_id; this session owns no records",
+                provider,
+            )
         # id_token is encrypted at rest server-side and required for OIDC SSO
         # logout (id_token_hint).
         from session_store import create_session
@@ -7251,6 +7514,7 @@ async def oauth2_callback(
             id_token=token_data.get("id_token"),
             subject=mapped_user.get("subject"),
             entra_graph_groups_resolved=entra_graph_groups_resolved,
+            owner_id=owner_id,
         )
         registry_session = signer.dumps(session_id)
 
@@ -7756,12 +8020,14 @@ _PROXY_CONTEXT_HEADERS: frozenset[str] = frozenset(
 # generated location block); the -Generic / -Registry variants belong to other
 # locations and can only arrive here client-supplied, which is exactly why they
 # are stripped too rather than forwarded as attacker-chosen values.
-_INTERNAL_HOP_TOKEN_HEADERS: frozenset[str] = frozenset(
-    {
-        "x-internal-token",
-        "x-internal-token-generic",
-        "x-internal-token-registry",
-    }
+# The whole X-Internal-Token* name family is reserved, not just the names minted
+# today, so a future variant (or a client-chosen look-alike) is never forwarded.
+# X-Body* is the capture_body.lua family set for the /validate hop: its value is
+# the raw request body, which is not a legal header value and must never reach
+# the upstream either. Matching is on the case-folded name prefix.
+_INTERNAL_HEADER_PREFIXES: tuple[str, ...] = (
+    "x-internal-token",
+    "x-body",
 )
 
 
@@ -7781,13 +8047,13 @@ def _forward_headers(
     X-Authorization, not Authorization). Every other server gets no client auth
     header on egress; upstream creds come from the vault.
 
-    The gateway-internal hop tokens (_INTERNAL_HOP_TOKEN_HEADERS) are stripped
-    for EVERY upstream, including plain registered MCP servers that never touch
-    the egress-vault branches: X-Internal-Token is a SECRET_KEY-signed
-    credential carrying the caller's audit identity, and a registrant-controlled
-    backend must not receive it. ``relay_authorization`` does NOT re-admit them
-    -- even the built-in internal server has no use for a token minted for a
-    different hop.
+    The gateway-internal header families (_INTERNAL_HEADER_PREFIXES: every
+    X-Internal-Token* and X-Body* name) are stripped for EVERY upstream,
+    including plain registered MCP servers that never touch the egress-vault
+    branches: X-Internal-Token is a SECRET_KEY-signed credential carrying the
+    caller's audit identity, and a registrant-controlled backend must not
+    receive it. ``relay_authorization`` does NOT re-admit them; even the
+    built-in internal server has no use for a token minted for a different hop.
     """
     forwarded: dict[str, str] = {}
     for key, value in incoming.items():
@@ -7799,15 +8065,10 @@ def _forward_headers(
             continue
         if lower in _PROXY_CONTEXT_HEADERS:
             continue
-        if lower in _INTERNAL_HOP_TOKEN_HEADERS:
-            # Gateway-internal, single-hop credentials; see the set's comment.
-            # Read the MCP hop's token off `request.headers`, never off this dict.
-            continue
-        if lower in ("x-body", "x-body-uninspectable"):
-            # Gateway-internal body-capture headers set by capture_body.lua for
-            # the /validate hop. Their value is the raw request body, which is
-            # not a legal HTTP header value (braces/spaces) and must never be
-            # forwarded to the upstream.
+        if lower.startswith(_INTERNAL_HEADER_PREFIXES):
+            # Gateway-internal hop credentials and body-capture headers; see the
+            # prefix tuple's comment. Read the MCP hop's token off
+            # `request.headers`, never off this dict.
             continue
         if lower == "cookie":
             # Ingress-only credential; never forwarded to any upstream.
@@ -7929,7 +8190,7 @@ def _assert_generic_authorization_not_gateway_cred(
 # X-Scopes family is gateway-internal identity/routing. Applied on the
 # oauth_user / PAT egress paths only (other servers keep existing behavior) --
 # with the exception of x-internal-token, which _forward_headers now strips for
-# EVERY upstream (_INTERNAL_HOP_TOKEN_HEADERS); it is kept here so this set
+# EVERY upstream (_INTERNAL_HEADER_PREFIXES); it is kept here so this set
 # remains a self-contained, independently verifiable invariant.
 _EGRESS_STRIP_HEADERS: frozenset[str] = frozenset(
     {

@@ -330,7 +330,12 @@ resource "aws_iam_role_policy" "codebuild" {
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
-        Resource = "*"
+        # The project sets no logs_config, so CodeBuild writes to its default
+        # group /aws/codebuild/<project name>.
+        Resource = [
+          "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/codebuild/${aws_codebuild_project.upstream[0].name}",
+          "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/codebuild/${aws_codebuild_project.upstream[0].name}:*"
+        ]
       },
       {
         Effect = "Allow"

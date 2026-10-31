@@ -2,6 +2,7 @@
 
 import json
 import logging
+from typing import Any
 
 from dependencies import get_db_manager
 from strands import tool
@@ -155,3 +156,30 @@ FLIGHT_BOOKING_TOOLS = [
     process_payment,
     manage_reservation,
 ]
+
+# Tools that never change state. Every other tool, and any tool not listed in
+# FLIGHT_BOOKING_TOOLS, is treated as mutating by the execution-boundary guard.
+_READ_ONLY_TOOLS: frozenset[str] = frozenset({"check_availability"})
+
+
+def is_read_only_tool_call(
+    tool_name: str,
+    tool_input: dict[str, Any],
+) -> bool:
+    """Classify a model-emitted tool call as read-only (True) or mutating (False).
+
+    ``manage_reservation`` is read-only only for ``action == "view"``; its cancel
+    action (and any unknown action) is mutating.
+
+    Args:
+        tool_name: Name of the tool the model called.
+        tool_input: Arguments the model supplied.
+
+    Returns:
+        True only when the call provably cannot change state.
+    """
+    if tool_name in _READ_ONLY_TOOLS:
+        return True
+    if tool_name == "manage_reservation":
+        return tool_input.get("action") == "view"
+    return False

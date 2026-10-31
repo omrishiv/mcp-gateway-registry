@@ -35,7 +35,33 @@ _RFC7230_TOKEN_RE = re.compile(r"[A-Za-z0-9!#$%&'*+\-.^_`|~]+")
 # ServerInfo with the bare segment). This is the systemic guard behind the
 # per-site nginx sanitization in NginxConfigService (defense-in-depth: reject the
 # dangerous character class at the model, escape at every render site).
-_SERVER_PATH_RE = re.compile(r"^[A-Za-z0-9._\-/]+$")
+# A segment that is exactly `.` or `..` is also rejected (the lookahead): nginx
+# and the auth layer normalize dot segments, so `/peer/../github` would be stored
+# under one path and routed and authorized under another. Use with fullmatch.
+_SERVER_PATH_RE = re.compile(r"(?!(?:.*/)?\.\.?(?:/|\Z))[A-Za-z0-9._\-/]+\Z")
+
+# A server version label (``ServerInfo.version``) is interpolated into the nginx
+# version-selection ``if`` directives and into the version document id
+# (``/<path>:<label>``). Restrict it to a version-shaped token: alphanumerics
+# first, then alphanumerics and ``. _ + -`` (semver pre-release and build
+# metadata, PEP 440 forms such as ``0.1.0rc3``), at most 64 characters. Rejects
+# whitespace, quotes, braces, ``$``, ``:``, ``/`` and template ``{{...}}``
+# markers. Use with fullmatch.
+_VERSION_LABEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+\-]{0,63}")
+
+
+def is_valid_version_label(
+    label: object,
+) -> bool:
+    """Return True if ``label`` is a safe server version label.
+
+    Args:
+        label: Candidate version label.
+
+    Returns:
+        True when ``label`` is a string matching ``_VERSION_LABEL_RE`` in full.
+    """
+    return isinstance(label, str) and _VERSION_LABEL_RE.fullmatch(label) is not None
 
 
 # obo_exchange target-audience GUID handling. A GUID could be an internal server's
@@ -881,6 +907,14 @@ class ServerInfo(ProxyableMixin):
             "field. The general audit log captures who last touched the entry."
         ),
     )
+    owner_id: str | None = Field(
+        default=None,
+        description=(
+            "Immutable ownership identity of the registrant, derived from the "
+            "token's (issuer, subject). Ownership checks use this, not "
+            "registered_by. Server-managed; never client-supplied."
+        ),
+    )
 
     @field_validator("visibility")
     @classmethod
@@ -915,8 +949,9 @@ class ServerInfo(ProxyableMixin):
         """
         if not v or not _SERVER_PATH_RE.fullmatch(v):
             raise ValueError(
-                f"invalid server path {v!r}: must be non-empty and contain only "
-                "letters, digits, '.', '_', '-', and '/'"
+                f"invalid server path {v!r}: must be non-empty, contain only "
+                "letters, digits, '.', '_', '-', and '/', and have no '.' or '..' "
+                "segment"
             )
         return v
 

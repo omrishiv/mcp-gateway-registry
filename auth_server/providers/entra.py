@@ -32,7 +32,7 @@ except ImportError:
         obo_exchange,
     )
 
-from .base import AuthProvider, normalize_groups_claim
+from .base import AuthProvider, normalize_groups_claim, self_signed_owner_id, with_owner_id
 
 # Constants for self-signed token validation
 JWT_ISSUER = os.environ.get("JWT_ISSUER", "mcp-auth-server")
@@ -666,16 +666,19 @@ class EntraIdProvider(AuthProvider):
             groups = normalize_groups_claim(raw_groups, source="entra groups")
 
             scopes = _delegated_scopes(claims)
-            return {
-                "valid": True,
-                "username": claims.get("preferred_username", claims.get("sub")),
-                "email": claims.get("email"),
-                "groups": groups,
-                "scopes": scopes,
-                "client_id": claims.get("azp", self.client_id),
-                "method": "entra",
-                "data": claims,
-            }
+            return with_owner_id(
+                {
+                    "valid": True,
+                    "username": claims.get("preferred_username", claims.get("sub")),
+                    "email": claims.get("email"),
+                    "groups": groups,
+                    "scopes": scopes,
+                    "client_id": claims.get("azp", self.client_id),
+                    "method": "entra",
+                    "data": claims,
+                },
+                self.owner_id_from_claims(claims),
+            )
 
         except jwt.ExpiredSignatureError:
             logger.warning("Token validation failed: Token has expired")
@@ -686,6 +689,11 @@ class EntraIdProvider(AuthProvider):
         except Exception as e:
             logger.error(f"Entra ID token validation error: {e}")
             raise ValueError(f"Token validation failed: {e}")
+
+    @property
+    def owner_issuer(self) -> str:
+        """The tenant's v2.0 issuer, for both the v1.0 and v2.0 issuer spellings."""
+        return self.issuer_v2
 
     def validate_id_token(
         self,
@@ -766,18 +774,21 @@ class EntraIdProvider(AuthProvider):
                 f"groups: {groups}, scopes: {scopes}"
             )
 
-            return {
-                "valid": True,
-                "method": "self_signed",
-                "data": claims,
-                "client_id": claims.get("client_id", "user-generated"),
-                "username": claims.get("sub", ""),
-                "email": claims.get("email", ""),
-                "expires_at": claims.get("exp"),
-                "scopes": scopes,
-                "groups": groups,
-                "token_type": "user_generated",
-            }
+            return with_owner_id(
+                {
+                    "valid": True,
+                    "method": "self_signed",
+                    "data": claims,
+                    "client_id": claims.get("client_id", "user-generated"),
+                    "username": claims.get("sub", ""),
+                    "email": claims.get("email", ""),
+                    "expires_at": claims.get("exp"),
+                    "scopes": scopes,
+                    "groups": groups,
+                    "token_type": "user_generated",
+                },
+                self_signed_owner_id(claims),
+            )
 
         except jwt.ExpiredSignatureError:
             logger.warning("Self-signed token validation failed: Token has expired")

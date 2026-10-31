@@ -4,7 +4,7 @@ Covers:
 - filter_tools_for_user admin / wildcard / restricted / fail-closed paths.
 - tool_allowed_for_user boolean wrapper.
 - _tool_identity normalization across `name` and `tool_name` shapes.
-- _is_admin_or_cross_server_wildcard bypass rules.
+- cross-server ("*" key) and slash-variant allowlists are unioned.
 - audit emission on prune and graceful handling of sink failure.
 
 Mapped to testing.md sections 1.1.2, 1.1.4, 1.1.5, 1.1.18 and LLD Step 3.
@@ -18,7 +18,6 @@ from unittest.mock import patch
 import pytest
 
 from registry.auth.tool_filter import (
-    _is_admin_or_cross_server_wildcard,
     _tool_identity,
     filter_tools_for_user,
     tool_allowed_for_user,
@@ -89,44 +88,6 @@ def test_tool_identity_returns_none_for_non_dict():
 
 
 # =============================================================================
-# _is_admin_or_cross_server_wildcard
-# =============================================================================
-
-
-def test_bypass_admin_flag():
-    """is_admin=True bypasses filtering."""
-    assert _is_admin_or_cross_server_wildcard({"is_admin": True}) is True
-
-
-def test_bypass_star_in_accessible_servers():
-    """accessible_servers containing '*' bypasses filtering."""
-    ctx = {"is_admin": False, "accessible_servers": ["*"]}
-    assert _is_admin_or_cross_server_wildcard(ctx) is True
-
-
-def test_bypass_all_string_in_accessible_servers():
-    """accessible_servers containing 'all' bypasses filtering."""
-    ctx = {"is_admin": False, "accessible_servers": ["all"]}
-    assert _is_admin_or_cross_server_wildcard(ctx) is True
-
-
-def test_bypass_star_key_in_accessible_tools():
-    """accessible_tools['*'] == {'*'} bypasses filtering."""
-    ctx = {"is_admin": False, "accessible_servers": [], "accessible_tools": {"*": {"*"}}}
-    assert _is_admin_or_cross_server_wildcard(ctx) is True
-
-
-def test_no_bypass_for_restricted_user():
-    """A restricted user with concrete server list does not bypass."""
-    ctx = {
-        "is_admin": False,
-        "accessible_servers": ["current_time"],
-        "accessible_tools": {"current_time": {"current_time_by_timezone"}},
-    }
-    assert _is_admin_or_cross_server_wildcard(ctx) is False
-
-
-# =============================================================================
 # filter_tools_for_user - bypass paths
 # =============================================================================
 
@@ -143,31 +104,57 @@ def test_filter_admin_bypass(mock_audit, admin_user_context, sample_tools):
 
 
 @patch("registry.auth.tool_filter._emit_tool_filter_audit")
-def test_filter_cross_server_wildcard_star(mock_audit, sample_tools):
-    """accessible_servers=['*'] bypasses filtering."""
+def test_filter_cross_server_rule_applies_its_own_allowlist(mock_audit, sample_tools):
+    """A server '*' rule grants only its own tools on every server, as the gateway does."""
     # Arrange
-    ctx = {"is_admin": False, "accessible_servers": ["*"], "accessible_tools": {}}
+    ctx = {
+        "is_admin": False,
+        "accessible_servers": ["*"],
+        "accessible_tools": {"*": {"current_time_utc"}},
+    }
 
     # Act
     result = filter_tools_for_user("current_time", sample_tools, ctx)
 
     # Assert
-    assert result == sample_tools
-    mock_audit.assert_not_called()
+    assert [t["name"] for t in result] == ["current_time_utc"]
 
 
 @patch("registry.auth.tool_filter._emit_tool_filter_audit")
-def test_filter_cross_server_wildcard_all_string(mock_audit, sample_tools):
-    """accessible_servers=['all'] bypasses filtering."""
+def test_filter_server_all_is_not_a_wildcard(mock_audit, sample_tools):
+    """A literal 'all' server grant matches no other server (the gateway ignores it)."""
     # Arrange
-    ctx = {"is_admin": False, "accessible_servers": ["all"], "accessible_tools": {}}
+    ctx = {
+        "is_admin": False,
+        "accessible_servers": ["all"],
+        "accessible_tools": {"all": {"*"}},
+    }
 
     # Act
     result = filter_tools_for_user("current_time", sample_tools, ctx)
 
     # Assert
-    assert result == sample_tools
-    mock_audit.assert_not_called()
+    assert result == []
+
+
+@patch("registry.auth.tool_filter._emit_tool_filter_audit")
+def test_filter_unions_slash_spelling_variants(mock_audit, sample_tools):
+    """Allowlists stored under different slash spellings of one server are unioned."""
+    # Arrange
+    ctx = {
+        "is_admin": False,
+        "accessible_servers": ["current_time", "/current_time/"],
+        "accessible_tools": {
+            "current_time": {"current_time_utc"},
+            "/current_time/": {"current_time_epoch"},
+        },
+    }
+
+    # Act
+    result = filter_tools_for_user("current_time", sample_tools, ctx, server_path="/current_time/")
+
+    # Assert
+    assert [t["name"] for t in result] == ["current_time_utc", "current_time_epoch"]
 
 
 @patch("registry.auth.tool_filter._emit_tool_filter_audit")

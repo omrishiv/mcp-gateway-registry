@@ -22,6 +22,7 @@ from ..schemas.federation_schema import (
     FederationConfig,
 )
 from ..schemas.proxy_mixin import strip_proxy_fields
+from ..services import admin_safety
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,6 +30,10 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+
+# Federation static token scope accepted besides is_admin.
+_FEDERATION_SCOPES: frozenset[str] = frozenset({"federation/peers"})
 
 
 def _check_federation_management_scope(
@@ -39,8 +44,10 @@ def _check_federation_management_scope(
     Federation config controls which external sources / peer registries this
     registry pulls from and syncs with, so it is a privileged operation.
     Mirrors _check_peer_management_scope in peer_management_routes.py. Allows:
-    - Admin users (is_admin or mcp-registry-admin group)
+    - Admin users (the canonical request-time is_admin decision)
     - Federation-static-token users (federation/peers scope)
+
+    Group names such as mcp-registry-admin are not an admin signal.
 
     Args:
         user_context: User context from the auth dependency.
@@ -48,16 +55,11 @@ def _check_federation_management_scope(
     Raises:
         HTTPException: 403 if the caller lacks federation management permission.
     """
-    if user_context and user_context.get("is_admin", False):
+    if admin_safety.caller_is_admin(user_context, _FEDERATION_SCOPES):
         return
 
     scopes = (user_context or {}).get("scopes", [])
-    if "federation/peers" in scopes:
-        return
-
     groups = (user_context or {}).get("groups", [])
-    if "mcp-registry-admin" in groups:
-        return
 
     logger.warning(
         f"User {(user_context or {}).get('username')} attempted federation "

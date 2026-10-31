@@ -145,6 +145,20 @@ def _byline_link(
     return f'<a href="{html.escape(url, quote=True)}">{html.escape(label)}</a>'
 
 
+def _drop_emphasis(
+    text: str,
+) -> str:
+    """Remove unescaped ``*`` and ``_`` emphasis markers from display text.
+
+    Emphasis markers are dropped rather than converted: the byline is already
+    styled by the template, and leaving them unescaped is a needless sink. Only
+    display text passes through here, never a link target or inline code: the
+    href scheme check runs on the target as written, so removing characters from
+    it afterwards could turn ``java_script:`` into a live ``javascript:`` href.
+    """
+    return re.sub(r"(?<!\\)[*_]", "", text)
+
+
 def _inline_markdown_to_html(
     text: str,
 ) -> str:
@@ -168,21 +182,19 @@ def _inline_markdown_to_html(
     out: list[str] = []
     position = 0
     for match in pattern.finditer(text):
-        out.append(html.escape(text[position : match.start()]))
+        out.append(_drop_emphasis(html.escape(text[position : match.start()])))
         if match.group("label") is not None:
-            out.append(_byline_link(match.group("label"), match.group("url")))
+            label = _drop_emphasis(match.group("label"))
+            out.append(_byline_link(label, match.group("url")))
         elif match.group("bare") is not None:
             out.append(_byline_link(match.group("bare"), match.group("bare")))
         else:
             out.append(f"<code>{html.escape(match.group('code'))}</code>")
         position = match.end()
-    out.append(html.escape(text[position:]))
-    # Emphasis markers are dropped rather than converted: the byline is already
-    # styled by the template, and leaving them unescaped is a needless sink.
-    rendered = re.sub(r"(?<!\\)[*_]", "", "".join(out))
+    out.append(_drop_emphasis(html.escape(text[position:])))
     # Each metadata line arrives newline-separated; join them only now, after
     # escaping, so the separator entity reaches the page intact.
-    return rendered.replace("\n", " &middot; ")
+    return "".join(out).replace("\n", " &middot; ")
 
 
 def _is_italic_line(

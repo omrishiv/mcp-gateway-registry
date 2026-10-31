@@ -26,6 +26,7 @@ from registry.schemas.idp_m2m_client import (
     IdPM2MClientPatch,
     M2MClientListResponse,
 )
+from registry.services import admin_safety
 from registry.services.m2m_management_service import (
     M2MClientConflict,
     M2MClientImmutable,
@@ -54,9 +55,18 @@ def _require_admin(
     if not user_context:
         m2m_management_requests_total.labels(operation=operation, outcome="auth_error").inc()
         raise HTTPException(status_code=401, detail="Not authenticated")
-    if not user_context.get("is_admin"):
+    if not admin_safety.caller_is_admin(user_context):
         m2m_management_requests_total.labels(operation=operation, outcome="forbidden").inc()
         raise HTTPException(status_code=403, detail="Administrator permissions are required")
+
+
+def _refuse(
+    exc: admin_safety.AdminSafetyError,
+    operation: str,
+) -> HTTPException:
+    """Translate an admin-safety refusal into an HTTPException and count it."""
+    m2m_management_requests_total.labels(operation=operation, outcome="forbidden").inc()
+    return HTTPException(status_code=exc.status_code, detail=exc.detail)
 
 
 async def _get_service() -> M2MManagementService:
@@ -151,6 +161,15 @@ async def patch_m2m_client(
 ) -> IdPM2MClient:
     """Update fields of an existing manual M2M client (admin only)."""
     _require_admin(user_context, operation="patch")
+    # Last-admin guard: disabling the client or replacing its groups can strip
+    # admin from the last administrator.
+    try:
+        if payload.enabled is False:
+            await admin_safety.assert_not_last_admin(client_id)
+        if "groups" in payload.model_fields_set:
+            await admin_safety.would_remove_last_admin_via_groups(client_id, payload.groups or [])
+    except admin_safety.AdminSafetyError as exc:
+        raise _refuse(exc, "patch") from exc
     service = await _get_service()
     try:
         result = await service.patch(client_id, payload)
@@ -190,6 +209,23 @@ async def delete_m2m_client(
     """Delete a manual M2M client (admin only)."""
     _require_admin(user_context, operation="delete")
     service = await _get_service()
+    # Self-delete guard: a client may not delete itself, addressed by either
+    # its client_id or its display name.
+    try:
+        target_name = (await service.get(client_id)).name
+    except M2MClientNotFound:
+        target_name = None
+    if admin_safety.is_self_principal(user_context, client_id, target_name):
+        m2m_management_requests_total.labels(operation="delete", outcome="forbidden").inc()
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You cannot delete your own account.",
+        )
+    # Last-admin guard.
+    try:
+        await admin_safety.assert_not_last_admin(client_id)
+    except admin_safety.AdminSafetyError as exc:
+        raise _refuse(exc, "delete") from exc
     try:
         await service.delete(client_id)
     except M2MClientNotFound:

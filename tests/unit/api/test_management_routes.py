@@ -20,6 +20,20 @@ from registry.utils.iam_errors import IdPNotFoundError
 logger = logging.getLogger(__name__)
 
 
+@pytest.fixture(autouse=True)
+def _neutralize_scope_change_admin_guard():
+    """Make the scope-group last-admin guard a no-op for these route tests.
+
+    The guard itself is exercised end to end by
+    tests/unit/services/test_admin_lifecycle_state_machine.py.
+    """
+    with patch(
+        "registry.api.management_routes.admin_safety.assert_scope_change_keeps_an_admin",
+        new=AsyncMock(return_value=None),
+    ):
+        yield
+
+
 # =============================================================================
 # AUTH MOCK FIXTURES
 # =============================================================================

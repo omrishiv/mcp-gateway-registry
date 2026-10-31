@@ -38,6 +38,7 @@ def _ctx(username: str, is_admin: bool = False) -> dict[str, Any]:
     """A user context that passes _check_server_permission('modify', ...)."""
     return {
         "username": username,
+        "owner_id": f"idp|{username}",
         "is_admin": is_admin,
         "groups": ["mcp-registry-admin"] if is_admin else ["test-group"],
         "scopes": ["mcp-servers-unrestricted/execute"],

@@ -199,6 +199,16 @@ The scanner analyzes each tool provided by the MCP server and generates a detail
 }
 ```
 
+### How the Verdict Is Decided
+
+The MCP server, agent and skill scanners all fail closed. A scan is reported safe only when all of these hold:
+
+- The scanner output has the expected shape: a list of tool results for MCP servers, a JSON object (or a list of findings) for agents, a JSON object for skills.
+- Every finding has a severity of `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, `INFO` or `SAFE` (compared case-insensitively), and none is `CRITICAL` or `HIGH`.
+- No tool result, result object or finding reports `is_safe: false`, and a result object's `high_severity_count`, when present, is 0.
+
+A finding with a missing, misspelled or non-string severity (for example `UNKNOWN`, which some YARA rules produce) makes the scan unsafe. Output that cannot be parsed is recorded as a failed scan, and so is agent or skill output whose findings are not a list of objects.
+
 ### What Happens When a Scan Fails
 
 If the security scan detects critical or high severity vulnerabilities:

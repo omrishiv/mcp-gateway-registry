@@ -22,11 +22,16 @@ from registry.constants import (
     DeploymentType,
     HealthStatus,
 )
+from registry.core.schemas import is_valid_version_label
 from registry.egress_auth.upstream_binding import registered_versions, selected_upstream
 from registry.exceptions import UrlValidationError
 from registry.schemas.proxy_mixin import _assert_egress_allowed, build_proxy_client_path
 from registry.utils.path_utils import make_version_id
-from registry.utils.url_guard import validate_proxy_pass_url, validate_server_path
+from registry.utils.url_guard import (
+    contains_nginx_metacharacters,
+    validate_proxy_pass_url,
+    validate_server_path,
+)
 
 from .config import settings
 from .metrics import (
@@ -75,6 +80,47 @@ def _virtual_config_generation(
     return hashlib.sha256(virtual_blocks.encode()).hexdigest()[:16]
 
 
+def _root_path() -> str:
+    """Return the ROOT_PATH prefix generated location blocks are rendered under.
+
+    Generated blocks carry the resolved prefix, never a ``{{ROOT_PATH}}``
+    placeholder: they embed registry values (version labels, names), and a
+    placeholder expanded after the blocks are inserted would also expand one a
+    registrant wrote into such a value.
+
+    Returns:
+        ``ROOT_PATH`` without a trailing slash (empty when unset).
+    """
+    return os.environ.get("ROOT_PATH", "").rstrip("/")
+
+
+_TEMPLATE_PLACEHOLDER_RE: re.Pattern[str] = re.compile(r"\{\{([A-Z_]+)\}\}")
+
+
+def _fill_template_placeholders(
+    template: str,
+    values: dict[str, str],
+) -> str:
+    """Substitute every ``{{NAME}}`` marker of ``template`` in a single pass.
+
+    A single ``re.sub`` scans only the template text: substituted values
+    (generated location blocks carrying registry data, or operator settings)
+    are never rescanned, so a ``{{PLACEHOLDER}}`` inside a registry value is
+    rendered literally instead of being expanded into live directives. A marker
+    with no value (e.g. the IdP section comments) is left unchanged.
+
+    Args:
+        template: nginx template text.
+        values: Replacement text per placeholder name (without braces).
+
+    Returns:
+        The rendered config text.
+    """
+    return _TEMPLATE_PLACEHOLDER_RE.sub(
+        lambda match: values.get(match.group(1), match.group(0)), template
+    )
+
+
 # Default mode applied to a fresh nginx config file when no destination
 # exists yet. Subsequent writes preserve whatever mode the destination
 # currently has so an operator's chmod isn't silently reverted.
@@ -115,7 +161,7 @@ TEMPLATE_EXACT_LOCATIONS: frozenset[str] = frozenset(
 # Agent path and backend url come from registry data and are interpolated into
 # nginx directive positions, so they must be validated to prevent config
 # injection (e.g. "}", ";", newlines breaking out of the location block).
-_NGINX_AGENT_PATH_SAFE = re.compile(r"^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$")
+_NGINX_AGENT_PATH_SAFE = re.compile(r"^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*\Z")
 # The path segment also accepts percent-encoded octets (%XX), because a Bedrock
 # AgentCore runtime url embeds a percent-encoded ARN:
 #   https://bedrock-agentcore.{region}.amazonaws.com/runtimes/{encoded-ARN}/invocations
@@ -128,7 +174,7 @@ _NGINX_AGENT_PATH_SAFE = re.compile(r"^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$")
 # characters that would break out of the location block (`}`, `;`, whitespace,
 # newlines) remain excluded because they are not hex digits.
 _NGINX_AGENT_URL_SAFE = re.compile(
-    r"^https?://[A-Za-z0-9.\-]+(?::\d+)?(?:/(?:[A-Za-z0-9._~\-/]|%[0-9A-Fa-f]{2})*)?$"
+    r"^https?://[A-Za-z0-9.\-]+(?::\d+)?(?:/(?:[A-Za-z0-9._~\-/]|%[0-9A-Fa-f]{2})*)?\Z"
 )
 
 
@@ -163,6 +209,26 @@ _VS_BACKEND_FRAMING_HEADERS: frozenset[str] = frozenset(
 _VS_BACKEND_RESET_IDENTITY_HEADERS: frozenset[str] = frozenset({"x-user", "x-username"})
 _VS_BACKEND_STRIPPED_HEADERS: frozenset[str] = (
     RESERVED_CUSTOM_HEADER_NAMES - _VS_BACKEND_FRAMING_HEADERS - _VS_BACKEND_RESET_IDENTITY_HEADERS
+)
+
+# The ingress bearer headers an egress-brokered virtual backend still relays to
+# the auth-server mcp-proxy hop (obo_exchange exchanges the caller's JWT there).
+# The hop strips them before forwarding to the upstream; a plain backend's hop
+# location clears them with the rest of _VS_BACKEND_STRIPPED_HEADERS.
+_VS_EGRESS_HOP_INGRESS_HEADERS: frozenset[str] = frozenset({"authorization", "x-authorization"})
+
+# Credential headers an A2A agent location must not relay to the registrant
+# backend: the gateway-credential ingress headers and every signed internal
+# token header from RESERVED_CUSTOM_HEADER_NAMES (a caller can send any of
+# them, and nginx forwards client request headers by default). Authorization
+# is carved out: under the A2A trust model the caller presents the target
+# agent's own credential there, and /validate refuses an Authorization equal
+# to the gateway credential.
+_AGENT_BACKEND_STRIPPED_HEADERS: frozenset[str] = frozenset(
+    name
+    for name in RESERVED_CUSTOM_HEADER_NAMES
+    if name in {"x-authorization", "proxy-authorization", "cookie"}
+    or name.startswith("x-internal-token")
 )
 
 
@@ -511,20 +577,22 @@ def _render_real_ip_config() -> str:
     return "\n".join(lines)
 
 
-def _vs_backend_header_clears(
+def _proxy_header_clears(
+    headers: frozenset[str],
     indent: str = "        ",
 ) -> str:
-    """Return the nginx directives that clear every stripped header.
+    """Return the nginx directives that clear every header in ``headers``.
 
     Args:
+        headers: Lowercase header names to clear.
         indent: Leading whitespace for each directive inside the location block.
 
     Returns:
-        One ``proxy_set_header <Name> "";`` line per header in
-        ``_VS_BACKEND_STRIPPED_HEADERS``, sorted so the rendered config is stable.
+        One ``proxy_set_header <Name> "";`` line per header, sorted so the
+        rendered config is stable.
     """
     lines = []
-    for name in sorted(_VS_BACKEND_STRIPPED_HEADERS):
+    for name in sorted(headers):
         canonical = "-".join(part.capitalize() for part in name.split("-"))
         lines.append(f'{indent}proxy_set_header {canonical} "";')
     return "\n".join(lines)
@@ -1367,7 +1435,7 @@ class NginxConfigService:
                             safe_commented_path = self._sanitize_for_nginx_set(path)
                             safe_commented_url = self._sanitize_for_nginx_set(proxy_pass_url)
                             commented_block = f"""
-#    location {{{{ROOT_PATH}}}}{safe_commented_path}/ {{
+#    location {_root_path()}{safe_commented_path}/ {{
 #        # Service currently unhealthy (status: {health_status})
 #        # Proxy to MCP server
 #        proxy_pass {safe_commented_url};
@@ -1466,35 +1534,34 @@ class NginxConfigService:
                 f"{keycloak_scheme}://{keycloak_host}:{keycloak_port}"
             )
 
-            # Replace placeholders in template
-            config_content = template_content.replace(
-                "{{LOCATION_BLOCKS}}", "\n".join(location_blocks)
-            )
-            config_content = config_content.replace(
-                "{{ADDITIONAL_SERVER_NAMES}}", additional_server_names
-            )
-            config_content = config_content.replace("{{ANTHROPIC_API_VERSION}}", api_version)
+            # Template placeholder values. They are substituted in ONE pass over
+            # the template at the end (_fill_template_placeholders), so a
+            # {{PLACEHOLDER}} that a registry value carries into a generated block
+            # (version label, virtual server name, agent name) is never expanded.
+            placeholders: dict[str, str] = {
+                "LOCATION_BLOCKS": "\n".join(location_blocks),
+                "ADDITIONAL_SERVER_NAMES": additional_server_names,
+                "ANTHROPIC_API_VERSION": api_version,
+            }
             # Marker secret: force-set on every /validate subrequest so the auth
             # server mints internal tokens only for requests that came through
             # nginx. Read from the same Settings object that refuses to start
             # without it (and that the generated /_vs_auth_* blocks use), so a
             # value supplied only through .env cannot render as an empty marker,
             # which would make the auth server refuse every mint.
-            config_content = config_content.replace(
-                "{{NGINX_MARKER_SECRET}}",
-                self._sanitize_for_nginx_set(settings.auth_server_nginx_marker_secret),
+            placeholders["NGINX_MARKER_SECRET"] = self._sanitize_for_nginx_set(
+                settings.auth_server_nginx_marker_secret
             )
-            config_content = config_content.replace("{{KEYCLOAK_SCHEME}}", keycloak_scheme)
-            config_content = config_content.replace("{{KEYCLOAK_HOST}}", keycloak_host)
-            config_content = config_content.replace("{{KEYCLOAK_PORT}}", keycloak_port)
+            placeholders["KEYCLOAK_SCHEME"] = keycloak_scheme
+            placeholders["KEYCLOAK_HOST"] = keycloak_host
+            placeholders["KEYCLOAK_PORT"] = keycloak_port
             # Render the per-location TLS trust block for the Keycloak upstream.
             # Fail closed on https: proxy_ssl_verify stays ON so a MITM cannot
             # substitute JWKS or intercept the token exchange to a BYO-https
             # Keycloak. The in-cluster default (http://keycloak:8080) is plaintext,
             # so this emits a comment only for that case and never verify-off.
-            config_content = config_content.replace(
-                "{{KEYCLOAK_PROXY_SSL}}",
-                _render_keycloak_proxy_ssl(keycloak_scheme, keycloak_host),
+            placeholders["KEYCLOAK_PROXY_SSL"] = _render_keycloak_proxy_ssl(
+                keycloak_scheme, keycloak_host
             )
 
             # Parse PingFederate configuration, falling back to defaults on any error
@@ -1521,15 +1588,14 @@ class NginxConfigService:
                 pf_port = ""
             if not pf_port:
                 pf_port = "443" if pf_scheme == "https" else "9032"
-            config_content = config_content.replace("{{PINGFEDERATE_SCHEME}}", pf_scheme)
-            config_content = config_content.replace("{{PINGFEDERATE_HOST}}", pf_host)
-            config_content = config_content.replace("{{PINGFEDERATE_PORT}}", pf_port)
+            placeholders["PINGFEDERATE_SCHEME"] = pf_scheme
+            placeholders["PINGFEDERATE_HOST"] = pf_host
+            placeholders["PINGFEDERATE_PORT"] = pf_port
             # Render the per-location TLS trust block. Fail closed on https:
             # proxy_ssl_verify stays ON so a MITM cannot substitute JWKS or
             # intercept the token exchange to the PingFederate IdP.
-            config_content = config_content.replace(
-                "{{PINGFEDERATE_PROXY_SSL}}",
-                _render_pingfederate_proxy_ssl(pf_scheme, pf_host),
+            placeholders["PINGFEDERATE_PROXY_SSL"] = _render_pingfederate_proxy_ssl(
+                pf_scheme, pf_host
             )
 
             # Parse AUTH_SERVER_URL so nginx templates can reference the
@@ -1556,13 +1622,13 @@ class NginxConfigService:
                 )
                 auth_host = "auth-server"
                 auth_port = "8888"
-            config_content = config_content.replace("{{AUTH_SERVER_HOST}}", auth_host)
-            config_content = config_content.replace("{{AUTH_SERVER_PORT}}", auth_port)
+            placeholders["AUTH_SERVER_HOST"] = auth_host
+            placeholders["AUTH_SERVER_PORT"] = auth_port
 
             # Real client-IP recovery (TRUSTED_REAL_IP_CIDRS). Empty by default so
             # edge deployments emit nothing; when trusted proxy CIDRs are set, the
             # audited client IP becomes the end user instead of the load balancer.
-            config_content = config_content.replace("{{REAL_IP_CONFIG}}", _render_real_ip_config())
+            placeholders["REAL_IP_CONFIG"] = _render_real_ip_config()
 
             # Registry-only mode used to emit an nginx catch-all here that
             # returned 503 for every path outside a hardcoded allowlist. That
@@ -1572,7 +1638,7 @@ class NginxConfigService:
             # now comes from the app's SPA catch-all, which can check the path
             # against the registered servers. The placeholder is still replaced
             # so a template carrying it does not emit a literal into the config.
-            config_content = config_content.replace("{{REGISTRY_ONLY_BLOCK}}", "")
+            placeholders["REGISTRY_ONLY_BLOCK"] = ""
 
             # Generate virtual server blocks
             try:
@@ -1621,7 +1687,7 @@ class NginxConfigService:
                         virtual_blocks + "\n" + generic_text if virtual_blocks else generic_text
                     )
 
-                config_content = config_content.replace("{{VIRTUAL_SERVER_BLOCKS}}", virtual_blocks)
+                placeholders["VIRTUAL_SERVER_BLOCKS"] = virtual_blocks
 
                 logger.info(
                     f"Generated virtual server config with {len(virtual_servers)} virtual "
@@ -1629,7 +1695,7 @@ class NginxConfigService:
                 )
             except Exception as e:
                 logger.error(f"Failed to generate virtual server config: {e}", exc_info=True)
-                config_content = config_content.replace("{{VIRTUAL_SERVER_BLOCKS}}", "")
+                placeholders["VIRTUAL_SERVER_BLOCKS"] = ""
 
             # Generate A2A agent reverse-proxy blocks. Opt-in via
             # A2A_REVERSE_PROXY_ENABLED, and only effective in with-gateway mode
@@ -1640,10 +1706,8 @@ class NginxConfigService:
                 agent_blocks = await self._generate_agent_location_blocks()
             else:
                 agent_blocks = ""
-            config_content = config_content.replace("{{AGENT_LOCATION_BLOCKS}}", agent_blocks)
-
-            root_path = os.environ.get("ROOT_PATH", "").rstrip("/")
-            config_content = config_content.replace("{{ROOT_PATH}}", root_path)
+            placeholders["AGENT_LOCATION_BLOCKS"] = agent_blocks
+            placeholders["ROOT_PATH"] = _root_path()
 
             # MCP 2025-06-18 / RFC 9728 §5.1: WWW-Authenticate on auth-failure 401s
             # must point at the gateway's PRM endpoint. The URL must match the
@@ -1665,11 +1729,9 @@ class NginxConfigService:
                     "Substituting empty value; clients will not see WWW-Authenticate."
                 )
                 resource_metadata_url = ""
-            config_content = config_content.replace(
-                "{{MCP_RESOURCE_METADATA_URL}}", resource_metadata_url
-            )
+            placeholders["MCP_RESOURCE_METADATA_URL"] = resource_metadata_url
 
-            return config_content
+            return _fill_template_placeholders(template_content, placeholders)
 
         except Exception as e:
             logger.error(f"Failed to render Nginx configuration: {e}", exc_info=True)
@@ -1863,8 +1925,15 @@ class NginxConfigService:
             f'        set $backend_url "{self._sanitize_for_nginx_set(active_url)}";',
             '        set $resolved_version "";',
         ]
-        active_selectors = [*_ACTIVE_VERSION_SELECTORS, routes[0].label]
-        seen = {self._sanitize_for_nginx_set(s) for s in active_selectors}
+        # Version labels are registry data placed inside quoted ``if`` arguments.
+        # A label that is not version-shaped (stored before registration
+        # validated it, or written by a bypass path) is never routed by name: an
+        # invalid active label is dropped from the selectors, an invalid linked
+        # version is skipped.
+        active_selectors = list(_ACTIVE_VERSION_SELECTORS)
+        if is_valid_version_label(routes[0].label):
+            active_selectors.append(routes[0].label)
+        seen = set(active_selectors)
         if enforce_pins:
             lines.append('        set $version_known "";')
             for selector in sorted(seen):
@@ -1873,9 +1942,11 @@ class NginxConfigService:
                     '{ set $version_known "1"; }'
                 )
         for route in routes[1:]:
-            label = self._sanitize_for_nginx_set(route.label)
-            if not label or label in seen:
-                logger.debug("Skipping duplicate or empty version label %r of %s", label, path)
+            label = route.label
+            if not is_valid_version_label(label) or label in seen:
+                logger.debug(
+                    "Skipping duplicate, empty or invalid version label %r of %s", label, path
+                )
                 continue
             url = self._version_upstream(path, route, virtual)
             if url is None:
@@ -1929,34 +2000,6 @@ class NginxConfigService:
         """Give each selected version document an injective internal route."""
         backend_key = make_version_id(path, version) if version else path
         return f"/_vs_backend{self._encode_path_for_location(backend_key)}"
-
-    @staticmethod
-    def _is_host_resolvable_at_startup(
-        hostname: str,
-    ) -> bool:
-        """Decide whether an upstream host is safe to resolve at nginx config load.
-
-        Nginx resolves literal proxy_pass hosts when it loads the config and
-        fails to start ("host not found in upstream") if any cannot be resolved.
-        A fully-qualified domain name (contains a dot, e.g. "api.github.com") or
-        an IP address is expected to resolve in any environment, so it is safe to
-        emit as a literal proxy_pass (resolved once, no per-request DNS cost).
-
-        A bare hostname with no dot (e.g. a docker-compose service name like
-        "currenttime-server") only resolves inside the environment that defines
-        it. Treat it as NOT safe so the caller defers resolution to request time.
-
-        Args:
-            hostname: The upstream hostname (no scheme or port), may be empty.
-
-        Returns:
-            True if the host can be safely resolved at config load, else False.
-        """
-        if not hostname:
-            return False
-        # A dot indicates an FQDN or an IPv4 literal; both resolve everywhere.
-        # IPv6 literals contain colons and are also always resolvable.
-        return "." in hostname or ":" in hostname
 
     @staticmethod
     def _sanitize_for_nginx_comment(
@@ -2023,6 +2066,7 @@ class NginxConfigService:
             from registry.auth.oauth_metadata import build_per_server_prm_url
 
             location_blocks = []
+            root_path = _root_path()
             for vs in virtual_servers:
                 # Extract server_id from path (e.g., '/virtual/dev-essentials' -> 'dev-essentials')
                 server_id = vs.path.replace("/virtual/", "", 1)
@@ -2084,7 +2128,7 @@ class NginxConfigService:
 
                 block = f"""
     # Virtual MCP Server: {safe_name}
-    location {{{{ROOT_PATH}}}}{safe_vs_path} {{
+    location {root_path}{safe_vs_path} {{
         # Inbound rate limiting: this path fans out to the shared /validate auth
         # subrequest, so bound it at the edge (zones declared at http scope in
         # docker/nginx_rev_proxy_*.conf) to keep a flood from exhausting /validate.
@@ -2126,9 +2170,7 @@ class NginxConfigService:
     # Matches a `location [=] <path> {` directive so a generated block's nginx
     # location path can be extracted for collision dedup. The path is a greedy
     # run of non-whitespace and MUST be followed by whitespace then the opening
-    # brace — otherwise a `{{ROOT_PATH}}` placeholder's own brace would be
-    # mistaken for the block opener. Tolerates the unsubstituted `{{ROOT_PATH}}`
-    # prefix (stripped by the caller before comparison).
+    # brace.
     _LOCATION_DIRECTIVE_RE = re.compile(r"^\s*location\s+(?:=\s+)?(\S+)\s+\{", re.MULTILINE)
 
     @classmethod
@@ -2140,9 +2182,9 @@ class NginxConfigService:
 
         Used to detect cross-block ``location`` collisions (duplicate location
         directives fail ``nginx -t`` and block the reload for the whole replica).
-        Commented-out location lines (leading ``#``) are ignored — they are not
-        live directives. The ``{{ROOT_PATH}}`` placeholder is stripped so paths
-        compare on their post-substitution value.
+        Commented-out location lines (leading ``#``) are ignored: they are not
+        live directives. Generated blocks carry the resolved ROOT_PATH, so the
+        paths compare as nginx sees them.
         """
         paths: set[str] = set()
         for line in block_text.splitlines():
@@ -2151,7 +2193,7 @@ class NginxConfigService:
                 continue
             m = cls._LOCATION_DIRECTIVE_RE.match(line)
             if m:
-                paths.add(m.group(1).replace("{{ROOT_PATH}}", ""))
+                paths.add(m.group(1))
         return paths
 
     def _create_generic_proxy_block(
@@ -2197,9 +2239,10 @@ class NginxConfigService:
                 headers to inject on egress).
 
         Returns:
-            The nginx location block string (with ``{{ROOT_PATH}}`` placeholder).
+            The nginx location block string, under the resolved ROOT_PATH.
         """
         entity_path = path.strip("/")
+        root_path = _root_path()
         proxy_target = f"{settings.auth_server_url.rstrip('/')}/proxy/{entity_type}/{entity_path}/"
         # Client-facing location = {prefix}/{type}/{name} (auto-derived, never
         # hand-entered). This is ONLY the outward path; the authz key is unchanged
@@ -2242,7 +2285,7 @@ class NginxConfigService:
             upstream_auth_directive = ""
         return f"""
     # Proxied {entity_type}: {location_path}
-    location {{{{ROOT_PATH}}}}{location_path} {{
+    location {root_path}{location_path} {{
         client_max_body_size {body_size};
         auth_request /validate;
         auth_request_set $auth_subrequest_status $upstream_status;
@@ -2324,10 +2367,12 @@ class NginxConfigService:
             out even though canonical/custom types are validated at registration);
           - no ``..`` path segment (would path-traverse on the auth-server hop
             after nginx normalizes the proxy_pass URI);
-          - neither the target, path, nor entity_type contains a character that
-            could break out of the location/proxy_pass/set directive. ``$`` is
-            denied in the target because it is placed inside a double-quoted
-            ``set`` value where nginx would otherwise expand it as a variable.
+          - neither the target nor the path contains a character the canonical
+            ``contains_nginx_metacharacters`` predicate rejects (quotes, ``;``,
+            braces, ``#``, ``$``, backslash, whitespace, NUL) or any other
+            control character: both are interpolated into the location,
+            proxy_pass and double-quoted ``set`` directives, where ``$`` would
+            also be expanded as a variable.
         """
         try:
             if not settings.auth_server_url:
@@ -2339,14 +2384,11 @@ class NginxConfigService:
                 raise ValueError(f"illegal entity_type token: {entity_type!r}")
             if ".." in path.split("/"):
                 raise ValueError(f"path-traversal segment in path: {path!r}")
-            # Chars that could break out of a location/proxy_pass/set directive.
-            # ``$`` is target-only (nginx would expand it inside the quoted set
-            # value); the rest apply to path and entity_type too.
-            structural = ("\n", "\r", '"', ";", "{", "}", " ", "\t", "\\")
-            if any(c in target_url for c in (*structural, "$")):
-                raise ValueError("illegal character in target")
-            if any(c in path for c in structural):
-                raise ValueError("illegal character in path")
+            for field_name, value in (("target", target_url), ("path", path)):
+                if contains_nginx_metacharacters(value) or any(
+                    ch < " " or ch == "\x7f" for ch in value
+                ):
+                    raise ValueError(f"illegal character in {field_name}")
             return self._create_generic_proxy_block(
                 entity_type, path, target_url, streaming, has_upstream_auth
             )
@@ -2526,19 +2568,9 @@ class NginxConfigService:
                     continue
                 rendered_locations.add(location_path)
                 server_info, egress_mode, version_id, base_path = renderable
-                proxy_pass_url = server_info["proxy_pass_url"]
-                # Determine upstream host from proxy_pass_url
-                parsed_url = urlparse(proxy_pass_url)
-                upstream_host = parsed_url.netloc
-
                 # The same function the vend uses to approve the signed upstream, so
                 # the routed URL and the approved URL cannot drift.
                 mcp_proxy_url = selected_upstream(server_info, True)
-                # The common egress identity strips a terminal slash; a direct
-                # nginx proxy_pass needs the URI slash to replace the capture URI.
-                plain_proxy_url = mcp_proxy_url
-                if not urlparse(mcp_proxy_url).path:
-                    plain_proxy_url += "/"
                 if backend_version or version_id:
                     # The mapping owns one exact version: never let a client header
                     # change the signed destination chosen for this location.
@@ -2562,6 +2594,7 @@ class NginxConfigService:
                 # response token for the backend hop.
                 auth_location = location_path.replace("/_vs_backend", "/_vs_auth", 1)
                 safe_backend_path = self._sanitize_for_nginx_set(base_path.rstrip("/"))
+                root_path = _root_path()
                 auth_server_target = settings.auth_server_url.rstrip("/")
                 safe_auth_url = f"{auth_server_target}/validate"
                 safe_proxy_target = f"{auth_server_target}/mcp-proxy/{base_path.strip('/')}/"
@@ -2592,14 +2625,14 @@ class NginxConfigService:
         # server-level error_page such as /502.html from answering here.
         error_page 500 502 504 = @auth_subrequest_failed;
         proxy_set_header Host $host;
-        proxy_set_header X-Original-URL $scheme://$host{{{{ROOT_PATH}}}}{safe_backend_path}/mcp;
+        proxy_set_header X-Original-URL $scheme://$host{root_path}{safe_backend_path}/mcp;
         # The parent URI is the only source of a virtual-resource token's
         # binding. The shared /validate location clears client-supplied copies.
         proxy_set_header X-Virtual-Original-URL $scheme://$host$request_uri;
         proxy_set_header X-Registered-Server-Path "{safe_backend_path}";
         proxy_set_header X-Registered-Route-Mode "virtual";
         proxy_set_header X-Resolved-Version $resolved_version;
-        proxy_set_header X-Original-URI {{{{ROOT_PATH}}}}{safe_backend_path}/mcp;
+        proxy_set_header X-Original-URI {root_path}{safe_backend_path}/mcp;
         proxy_set_header X-Original-Method POST;
         proxy_set_header X-Resolved-Upstream $backend_url;
         proxy_set_header X-Validate-Source-Secret "{self._sanitize_for_nginx_set(settings.auth_server_nginx_marker_secret)}";
@@ -2622,9 +2655,33 @@ class NginxConfigService:
     }}"""
                 location_blocks.append(auth_block)
 
+                # Every backend, plain or egress-brokered, goes through the
+                # auth-server mcp-proxy hop, as direct MCP locations do. nginx never
+                # resolves or dials the registrant's host name: a TTL 0 answer that
+                # changed after the pinned health check would otherwise send this
+                # request wherever DNS now points. The hop forwards to the
+                # upstream_url signed into X-Internal-Token by the sibling
+                # /_vs_auth capture (the $backend_url this location selected), and
+                # verify_mcp_proxy_token binds the token to the registration and
+                # route mode set below, so a client header cannot pick the target.
+                #
+                # The Lua subrequest inherits the parent request's headers, so every
+                # reserved header is cleared (RESERVED_CUSTOM_HEADER_NAMES, see
+                # _VS_BACKEND_STRIPPED_HEADERS) except the hop token set below. An
+                # egress backend keeps the ingress bearer: obo_exchange exchanges it
+                # at the hop, which strips it before any upstream call.
+                hop_cleared = _VS_BACKEND_STRIPPED_HEADERS - {"x-internal-token"}
+                consent_markers = ""
                 if egress_mode != "none":
-                    mcp_proxy_read_timeout = _resolve_mcp_proxy_read_timeout_seconds()
-                    block = f"""
+                    hop_cleared -= _VS_EGRESS_HOP_INGRESS_HEADERS
+                else:
+                    consent_markers = """
+        # Only the egress broker may mark a response as pre-consent; the hop
+        # never does so for a plain backend.
+        proxy_hide_header X-MCP-Backend-Initialized;
+        proxy_hide_header X-Egress-Consent-Required;"""
+                mcp_proxy_read_timeout = _resolve_mcp_proxy_read_timeout_seconds()
+                block = f"""
     location = {location_path} {{
         internal;
         # The signed upstream claim is already the exact resolved MCP endpoint.
@@ -2632,90 +2689,19 @@ class NginxConfigService:
         proxy_pass {safe_proxy_target};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
+{_proxy_header_clears(frozenset(hop_cleared))}
         proxy_set_header X-Internal-Token $http_x_internal_token;
         proxy_set_header X-Registered-Server-Path "{safe_backend_path}";
         proxy_set_header X-Registered-Route-Mode "virtual";
-        proxy_set_header X-Upstream-Url "";
+        # The validated caller identity virtual_router.lua copied onto the
+        # request (ngx.req.set_header) before the subrequest; the hop relays it.
         proxy_set_header X-User $http_x_user;
         proxy_set_header X-Username $http_x_username;
         proxy_set_header Accept "application/json, text/event-stream";
         proxy_set_header Content-Type $content_type;
         proxy_read_timeout {mcp_proxy_read_timeout}s;
         proxy_send_timeout {mcp_proxy_read_timeout}s;
-        proxy_buffering off;
-    }}"""
-                    location_blocks.append(block)
-                    continue
-
-                # Decide how to emit proxy_pass based on whether the backend host
-                # is safe to resolve at config-load time.
-                #
-                # Normal external hosts (with a dot, like api.github.com, or an IP)
-                # use a literal proxy_pass: nginx resolves them once at startup and
-                # caches for the worker's life, so there is no per-request DNS cost.
-                #
-                # Bare hostnames (no dot, e.g. a docker-compose service name like
-                # "currenttime-server") are NOT resolvable in every environment.
-                # A literal proxy_pass to such a host makes nginx fail to start with
-                # "host not found in upstream", crashing the whole registry
-                # container. For those we pass the URL through a variable plus a
-                # resolver so nginx resolves at request time instead; an
-                # unresolvable backend then degrades to a per-request 502 for only
-                # that backend rather than taking the gateway down at boot.
-                backend_hostname = parsed_url.hostname or ""
-                host_is_resolvable_at_startup = self._is_host_resolvable_at_startup(
-                    backend_hostname
-                )
-
-                # Registration and endpoint validation reject nginx metacharacters;
-                # sanitize again before interpolating a persisted URL or Host.
-                safe_mcp_proxy_url = self._sanitize_for_nginx_set(plain_proxy_url)
-                safe_upstream_host = self._sanitize_for_nginx_set(upstream_host)
-
-                if host_is_resolvable_at_startup:
-                    proxy_directive = f"proxy_pass {safe_mcp_proxy_url};"
-                else:
-                    # Nginx variables are server-scoped: keep versions disjoint.
-                    backend_var = (
-                        "$vs_backend_" + hashlib.sha256(location_path.encode()).hexdigest()[:16]
-                    )
-                    dns_resolver = os.environ.get("NGINX_DNS_RESOLVER", "8.8.8.8 8.8.4.4")
-                    dns_resolver_timeout = os.environ.get("NGINX_DNS_RESOLVER_TIMEOUT", "5")
-                    proxy_directive = (
-                        f"resolver {dns_resolver} valid=10s;\n"
-                        f"        resolver_timeout {dns_resolver_timeout}s;\n"
-                        f'        set {backend_var} "{safe_mcp_proxy_url}";\n'
-                        f"        proxy_pass {backend_var};"
-                    )
-
-                block = f"""
-    location = {location_path} {{
-        internal;
-        {proxy_directive}
-        proxy_http_version 1.1;
-        proxy_ssl_server_name on;
-        proxy_set_header Host {safe_upstream_host};
-        # SECURITY: this location proxies directly to a registrant-controlled
-        # (not fully trusted) MCP backend. It is reached via a Lua subrequest
-        # that inherits the parent request's headers, so every reserved header
-        # is cleared explicitly: the caller's credentials (Authorization,
-        # X-Authorization, Proxy-Authorization, Cookie), the gateway's signed
-        # internal tokens, and the internal routing/identity headers. The list
-        # comes from RESERVED_CUSTOM_HEADER_NAMES (_VS_BACKEND_STRIPPED_HEADERS).
-{_vs_backend_header_clears()}
-        # Forward the validated caller identity so backends can attribute
-        # write operations to the authenticated user.  These are set as
-        # request headers by virtual_router.lua (ngx.req.set_header) before
-        # the ngx.location.capture subrequest.
-        proxy_set_header X-User $http_x_user;
-        proxy_set_header X-Username $http_x_username;
-        proxy_buffering off;
-        proxy_set_header Accept "application/json, text/event-stream";
-        proxy_set_header Content-Type $content_type;
-        # Only the egress broker may mark a response as pre-consent; a
-        # registrant's upstream must not be able to speak for the gateway.
-        proxy_hide_header X-MCP-Backend-Initialized;
-        proxy_hide_header X-Egress-Consent-Required;
+        proxy_buffering off;{consent_markers}
     }}"""
                 location_blocks.append(block)
                 logger.debug(
@@ -3008,6 +2994,7 @@ class NginxConfigService:
         dns_resolver_timeout = os.environ.get("NGINX_DNS_RESOLVER_TIMEOUT", "5")
         safe_name = self._sanitize_for_nginx_comment(agent_name)
         route = f"{AGENT_ROUTE_PREFIX}/{agent_path}"
+        root_path = _root_path()
         # Per the A2A spec the card document lives at a well-known path on the
         # ORIGIN, while the card's own "url" names the JSON-RPC endpoint and may
         # carry a path. Appending the suffix to backend_url asks the backend one
@@ -3018,7 +3005,8 @@ class NginxConfigService:
         # two must agree or the health check calls an agent healthy while its
         # gateway card route fails (issue #1724).
         card_origin = f"{parsed_url.scheme}://{upstream_host}"
-        card_internal_uri = f"{{{{ROOT_PATH}}}}{route}/_agent_card_upstream"
+        card_internal_uri = f"{root_path}{route}/_agent_card_upstream"
+        credential_clears = _proxy_header_clears(_AGENT_BACKEND_STRIPPED_HEADERS)
         safe_backend_url = self._sanitize_for_nginx_set(backend_url)
         # nginx's location body filter cannot replace a successful upstream
         # status after headers are sent. Read the card in the content phase so
@@ -3028,7 +3016,7 @@ class NginxConfigService:
     # A2A agent card (discovery): {safe_name}
     # Exact match so suffixes (e.g. /.well-known/agent-card.json/../secret)
     # cannot be smuggled through this proxy.
-    location = {{{{ROOT_PATH}}}}{route}/.well-known/agent-card.json {{
+    location = {root_path}{route}/.well-known/agent-card.json {{
         resolver {dns_resolver} valid=10s;
         resolver_timeout {dns_resolver_timeout}s;
         auth_request /validate;
@@ -3046,6 +3034,8 @@ class NginxConfigService:
 
     # Accessible only from the authenticated discovery handler above. Explicitly
     # strip gateway credentials again: internal subrequests inherit client headers.
+    # The cleared set is _AGENT_BACKEND_STRIPPED_HEADERS (X-Authorization,
+    # Proxy-Authorization, Cookie and every X-Internal-Token* header).
     location = {card_internal_uri} {{
         internal;
         resolver {dns_resolver} valid=10s;
@@ -3054,8 +3044,7 @@ class NginxConfigService:
         proxy_http_version 1.1;
         proxy_ssl_server_name on;
         proxy_set_header Host {host_header};
-        proxy_set_header X-Authorization "";
-        proxy_set_header Cookie "";
+{credential_clears}
         proxy_set_header Accept-Encoding "";
         # Card fetches do not consume caller identity. Clear spoofable copies
         # instead of forwarding headers that an agent could mistake for
@@ -3068,7 +3057,7 @@ class NginxConfigService:
     }}
 
     # A2A agent JSON-RPC endpoint: {safe_name}
-    location {{{{ROOT_PATH}}}}{route}/ {{
+    location {root_path}{route}/ {{
         resolver {dns_resolver} valid=10s;
         resolver_timeout {dns_resolver_timeout}s;
         auth_request /validate;
@@ -3124,8 +3113,9 @@ class NginxConfigService:
         # (no Authorization fallback for agent paths) and refuses to forward an
         # Authorization equal to the validated X-Authorization, so a caller that
         # duplicates its gateway token into both headers cannot leak it here.
-        proxy_set_header X-Authorization "";
-        proxy_set_header Cookie "";
+        # Proxy-Authorization and every X-Internal-Token* header a caller sends
+        # are cleared for the same reason (_AGENT_BACKEND_STRIPPED_HEADERS).
+{credential_clears}
 
         # Forward validated auth context to the agent backend
         proxy_set_header X-User $auth_user;
@@ -3490,8 +3480,9 @@ class NginxConfigService:
         logger.info(f"Creating location block for {location_path} with {transport_type} transport")
 
         body = f"{transport_settings}{common_settings}"
+        root_path = _root_path()
         block = f"""
-    location {{{{ROOT_PATH}}}}{location_path} {{{body}
+    location {root_path}{location_path} {{{body}
     }}"""
 
         # A root-endpoint server (append_mcp_path=False) is reached at the bare path:
@@ -3512,7 +3503,7 @@ class NginxConfigService:
                 )
             else:
                 block += f"""
-    location = {{{{ROOT_PATH}}}}{bare_path} {{{body}
+    location = {root_path}{bare_path} {{{body}
     }}"""
 
         return block

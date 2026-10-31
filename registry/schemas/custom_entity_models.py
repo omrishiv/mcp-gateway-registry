@@ -64,6 +64,7 @@ RESERVED_FIELD_NAMES: frozenset[str] = frozenset(
         "visibility",
         "allowed_groups",
         "owner",
+        "owner_id",
         "tags",
         "is_enabled",
         "created_at",
@@ -260,6 +261,8 @@ class CustomEntityRecord(ProxyableMixin):
     visibility: str = Field(default="private")
     allowed_groups: list[str] = Field(default_factory=list)
     owner: str | None = None
+    # Immutable ownership identity (registry/auth/ownership.py); server-derived.
+    owner_id: str | None = None
     tags: list[str] = Field(default_factory=list)
     is_enabled: bool = True
     num_stars: float = Field(default=0.0, ge=0.0, le=5.0, description="Average user rating")

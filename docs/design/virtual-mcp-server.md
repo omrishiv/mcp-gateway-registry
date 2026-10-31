@@ -98,7 +98,7 @@ A client connecting to `/virtual/dev-tools` sees `search-repo`, `post-message`, 
 4. For every backing request, Lua explicitly captures `/_vs_auth_<backend>` with the rewritten JSON-RPC body. This verifies the same caller has the backing server's method/tool grant and returns a signed token bound to that registered backend and its resolved upstream. `ngx.location.capture` does not run `auth_request` on a captured backend location; the explicit check is required.
    For a resource token bound to the virtual server, the internal authorization location supplies the original virtual URI separately; auth-server verifies the virtual binding and the rewritten backend's scope grant. Normal `/validate` locations clear that parent header, and the backend hop requires the nginx marker, so the exception cannot be used by a direct backend request.
    An IdP token issued for the virtual server's own resource (Entra issues one per server, so its `aud` is `https://<gateway>/virtual/<id>/mcp`) is accepted at the backend hop for that parent virtual server only. The backend's own audience is still accepted, and the backend's scope grant is still required.
-5. Lua calls `/_vs_backend_<backend>` only after that grant. A PAT or `oauth_user` backend routes through auth-server's `/mcp-proxy/<backend>/` vend/inject hop. Plain backends retain their direct proxy, with ingress credentials and internal tokens stripped. The resolved backend path, not the virtual alias, keys the egress vault.
+5. Lua calls `/_vs_backend_<backend>` only after that grant. Every backend, plain or credentialed, routes through auth-server's `/mcp-proxy/<backend>/` hop, which forwards to the upstream signed into the backend token; nginx never resolves or dials the registrant's host itself, so a DNS answer that changes after the health check cannot redirect nginx. A PAT or `oauth_user` backend's hop also vends and injects the caller's credential. The dispatch location clears ingress credentials and the other reserved headers before the hop. The resolved backend path, not the virtual alias, keys the egress vault.
    The signed token retains the exact registered backing path and selected version ID. Vend checks the selected version's exact outbound endpoint against the credential's write-time destination binding; adding or retargeting a version requires reconnecting or resubmitting its credential.
 6. Virtual `initialize` creates the client session locally. Backend `initialize` is performed when a backend is first used; both stateful session IDs and successful sessionless initialization are remembered per caller and mapped backend version. `tools/list` and other routed methods also require the backing grant.
 
@@ -269,7 +269,7 @@ location = /_vs_backend_github {
 }
 ```
 
-The second location above is for a credentialed backend; a plain backend's dispatch location proxies to its MCP endpoint directly and clears gateway credentials. Lua calls the authorization location explicitly before dispatch and refuses a response without a signed backend token. Version selection lives in the backend's own location and covers its active label too, so a mapping pinned to a version that has since become the only (active) version keeps working.
+Plain and credentialed backends share this dispatch location shape; a plain backend's location also clears ingress credentials and the other reserved headers. Lua calls the authorization location explicitly before dispatch and refuses a response without a signed backend token. Version selection lives in the backend's own location and covers its active label too, so a mapping pinned to a version that has since become the only (active) version keeps working.
 
 Internal location names encode the backend path injectively: `/` becomes `_`, ASCII letters, digits and `-` are kept, and every other byte becomes `.XX` (lowercase hex), so `/a-b`, `/a.b` and `/a_b` become `_a-b`, `_a.2eb` and `_a.5fb`. Paths made only of letters, digits and `/` keep their previous names. When upgrading, backends whose paths contain `-`, `.` or `_` get new internal names: each live client session re-initializes those backends once (stateful backends receive a new `Mcp-Session-Id`; old L2 session records age out through their TTL index). Registered virtual servers, tool mappings and client URLs are unchanged.
 
@@ -453,7 +453,7 @@ Nginx exposes these locations only for Lua subrequests. The backing authorizatio
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/_vs_auth_<backend>` | Authorize backing server and mint an upstream-bound internal token |
-| `POST` | `/_vs_backend_<backend>` | Dispatch to auth-server's egress broker or a plain direct backend |
+| `POST` | `/_vs_backend_<backend>` | Dispatch through auth-server's `/mcp-proxy/<backend>/` hop to the signed upstream |
 | `GET` | `/_internal/sessions/backend/{client_id}:{backend}` | Read owner-bound stateful ID or explicit stateless state |
 | `PUT` | `/_internal/sessions/backend/{client_id}:{backend}` | Persist successful backend initialization state |
 | `DELETE` | `/_internal/sessions/backend/{client_id}:{backend}` | Invalidate a stale stateful backend session |

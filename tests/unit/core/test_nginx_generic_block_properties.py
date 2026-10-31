@@ -41,6 +41,7 @@ from registry.schemas.virtual_server_models import (
 )
 from registry.utils.url_guard import contains_nginx_metacharacters
 from tests.unit.core.nginx_render_harness import (
+    AUTH_SERVER_URL,
     HEALTHY,
     ROOT_PATH,
     TEMPLATES,
@@ -665,15 +666,45 @@ def _uncleared_credentials(
 def test_pinned_registry_has_registrant_locations(
     template: Path,
 ) -> None:
-    """Property: the classifier finds the virtual-backend and agent registrant locations.
+    """Property: the classifier finds the agent registrant locations, and no virtual backend.
 
-    Guards the header properties against passing vacuously.
+    Guards the header properties against passing vacuously. Virtual-backend
+    locations are not registrant locations: each relays to the auth-server
+    mcp-proxy hop, overwrites X-Internal-Token with the Lua-set request value
+    rather than passing a second copy, and clears every other credential header.
     """
     locations = _registrant_locations(template, _PINNED_REGISTRY)
     paths = [location["args"][-1] for location in locations]
 
-    assert any(path.startswith("/_vs_backend") for path in paths), paths
+    assert not any(path.startswith("/_vs_backend") for path in paths), paths
     assert any(f"{AGENT_ROUTE_PREFIX}/" in path for path in paths), paths
+
+    tree, error = parse_config(render_config(template, _PINNED_REGISTRY.snapshot))
+    assert tree is not None, error
+    hops = [
+        location
+        for location in iter_blocks(tree, "location")
+        if location["args"][-1].startswith("/_vs_backend")
+    ]
+    assert hops
+    for hop in hops:
+        proxy_targets = [
+            directive["args"][0]
+            for directive in hop.get("block", [])
+            if directive["directive"] == "proxy_pass"
+        ]
+        assert len(proxy_targets) == 1, proxy_targets
+        target = urlparse(proxy_targets[0])
+        assert target.netloc == urlparse(AUTH_SERVER_URL).netloc, proxy_targets
+        assert target.path.startswith("/mcp-proxy/"), proxy_targets
+        token_headers = [
+            directive["args"]
+            for directive in hop.get("block", [])
+            if directive["directive"] == "proxy_set_header"
+            and directive["args"][0].lower() == "x-internal-token"
+        ]
+        assert token_headers == [["X-Internal-Token", "$http_x_internal_token"]]
+        assert _uncleared_credentials(hop) == ["x-internal-token"]
 
 
 @pytest.mark.unit

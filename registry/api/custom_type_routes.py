@@ -25,6 +25,7 @@ from ..audit.context import set_audit_action
 from ..auth.csrf import verify_csrf_token_flexible
 from ..auth.dependencies import nginx_proxied_auth
 from ..schemas.custom_entity_models import CustomTypeDescriptor, CustomTypeUpdate
+from ..services import admin_safety
 from ..services.custom_entity_errors import (
     CustomEntityValidationError,
     CustomTypeAlreadyExistsError,
@@ -59,10 +60,8 @@ def _require_admin(
     user_context: dict,
 ) -> None:
     """Raise HTTP 403 unless the caller has registry-admin privileges."""
-    is_admin = user_context.get("is_admin", False)
-    groups = user_context.get("groups", [])
-    scopes = user_context.get("scopes", [])
-    if not (is_admin or "mcp-registry-admin" in groups or "mcp-registry-admin" in scopes):
+    # Canonical request-time is_admin only; group or scope names are not admin.
+    if not admin_safety.caller_is_admin(user_context):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin permissions required to manage custom types",

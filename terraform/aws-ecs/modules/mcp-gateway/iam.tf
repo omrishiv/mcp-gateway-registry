@@ -68,8 +68,9 @@ resource "aws_iam_policy" "ecs_secrets_access" {
 # Per-user egress credential vault: the registry task creates/reads/updates/
 # deletes per-user secrets at RUNTIME under the configured path prefix (these
 # are not pre-provisioned ARNs), so it needs a broader verb set scoped to the
-# prefix, plus KMS for the CMK encrypting them. Only created when the egress
-# vault is enabled with the secrets-manager backend.
+# prefix, plus KMS for the CMK encrypting them. The actions are exactly the
+# calls registry/secrets/secrets_manager/store.py makes. Only created when the
+# egress vault is enabled with the secrets-manager backend.
 resource "aws_iam_policy" "ecs_egress_vault_access" {
   count       = var.egress_auth_enabled && var.egress_secret_store_backend == "secrets-manager" ? 1 : 0
   name_prefix = "${local.name_prefix}-egress-vault-"
@@ -84,13 +85,12 @@ resource "aws_iam_policy" "ecs_egress_vault_access" {
             "secretsmanager:CreateSecret",
             "secretsmanager:GetSecretValue",
             "secretsmanager:PutSecretValue",
-            "secretsmanager:DeleteSecret",
-            "secretsmanager:DescribeSecret",
-            "secretsmanager:ListSecretVersionIds"
+            "secretsmanager:DeleteSecret"
           ]
-          # Scope to the egress path prefix only. Secrets Manager ARNs append a
-          # random 6-char suffix, so the wildcard covers "<prefix>/*-??????".
-          Resource = "arn:aws:secretsmanager:*:*:secret:${var.egress_secrets_manager_path_prefix}/*"
+          # This account's egress path prefix only (Secrets Manager appends a
+          # 6-char suffix to the ARN). Region stays open: AWS_SECRETS_REGION
+          # may point the vault at another region.
+          Resource = "arn:${data.aws_partition.current.partition}:secretsmanager:*:${data.aws_caller_identity.current.account_id}:secret:${var.egress_secrets_manager_path_prefix}/*"
         }
       ],
       # KMS only when a customer-managed CMK is configured; the AWS-managed key
@@ -132,11 +132,10 @@ resource "aws_iam_policy" "ecs_exec_task_execution" {
         Effect = "Allow"
         Action = [
           "logs:CreateLogStream",
-          "logs:DescribeLogGroups",
-          "logs:DescribeLogStreams",
           "logs:PutLogEvents"
         ]
-        Resource = "arn:aws:logs:*:*:*"
+        # Every container log group in this module is /ecs/<name_prefix>-<service>.
+        Resource = "arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:log-group:/ecs/${local.name_prefix}-*:*"
       }
     ]
   })

@@ -1,17 +1,18 @@
 """Property tests: the ownership identity is injective over issuer and subject.
 
-Ownership checks compare a record's ``registered_by`` with the caller's
-``username``. That username is derived from IdP claims on two paths: the OAuth2
-login callback writes it into the browser session (the cookie path), and each
+Ownership checks compare a record's ``owner_id`` with the caller's ``owner_id``.
+That owner_id is derived from IdP claims on two paths: the OAuth2 login
+callback writes it into the browser session (the cookie path), and each
 provider's ``validate_token`` returns it for a bearer token (the bearer path).
-The security property pinned here is that the derived username behaves as an
+The security property pinned here is that the derived owner_id behaves as an
 owner key: two accounts with distinct ``(iss, sub)`` never share it, an account
 keeps it when only its mutable profile claims (``preferred_username``,
 ``email``, ``nickname``, ``login``, ``upn``) change, and the cookie path and the
-bearer path derive the same one from the same claims. Signatures are not under
-test: bearer tokens are really signed and verified against a test JWKS, and on
-the login path the provider's id_token verification returns the claims as
-verified.
+bearer path derive the same one from the same claims. ``username`` stays the
+display name with its existing derivation, pinned separately. Signatures are
+not under test: bearer tokens are really signed and verified against a test
+JWKS, and on the login path the provider's id_token verification returns the
+claims as verified.
 """
 
 from __future__ import annotations
@@ -297,11 +298,11 @@ def _account_claims(
     return claims
 
 
-def _bearer_identity(
+def _bearer_result(
     provider: str,
     identity_claims: dict[str, Any],
-) -> str | None:
-    """Return the username the provider's ``validate_token`` derives.
+) -> dict[str, Any]:
+    """Return the provider's ``validate_token`` result for the claims.
 
     The claims are signed into a user access token that the provider accepts
     (issuer, audience and expiry set for it) and verified for real.
@@ -311,7 +312,7 @@ def _bearer_identity(
         identity_claims: The account's identity claims.
 
     Returns:
-        ``validation_result["username"]``.
+        The validation result.
     """
     instance = _provider(provider)
     now = int(time.time())
@@ -330,25 +331,42 @@ def _bearer_identity(
     with patch.object(instance, "get_jwks", return_value=_JWKS):
         result = instance.validate_token(token)
     assert result["valid"] is True, result
-    return result["username"]
+    return result
 
 
-def _cookie_identity(
-    login_path: str,
+def _bearer_identity(
+    provider: str,
     identity_claims: dict[str, Any],
 ) -> str | None:
-    """Drive ``/oauth2/callback`` and return the username written to the session.
+    """Return the owner_id the provider's ``validate_token`` derives.
+
+    Args:
+        provider: Provider name, one of ``BEARER_PROVIDERS``.
+        identity_claims: The account's identity claims.
+
+    Returns:
+        ``validation_result["owner_id"]``, or None when absent.
+    """
+    return _bearer_result(provider, identity_claims).get("owner_id")
+
+
+def _cookie_session(
+    login_path: str,
+    identity_claims: dict[str, Any],
+) -> dict[str, Any]:
+    """Drive ``/oauth2/callback`` and return the fields written to the session.
 
     The code exchange, the userInfo fetch and id_token verification are
     replaced so the claims arrive as verified; the callback's own mapping from
-    claims to session username runs unchanged.
+    claims to session fields runs unchanged.
 
     Args:
         login_path: Key of ``LOGIN_PATHS``.
         identity_claims: The account's identity claims.
 
     Returns:
-        The session username, or None when the login created no usable session.
+        The ``create_session`` keyword arguments, empty when the login created
+        no session.
     """
     provider = LOGIN_PATHS[login_path]
     userinfo_path = login_path.endswith("-userinfo") or provider in ("github", "google")
@@ -425,7 +443,24 @@ def _cookie_identity(
             headers={"Cookie": f"oauth2_temp_session={temp_cookie}"},
             follow_redirects=False,
         )
-    return captured.get("username") or None
+    return captured
+
+
+def _cookie_identity(
+    login_path: str,
+    identity_claims: dict[str, Any],
+) -> str | None:
+    """Return the owner_id the login callback writes to the session.
+
+    Args:
+        login_path: Key of ``LOGIN_PATHS``.
+        identity_claims: The account's identity claims.
+
+    Returns:
+        The session owner_id, or None when the login created no session or
+        derived no owner_id.
+    """
+    return _cookie_session(login_path, identity_claims).get("owner_id") or None
 
 
 def _param(
@@ -489,11 +524,11 @@ _NAMESPACE_MIX_EXAMPLE = ("alice", "user-b", {}, {"preferred_username": "alice",
 @example(accounts=_COLLISION_EXAMPLE)
 @example(accounts=_NAMESPACE_MIX_EXAMPLE)
 def test_bearer_identity_injective_over_subject(provider, accounts):
-    """Distinct subjects at one issuer get distinct bearer-path usernames.
+    """Distinct subjects at one issuer get distinct bearer-path owner_ids.
 
     For every provider and every two accounts with distinct ``sub`` at the
     provider's issuer, whatever their profile claims (identical in the pinned
-    collision), ``validate_token`` derives different usernames.
+    collision), ``validate_token`` derives different owner_ids.
     """
     sub_a, sub_b, profile_a, profile_b = accounts
     identity_a = _bearer_identity(provider, _account_claims(provider, sub_a, profile_a))
@@ -509,10 +544,10 @@ def test_bearer_identity_injective_over_subject(provider, accounts):
 @given(sub=_SUBJECTS, before=_PROFILES, after=_PROFILES)
 @example(sub="user-a", before=_COLLIDING_PROFILE, after=_RENAMED_PROFILE)
 def test_bearer_identity_stable_under_profile_edits(provider, sub, before, after):
-    """Editing only profile claims keeps the bearer-path username.
+    """Editing only profile claims keeps the bearer-path owner_id.
 
     For every provider, account ``sub`` and two profile-claim sets, the
-    username ``validate_token`` derives is the same before and after the edit.
+    owner_id ``validate_token`` derives is the same before and after the edit.
     """
     identity_before = _bearer_identity(provider, _account_claims(provider, sub, before))
     identity_after = _bearer_identity(provider, _account_claims(provider, sub, after))
@@ -528,11 +563,11 @@ def test_bearer_identity_stable_under_profile_edits(provider, sub, before, after
 @example(accounts=_COLLISION_EXAMPLE)
 @example(accounts=_NAMESPACE_MIX_EXAMPLE)
 def test_session_identity_injective_over_subject(login_path, accounts):
-    """Distinct subjects at one issuer get distinct session usernames.
+    """Distinct subjects at one issuer get distinct session owner_ids.
 
     For every login path and every two accounts with distinct ``sub`` at that
     provider, whatever their profile claims, the logins that create a session
-    store different usernames in it.
+    store different owner_ids in it.
     """
     provider = LOGIN_PATHS[login_path]
     sub_a, sub_b, profile_a, profile_b = accounts
@@ -550,10 +585,10 @@ def test_session_identity_injective_over_subject(login_path, accounts):
 @given(sub=_SUBJECTS, before=_PROFILES, after=_PROFILES)
 @example(sub="user-a", before=_COLLIDING_PROFILE, after=_RENAMED_PROFILE)
 def test_session_identity_stable_under_profile_edits(login_path, sub, before, after):
-    """Editing only profile claims keeps the session username.
+    """Editing only profile claims keeps the session owner_id.
 
     For every login path, account ``sub`` and two profile-claim sets that both
-    produce a session, the session username is the same before and after.
+    produce a session, the session owner_id is the same before and after.
     """
     provider = LOGIN_PATHS[login_path]
     identity_before = _cookie_identity(login_path, _account_claims(provider, sub, before))
@@ -570,10 +605,10 @@ def test_session_identity_stable_under_profile_edits(login_path, sub, before, af
 @given(sub=_SUBJECTS, profile=_PROFILES)
 @example(sub="user-a", profile={"email": "alice@example.com"})
 def test_session_identity_matches_bearer_identity(provider, sub, profile):
-    """The cookie path and the bearer path derive the same username.
+    """The cookie path and the bearer path derive the same owner_id.
 
-    For every provider with both paths and every claim set, the username the
-    login callback stores in the session equals the username
+    For every provider with both paths and every claim set, the owner_id the
+    login callback stores in the session equals the owner_id
     ``validate_token`` returns for a bearer token carrying the same claims.
     """
     claims = _account_claims(provider, sub, profile)
@@ -597,11 +632,11 @@ _CROSS_PROVIDER_PAIRS: list[tuple[str, str]] = [
 )
 @example(pair=("github", "keycloak"), sub_a="1001", sub_b="1001", profile=_COLLIDING_PROFILE)
 def test_session_identity_injective_across_issuers(pair, sub_a, sub_b, profile):
-    """Accounts at two different issuers never share a session username.
+    """Accounts at two different issuers never share a session owner_id.
 
     Several login providers can be enabled at once. For every two login paths
     of different providers, any two subjects (equal or not) and the same
-    profile claims, the session usernames differ, because ``(iss, sub)``
+    profile claims, the session owner_ids differ, because ``(iss, sub)``
     differs.
     """
     path_a, path_b = pair
@@ -609,3 +644,47 @@ def test_session_identity_injective_across_issuers(pair, sub_a, sub_b, profile):
     identity_b = _cookie_identity(path_b, _account_claims(LOGIN_PATHS[path_b], sub_b, profile))
     assume(identity_a is not None and identity_b is not None)
     assert identity_a != identity_b, (pair, identity_a, sub_a, sub_b, profile)
+
+
+# The display username each path derives today for subject ``user-a`` with
+# ``_COLLIDING_PROFILE``. Ownership moved to owner_id; username is unchanged.
+_EXPECTED_BEARER_USERNAMES: dict[str, str] = {
+    "keycloak": "alice",
+    "entra": "alice",
+    "okta": "user-a",
+    "auth0": "alice",
+    "cognito": "pool-user-user-a",
+    "pingfederate": "user-a",
+}
+_EXPECTED_SESSION_USERNAMES: dict[str, str] = {
+    "keycloak": "alice",
+    "entra": "alice",
+    "okta": "alice",
+    "auth0": "alice",
+    "pingfederate": "alice",
+    "cognito": "pool-user-user-a",
+    "keycloak-userinfo": "alice",
+    "okta-userinfo": "alice",
+    "auth0-userinfo": "alice",
+    "pingfederate-userinfo": "alice",
+    "cognito-userinfo": "alice@example.com",
+    "github": "alice",
+    "google": "alice@example.com",
+}
+
+
+@pytest.mark.parametrize("provider", BEARER_PROVIDERS)
+def test_bearer_username_derivation_unchanged(provider):
+    """``validate_token`` keeps its display username and also yields an owner_id."""
+    result = _bearer_result(provider, _account_claims(provider, "user-a", _COLLIDING_PROFILE))
+    assert result["username"] == _EXPECTED_BEARER_USERNAMES[provider]
+    assert result.get("owner_id")
+
+
+@pytest.mark.parametrize("login_path", list(LOGIN_PATHS))
+def test_session_username_derivation_unchanged(login_path):
+    """Every login path keeps its session username and stores an owner_id."""
+    provider = LOGIN_PATHS[login_path]
+    session = _cookie_session(login_path, _account_claims(provider, "user-a", _COLLIDING_PROFILE))
+    assert session.get("username") == _EXPECTED_SESSION_USERNAMES[login_path]
+    assert session.get("owner_id")

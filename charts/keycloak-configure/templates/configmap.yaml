@@ -1017,7 +1017,9 @@ data:
         # same list create_scopes() creates from, so a privileged scope added
         # there cannot stay requestable here by omission. The "/" filter is
         # kept as a second rule for a privileged scope some other tool
-        # created in this realm.
+        # created in this realm. "openid" is appended because every OIDC DCR
+        # client requests it and it is not a Keycloak client-scope, so without
+        # it the policy rejects the registration.
         local privileged_json=$(printf '%s\n' "${DCR_WITHHELD_SCOPES[@]}" | jq -R . | jq -sc .)
 
         local all_scope_names=$(curl -s -H "Authorization: Bearer ${token}" \
@@ -1028,7 +1030,7 @@ data:
                     | . as $scope
                     | select(($privileged | index($scope)) == null)
                     | select(contains("/") | not)
-                 ]')
+                 ] + ["openid"] | unique')
 
         _widen_allowed_scopes_policy "$token" "anonymous" "$components" "$all_scope_names" || return 1
         _widen_allowed_scopes_policy "$token" "authenticated" "$components" "$all_scope_names" || return 1

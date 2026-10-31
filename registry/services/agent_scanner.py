@@ -23,6 +23,11 @@ from ..schemas.agent_security import AgentSecurityScanConfig, AgentSecurityScanR
 from .scanner_llm_analyzer import (
     ensure_llm_analyzer_available,
 )
+from .scanner_verdict import (
+    classify_severity,
+    finding_allows_safe,
+    result_document_allows_safe,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +111,10 @@ def _parse_a2a_scanner_stdout(
 def _build_a2a_raw_output(
     scan_results: Any,
 ) -> dict:
-    """Wrap parsed a2a-scanner results in the raw_output shape the registry stores."""
+    """Wrap parsed a2a-scanner results in the raw_output shape the registry stores.
+
+    Raises ValueError when a result object's findings are not a list of objects.
+    """
     raw_output: dict = {
         "analysis_results": {},
         "scan_results": scan_results,
@@ -115,8 +123,12 @@ def _build_a2a_raw_output(
     # Extract findings and organize by analyzer
     if isinstance(scan_results, dict):
         findings = scan_results.get("findings", [])
-        # Findings is always a list from a2a-scanner
+        # A result the scanner never prints is a failed scan, not a clean one.
+        if not isinstance(findings, list):
+            raise ValueError("A2A scanner findings are not a list")
         for finding in findings:
+            if not isinstance(finding, dict):
+                raise ValueError("A2A scanner finding is not a JSON object")
             analyzer_name = finding.get("analyzer", "unknown")
             if analyzer_name not in raw_output["analysis_results"]:
                 raw_output["analysis_results"][analyzer_name] = {"findings": []}
@@ -163,6 +175,20 @@ def _has_blocking_findings(
         and str(finding.get("severity", "")).lower() in A2A_SCANNER_BLOCKING_SEVERITIES
         for finding in findings
     )
+
+
+def _scan_results_allow_safe(
+    scan_results: Any,
+) -> bool:
+    """Return True when parsed a2a-scanner output permits a safe verdict.
+
+    The scanner prints a result object; older output was a bare JSON array of
+    findings, which is classified finding by finding. Anything else (null, a
+    bool, a number, a string) is not a scanner result and is unsafe.
+    """
+    if isinstance(scan_results, list):
+        return all(finding_allows_safe(finding) for finding in scan_results)
+    return result_document_allows_safe(scan_results)
 
 
 class AgentScannerService:
@@ -425,6 +451,12 @@ class AgentScannerService:
         """
         Analyze scan results and extract severity counts.
 
+        The verdict fails closed: it is safe only when no critical or high
+        finding was counted and the parsed scanner output classifies as safe
+        (every finding has a known severity below high, nothing reports
+        is_safe false and the scanner's high_severity_count is 0). Output that
+        is not a result object or findings array is unsafe.
+
         Returns:
             Tuple of (is_safe, critical_count, high_count, medium_count, low_count)
         """
@@ -440,7 +472,9 @@ class AgentScannerService:
             if isinstance(analyzer_data, dict):
                 findings = analyzer_data.get("findings", [])
                 for finding in findings:
-                    severity = finding.get("severity", "").lower()
+                    if not isinstance(finding, dict):
+                        continue
+                    severity = classify_severity(finding.get("severity"))
                     if severity == "critical":
                         critical_count += 1
                     elif severity == "high":
@@ -458,8 +492,13 @@ class AgentScannerService:
         if scanner_high_count is not None:
             high_count = max(high_count, scanner_high_count)
 
-        # Determine if safe: no critical or high severity issues
-        is_safe = critical_count == 0 and high_count == 0
+        # Determine if safe: no critical or high severity issues, and the
+        # scanner output itself classifies as safe.
+        is_safe = (
+            critical_count == 0
+            and high_count == 0
+            and _scan_results_allow_safe(raw_output.get("scan_results"))
+        )
 
         logger.info("Agent security analysis results:")
         logger.info(f"  Critical Issues: {critical_count}")

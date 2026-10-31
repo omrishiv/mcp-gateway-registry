@@ -212,7 +212,7 @@ For `tools/call: github_search` on `/virtual/dev-tools/mcp`:
 1. Nginx validates the gateway credential and the caller's virtual-server grant.
 2. Lua resolves `github_search` to `/github` and rewrites the tool name to `search`. It enforces the virtual server's required scopes and alias override.
 3. Lua calls the internal `/_vs_auth_github` location with the **rewritten** JSON-RPC body. Auth-server checks the backing server's scope and original tool name, returning a short-lived token signed for `/github` and its registered upstream.
-4. Lua reuses or initializes that backend's stateful or stateless session and calls `/_vs_backend_github` with the signed token. For a PAT or OAuth-backed registration, this location sends the request through `/mcp-proxy/github/`, which vends the calling user's `/github` credential and injects it. For a plain registration, it proxies directly after stripping gateway credentials.
+4. Lua reuses or initializes that backend's stateful or stateless session and calls `/_vs_backend_github` with the signed token. This location sends the request through `/mcp-proxy/github/` on the auth-server, which forwards it to the upstream signed into the token. For a PAT or OAuth-backed registration, the hop also vends the calling user's `/github` credential and injects it. nginx never resolves the backend's host name itself.
 5. The backend result returns through Lua to the client. If either the virtual or backing grant fails, there is no backend call or egress vend.
 
 ---
@@ -291,7 +291,7 @@ location = /_vs_backend_github {
 }
 ```
 
-The example uses a credentialed GitHub backend; a plain backend dispatches directly after clearing all gateway credentials. Only Lua can call these `internal` locations, and the authorization location must return a signed backend token before Lua dispatches.
+The example uses a credentialed GitHub backend; a plain backend uses the same hop and also clears ingress credentials before it. Only Lua can call these `internal` locations, and the authorization location must return a signed backend token before Lua dispatches.
 
 ---
 

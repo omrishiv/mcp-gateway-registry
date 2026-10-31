@@ -104,6 +104,7 @@ class TestSkillDiscoveryGate:
         """With the gate open, owner+group visibility returns all three."""
         ctx = {
             "username": "alice",
+            "owner_id": "idp|alice",
             "is_admin": False,
             "groups": ["secret-group"],
             "accessible_skills": ["all"],
@@ -132,6 +133,7 @@ class TestSkillDiscoveryGate:
         """
         ctx = {
             "username": "bob",
+            "owner_id": "idp|bob",
             "is_admin": False,
             "groups": [],
             "accessible_skills": ["private-alice"],

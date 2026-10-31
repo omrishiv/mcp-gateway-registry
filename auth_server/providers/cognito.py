@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 import jwt
 import requests
 
-from .base import AuthProvider, normalize_groups_claim
+from .base import AuthProvider, normalize_groups_claim, with_owner_id
 
 logging.basicConfig(
     level=logging.INFO,
@@ -121,6 +121,11 @@ class CognitoProvider(AuthProvider):
             f"Initialized Cognito provider for user pool '{user_pool_id}' in region '{region}'"
         )
 
+    @property
+    def owner_issuer(self) -> str:
+        """The user pool issuer (``https://cognito-idp.<region>.amazonaws.com/<pool>``)."""
+        return self.issuer
+
     def validate_token(self, token: str, **kwargs: Any) -> dict[str, Any]:
         """Validate Cognito JWT token."""
         try:
@@ -206,16 +211,19 @@ class CognitoProvider(AuthProvider):
             # Extract user info from claims. The groups claim is strictly
             # validated (fail closed on a non-array claim).
             groups = normalize_groups_claim(claims.get("cognito:groups"), source="cognito groups")
-            return {
-                "valid": True,
-                "username": claims.get("username", claims.get("sub")),
-                "email": claims.get("email"),
-                "groups": groups,
-                "scopes": claims.get("scope", "").split() if claims.get("scope") else [],
-                "client_id": claims.get("client_id", self.client_id),
-                "method": "cognito",
-                "data": claims,
-            }
+            return with_owner_id(
+                {
+                    "valid": True,
+                    "username": claims.get("username", claims.get("sub")),
+                    "email": claims.get("email"),
+                    "groups": groups,
+                    "scopes": claims.get("scope", "").split() if claims.get("scope") else [],
+                    "client_id": claims.get("client_id", self.client_id),
+                    "method": "cognito",
+                    "data": claims,
+                },
+                self.owner_id_from_claims(claims),
+            )
 
         except jwt.ExpiredSignatureError:
             logger.warning("Token validation failed: Token has expired")

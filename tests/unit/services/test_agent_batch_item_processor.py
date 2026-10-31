@@ -102,7 +102,9 @@ class TestAuthorize:
         item = _item({"op": "patch", "path": "/agents/existing", "card": {"description": "d"}})
         existing = _existing(registered_by="alice")
         with patch.object(proc.agent_service, "get_agent_info", AsyncMock(return_value=existing)):
-            ok, reason = await proc._authorize(item, "alice", False, {"modify_agent": ["all"]})
+            ok, reason = await proc._authorize(
+                item, "alice", False, {"modify_agent": ["all"]}, "idp|alice"
+            )
         assert ok is True
 
     async def test_delete_requires_delete_agent_permission(self):
@@ -120,7 +122,9 @@ class TestAuthorize:
         item = _item({"op": "delete", "path": "/agents/existing"})
         existing = _existing(registered_by="alice")
         with patch.object(proc.agent_service, "get_agent_info", AsyncMock(return_value=existing)):
-            ok, reason = await proc._authorize(item, "alice", False, {"delete_agent": ["all"]})
+            ok, reason = await proc._authorize(
+                item, "alice", False, {"delete_agent": ["all"]}, "idp|alice"
+            )
         assert ok is True
 
     async def test_delete_scope_without_ownership_denied(self):
@@ -128,7 +132,9 @@ class TestAuthorize:
         item = _item({"op": "delete", "path": "/agents/existing"})
         existing = _existing(registered_by="bob")
         with patch.object(proc.agent_service, "get_agent_info", AsyncMock(return_value=existing)):
-            ok, reason = await proc._authorize(item, "alice", False, {"delete_agent": ["all"]})
+            ok, reason = await proc._authorize(
+                item, "alice", False, {"delete_agent": ["all"]}, "idp|alice"
+            )
         assert ok is False
         assert "only delete agents you registered" in reason
 

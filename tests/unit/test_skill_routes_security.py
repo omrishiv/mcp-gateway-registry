@@ -429,6 +429,7 @@ class TestUserCanModifySkill:
         skill = MagicMock()
         skill.name = name
         skill.owner = owner
+        skill.owner_id = None  # legacy record: ownership falls back to the username
         return skill
 
     def test_admin_bypasses_both_checks(self):
@@ -443,6 +444,7 @@ class TestUserCanModifySkill:
         ctx = {
             "is_admin": False,
             "username": "alice",
+            "owner_id": "idp|alice",
             "ui_permissions": {"modify_skill": ["all"]},
         }
         assert _user_can_modify_skill(self._skill(owner="alice"), ctx) is True
@@ -474,6 +476,7 @@ class TestUserCanModifySkill:
         ctx = {
             "is_admin": False,
             "username": "alice",
+            "owner_id": "idp|alice",
             "ui_permissions": {"modify_skill": ["all"]},
         }
         skill = self._skill(owner="alice")
@@ -489,6 +492,7 @@ class TestUserCanModifySkill:
         ctx = {
             "is_admin": False,
             "username": "alice",
+            "owner_id": "idp|alice",
             "ui_permissions": {"delete_skill": ["test-skill"]},
         }
         assert _user_can_modify_skill(self._skill(owner="alice"), ctx, action="delete") is True
@@ -517,6 +521,7 @@ class TestSkillMutationEndpointsWireCorrectAction:
         skill = MagicMock()
         skill.name = name
         skill.owner = owner
+        skill.owner_id = None  # legacy record: ownership falls back to the username
         skill.path = "/test-skill"
         return skill
 
@@ -524,6 +529,7 @@ class TestSkillMutationEndpointsWireCorrectAction:
         return {
             "is_admin": False,
             "username": "alice",
+            "owner_id": "idp|alice",
             "ui_permissions": {"modify_skill": ["all"]},
         }
 
@@ -583,6 +589,7 @@ class TestSkillMutationEndpointsWireCorrectAction:
         ctx = {
             "is_admin": False,
             "username": "alice",
+            "owner_id": "idp|alice",
             "ui_permissions": {"delete_skill": ["all"]},
         }
 

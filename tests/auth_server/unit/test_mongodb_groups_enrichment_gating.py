@@ -19,11 +19,15 @@ class TestShouldEnrichGroupsGate:
     genuine M2M token with empty groups."""
 
     def test_m2m_token_with_empty_groups_enriches(self):
+        # A client_credentials token: the top-level client_id CLAIM (in the
+        # verified claims under `data`) is the machine signal, not the
+        # azp-derived result client_id every provider fills in.
         result = {
             "valid": True,
             "groups": [],
             "client_id": "real-m2m-client",
             "token_type": "m2m",
+            "data": {"client_id": "real-m2m-client"},
         }
         assert enrichment.should_enrich_groups(result) is True
 

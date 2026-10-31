@@ -127,7 +127,7 @@ The ECS task definitions pick up the flag for both services from the single `egr
 
 `NO_PROXY` is an override, not the routing mechanism. Internal targets are already detected by classification, so a missing entry no longer breaks an in-cluster hop. Use it for two things: public addresses this host reaches directly, which saves a pointless tunnel, and in-cluster hostnames you want to keep explicit.
 
-The guard reads the forms curl reads. An entry matches an exact host (`mcpgw-server`), a `host:port` pair (`acme.example:443`), a domain suffix (`svc.cluster.local` matches `a.svc.cluster.local`, with or without a leading dot), or everything (`*`, which behaves the same as leaving the flag off). Upper case wins over lower case when both spellings are set.
+The guard reads `NO_PROXY` the way Python's `urllib` does, because that is what the AWS SDK (botocore) uses, and it never claims an exclusion urllib would ignore. An entry matches an exact host (`mcpgw-server`), a `host:port` pair on a non-default port (`acme.example:8443`; `host:80` and `host:443` never match, because botocore and httpx compare a URL without an explicit port against the bare host), or a domain suffix (`svc.cluster.local` matches `a.svc.cluster.local`, with or without a leading dot). `*` bypasses the proxy for everything (the same as leaving the flag off) only when it is the whole value; a `*` inside a list is ignored with a warning. When both spellings are set, lower-case `no_proxy` wins, and an empty `no_proxy` clears `NO_PROXY`. `HTTP_PROXY` and `HTTPS_PROXY` still prefer the upper-case spelling.
 
 `NO_PROXY` **must** include the three cloud credential endpoints, `169.254.169.254`, `169.254.170.2` and `169.254.170.23`. This is enforced: with the flag on and any of them missing, the process refuses to start and names the remedy. The reason is not cosmetic. The AWS SDK reads `HTTP_PROXY` itself, independently of this feature, so once the variable is set its instance-metadata credential provider sends IAM credential requests to your proxy. Observed on a test deployment: the proxy established connections to `169.254.169.254`, the SDK read the instance role name from `/latest/meta-data/iam/security-credentials/`, and then used the resulting credentials. A proxy operator should never see a credential request, and a proxy that can reach a metadata endpoint itself would be answering from its own network position rather than yours.
 
@@ -241,19 +241,17 @@ A credential-bearing request is refused with a message about an `http` target. T
 
 Probes time out in waves and servers flap. The proxy is rate-limiting or capping concurrent tunnels. Lower `EGRESS_HTTP_POOL_MAX_CONNECTIONS`.
 
-## Known limitation: virtual-server tool calls
+## Virtual-server tool calls
 
-A tool call to an ordinary MCP server path goes through the auth-server, whose egress this feature covers. A tool call fanned out by a **virtual server** does not. The generated nginx config gives each virtual-server member its own internal location:
+A tool call fanned out by a **virtual server** takes the same path as one to an ordinary MCP server path. Each virtual-server member's internal nginx location relays to the auth-server hop, and the auth-server makes the upstream fetch, so this feature covers it:
 
 ```nginx
-location /_vs_backend_cloudflare_docs {
+location = /_vs_backend_cloudflare_docs {
     internal;
-    proxy_pass https://docs.mcp.cloudflare.com/mcp;
+    proxy_pass http://auth-server:8888/mcp-proxy/cloudflare-docs/;
 ```
 
-That location is reached by a Lua subrequest, so nginx performs the upstream fetch itself, and nginx has no environment-proxy support for `proxy_pass`. Measured on a test deployment: the same tool through `/cloudflare-docs` opened four new tunnels through the proxy, while the same tool through `/virtual/dev-essentials` opened none.
-
-In a proxy-only network, virtual-server tool calls therefore fail even with this feature enabled. Use the per-server paths there. Closing the gap needs `ngx_http_proxy_connect_module` or an equivalent, which is a separate change.
+Releases before this change proxied virtual-server members from nginx directly, which has no environment-proxy support, so those tool calls failed in a proxy-only network.
 
 ## Not supported
 

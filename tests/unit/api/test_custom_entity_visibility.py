@@ -44,12 +44,18 @@ class TestBuildVisibilityFilter:
         assert _build_visibility_filter({"is_admin": True}) is None
 
     def test_non_admin_filter_shape(self):
-        ctx = {"is_admin": False, "username": "alice", "groups": ["g1"]}
+        ctx = {"is_admin": False, "username": "alice", "owner_id": "idp|alice", "groups": ["g1"]}
         f = _build_visibility_filter(ctx)
         assert f is not None
         clauses = f["$or"]
         assert {"visibility": "public"} in clauses
-        assert {"visibility": "private", "owner": "alice"} in clauses
+        assert {"visibility": "private", "owner_id": "idp|alice"} in clauses
+        # Legacy records (no owner_id) still match on the owner username.
+        assert {
+            "visibility": "private",
+            "owner_id": {"$in": [None, ""]},
+            "owner": "alice",
+        } in clauses
         assert {
             "visibility": "group-restricted",
             "allowed_groups": {"$in": ["g1"]},
@@ -72,8 +78,10 @@ class TestUserCanView:
 
     def test_private_only_owner(self):
         rec = _record(visibility="private", owner="alice")
-        assert _user_can_view(rec, {"username": "alice"})
-        assert not _user_can_view(rec, {"username": "bob"})
+        assert _user_can_view(rec, {"username": "alice", "owner_id": "idp|alice"})
+        assert not _user_can_view(rec, {"username": "bob", "owner_id": "idp|bob"})
+        # A matching username without an owner_id owns nothing.
+        assert not _user_can_view(rec, {"username": "alice"})
 
     def test_group_restricted_requires_group_overlap(self):
         rec = _record(visibility="group-restricted", allowed_groups=["g1", "g2"])
@@ -92,7 +100,9 @@ class TestRequireOwnerOrAdmin:
         _require_owner_or_admin(_record(owner="bob"), {"is_admin": True})
 
     def test_owner_allowed(self):
-        _require_owner_or_admin(_record(owner="alice"), {"username": "alice"})
+        _require_owner_or_admin(
+            _record(owner="alice"), {"username": "alice", "owner_id": "idp|alice"}
+        )
 
     def test_non_owner_forbidden(self):
         with pytest.raises(HTTPException) as exc:

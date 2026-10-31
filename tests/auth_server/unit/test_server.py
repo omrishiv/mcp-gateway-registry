@@ -6553,11 +6553,11 @@ class TestForwardHeadersInternalTokenStrip:
         return _forward_headers(incoming, relay_authorization=relay)
 
     def test_strips_each_internal_hop_token_header(self):
-        from auth_server.server import _INTERNAL_HOP_TOKEN_HEADERS
-
-        # Enumerated from the set itself so a name added there is covered too.
-        assert _INTERNAL_HOP_TOKEN_HEADERS  # not silently empty
-        for lower in _INTERNAL_HOP_TOKEN_HEADERS:
+        for lower in (
+            "x-internal-token",
+            "x-internal-token-generic",
+            "x-internal-token-registry",
+        ):
             name = "-".join(part.capitalize() for part in lower.split("-"))
             out = self._forward({name: "signed.hop.jwt", "Accept": "application/json"})
             assert name.lower() not in {k.lower() for k in out}, name
@@ -6704,7 +6704,7 @@ class TestValidateA2AAgentAccess:
     """
 
     @staticmethod
-    def _repo(scope_config: dict[str, list]):
+    def _repo(scope_config: dict[str, list], ui_config: dict[str, dict] | None = None):
         """Build a mock scope repository returning the given scope -> config map."""
         repo = AsyncMock()
 
@@ -6716,8 +6716,13 @@ class TestValidateA2AAgentAccess:
             # {scope_name: rules} for the requested scopes.
             return {name: scope_config.get(name, []) for name in scope_names}
 
+        async def get_ui_scopes_bulk(scope_names: list[str]):
+            ui = ui_config or {}
+            return {name: ui[name] for name in scope_names if name in ui}
+
         repo.get_server_scopes.side_effect = get_server_scopes
         repo.get_server_scopes_bulk.side_effect = get_server_scopes_bulk
+        repo.get_ui_scopes_bulk.side_effect = get_ui_scopes_bulk
         return repo
 
     @staticmethod
@@ -6731,20 +6736,29 @@ class TestValidateA2AAgentAccess:
         from auth_server.server import validate_a2a_agent_access
 
         # Legacy nested shape: no {agent, actions} rule, so the flattener yields
-        # nothing invoke-relevant; the admin marker must still grant access.
-        repo = self._repo({"registry-admins": []})
+        # nothing invoke-relevant; the derived admin decision must still grant.
+        repo = self._repo(
+            {"registry-admins": []},
+            ui_config={"registry-admins": {"register_service": ["all"]}},
+        )
         with patch("auth_server.server.get_scope_repository", return_value=repo):
             assert await validate_a2a_agent_access("/travel", ["registry-admins"]) is True
 
-    async def test_admin_group_marker_allows(self):
-        """The admin marker is honored when it arrives as a GROUP, not a scope."""
+    async def test_admin_marker_name_without_admin_grant_denied(self):
+        """A marker group or scope NAME whose scope no longer derives admin is
+        denied: a demoted admin must not keep invoke through the name alone."""
         from auth_server.server import validate_a2a_agent_access
 
-        repo = self._repo({})
+        repo = self._repo(
+            {"registry-admins": []},
+            ui_config={"registry-admins": {"list_service": ["all"]}},
+        )
         with patch("auth_server.server.get_scope_repository", return_value=repo):
             assert (
-                await validate_a2a_agent_access("/travel", [], user_groups=["mcp-registry-admin"])
-                is True
+                await validate_a2a_agent_access(
+                    "/travel", ["registry-admins"], user_groups=["mcp-registry-admin"]
+                )
+                is False
             )
 
     async def test_non_admin_legacy_shape_still_denied(self):
