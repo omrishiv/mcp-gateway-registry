@@ -4095,10 +4095,9 @@ def _build_mock_upstream_response(
 
 
 def _patch_httpx_async_client(mock_upstream_response: MagicMock):
-    """Return a patch context manager that replaces
-    ``auth_server.server.httpx.AsyncClient`` so the ``async with
-    httpx.AsyncClient(...) as client: async with client.stream(...) as
-    response:`` chain yields ``mock_upstream_response``.
+    """Return a patch context manager that replaces the pooled guarded client
+    (``registry.utils.url_guard.shared_guarded_async_client``) the /mcp-proxy hop
+    forwards through, so ``client.stream(...)`` yields ``mock_upstream_response``.
     """
     mock_stream_cm = AsyncMock()
     mock_stream_cm.__aenter__ = AsyncMock(return_value=mock_upstream_response)
@@ -4106,10 +4105,8 @@ def _patch_httpx_async_client(mock_upstream_response: MagicMock):
 
     mock_client = AsyncMock()
     mock_client.stream = MagicMock(return_value=mock_stream_cm)
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    return patch("auth_server.server.httpx.AsyncClient", return_value=mock_client)
+    return patch("registry.utils.url_guard.shared_guarded_async_client", return_value=mock_client)
 
 
 class TestForwardedResponseHeadersAllowlist:
@@ -4940,7 +4937,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
 
 
 def _capture_upstream_headers():
-    """Patch httpx.AsyncClient.stream to record the headers forwarded upstream.
+    """Patch the hop's pooled guarded client to record the headers forwarded upstream.
 
     Returns (patch_cm, captured) where captured['headers'] holds the dict passed
     to client.stream(...) once a request reaches the upstream-call branch.
@@ -4963,27 +4960,12 @@ def _capture_upstream_headers():
 
     mock_client = AsyncMock()
     mock_client.stream = MagicMock(side_effect=_stream)
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-
-    # The egress (token-injected) stream uses the pooled shared_guarded_async_client;
-    # the non-egress stream uses server.httpx.AsyncClient. Patch BOTH to the same
-    # mock so either path records the forwarded headers.
-    from contextlib import contextmanager
-
-    @contextmanager
-    def _patch_both():
-        with (
-            patch("auth_server.server.httpx.AsyncClient", return_value=mock_client),
-            patch(
-                "registry.utils.url_guard.shared_guarded_async_client",
-                return_value=mock_client,
-            ),
-        ):
-            yield
 
     captured["client"] = mock_client
-    return _patch_both(), captured
+    return (
+        patch("registry.utils.url_guard.shared_guarded_async_client", return_value=mock_client),
+        captured,
+    )
 
 
 class _FakeEntraProvider:
@@ -5096,8 +5078,8 @@ class TestMcpProxyOboExchange:
         assert "x-authorization" not in sent
         assert "cookie" not in sent
         assert "x-internal-token" not in sent
-        # The pooled (shared) egress client must NOT be closed per request; only
-        # the per-call non-egress client is. This is the egress path (guarded pool).
+        # The pooled (shared) guarded client is process-lived and must NOT be
+        # closed per request.
         captured["client"].aclose.assert_not_called()
 
     @staticmethod
@@ -8101,14 +8083,12 @@ class TestMcpProxyTransportSubPath:
 
 
 def _patch_upstream_client(mock_upstream_response: MagicMock):
-    """Patch both upstream clients (plain and pooled egress) with one mock.
+    """Patch the hop's pooled guarded upstream client with one mock.
 
     Returns (patch_cm, stream_calls, stream_cm). ``stream_calls`` counts the
     outbound ``client.stream(...)`` calls, and ``stream_cm.__aexit__`` shows
     whether the handler released the upstream response.
     """
-    from contextlib import contextmanager
-
     stream_calls = {"n": 0}
     stream_cm = AsyncMock()
     stream_cm.__aenter__ = AsyncMock(return_value=mock_upstream_response)
@@ -8121,18 +8101,11 @@ def _patch_upstream_client(mock_upstream_response: MagicMock):
     mock_client = AsyncMock()
     mock_client.stream = MagicMock(side_effect=_stream)
 
-    @contextmanager
-    def _patch_both():
-        with (
-            patch("auth_server.server.httpx.AsyncClient", return_value=mock_client),
-            patch(
-                "registry.utils.url_guard.shared_guarded_async_client",
-                return_value=mock_client,
-            ),
-        ):
-            yield
-
-    return _patch_both(), stream_calls, stream_cm
+    return (
+        patch("registry.utils.url_guard.shared_guarded_async_client", return_value=mock_client),
+        stream_calls,
+        stream_cm,
+    )
 
 
 def _endless_sse_upstream_response() -> MagicMock:

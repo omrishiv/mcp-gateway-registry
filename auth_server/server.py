@@ -133,7 +133,12 @@ from registry.exceptions import UrlValidationError
 from registry.repositories.factory import get_scope_repository, get_server_repository
 from registry.utils.logging_setup import setup_logging as _setup_logging
 from registry.utils.request_utils import get_client_ip
-from registry.utils.url_guard import PROXY_PROFILE, guarded_async_client
+from registry.utils.url_guard import (
+    PROXY_PROFILE,
+    credential_bearing_proxy_profile,
+    guarded_async_client,
+    proxy_profile_for_entity_target,
+)
 
 # Let setup_logging resolve the file path from settings.log_dir /
 # {service_name}.log. Honors APP_LOG_DIR overrides and the new
@@ -9284,6 +9289,62 @@ async def _authorize_forwarded_mcp_body(
     )
 
 
+def _mcp_upstream_guard_profile(
+    claims: dict,
+    registered_server: str,
+    outbound_url: str,
+    egress_token_injected: bool,
+) -> Any:
+    """Select the SSRF profile the registry validates and health-checks this backend with.
+
+    The registry picks the profile with
+    ``proxy_profile_for_entity_target("mcp_server", path, proxy_pass_url, url)``.
+    The hop has no registry record, only the signed hop token, and the token
+    carries everything that choice reads:
+
+    - ``server`` is the registered path /validate authorized.
+    - On a direct route ``upstream_url`` IS the registered ``proxy_pass_url``
+      (``selected_upstream``), so it is passed unchanged as the registered target.
+    - On a virtual route ``upstream_url`` is the ``proxy_pass_url`` origin plus the
+      endpoint path. Scheme, host and port, which are all ``PROXY_PROFILE`` reads,
+      are the registered ones. The only decision that reads the registered path is
+      the built-in airegistry-tools selection, which requires the target to be
+      exactly ``http://mcpgw-server:8003/``. nginx renders a virtual route only
+      after ``validate_proxy_pass_url`` accepts the registered URL, and that
+      rejects the reserved ``mcpgw-server`` host under every other target, so a
+      signed virtual upstream on that host always came from the exact built-in
+      target. Its origin with path ``/`` therefore reproduces the registered
+      target for every case the decision distinguishes.
+
+    The built-in profile still requires the outbound URL to be one of its exact
+    identities; any other URL raises ``UrlValidationError``.
+
+    Args:
+        claims: Verified mcp-proxy token claims.
+        registered_server: The ``server`` claim.
+        outbound_url: The URL this request is sent to.
+        egress_token_injected: Whether a vaulted egress credential was injected.
+
+    Returns:
+        The registry's profile for this backend, or its credential-bearing twin
+        when a credential was injected.
+
+    Raises:
+        UrlValidationError: The outbound URL does not match the built-in identity.
+    """
+    signed_upstream = claims["upstream_url"]
+    registered_target = signed_upstream
+    if claims.get("virtual_backend") is True:
+        parsed = urlsplit(signed_upstream)
+        registered_target = f"{parsed.scheme}://{parsed.netloc}/"
+    profile = proxy_profile_for_entity_target(
+        "mcp_server", registered_server, registered_target, outbound_url
+    )
+    if egress_token_injected:
+        return credential_bearing_proxy_profile(profile)
+    return profile
+
+
 @app.post("/mcp-proxy/{server_name:path}", dependencies=[Depends(verify_mcp_proxy_token)])
 async def mcp_proxy(
     server_name: str,
@@ -9700,30 +9761,21 @@ async def mcp_proxy(
         f"mcp_proxy: server={server_name} method={incoming_method} filter_enabled={filter_enabled} timeout={proxy_timeout}"
     )
 
-    # When the gateway injected a third-party credential, pin the egress
-    # connection: resolve+pin the IP (rebinding-safe) and hard-deny cloud/
-    # workload credential + metadata endpoints, so a repointed egress upstream
-    # cannot exfiltrate the injected credential to IMDS/ECS/EKS creds via a DNS
-    # rebind. Private / hostname-private MCP upstreams stay reachable. Non-egress
-    # traffic keeps the plain client (no injected credential to protect, and many
-    # internal upstreams legitimately resolve to private addresses).
-    from registry.exceptions import UrlValidationError
-    from registry.utils.url_guard import (
-        EGRESS_UPSTREAM_PROFILE,
-        shared_guarded_async_client,
-    )
+    # Every request goes through the pooled SSRF-guarded client under the SAME
+    # policy the registry used to validate and health-check this backend (see
+    # _mcp_upstream_guard_profile): the transport validates, resolves and pins the
+    # connection IP on each request, so a backend name that passed the pinned
+    # health check cannot rebind to loopback, a private address or metadata here.
+    # An injected credential gets the credential-bearing twin of that profile. The
+    # pooled client is process-lived: it is never closed per request. Timeout is
+    # passed per request.
+    from registry.utils.url_guard import shared_guarded_async_client
 
-    # egress-injected: pooled + SSRF-guarded (keep-alive reuse; this pooled client
-    # is process-lived and must NOT be closed per request). non-egress: no injected
-    # credential to protect and many internal upstreams are private, so keep the
-    # per-call plain client (closed in the finally). Timeout is passed per-request.
-    if egress_token_injected:
-        proxy_client = shared_guarded_async_client(profile=EGRESS_UPSTREAM_PROFILE)
-        close_proxy_client = False
-    else:
-        proxy_client = httpx.AsyncClient(timeout=proxy_timeout)
-        close_proxy_client = True
     try:
+        upstream_profile = _mcp_upstream_guard_profile(
+            claims, registered_server, upstream_url, egress_token_injected
+        )
+        proxy_client = shared_guarded_async_client(profile=upstream_profile)
         # The httpx timeout applies to each read, not to the whole exchange. An
         # upstream that keeps sending (SSE keep-alives) never trips it, so the
         # overall deadline is what releases the connection (#1890). nginx's
@@ -9752,13 +9804,14 @@ async def mcp_proxy(
     except HTTPException:
         raise
     except UrlValidationError as exc:
-        # The injected credential was about to be sent to a blocked destination
-        # (metadata/credential endpoint or an otherwise-denied target). Fail
-        # closed -- never forward the credential.
+        # The backend (or a rebound DNS answer for it) is outside the policy the
+        # registry admits it under. Fail closed: nothing, and in particular no
+        # injected credential, is sent.
         logger.error(
-            "mcp_proxy: egress upstream %s blocked by egress SSRF guard: %s",
-            upstream_url,
-            exc,
+            "mcp_proxy: upstream %s for server=%s blocked by egress SSRF guard: %s",
+            redact_url(upstream_url),
+            registered_server,
+            exc.reason,
         )
         raise HTTPException(
             status_code=502,
@@ -9785,11 +9838,6 @@ async def mcp_proxy(
             status_code=502,
             detail="Upstream MCP server error",
         ) from exc
-    finally:
-        # The pooled (shared) client is process-lived and reused; only the
-        # per-call non-egress client is closed here.
-        if close_proxy_client:
-            await proxy_client.aclose()
 
     is_sse_response = _is_sse_content_type(content_type)
     should_filter = _should_filter_tools_list(

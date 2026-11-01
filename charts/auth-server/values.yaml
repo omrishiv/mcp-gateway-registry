@@ -154,6 +154,18 @@ app:
   gatewayGenericAcquireTimeoutSeconds: 5 # Max wait (s) for either concurrency pool before 503
   gatewayGenericStreamMaxDurationSeconds: 3600 # Absolute lifetime (s) for one stream
   gatewayGenericStreamMaxBytes: "104857600" # Raw response-byte ceiling per stream (100 MiB)
+  # SSRF policy for the MCP proxy hop. The hop dials every registered backend
+  # through the same SSRF guard profile the registry used to register and
+  # health-check it, and that profile reads these three values. They MUST equal
+  # the registry chart's app.ssrfAllowedHosts / app.ssrfAllowedCidrs /
+  # app.gatewayProxyAllowPrivateTargets: a tighter value here refuses backends
+  # the registry reports healthy, a looser one lets the hop dial hosts the
+  # registry refused. The umbrella chart feeds both subcharts from one value and
+  # fails the render if they differ. Metadata and workload-credential endpoints
+  # stay hard-denied regardless.
+  ssrfAllowedHosts: "" # Exact hostnames or literal IPs (comma-separated, no wildcards)
+  ssrfAllowedCidrs: "" # CIDR ranges (comma-separated) for whole internal subnets
+  gatewayProxyAllowPrivateTargets: false # Allow private/loopback targets (metadata always denied)
   # Forward-proxy egress for the SSRF-guarded clients (issue #1832). OFF by
   # default. Only needed where the pod has NO direct internet egress and all
   # outbound traffic must traverse a corporate forward proxy.

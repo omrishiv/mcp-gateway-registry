@@ -3,8 +3,9 @@
 The gateway pools its outbound (egress) HTTP clients so repeated egress calls
 reuse warm TCP+TLS connections instead of handshaking on every request. This
 covers the OBO token exchange, the 3LO exchange/refresh, the egress-token vend,
-the MCP-proxy egress stream, the registry health-check loop, and the browser
-login OAuth callback (authorization-code token exchange + userinfo).
+the MCP-proxy upstream stream (with or without an injected egress credential),
+the registry health-check loop, and the browser login OAuth callback
+(authorization-code token exchange + userinfo).
 
 Pooling is on by default and requires no configuration. This page documents the
 tuning knobs, the observability signal, and the correct rollback lever.

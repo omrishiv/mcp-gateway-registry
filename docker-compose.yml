@@ -700,6 +700,12 @@ services:
       # OBO (same-IdP) token exchange against a self-hosted IdP: allowlist its
       # private-resolving token endpoint. Must match the registry's value.
       - EGRESS_OAUTH_TRUSTED_IDP_HOSTS=${EGRESS_OAUTH_TRUSTED_IDP_HOSTS:-}
+      # SSRF policy for the MCP proxy hop. The hop dials each backend through the
+      # same SSRF profile the registry used to register and health-check it, so
+      # these MUST match the registry service's values (same .env variables).
+      - SSRF_ALLOWED_HOSTS=${SSRF_ALLOWED_HOSTS:-}
+      - SSRF_ALLOWED_CIDRS=${SSRF_ALLOWED_CIDRS:-}
+      - GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS=${GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS:-false}
       - EGRESS_CONSENT_USE_ELICITATION=${EGRESS_CONSENT_USE_ELICITATION:-false}
       # Egress httpx client connection pooling (shared by url_guard). Keep
       # keepalive_expiry below the shortest upstream/LB idle timeout.

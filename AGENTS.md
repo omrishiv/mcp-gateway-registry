@@ -322,7 +322,10 @@ working in those areas.
 - **SSRF:** one shared hardened URL guard for every outbound fetch. Block
   RFC-1918/loopback/link-local/reserved/multicast and exact cloud/workload
   metadata endpoints (AWS plus Alibaba `100.100.100.200`), including scoped/
-  mapped/NAT64/6to4/Teredo forms. Validate at registration AND pin at fetch time.
+  mapped/NAT64/6to4/Teredo forms. Validate at registration AND pin at fetch time,
+  with the SAME profile: the auth-server `/mcp-proxy/` hop dials through
+  `proxy_profile_for_entity_target` (or `credential_bearing_proxy_profile`), never
+  a bare `httpx` client, and gets the registry's SSRF settings on every surface.
   Credentialed OAuth token endpoints MUST use the HTTPS-only empty-allowlist
   `CREDENTIALED_OAUTH_PROFILE` at both points, never `PROXY_PROFILE`. Credential
   builders self-guard the exact derived destination before adding/decrypting any

@@ -1,0 +1,6 @@
+{{- /*
+Renders no resources. Fails the release when the registry and the auth-server
+would receive different SSRF policy values; see
+"mcp-gateway-registry-stack.validateSsrfPolicyParity" in _helpers.tpl.
+*/ -}}
+{{- include "mcp-gateway-registry-stack.validateSsrfPolicyParity" . -}}

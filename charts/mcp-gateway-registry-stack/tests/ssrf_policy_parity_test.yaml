@@ -1,0 +1,129 @@
+suite: registry and auth-server share one SSRF policy
+release:
+  name: test
+  namespace: default
+tests:
+  # The auth-server MCP proxy hop applies the registry's SSRF policy, so the
+  # shipped stack values must hand both subcharts the same value.
+  - it: renders the shipped SSRF policy into the auth-server
+    templates:
+      - charts/auth-server/templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_HOSTS
+            value: ""
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_CIDRS
+            value: ""
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
+            value: "false"
+
+  - it: renders the shipped SSRF policy into the registry
+    templates:
+      - charts/registry/templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_HOSTS
+            value: ""
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_CIDRS
+            value: ""
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
+            value: "false"
+
+  - it: forwards a matching SSRF policy to the auth-server
+    templates:
+      - charts/auth-server/templates/deployment.yaml
+    set:
+      registry:
+        app:
+          ssrfAllowedHosts: "obo-echo.mcp-entra.svc.cluster.local"
+          ssrfAllowedCidrs: "172.20.0.0/16"
+          gatewayProxyAllowPrivateTargets: true
+      auth-server:
+        app:
+          ssrfAllowedHosts: "obo-echo.mcp-entra.svc.cluster.local"
+          ssrfAllowedCidrs: "172.20.0.0/16"
+          gatewayProxyAllowPrivateTargets: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_HOSTS
+            value: "obo-echo.mcp-entra.svc.cluster.local"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_CIDRS
+            value: "172.20.0.0/16"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
+            value: "true"
+
+  - it: accepts a matching SSRF policy override
+    templates:
+      - templates/validate-ssrf-policy.yaml
+    set:
+      registry:
+        app:
+          ssrfAllowedHosts: "obo-echo.mcp-entra.svc.cluster.local"
+          gatewayProxyAllowPrivateTargets: true
+      auth-server:
+        app:
+          ssrfAllowedHosts: "obo-echo.mcp-entra.svc.cluster.local"
+          gatewayProxyAllowPrivateTargets: "true"
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: rejects an allowed-hosts override set on the registry only
+    templates:
+      - templates/validate-ssrf-policy.yaml
+    set:
+      registry:
+        app:
+          ssrfAllowedHosts: "obo-echo.mcp-entra.svc.cluster.local"
+    asserts:
+      - failedTemplate:
+          errorPattern: "SSRF policy mismatch: registry.app.ssrfAllowedHosts"
+
+  - it: rejects an allowed-CIDRs override set on the auth-server only
+    templates:
+      - templates/validate-ssrf-policy.yaml
+    set:
+      auth-server:
+        app:
+          ssrfAllowedCidrs: "0.0.0.0/0"
+    asserts:
+      - failedTemplate:
+          errorPattern: "SSRF policy mismatch: registry.app.ssrfAllowedCidrs"
+
+  - it: rejects a private-targets switch that differs between the two pods
+    templates:
+      - templates/validate-ssrf-policy.yaml
+    set:
+      registry:
+        app:
+          gatewayProxyAllowPrivateTargets: false
+      auth-server:
+        app:
+          gatewayProxyAllowPrivateTargets: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "SSRF policy mismatch: registry.app.gatewayProxyAllowPrivateTargets"

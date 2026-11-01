@@ -350,7 +350,7 @@ class TestRoutingScope:
         transport = url_guard.GuardedAsyncTransport(guard_profile=url_guard.EGRESS_UPSTREAM_PROFILE)
         with (
             patch.dict("os.environ", _proxy_env(), clear=True),
-            patch.object(url_guard, "settings", _settings()),
+            patch.object(url_guard, "settings", _settings(ssrf_allowed_cidrs="10.0.0.0/8")),
         ):
             routed = await transport._route_request_async(
                 httpx.Request("GET", f"https://{PRIVATE_IP}:8443/mcp")

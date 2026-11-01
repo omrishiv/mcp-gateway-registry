@@ -522,7 +522,15 @@ registry:
     # NetworkPolicy that MUST be deployed before enabling.
     gatewayGenericProxyEnabled: false
     gatewayCanonicalNamespaceEnabled: false
-    gatewayProxyAllowPrivateTargets: false
+    # SSRF policy (registry registration + health check, and the auth-server MCP
+    # proxy hop). Each value is anchored here and aliased into auth-server.app so
+    # both pods apply the same policy; the stack render fails if an override
+    # makes them differ. For in-cluster MCP servers set ssrfAllowedHosts (exact
+    # hostnames, least privilege) or ssrfAllowedCidrs (e.g. the cluster service
+    # CIDR). Metadata and workload-credential endpoints are never permitted.
+    ssrfAllowedHosts: &ssrfAllowedHosts ""
+    ssrfAllowedCidrs: &ssrfAllowedCidrs ""
+    gatewayProxyAllowPrivateTargets: &gatewayProxyAllowPrivateTargets false
     gatewayGenericClientMaxBodySize: "1m"
     gatewayProxyPrefix: "gateway" # URL path prefix for auto-generated client routes (/{prefix}/{type}/{name})
     gatewayGenericStreamReadTimeoutSeconds: 3600 # nginx proxy_read_timeout (s) for proxy_streaming routes
@@ -717,6 +725,12 @@ auth-server:
     gatewayGenericAcquireTimeoutSeconds: 5
     gatewayGenericStreamMaxDurationSeconds: 3600
     gatewayGenericStreamMaxBytes: "104857600" # string to avoid Helm float sci-notation
+    # SSRF policy for the MCP proxy hop: aliases of registry.app above, so the
+    # hop admits exactly the backends the registry registered and health-checks.
+    # Override both sides together; the stack render fails if they differ.
+    ssrfAllowedHosts: *ssrfAllowedHosts
+    ssrfAllowedCidrs: *ssrfAllowedCidrs
+    gatewayProxyAllowPrivateTargets: *gatewayProxyAllowPrivateTargets
   # Egress HTTP connection pooling (operational tuning). MUST match
   # registry.egressAuth above. See that block for guidance; the rest of egressAuth
   # (oauthTrustedIdpHosts, secretsManager, callback URLs) stays subchart-defaulted.

@@ -330,6 +330,15 @@ spec:
               value: {{ .Values.app.gatewayGenericStreamMaxDurationSeconds | default 3600 | toString | quote }}
             - name: GATEWAY_GENERIC_STREAM_MAX_BYTES
               value: {{ .Values.app.gatewayGenericStreamMaxBytes | default 104857600 | int64 | quote }}
+            # SSRF policy for the MCP proxy hop: the same SSRF guard profile the
+            # registry used to register and health-check a backend, so these MUST
+            # match the registry chart's values (the umbrella chart enforces it).
+            - name: SSRF_ALLOWED_HOSTS
+              value: {{ .Values.app.ssrfAllowedHosts | default "" | quote }}
+            - name: SSRF_ALLOWED_CIDRS
+              value: {{ .Values.app.ssrfAllowedCidrs | default "" | quote }}
+            - name: GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
+              value: {{ .Values.app.gatewayProxyAllowPrivateTargets | default false | toString | quote }}
             # Forward-proxy egress for the SSRF-guarded clients (issue #1832).
             # OFF by default; see values.yaml for the security trade-off. The CA
             # bundle path is DERIVED from the caBundle block so an operator never

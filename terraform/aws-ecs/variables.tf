@@ -1836,13 +1836,13 @@ variable "a2a_reverse_proxy_enabled" {
 }
 
 variable "ssrf_allowed_hosts" {
-  description = "Comma-separated hostnames (or literal IPs) that may resolve to private addresses and still be accepted by the SSRF guard for MCP-server proxy_pass_url / A2A-agent URLs. The cloud metadata endpoint is never permitted."
+  description = "Comma-separated hostnames (or literal IPs) that may resolve to private addresses and still be accepted by the SSRF guard for MCP-server proxy_pass_url / A2A-agent URLs. Applied by both the registry and the auth-server MCP proxy hop. The cloud metadata endpoint is never permitted."
   type        = string
   default     = ""
 }
 
 variable "ssrf_allowed_cidrs" {
-  description = "Comma-separated CIDR ranges the SSRF guard accepts for MCP-server / A2A-agent upstreams even though they are private. The cloud metadata address 169.254.169.254 is never permitted."
+  description = "Comma-separated CIDR ranges the SSRF guard accepts for MCP-server / A2A-agent upstreams even though they are private. Applied by both the registry and the auth-server MCP proxy hop. The cloud metadata address 169.254.169.254 is never permitted."
   type        = string
   default     = ""
 }
@@ -2188,10 +2188,12 @@ variable "registry_extra_env" {
           "GATEWAY_PROXY_PREFIX",
           "GATEWAY_GENERIC_STREAM_READ_TIMEOUT_SECONDS",
           "SEARCH_LOG_QUERY_TEXT",
+          "SSRF_ALLOWED_HOSTS",
+          "SSRF_ALLOWED_CIDRS",
         ], upper(trimspace(entry.name)))
       )
     ])
-    error_message = "registry_extra_env must not override Terraform-managed variables (AWS_EC2_METADATA_DISABLED, the canonical gateway_* generic-proxy variables, or SEARCH_LOG_QUERY_TEXT; use the matching Terraform variable instead)."
+    error_message = "registry_extra_env must not override Terraform-managed variables (AWS_EC2_METADATA_DISABLED, the canonical gateway_* generic-proxy variables, SEARCH_LOG_QUERY_TEXT, or SSRF_ALLOWED_HOSTS / SSRF_ALLOWED_CIDRS, which the auth-server shares; use the matching Terraform variable instead)."
   }
 
   # Forward-proxy egress: NO_PROXY must exclude the cloud credential endpoints.
@@ -2227,7 +2229,7 @@ variable "registry_extra_env" {
 }
 
 variable "auth_server_extra_env" {
-  description = "Extra environment variables for the auth-server service. AWS_EC2_METADATA_DISABLED is Terraform-managed and cannot be overridden. For secrets, prefer AWS Secrets Manager ARNs wired into the task definition's secrets block."
+  description = "Extra environment variables for the auth-server service. AWS_EC2_METADATA_DISABLED and the SSRF policy names (SSRF_ALLOWED_HOSTS, SSRF_ALLOWED_CIDRS, GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS, set from the registry's variables) are Terraform-managed and cannot be overridden. For secrets, prefer AWS Secrets Manager ARNs wired into the task definition's secrets block."
   type        = list(object({ name = string, value = string }))
   default     = []
   sensitive   = true
@@ -2247,9 +2249,12 @@ variable "auth_server_extra_env" {
         "GATEWAY_GENERIC_STREAM_MAX_DURATION_SECONDS",
         "GATEWAY_GENERIC_STREAM_MAX_BYTES",
         "AWS_EC2_METADATA_DISABLED",
+        "SSRF_ALLOWED_HOSTS",
+        "SSRF_ALLOWED_CIDRS",
+        "GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS",
       ], upper(trimspace(entry.name)))
     ])
-    error_message = "auth_server_extra_env must not override Terraform-managed generic-proxy or metadata-hardening variables; use the canonical variables instead."
+    error_message = "auth_server_extra_env must not override Terraform-managed generic-proxy, SSRF policy or metadata-hardening variables; use the canonical variables instead (the SSRF policy must match the registry's)."
   }
 
   # Forward-proxy egress: NO_PROXY must exclude the cloud credential endpoints.
@@ -2467,7 +2472,7 @@ variable "gateway_canonical_namespace_enabled" {
 }
 
 variable "gateway_proxy_allow_private_targets" {
-  description = "Allow the generic proxy to reach private/internal network targets. Off by default to keep the SSRF egress guard fail-closed."
+  description = "Allow the generic proxy, and the SSRF guard the registry and the auth-server MCP proxy hop both apply, to reach private/internal network targets. Off by default to keep the SSRF egress guard fail-closed; metadata endpoints stay denied."
   type        = bool
   default     = false
 }

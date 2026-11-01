@@ -51,6 +51,11 @@ Validation profiles separate the registry's distinct outbound trust surfaces:
   but operators who legitimately proxy to internal MCP servers can opt those
   targets in via ``settings.ssrf_allowed_hosts`` / ``settings.ssrf_allowed_cidrs``.
   Cloud/workload credential endpoints are never allowlistable in any profile.
+  The auth-server ``/mcp-proxy/`` hop selects the same profile the registry's
+  health check uses (``proxy_profile_for_entity_target``); when it injects an
+  egress credential it uses the credential-bearing twin from
+  ``credential_bearing_proxy_profile`` (``EGRESS_UPSTREAM_PROFILE`` or
+  ``BUILTIN_AIREGISTRY_TOOLS_EGRESS_PROFILE``), which shares the allowlist.
 
 - **Credential-bearing OAuth token endpoints**
   (``CREDENTIALED_OAUTH_PROFILE``): HTTPS-only, and public-only unless the
@@ -825,7 +830,7 @@ async def _resolves_exclusively_public_async(
     """
     literal = coerce_ip_literal(hostname)
     if literal is not None:
-        return not _is_blocked_ip(hostname, _Allowlist(), allow_private=False)
+        return not _is_blocked_ip(hostname, _Allowlist())
     try:
         loop = asyncio.get_running_loop()
         addr_info = await asyncio.wait_for(
@@ -841,7 +846,7 @@ async def _resolves_exclusively_public_async(
     addresses = {str(info[4][0]) for info in addr_info}
     if not addresses:
         return None
-    return all(not _is_blocked_ip(ip, _Allowlist(), allow_private=False) for ip in addresses)
+    return all(not _is_blocked_ip(ip, _Allowlist()) for ip in addresses)
 
 
 def _build_proxy(
@@ -1215,18 +1220,6 @@ def _entra_graph_allowlist() -> _Allowlist:
     return _Allowlist(hosts=frozenset({host}))
 
 
-def _egress_upstream_allowlist() -> _Allowlist:
-    """Empty allowlist for the egress-injected proxy hop.
-
-    Deliberately touches no settings so it is importable from the auth-server
-    process (which does not build the registry Settings). Combined with
-    ``allow_private=True`` on EGRESS_UPSTREAM_PROFILE, the hop pins to the
-    resolved IP and permits private / hostname-private MCP upstreams, while the
-    cloud/workload credential + metadata endpoints stay hard-denied.
-    """
-    return _Allowlist()
-
-
 def _federation_allowlist() -> _Allowlist:
     """Return the peer-federation allowlist: deliberately empty (no bypass).
 
@@ -1250,7 +1243,6 @@ class _Profile:
     allowlist_factory: object  # callable returning _Allowlist
     allowed_url_identities: frozenset[str] | None = None
     require_https: bool = False
-    allow_private: bool = False
     # Profiles whose requests carry a secret (client secret, refresh token,
     # bearer, injected egress credential). On the forward-proxied path these are
     # HTTPS-only, so the secret rides inside a CONNECT tunnel and the proxy sees
@@ -1285,12 +1277,47 @@ ENTRA_GRAPH_PROFILE = _Profile(
     require_https=True,
     credential_bearing=True,  # delegated bearer token, including through a proxy
 )
+# Credential-bearing twins of the two MCP proxy profiles, used when the auth-server
+# hop forwards a request carrying an injected egress credential. Each shares its
+# twin's allowlist (SSRF_ALLOWED_HOSTS / SSRF_ALLOWED_CIDRS /
+# GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS), so an injected credential reaches exactly
+# the backends the registry admits; only the forward-proxy cleartext refusal is
+# added. Credential and metadata endpoints stay hard-denied as in every profile.
 EGRESS_UPSTREAM_PROFILE = _Profile(
     name="egress-upstream",
-    allowlist_factory=_egress_upstream_allowlist,
-    allow_private=True,
+    allowlist_factory=_proxy_allowlist,
     credential_bearing=True,  # carries the injected egress credential
 )
+BUILTIN_AIREGISTRY_TOOLS_EGRESS_PROFILE = _Profile(
+    name="builtin-airegistry-tools-egress",
+    allowlist_factory=_builtin_airegistry_tools_allowlist,
+    allowed_url_identities=_BUILTIN_AIREGISTRY_TOOLS_OUTBOUND_IDENTITIES,
+    credential_bearing=True,  # carries the injected egress credential
+)
+_BUILTIN_AIREGISTRY_TOOLS_PROFILES: tuple[_Profile, ...] = (
+    BUILTIN_AIREGISTRY_TOOLS_PROFILE,
+    BUILTIN_AIREGISTRY_TOOLS_EGRESS_PROFILE,
+)
+
+
+def credential_bearing_proxy_profile(profile: _Profile) -> _Profile:
+    """Return the credential-bearing twin of an MCP proxy profile.
+
+    Args:
+        profile: A profile returned by ``proxy_profile_for_entity_target``.
+
+    Returns:
+        ``EGRESS_UPSTREAM_PROFILE`` for ``PROXY_PROFILE`` and
+        ``BUILTIN_AIREGISTRY_TOOLS_EGRESS_PROFILE`` for the built-in profile.
+
+    Raises:
+        ValueError: ``profile`` is not an MCP proxy profile.
+    """
+    if profile is PROXY_PROFILE:
+        return EGRESS_UPSTREAM_PROFILE
+    if profile is BUILTIN_AIREGISTRY_TOOLS_PROFILE:
+        return BUILTIN_AIREGISTRY_TOOLS_EGRESS_PROFILE
+    raise ValueError(f"profile {profile.name!r} has no credential-bearing MCP proxy twin")
 
 
 def proxy_profile_for_entity_target(
@@ -1324,7 +1351,6 @@ def _is_blocked_ip(
     allowlist: _Allowlist,
     *,
     trusted_hostname: bool = False,
-    allow_private: bool = False,
 ) -> bool:
     """Return True if an IP must not be the target of a server-side fetch.
 
@@ -1343,13 +1369,11 @@ def _is_blocked_ip(
     return (
         _ip_denial_reason(
             ip,
-            # allow_private is honored from EITHER source: the threaded flag
-            # (profile.allow_private, e.g. EGRESS_UPSTREAM_PROFILE=True) or the
-            # allowlist (allowlist.allow_private, set from
-            # gateway_proxy_allow_private_targets). Metadata/credential/link-local
-            # /reserved/multicast stay hard-denied in _ip_denial_reason before
-            # any relaxation, so this only ever relaxes loopback/private/CGNAT.
-            allow_private=allow_private or allowlist.allow_private,
+            # allowlist.allow_private comes from gateway_proxy_allow_private_targets.
+            # Metadata/credential/link-local/reserved/multicast stay hard-denied in
+            # _ip_denial_reason before any relaxation, so this only ever relaxes
+            # loopback/private/CGNAT.
+            allow_private=allowlist.allow_private,
             allowed_cidrs=allowed_cidrs,
         )
         is not None
@@ -1360,17 +1384,13 @@ def _validate_resolved_ips(
     hostname: str,
     addr_info: list[tuple],
     allowlist: _Allowlist,
-    *,
-    allow_private: bool = False,
 ) -> list[str]:
     """Validate every resolver answer and return a de-duplicated IP list."""
     trusted_hostname = allowlist.allows_host(hostname.lower())
     ips: list[str] = []
     for _family, _socktype, _proto, _canonname, sockaddr in addr_info:
         ip_str = str(sockaddr[0])
-        if _is_blocked_ip(
-            ip_str, allowlist, trusted_hostname=trusted_hostname, allow_private=allow_private
-        ):
+        if _is_blocked_ip(ip_str, allowlist, trusted_hostname=trusted_hostname):
             raise UrlValidationError(hostname, f"resolves to blocked/private IP {ip_str}")
         if ip_str not in ips:
             ips.append(ip_str)
@@ -1383,23 +1403,19 @@ def _resolve_public_ips(
     hostname: str,
     port: int,
     allowlist: _Allowlist,
-    *,
-    allow_private: bool = False,
 ) -> list[str]:
     """Synchronously resolve, classify, and return every destination IP."""
     try:
         addr_info = socket.getaddrinfo(hostname, port, proto=socket.IPPROTO_TCP)
     except socket.gaierror as exc:
         raise UrlValidationError(hostname, f"DNS resolution failed: {exc}") from exc
-    return _validate_resolved_ips(hostname, addr_info, allowlist, allow_private=allow_private)
+    return _validate_resolved_ips(hostname, addr_info, allowlist)
 
 
 async def _resolve_public_ips_async(
     hostname: str,
     port: int,
     allowlist: _Allowlist,
-    *,
-    allow_private: bool = False,
 ) -> list[str]:
     """Resolve without blocking the event loop, under a fixed DNS deadline."""
     loop = asyncio.get_running_loop()
@@ -1412,7 +1428,7 @@ async def _resolve_public_ips_async(
         raise UrlValidationError(hostname, "DNS resolution timed out") from exc
     except socket.gaierror as exc:
         raise UrlValidationError(hostname, f"DNS resolution failed: {exc}") from exc
-    return _validate_resolved_ips(hostname, addr_info, allowlist, allow_private=allow_private)
+    return _validate_resolved_ips(hostname, addr_info, allowlist)
 
 
 def contains_nginx_metacharacters(
@@ -1501,7 +1517,7 @@ def validate_url(
     # not mistaken for opaque hostnames.
     literal = coerce_ip_literal(hostname)
     if literal is not None:
-        if _is_blocked_ip(hostname, allowlist, allow_private=profile.allow_private):
+        if _is_blocked_ip(hostname, allowlist):
             raise UrlValidationError(url, f"targets blocked/private IP {hostname}")
         return [str(literal)]
 
@@ -1510,9 +1526,8 @@ def validate_url(
     # exact airegistry-tools entity/path/full-target selector receives the
     # dedicated profile that can admit it. A trailing root dot names the same
     # host to the resolver (``mcpgw-server.``), so it is stripped for the check.
-    if (
-        hostname_lower.rstrip(".") in _RESERVED_BUILTIN_PROXY_HOSTS
-        and profile is not BUILTIN_AIREGISTRY_TOOLS_PROFILE
+    if hostname_lower.rstrip(".") in _RESERVED_BUILTIN_PROXY_HOSTS and not any(
+        profile is builtin for builtin in _BUILTIN_AIREGISTRY_TOOLS_PROFILES
     ):
         raise UrlValidationError(
             url, "hostname is reserved for the built-in airegistry-tools server"
@@ -1531,7 +1546,7 @@ def validate_url(
         logger.debug(f"URL guard[{profile.name}]: resolving trusted host '{hostname_lower}'")
 
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    return _resolve_public_ips(hostname, port, allowlist, allow_private=profile.allow_private)
+    return _resolve_public_ips(hostname, port, allowlist)
 
 
 def validate_proxy_pass_url(
@@ -1726,12 +1741,10 @@ class _PinnedResolverMixin:
         """Synchronously validate, resolve, and pin a request."""
         url, _scheme, hostname, port, allowlist = self._request_target(request)
         if coerce_ip_literal(hostname) is not None:
-            if _is_blocked_ip(hostname, allowlist, allow_private=self._guard_profile.allow_private):
+            if _is_blocked_ip(hostname, allowlist):
                 raise UrlValidationError(str(url), f"targets blocked/private IP {hostname}")
             return self._hop_request(request, None)
-        pinned_ip = _resolve_public_ips(
-            hostname, port, allowlist, allow_private=self._guard_profile.allow_private
-        )[0]
+        pinned_ip = _resolve_public_ips(hostname, port, allowlist)[0]
         return self._hop_request(request, pinned_ip)
 
     async def _pin_request_async(
@@ -1741,14 +1754,10 @@ class _PinnedResolverMixin:
         """Asynchronously validate, resolve under deadline, and pin a request."""
         url, _scheme, hostname, port, allowlist = self._request_target(request)
         if coerce_ip_literal(hostname) is not None:
-            if _is_blocked_ip(hostname, allowlist, allow_private=self._guard_profile.allow_private):
+            if _is_blocked_ip(hostname, allowlist):
                 raise UrlValidationError(str(url), f"targets blocked/private IP {hostname}")
             return self._hop_request(request, None)
-        pinned_ip = (
-            await _resolve_public_ips_async(
-                hostname, port, allowlist, allow_private=self._guard_profile.allow_private
-            )
-        )[0]
+        pinned_ip = (await _resolve_public_ips_async(hostname, port, allowlist))[0]
         return self._hop_request(request, pinned_ip)
 
     # -- Forward-proxy routing (see the module docstring) --------------------
@@ -1815,8 +1824,8 @@ class _PinnedResolverMixin:
     ) -> bool:
         """Return True if an address is internal, ignoring every relaxation.
 
-        Delegates to the canonical classifier with an EMPTY allowlist and
-        ``allow_private=False``, so this introduces no second opinion about what
+        Delegates to the canonical classifier with an EMPTY allowlist (so
+        ``allow_private`` is False), so this introduces no second opinion about what
         counts as internal. An address the classifier rejects with no relaxations
         applied is internal by definition; one it accepts is on the public
         internet.
@@ -1825,7 +1834,7 @@ class _PinnedResolverMixin:
         decided by ``_validated_addresses*``, which applied the profile's
         allowlist and raised on anything genuinely forbidden.
         """
-        return _is_blocked_ip(ip_str, _Allowlist(), allow_private=False)
+        return _is_blocked_ip(ip_str, _Allowlist())
 
     def _validated_addresses(
         self,
@@ -1842,13 +1851,11 @@ class _PinnedResolverMixin:
         branches.
         """
         if coerce_ip_literal(hostname) is not None:
-            if _is_blocked_ip(hostname, allowlist, allow_private=self._guard_profile.allow_private):
+            if _is_blocked_ip(hostname, allowlist):
                 raise UrlValidationError(str(url), f"targets blocked/private IP {hostname}")
             return [hostname]
         # Raises if ANY answer is blocked under the profile's allowlist.
-        return _resolve_public_ips(
-            hostname, port, allowlist, allow_private=self._guard_profile.allow_private
-        )
+        return _resolve_public_ips(hostname, port, allowlist)
 
     async def _validated_addresses_async(
         self,
@@ -1859,12 +1866,10 @@ class _PinnedResolverMixin:
     ) -> list[str]:
         """Async twin of :meth:`_validated_addresses`."""
         if coerce_ip_literal(hostname) is not None:
-            if _is_blocked_ip(hostname, allowlist, allow_private=self._guard_profile.allow_private):
+            if _is_blocked_ip(hostname, allowlist):
                 raise UrlValidationError(str(url), f"targets blocked/private IP {hostname}")
             return [hostname]
-        return await _resolve_public_ips_async(
-            hostname, port, allowlist, allow_private=self._guard_profile.allow_private
-        )
+        return await _resolve_public_ips_async(hostname, port, allowlist)
 
     def _route_on_addresses(
         self,

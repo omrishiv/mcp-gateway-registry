@@ -110,16 +110,15 @@ def _tools_call(name: str) -> dict:
 def _proxy_patches(vend: dict | None):
     """Patch the proxy hop's collaborators and expose the upstream clients.
 
-    Yields a dict of the two upstream client factories, so a test can assert
-    that neither was used (nothing was forwarded).
+    Yields a dict holding the upstream client factory, so a test can assert
+    that it was not used (nothing was forwarded).
     """
     import auth_server.server as server_module
 
     async def _vend(token, server):
         return vend
 
-    plain_client = MagicMock(side_effect=AssertionError("forwarded with the plain client"))
-    guarded_client = MagicMock(side_effect=AssertionError("forwarded with the guarded client"))
+    guarded_client = MagicMock(side_effect=AssertionError("forwarded upstream"))
     with (
         patch.object(server_module.settings, "egress_auth_enabled", vend is not None),
         patch.object(server_module.settings, "egress_consent_use_elicitation", False),
@@ -127,10 +126,9 @@ def _proxy_patches(vend: dict | None):
         patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
         patch("auth_server.server.get_scope_repository", return_value=_limited_scope_repo()),
         patch("auth_server.server._get_blocked_tools", new=AsyncMock(return_value=set())),
-        patch("auth_server.server.httpx.AsyncClient", plain_client),
         patch("registry.utils.url_guard.shared_guarded_async_client", guarded_client),
     ):
-        yield {"plain": plain_client, "guarded": guarded_client}
+        yield {"guarded": guarded_client}
 
 
 def _consent_vend() -> dict:
@@ -309,7 +307,6 @@ class TestMcpProxyConnectTool:
         assert "reconnect this server" in text
         assert "load its github tools" in text
         assert "run this tool again" not in text
-        clients["plain"].assert_not_called()
         clients["guarded"].assert_not_called()
 
     def test_pre_consent_ordinary_tool_call_still_asks_to_run_it_again(self):
@@ -341,7 +338,6 @@ class TestMcpProxyConnectTool:
         result = response.json()["result"]
         assert result["isError"] is False
         assert "already connected" in result["content"][0]["text"]
-        clients["plain"].assert_not_called()
         clients["guarded"].assert_not_called()
 
     def test_connect_call_on_a_non_egress_server_is_answered_locally(self):
@@ -355,7 +351,7 @@ class TestMcpProxyConnectTool:
             )
         assert response.status_code == 200, response.text
         assert "does not need" in response.json()["result"]["content"][0]["text"]
-        clients["plain"].assert_not_called()
+        clients["guarded"].assert_not_called()
 
     def test_connect_call_on_a_virtual_route_needs_a_tool_grant(self):
         import auth_server.server as server_module
@@ -380,7 +376,6 @@ class TestMcpProxyConnectTool:
                 headers=_legacy_proxy_headers(),
             )
         assert response.status_code == 403, response.text
-        clients["plain"].assert_not_called()
         clients["guarded"].assert_not_called()
 
     def test_hop_token_without_the_route_claim_is_not_offered_the_tool(self):

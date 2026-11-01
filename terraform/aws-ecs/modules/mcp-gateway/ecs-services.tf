@@ -637,6 +637,21 @@ module "ecs_service_auth" {
           name  = "EGRESS_OAUTH_TRUSTED_IDP_HOSTS"
           value = var.egress_oauth_trusted_idp_hosts
         },
+        # SSRF policy for the MCP proxy hop. The hop dials each backend through
+        # the same SSRF guard profile the registry used to register and
+        # health-check it, so these use the registry container's variables.
+        {
+          name  = "SSRF_ALLOWED_HOSTS"
+          value = var.ssrf_allowed_hosts
+        },
+        {
+          name  = "SSRF_ALLOWED_CIDRS"
+          value = var.ssrf_allowed_cidrs
+        },
+        {
+          name  = "GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS"
+          value = tostring(var.gateway_proxy_allow_private_targets)
+        },
         # Egress httpx client connection pooling (shared by url_guard). Keep the
         # keepalive expiry below the shortest upstream/LB idle timeout.
         {

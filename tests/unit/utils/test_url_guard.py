@@ -981,21 +981,34 @@ class TestEntraGraphProfile:
 
 
 class TestEgressUpstreamProfile:
-    """The egress-injected proxy hop pins to the resolved IP and permits private /
-    hostname-private MCP upstreams, but never metadata/credential endpoints."""
+    """The egress-injected proxy hop applies the registry's proxy allowlist: a
+    private upstream is reachable only when the operator admitted it, and
+    metadata/credential endpoints never are."""
 
-    def test_profile_is_settings_free_and_allows_private(self):
-        profile = url_guard.EGRESS_UPSTREAM_PROFILE
-        allowlist = profile.allowlist_factory()  # must not touch registry settings
-        assert profile.name == "egress-upstream"
-        assert profile.allow_private is True
-        assert profile.require_https is False
-        assert allowlist.hosts == frozenset() and allowlist.cidrs == ()
+    def test_private_upstream_is_blocked_without_an_allowlist_entry(self):
+        with (
+            patch.object(url_guard, "settings", _settings()),
+            patch.object(url_guard.socket, "getaddrinfo", _resolve_to("10.0.0.5")),
+        ):
+            transport = url_guard.GuardedAsyncTransport(
+                guard_profile=url_guard.EGRESS_UPSTREAM_PROFILE
+            )
+            with pytest.raises(UrlValidationError):
+                transport._pin_request(httpx.Request("POST", "http://internal-mcp:8003/mcp"))
 
-    def test_private_upstream_is_pinned_not_blocked(self):
-        # An internal MCP server resolving to a private IP stays reachable, and
-        # the connection is pinned to that resolved IP (rebinding-safe).
-        with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("10.0.0.5")):
+    @pytest.mark.parametrize(
+        "policy",
+        [
+            {"ssrf_allowed_hosts": "internal-mcp"},
+            {"ssrf_allowed_cidrs": "10.0.0.0/8"},
+            {"gateway_proxy_allow_private_targets": True},
+        ],
+    )
+    def test_allowlisted_private_upstream_is_pinned(self, policy):
+        with (
+            patch.object(url_guard, "settings", _settings(**policy)),
+            patch.object(url_guard.socket, "getaddrinfo", _resolve_to("10.0.0.5")),
+        ):
             transport = url_guard.GuardedAsyncTransport(
                 guard_profile=url_guard.EGRESS_UPSTREAM_PROFILE
             )
@@ -1003,28 +1016,57 @@ class TestEgressUpstreamProfile:
         assert pinned.url.host == "10.0.0.5"
         assert pinned.headers["Host"] == "internal-mcp:8003"
 
-    def test_metadata_literal_is_blocked_even_with_allow_private(self):
-        transport = url_guard.GuardedAsyncTransport(guard_profile=url_guard.EGRESS_UPSTREAM_PROFILE)
-        with pytest.raises(UrlValidationError):
-            transport._pin_request(
-                httpx.Request("POST", "http://169.254.169.254/latest/meta-data/")
-            )
-
-    def test_credential_endpoint_literal_is_blocked(self):
-        # ECS task-credential endpoint: hard-denied regardless of allow_private.
-        transport = url_guard.GuardedAsyncTransport(guard_profile=url_guard.EGRESS_UPSTREAM_PROFILE)
-        with pytest.raises(UrlValidationError):
-            transport._pin_request(httpx.Request("POST", "http://169.254.170.2/creds"))
-
-    def test_rebind_to_metadata_is_defeated(self):
-        # allow_private permits private unicast, but a rebind to the metadata IP
-        # is still blocked at connect time.
-        with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("169.254.169.254")):
+    @pytest.mark.parametrize("ip", ["169.254.169.254", "169.254.170.2", "fd00:ec2::254"])
+    def test_credential_endpoint_is_blocked_under_the_widest_allowlist(self, ip):
+        settings = _settings(
+            ssrf_allowed_hosts="rebind.example",
+            ssrf_allowed_cidrs="169.254.0.0/16,fd00::/8",
+            gateway_proxy_allow_private_targets=True,
+        )
+        with (
+            patch.object(url_guard, "settings", settings),
+            patch.object(url_guard.socket, "getaddrinfo", _resolve_to(ip)),
+        ):
             transport = url_guard.GuardedAsyncTransport(
                 guard_profile=url_guard.EGRESS_UPSTREAM_PROFILE
             )
             with pytest.raises(UrlValidationError):
                 transport._pin_request(httpx.Request("POST", "http://rebind.example/mcp"))
+
+
+class TestCredentialBearingProxyProfile:
+    """Each MCP proxy profile has a credential-bearing twin with the same policy."""
+
+    def test_every_twin_bears_credentials(self):
+        for profile in (url_guard.PROXY_PROFILE, url_guard.BUILTIN_AIREGISTRY_TOOLS_PROFILE):
+            assert url_guard.credential_bearing_proxy_profile(profile).credential_bearing is True
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://mcpgw-server:8003/",
+            "http://mcpgw-server:8003/mcp",
+            "http://mcpgw-server:8003/mcp/",
+        ],
+    )
+    def test_builtin_twin_admits_only_the_exact_identities(self, url):
+        twin = url_guard.credential_bearing_proxy_profile(
+            url_guard.BUILTIN_AIREGISTRY_TOOLS_PROFILE
+        )
+        with patch.object(url_guard, "settings", _settings()):
+            assert url_guard.validate_url(url, profile=twin, resolve=False) == []
+            with pytest.raises(UrlValidationError):
+                url_guard.validate_url("http://mcpgw-server:8003/sse", profile=twin, resolve=False)
+
+    def test_ordinary_twin_keeps_the_reserved_builtin_host_closed(self):
+        twin = url_guard.credential_bearing_proxy_profile(url_guard.PROXY_PROFILE)
+        with patch.object(url_guard, "settings", _settings(ssrf_allowed_hosts="mcpgw-server")):
+            with pytest.raises(UrlValidationError):
+                url_guard.validate_url("http://mcpgw-server:8003/mcp", profile=twin, resolve=False)
+
+    def test_non_proxy_profile_has_no_twin(self):
+        with pytest.raises(ValueError):
+            url_guard.credential_bearing_proxy_profile(url_guard.SKILL_PROFILE)
 
 
 class TestProxyProfilePrivateTargetToggle:

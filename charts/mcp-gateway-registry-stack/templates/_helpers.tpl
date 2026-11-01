@@ -96,6 +96,27 @@ subcharts render.
 {{- end -}}
 
 {{/*
+Validate SSRF policy parity between the registry and the auth-server. The
+registry validates and health-checks each MCP backend with this policy, and the
+auth-server MCP proxy hop dials the backend through the same SSRF guard profile,
+so the two pods must see identical values: a tighter auth-server refuses
+backends the registry reports healthy, a looser one dials backends the registry
+refused. The shipped stack values alias one declaration into both subcharts;
+this rejects an override that sets only one side.
+*/}}
+{{- define "mcp-gateway-registry-stack.validateSsrfPolicyParity" -}}
+{{- $registryApp := dig "app" (dict) (.Values.registry | default (dict)) -}}
+{{- $authApp := dig "app" (dict) ((index .Values "auth-server") | default (dict)) -}}
+{{- range $key, $default := dict "ssrfAllowedHosts" "" "ssrfAllowedCidrs" "" "gatewayProxyAllowPrivateTargets" false -}}
+{{- $registryValue := get $registryApp $key | default $default | toString -}}
+{{- $authValue := get $authApp $key | default $default | toString -}}
+{{- if ne $registryValue $authValue -}}
+{{- fail (printf "SSRF policy mismatch: registry.app.%s is %q but auth-server.app.%s is %q. The auth-server MCP proxy hop applies the registry's SSRF policy, so set both to the same value" $key $registryValue $key $authValue) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Guard chart-generated random secret value.
 
 `global.generateSecrets: true` (the default) generates a random value,

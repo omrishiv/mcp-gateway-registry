@@ -1147,7 +1147,10 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # checker and proxy validate every upstream URL through an SSRF guard that blocks
 # private/loopback/metadata addresses by default, so internal upstreams (private
 # IPs / service-discovery hostnames) are marked unhealthy unless listed here. The
-# cloud metadata address (169.254.169.254) is never permitted by either.
+# cloud metadata address (169.254.169.254) is never permitted by either. Both the
+# registry and the auth-server MCP proxy hop apply these values (and
+# gateway_proxy_allow_private_targets), so a backend the registry health-checks
+# as healthy is reachable through the hop.
 #   ssrf_allowed_hosts: comma-separated exact hostnames or IPs (least privilege).
 #   ssrf_allowed_cidrs: comma-separated CIDR ranges for whole internal subnets.
 # ssrf_allowed_hosts = "flight-booking-agent.mcp-gateway-v2.local"

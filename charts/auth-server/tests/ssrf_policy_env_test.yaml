@@ -1,0 +1,59 @@
+suite: MCP proxy hop SSRF policy env
+templates:
+  - deployment.yaml
+release:
+  name: test
+  namespace: default
+tests:
+  # The hop applies the registry's SSRF profile, so the defaults must equal the
+  # registry chart's defaults: no allowlisted hosts or CIDRs, private targets off.
+  - it: renders the fail-closed SSRF policy by default
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_HOSTS
+            value: ""
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_CIDRS
+            value: ""
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
+            value: "false"
+
+  - it: renders operator SSRF allowlist and private-target overrides verbatim
+    set:
+      app.ssrfAllowedHosts: "obo-echo.mcp-entra.svc.cluster.local,10.0.0.7"
+      app.ssrfAllowedCidrs: "172.20.0.0/16"
+      app.gatewayProxyAllowPrivateTargets: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_HOSTS
+            value: "obo-echo.mcp-entra.svc.cluster.local,10.0.0.7"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_CIDRS
+            value: "172.20.0.0/16"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
+            value: "true"
+
+  # A string "false" from --set-string must stay false, never be read as truthy.
+  - it: keeps a string false private-target override false
+    set:
+      app.gatewayProxyAllowPrivateTargets: "false"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
+            value: "false"

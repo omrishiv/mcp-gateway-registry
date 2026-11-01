@@ -58,10 +58,13 @@ tests:
       #   env[12] = AWS_EC2_METADATA_DISABLED (chart-managed security constant)
       #   env[13..23] = the eleven unconditional GATEWAY_/GENERIC_PROXY_
       #                 generic-proxy vars (auth-server-consumed)
-      #   env[24] = EGRESS_FORWARD_PROXY_ENABLED   (issue #1832)
-      #   env[25] = EGRESS_FORWARD_PROXY_CA_BUNDLE (issue #1832)
-      #   env[26] = MY_FLAG       (extraEnv[0])
-      #   env[27] = MY_SECRET_VAR (extraEnv[1])
+      #   env[24] = SSRF_ALLOWED_HOSTS  (MCP proxy hop SSRF policy trio, always
+      #   env[25] = SSRF_ALLOWED_CIDRS   rendered; mirrors the registry chart)
+      #   env[26] = GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
+      #   env[27] = EGRESS_FORWARD_PROXY_ENABLED   (issue #1832)
+      #   env[28] = EGRESS_FORWARD_PROXY_CA_BUNDLE (issue #1832)
+      #   env[29] = MY_FLAG       (extraEnv[0])
+      #   env[30] = MY_SECRET_VAR (extraEnv[1])
       - equal:
           path: spec.template.spec.containers[0].env[0].name
           value: ENTRA_CLIENT_SECRET
@@ -86,19 +89,30 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].env[23].name
           value: GATEWAY_GENERIC_STREAM_MAX_BYTES
+      # SSRF policy trio for the MCP proxy hop, always rendered, between the
+      # generic-proxy block and the forward-proxy pair.
+      - equal:
+          path: spec.template.spec.containers[0].env[24].name
+          value: SSRF_ALLOWED_HOSTS
+      - equal:
+          path: spec.template.spec.containers[0].env[25].name
+          value: SSRF_ALLOWED_CIDRS
+      - equal:
+          path: spec.template.spec.containers[0].env[26].name
+          value: GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
       # Forward-proxy egress pair (issue #1832), always rendered, immediately
       # before the extraEnv append.
       - equal:
-          path: spec.template.spec.containers[0].env[24].name
+          path: spec.template.spec.containers[0].env[27].name
           value: EGRESS_FORWARD_PROXY_ENABLED
       - equal:
-          path: spec.template.spec.containers[0].env[25].name
+          path: spec.template.spec.containers[0].env[28].name
           value: EGRESS_FORWARD_PROXY_CA_BUNDLE
       - equal:
-          path: spec.template.spec.containers[0].env[26].name
+          path: spec.template.spec.containers[0].env[29].name
           value: MY_FLAG
       - equal:
-          path: spec.template.spec.containers[0].env[27].name
+          path: spec.template.spec.containers[0].env[30].name
           value: MY_SECRET_VAR
 
   - it: enables Entra overage recovery with a 300-second positive cache by default
@@ -289,6 +303,33 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "\"GATEWAY_GENERIC_STREAM_MAX_BYTES\" is a reserved variable"
+
+  - it: fails when extraEnv contains a reserved SSRF policy name (SSRF_ALLOWED_HOSTS)
+    set:
+      extraEnv:
+        - name: SSRF_ALLOWED_HOSTS
+          value: "169.254.169.254"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"SSRF_ALLOWED_HOSTS\" is a reserved variable"
+
+  - it: fails when extraEnv contains a reserved SSRF policy name (SSRF_ALLOWED_CIDRS)
+    set:
+      extraEnv:
+        - name: SSRF_ALLOWED_CIDRS
+          value: "0.0.0.0/0"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"SSRF_ALLOWED_CIDRS\" is a reserved variable"
+
+  - it: fails when extraEnv contains a reserved SSRF policy name (GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS)
+    set:
+      extraEnv:
+        - name: GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
+          value: "true"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS\" is a reserved variable"
 
   - it: fails when extraEnv contains a reserved envFrom-sourced name (SECRET_KEY)
     set:
