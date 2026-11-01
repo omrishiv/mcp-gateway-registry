@@ -208,6 +208,52 @@ data in a fixture, and cover the error paths as well as the happy one.
 - Use fixtures for common test data
 - Test both happy paths and error cases
 
+### Property tests for touched code
+
+Every change to production code ships with a test that states the rule the code must keep, not only examples of what it does today. An example test checks one input; a property test checks a rule over every input Hypothesis generates, and the other techniques below prove the same kind of rule where generating inputs is the wrong tool. Keep the existing example tests: they pin specific cases.
+
+This applies to any code you touch. In the areas in the table further down it is a merge gate. Elsewhere, write one wherever the code has a rule you can state in one sentence: a parser, a validator, an encoder and its decoder, a permission check, a state transition. A getter or a pass-through needs none.
+
+**Pick the technique by the kind of bug:**
+
+| Technique | Use it when | How it is done here |
+|---|---|---|
+| Exhaustive enumeration | The domain is small and finite | `pytest.mark.parametrize` over every case, for example every group and scope combination against every admin gate |
+| Hypothesis with a reference model | A pure function takes unbounded input | A short function in the test states the intended rule, and the test asserts production agrees with it |
+| Differential against the real consumer | Two parsers might read the same value differently | Compare with whatever acts on the value: libc `inet_aton`, `httpx.URL`, `urllib`, `crossplane`, nginx in docker, the WHATWG `URL` in jest |
+| State machine | The bug shows only across a sequence of operations | `hypothesis.stateful.RuleBasedStateMachine`, with invariants checked after every step |
+| Static or route walk | The rule is "every X has Y" | Enumerate the real FastAPI routes, `Settings` fields, chart env names or IAM statements |
+
+Do not reach for runtime contracts (`icontract`, `deal`) or CrossHair. The defects found here came from several functions answering the same question differently; a contract keeps each function consistent with itself and misses the disagreement, while a differential test against one model catches it.
+
+**Where the existing tests live.** Extend the file for the area rather than starting a second file for the same rule.
+
+| Area | Code | Tests |
+|---|---|---|
+| Authorization, admin, scopes, ownership | `registry/auth/`, `registry/services/admin_safety.py`, `registry/services/scope_service.py`, the tool-access check in `auth_server/server.py` | `tests/unit/auth/test_authz_reference_model_properties.py`, `test_admin_gate_consistency.py`, `test_owner_predicates_properties.py`; `tests/unit/services/test_admin_lifecycle_state_machine.py`, `test_admin_population_properties.py`; `tests/auth_server/unit/test_tool_access_properties.py` |
+| Identity, sessions, tokens | `auth_server/server.py`, `auth_server/providers/`, `auth_server/internal_request_token.py`, `registry/auth/dependencies.py` | `tests/auth_server/unit/test_identity_injectivity_properties.py`, `test_groups_claim_properties.py`, `test_token_audience_matrix.py`, `test_user_token_scope_narrowing.py`, `test_session_reconcile_properties.py`, `test_m2m_enrichment_classifier.py`, `test_logout_redirect_properties.py`; `tests/unit/auth/test_forged_identity_headers.py` |
+| SSRF, URLs, redaction, the MCP proxy hop | `registry/utils/url_guard.py`, `registry/utils/url_normalize.py`, `registry/common/log_redaction.py`, `mcp_proxy` and `_forward_headers` in `auth_server/server.py` | `tests/unit/utils/test_url_guard_properties.py`, `test_url_guard_transport_properties.py`, `test_url_identity_properties.py`, `test_no_proxy_properties.py`; `tests/unit/common/test_redact_url_properties.py`; `tests/auth_server/unit/test_mcp_proxy_egress_policy_properties.py`, `test_forward_header_properties.py` |
+| Egress credentials | `registry/egress_auth/`, `registry/secrets/` | `tests/unit/egress_auth/test_consent_binding_properties.py`, `test_state_codec_properties.py`; `tests/unit/secrets/test_vault_key_properties.py` |
+| nginx and Lua generation, request routing | `registry/core/nginx_service.py`, `docker/lua/`, `registry/auth/resource_binding.py` | `tests/unit/core/test_nginx_render_properties.py`, `test_nginx_generic_block_properties.py`, `test_encoder_roundtrip_properties.py`, `test_lua_cache_key_properties.py`; `tests/unit/auth/test_normalize_request_path_properties.py`; `tests/integration/test_request_path_nginx_differential.py`, `test_nginx_dns_rebinding.py`. Render through `tests/unit/core/nginx_render_harness.py` |
+| Validators and server paths | `registry/schemas/`, `registry/core/schemas.py`, `registry/utils/path_utils.py` | `tests/unit/test_validator_suffix_sweep.py`, `tests/unit/utils/test_server_path_normal_form.py` |
+| API reads, mutating routes, config export | `registry/api/`, `registry/services/visibility.py`, `registry/audit/` | `tests/unit/api/test_public_read_properties.py`, `test_search_list_consistency.py`, `test_config_export_classification.py`, `test_mutating_routes_have_csrf_and_auth.py`; `tests/unit/audit/test_mutating_routes_audited.py` |
+| Federation, scanners, DCR | `registry/services/peer_federation_service.py`, `registry/services/scanner_verdict.py`, `keycloak/setup/`, `charts/keycloak-configure/` | `tests/unit/services/test_peer_federation_properties.py`, `test_scanner_verdicts_fail_closed.py`, `test_security_scanner_verdict_properties.py`; `tests/unit/security/test_dcr_withheld_scopes.py` |
+| Rate limiting, metrics retention | `registry/rate_limiting/`, `metrics-service/` | `tests/unit/rate_limiting/test_limiter_state_machine.py`, `tests/unit/metrics/test_retention_sql_identifiers.py` |
+| mcpgw | `servers/mcpgw/` | `tests/unit/servers/mcpgw/test_registry_identity_properties.py`, `test_outbound_url_and_projection_properties.py` |
+| Sample agents, doc renderer, frontend URLs | `agents/a2a/`, `scripts/render-doc-html.py`, `frontend/src/utils/safeUrl.ts` | `tests/unit/agents/test_a2a_agent_security_properties.py`, `tests/scripts/test_render_doc_html_properties.py`, `frontend/src/utils/__tests__/safeUrl.property.test.ts` |
+| Charts, Terraform, CDK | `charts/`, `terraform/`, `infra/` | `tests/infra/test_helm_reserved_env_names.py`, `test_iam_least_privilege.py`, `test_auth_server_ssrf_settings_parity.py` |
+
+**Rules:**
+
+1. **Run the area's tests on every change there, and extend them when you add something they enumerate:** an admin gate, a mutating route, a `Settings` field, a chart env var, an IAM statement, a validator, a token minter or verifier, an outbound fetch site, an nginx template placeholder. The enumeration tests fail on purpose when something new is unclassified. Classify it; never add it to an allowlist just to make the failure go away, and give every allowlist entry its reason.
+2. **Fixing a bug: write the property first and watch it fail on the unfixed code.** Then fix. Pin the counterexample with `@example(...)` or a parametrize case so the failure reproduces without Hypothesis finding it again.
+3. **State the rule, not today's behaviour.** A correct fix must make the test pass without editing it. If all you can write down is what the code does now, you have not found the rule yet.
+4. **Hypothesis settings.** Every `@given` test uses `@settings(max_examples=200, derandomize=True, database=None, report_multiple_bugs=False)`; state machines use `max_examples=50, stateful_step_count=15`. The `mcp-gateway` profile in `tests/conftest.py` already turns deadlines off. `derandomize=True` keeps CI runs reproducible.
+5. **Isolation.** No real MongoDB, IdP or network: patch in-memory repositories at the factory, send httpx through `httpx.MockTransport` or a recording transport, and serve JWKS from RSA keys generated in the test. Every file must pass under `-n 8`. Docker-backed differentials carry the `integration` marker, skip with a reason when the docker CLI is missing, use a pinned image, publish only on 127.0.0.1 and remove their containers in a finalizer. mcpgw tests stub `fastmcp` the way the existing ones do.
+6. **A harness that cannot build its input fails loudly** (`pytest.fail` or `RuntimeError`), so a broken fixture never reads as a passing property.
+7. **A defect you find but do not fix in the same change** gets `pytest.mark.xfail(strict=True, raises=AssertionError, reason="Known defect: <what is wrong>")` on the failing cases only, plus an issue. Strict mode fails the suite once the defect is fixed, which forces the marker's removal; `raises=AssertionError` keeps an import error or a crash from hiding behind the marker. Never mark a defect with a non-strict xfail or a skip.
+8. **No planning labels or scratchpad references** in test code, comments or docstrings.
+
 ### Running Tests Before Pull Requests
 
 **CRITICAL**: Always run the full test suite before submitting a pull request or after completing a major feature.
@@ -470,6 +516,10 @@ working in those areas.
   marker under a new header name (`X-Validate-Binding-Secret`).
 - **After fixing a finding, grep the pattern repo-wide**, because findings usually have
   siblings the report didn't list.
+- **Prove the rule, not one example.** A change to any area above ships with a
+  property, exhaustive, state machine or differential test of the rule it must keep,
+  in the area's existing test file. A bug fix starts with that test failing. See
+  "Property tests for touched code" under Testing Standards.
 
 **Standing rule:** when you find or fix a NEW category of security issue, persist
 the generalizable lesson in [docs/SECURITY_GUIDELINES.md](docs/SECURITY_GUIDELINES.md)
@@ -1031,10 +1081,10 @@ Canonical commands live in `.github/workflows/`, `pyproject.toml` and
 
 | Changed | Run |
 |---------|-----|
-| `registry/`, `auth_server/` | `uv run python scripts/test.py coverage -n 8`; re-read the security invariants above |
-| `frontend/` | `npm run lint && npm run build` in `frontend/` |
-| `charts/` | `helm unittest charts/mcpgw charts/auth-server charts/registry charts/mcp-gateway-registry-stack`, then `helm dep update` on the stack chart if a subchart changed |
-| `terraform/` | `terraform fmt -check && terraform validate`, then `terraform plan` |
+| `registry/`, `auth_server/` | Write or extend the area's property tests (see "Property tests for touched code"), then `uv run python scripts/test.py coverage -n 8`; re-read the security invariants above |
+| `frontend/` | `npm run lint && npm run build` in `frontend/`; for URL handling, `npx jest src/utils/__tests__/safeUrl.property.test.ts` |
+| `charts/` | `helm unittest charts/mcpgw charts/auth-server charts/registry charts/mcp-gateway-registry-stack`, then `helm dep update` on the stack chart if a subchart changed; `uv run pytest tests/infra -n 8 --no-cov` |
+| `terraform/`, `infra/` | `terraform fmt -check && terraform validate`, then `terraform plan`; `uv run pytest tests/infra -n 8 --no-cov` for IAM and parity |
 | `api/` routes | Refresh `api/openapi.json` (see below). Update `api/registry_client.py` and `api/registry_management.py` |
 | `scripts/`, any shell | `bash -n <file>`; `uv run python -m py_compile <file>` for Python |
 | Any config parameter | All three deployment surfaces plus `docs/unified-parameter-reference.md` |
@@ -1528,6 +1578,7 @@ mcpgw_extra_env = [
 These gates apply to any multi-step feature. Before calling a sub-feature done:
 
 - Every acceptance criterion is verified by a test, not by inspection.
+- Every changed rule has a property, exhaustive, state machine or differential test, and a bug fix's test failed before the fix.
 - No `TODO` or `FIXME` left behind.
 - The code compiles and lints clean, and the existing suite still passes.
 - The design document is updated if implementation revealed new scope.
