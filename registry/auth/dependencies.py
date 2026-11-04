@@ -114,8 +114,9 @@ async def is_browser_session_caller(
     ``nginx_proxied_auth`` too, and CSRF is skipped for it. Both conditions must
     hold: the request carried the session cookie, and the context the route acts
     on was resolved from that same session (its ``session_id`` is the cookie's).
-    A bearer sent beside some other session cookie resolves to the bearer's
-    context, with no or a different ``session_id``, and fails.
+    A bearer with no session cookie has no ``session_id`` and fails. A request
+    that carries a session cookie is resolved as that session at ``/validate``
+    (the cookie is checked first), so a bearer beside it gains nothing.
 
     Args:
         request: The incoming request.

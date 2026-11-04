@@ -210,17 +210,18 @@ async def _session_dependency(
 ) -> dict:
     """FastAPI dependency form of ``nginx_proxied_auth`` for the initiate route.
 
-    A bearer wins over a cookie, as at ``/validate``, which validates the
-    ``Authorization`` header when one is present.
+    A session cookie wins over a bearer, as at ``/validate``, which checks the
+    cookie first; a request without one is resolved from its bearer.
 
     Args:
         request: The incoming request.
 
     Returns:
-        The user context for the request's bearer, else its session cookie.
+        The user context for the request's session cookie, else its bearer.
     """
     authorization = request.headers.get("authorization", "")
-    if authorization.startswith("Bearer "):
+    has_cookie = request.cookies.get(routes.settings.session_cookie_name) is not None
+    if authorization.startswith("Bearer ") and not has_cookie:
         return dict(_BEARERS[authorization.removeprefix("Bearer ")])
     return await _resolve_session(request)
 
@@ -610,15 +611,8 @@ def test_provider_error_without_code_burns_the_state_and_clears_its_cookie(conse
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize(
-    "session_cookie",
-    [
-        pytest.param(None, id="bearer-only"),
-        pytest.param(_OTHER_COOKIE, id="bearer-with-another-users-session-cookie"),
-    ],
-)
-def test_initiate_without_the_browser_session_hands_out_no_binding(consent_app, session_cookie):
-    """A caller not backed by the browser session gets no consent state and no cookie.
+def test_initiate_without_the_browser_session_hands_out_no_binding(consent_app):
+    """A bearer caller with no session cookie gets no consent state and no cookie.
 
     A client holding V's bearer (a DCR agent) skips CSRF, which applies only to
     cookie callers. If initiate answered it, the client would hold a state bound
@@ -627,7 +621,7 @@ def test_initiate_without_the_browser_session_hands_out_no_binding(consent_app, 
     acts on must be the session the request's cookie names; otherwise 403.
     """
     app, _ = consent_app
-    client = _browser(app, session_cookie)
+    client = _browser(app, None)
 
     response = client.post(
         "/api/egress-auth/initiate",
