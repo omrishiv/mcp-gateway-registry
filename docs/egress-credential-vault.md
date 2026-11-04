@@ -311,16 +311,25 @@ Accounts. Remove it through the server's discovery config
 
 ### The canonical `user_id` (OIDC `sub`)
 
-`user_id` is the caller's **OIDC `sub`**, not their display username. The `sub`
-is present in both id_tokens and access_tokens for every OIDC provider and is
-stable per `(user, gateway app)`. Keying on the display name instead would break
-on Entra, whose **access** tokens omit `preferred_username`: a DCR client's
-bearer token would key on `sub` while the browser-consent leg keyed on the
-email, so the token would be written and read under different ids and every vend
-would miss.
+`user_id` is the caller's **immutable account id at the IdP**, not their display
+username or any other name the account can change or a later account can take.
+For most providers that id is the OIDC `sub`. Keying on the display name instead
+would break on Entra, whose **access** tokens omit `preferred_username`: a DCR
+client's bearer token would key on `sub` while the browser-consent leg keyed on
+the email, so the token would be written and read under different ids and every
+vend would miss. A reusable name also hands one account's vaulted tokens to the
+next account that holds it.
+
+| Provider | `user_id` | Notes |
+|----------|-----------|-------|
+| Keycloak, Auth0, Entra | token `sub` | The browser login stores the id_token `sub`; a bearer token keys on its own `sub`. |
+| Cognito | token `sub` (a UUID) | The login reads it from the verified access token, or from the `sub` attribute boto3 `GetUser` returns when JWT verification is unavailable. A `GetUser` response without `sub` fails validation, and the login then takes `sub` from the userInfo endpoint. It is never the Cognito username: Cognito frees a username when its user is deleted, and a new user created under that name would otherwise read the old user's connections. |
+| Okta | access token `uid` when it is a non-empty string, else `sub` | An Okta user access token carries the user's login (editable, often an email) in `sub` and the immutable user id in `uid`. The id_token carries that user id as `sub`, so both paths agree. A client-credentials token has no `uid` and keys on its `sub`, the client id. `uid` is read only from tokens the Okta provider validated. |
+| PingFederate | token `sub` | The deployment decides what `sub` holds. Map it to the same immutable attribute (for example the directory object GUID) in both the OpenID Connect policy, which builds the id_token, and the access token manager, which builds the bearer token. Different attributes split the browser and bearer paths; a mutable one such as email gives a renamed user's connections to the next holder of the address. |
+| GitHub, Google | userinfo `id` (`subject_claim: "id"`) | Their userinfo endpoints have no `sub`. |
 
 The canonical id is derived once in the auth-server (`_canonical_egress_user`:
-`sub` → persisted session `subject` → `username` fallback) and carried to the
+Okta `uid` → `sub` → persisted session `subject` → `username` fallback) and carried to the
 registry as an `egress_user` claim on the internal tokens. So that the browser
 consent-write path (which reaches the registry through the cookie session, not
 an internal token) resolves the same value, the auth-server persists the
@@ -339,15 +348,45 @@ otherwise-silent "consent succeeds, then 0 tools" failure visible; a token
 minted before the claim existed is refused for at most one token lifetime and
 the next mint carries the claim.
 
-The session subject comes from the IdP at login: the id_token `sub` (Auth0 and
-the other id_token providers), or the userinfo field named by the provider's
+The session subject comes from the IdP at login: the id_token `sub` for
+Keycloak, Entra, Okta, Auth0 and PingFederate, the access token `sub` for
+Cognito, or, on the userinfo fallback, the field named by the provider's
 `subject_claim` (default `sub`; `id` for GitHub and Google, whose userinfo
-endpoints have no `sub`). A provider that yields no subject logs a warning at
-login, and its bearer tokens are refused at the per-user vend. Auth0, GitHub, and
+endpoints have no `sub`). A Keycloak, Cognito, Entra, Okta, Auth0 or
+PingFederate login that yields no subject is refused with HTTP 401 and creates
+no session, because the vault would otherwise key that user on the username. A
+GitHub, Google or custom provider login without one still succeeds and logs a
+warning, and its bearer tokens are refused at the per-user vend. Auth0, GitHub, and
 Google sessions created before the subject was captured keyed their grants on the
 username; those users sign in again and reconnect each egress server once.
 `auth_method` still canonicalizes across IdP methods (see below), so the full
 key is stable regardless of how the same human authenticated.
+
+**Upgrading to immutable-id keying.** Two groups of callers find their existing
+connections gone and reconnect each egress server once from Connected Accounts:
+
+- Cognito users who sign in through the access-token path (the default when
+  `COGNITO_USER_POOL_ID` is set). Earlier releases stored their session subject
+  as the Cognito username, so their connections sit under the username. A
+  bearer validated through the boto3 `GetUser` fallback moves from the username
+  to the `sub` as well.
+- Clients that present a raw Okta access token. Their connections sit under the
+  user's Okta login, and the vault now keys them on `uid`.
+
+The old entries stay in the secret store. After the upgrade no Okta user token
+or session keys on the login (Okta sessions always stored the user id, and the
+tokens minted from them carry it), so login-keyed entries are unreadable. Cognito username-keyed
+entries stay readable for a bounded time: a session created before the upgrade
+keeps the username as its subject until it expires (`session.max_age_seconds` in
+`oauth2_providers.yml`, 8 hours by default), and a token the gateway mints from
+such a session carries the username as `egress_user` until its `exp`, at most
+`MCP_TOKEN_MAX_TTL_HOURS` (24 hours by default) after the mint. With the
+defaults that is at most 32 hours after the upgrade. To end it sooner, delete
+the username-keyed entries: decode the `user_id` segment of each entry path
+(base64url, see the layout below) and remove the entries whose value is not a
+Cognito `sub` UUID. Deleting the pre-upgrade documents in the `oauth_sessions`
+collection signs those users out but does not revoke tokens already minted,
+which are stateless JWTs and stay valid until they expire.
 
 ```
 per-principal prefix:   {prefix}/enc(auth_method)/enc(user_id)
@@ -818,6 +857,7 @@ Users can review and revoke their connections in the UI at **Connected Accounts*
 | Connected, but the client still shows only the connect tool or no tools | The client cached the pre-consent tool list. Reconnect the server in the client. If the auth-server log still shows `has no token`, the account was connected under a different identity: the Registry UI session and the MCP client must sign in as the same user. |
 | Consent loops (re-asked every call) | Usually an `auth_method` mismatch between consent-write and vend-read — confirm the IdP method canonicalizes to `oauth2`. Or the stored refresh token is dead (provider revoked it) → re-consent. |
 | Connected once, but tools still show empty / vend logs "has no token" | The consent-write and vend paths keyed the vault on different `user_id`s. Since keying moved to the OIDC `sub` (see [Vault key scheme](#vault-key-scheme)), an existing connection created under the old display-name key is invisible to the new `sub`-keyed lookup. Fix: **disconnect and reconnect once** (from Connected Accounts), which re-writes the entry under the `sub`. On Entra this reconnect must follow a fresh gateway login so the session carries the persisted `subject`. |
+| After upgrading to immutable-id keying, Cognito users (or clients presenting a raw Okta access token) are asked to connect again | Their connections were stored under the Cognito username or the Okta login, and the vault now keys on the Cognito `sub` or the Okta `uid` (see [The canonical `user_id`](#the-canonical-user_id-oidc-sub)). **Reconnect once** from Connected Accounts. The old entries stay in the secret store; that section says how long a pre-upgrade session or token can still read them and how to delete them. |
 | Connected, but a `tools/call` asks to reconnect after a backend URL change | Destination binding: changing a server's `proxy_pass_url`, `mcp_endpoint` (or a custom provider's `custom_token_url`) invalidates credentials bound to the old destination. **Reconnect once** (from Connected Accounts) to rebind. Adding a *new version* at a URL that was not registered when you connected only requires a reconnect for calls routed to that new version; existing routes are unaffected. Promoting a version never requires a reconnect. |
 | After upgrading to the exact-destination-binding release, every connection asks to reconnect once | Credentials stored before the upgrade carry an empty or origin-only binding (for example `https://api.example.com` instead of `https://api.example.com/mcp`), which does not match the exact outbound URL — a deliberate one-time forced reconnect (`oauth_user` → connect nudge, `pat` → "submit a PAT"; a designated discovery identity must reconnect too, and its server reports unhealthy discovery until then), mirroring the `sub`-keying migration above. |
 | "Connection failed" on the consent callback; registry logs `state user mismatch` | The account-swap guard saw the consent-initiate principal differ from the callback's live-session principal. Almost always the session predates the `sub`-persisting login — **log out and back in**, then reconnect, so the cookie session carries the `subject` the initiate leg bound the state to. |

@@ -369,6 +369,11 @@ working in those areas.
   `"groups": "mcp-registry-admin"` a membership). One shared validator
   (`normalize_groups_claim`), applied in EVERY provider including the
   self-signed and userinfo paths.
+- **Per-user secret keys:** key a user's stored secrets on the IdP's immutable
+  account id (`sub`; on an Okta access token, `uid`), never a username, email or
+  login an account can change or a later account can reuse. Derive it in one
+  function for the cookie, bearer and minted-token paths, and refuse an OIDC
+  login that yields none.
 - **Self-registration (DCR):** restrict which scopes a self-registered client
   may request AND whether it may define protocol mappers (a mapper chooses
   what a claim says), for the `anonymous` and `authenticated` subtypes alike.

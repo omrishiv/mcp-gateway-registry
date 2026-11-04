@@ -833,6 +833,20 @@ sanitizer that isn't called) is equivalent to no check.
   reuse window (`EGRESS_OBO_CACHE_MAX_TTL_SECONDS`). A data-plane service that starts caching credentials also gets the
   narrowest store access that works: an in-process handle clamped to its own namespace, plus a backend policy scoped to
   that namespace's path, created only when the feature is on.
+- **Key per-user secrets on the IdP's immutable account id, derived the same way
+  on every path.** The egress vault keyed Cognito browser sessions on the Cognito
+  username, which Cognito frees for reuse when the user is deleted, so a new user
+  created under the old name inherited the old user's vaulted provider tokens. A
+  raw Okta access token keyed on its `sub`, the user's editable login, while the
+  browser session keyed on the immutable user id; moving a login to another user
+  moved the connections with it. Key a stored secret on the value the IdP never
+  reassigns (`sub` for most OIDC providers, `uid` on an Okta access token), and
+  derive it in one function (`_canonical_egress_user`) for the cookie session,
+  the raw bearer and the gateway-minted token alike. Refuse an OIDC login that
+  yields no such id, since a fallback to a name reopens the hole. Test the
+  derivation as properties over generated accounts: two accounts with distinct
+  ids never share a key even when every other claim matches, one account keeps
+  its key when its profile changes, and every path agrees.
 
 ## Identity-provider self-registration (DCR)
 

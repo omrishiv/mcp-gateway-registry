@@ -294,6 +294,26 @@ _PER_USER_IDP_METHODS: frozenset[str] = frozenset(
 # the hop token, so only these may be served from the OBO token cache.
 _OBO_SUBJECT_VERIFIED_METHODS: frozenset[str] = frozenset({"entra", "keycloak"})
 
+# Validator ``method`` an Okta bearer reports. An Okta user access token puts the
+# user's editable login in ``sub`` and the immutable user id in ``uid``, so the
+# egress vault key reads ``uid`` for this method only (see _canonical_egress_user).
+_OKTA_BEARER_METHOD: str = "okta"
+
+# Login providers that speak OpenID Connect, so every login returns the
+# account's ``sub``. A login through one of them that maps no subject is refused
+# (see oauth2_callback): the session would otherwise key the egress vault on the
+# username, which the IdP may let another account hold later.
+_OIDC_LOGIN_PROVIDERS: frozenset[str] = frozenset(
+    {
+        "keycloak",
+        "cognito",
+        "entra",
+        "okta",
+        "auth0",
+        "pingfederate",
+    }
+)
+
 
 def _canonical_auth_method(validation_result: dict) -> str:
     """The ONE canonical egress principal method, stamped into both internal tokens.
@@ -352,6 +372,36 @@ def _trusted_egress_user_claim(validation_result: dict) -> str | None:
     return (validation_result.get("data") or {}).get("egress_user") or None
 
 
+def _okta_user_id(validation_result: dict) -> str | None:
+    """The immutable Okta user id from a raw Okta bearer, or None.
+
+    An Okta user access token carries the user's login (editable, often an
+    email, and movable to another user) in ``sub`` and the immutable user id in
+    ``uid``; the Okta id_token, and so the cookie session, carries that user id
+    as ``sub``. A client-credentials token has no ``uid``.
+
+    Read ``uid`` only when the Okta provider validated the token (``method ==
+    "okta"``), and only as a non-empty string, so no other issuer can choose
+    the identity this returns.
+
+    Shared by ``_canonical_egress_user`` (the vault key) and
+    ``_audit_identity_claims`` (the audit subject) so both apply one rule.
+
+    Args:
+        validation_result: A validator result with ``method`` and ``data``.
+
+    Returns:
+        The ``uid`` claim, or None when the token is not an Okta bearer or
+        carries no usable ``uid``.
+    """
+    if validation_result.get("method") != _OKTA_BEARER_METHOD:
+        return None
+    okta_user_id = (validation_result.get("data") or {}).get("uid")
+    if isinstance(okta_user_id, str) and okta_user_id:
+        return okta_user_id
+    return None
+
+
 def _canonical_egress_user(validation_result: dict) -> str:
     """The stable per-user id the egress vault keys on, for ONE human identity.
 
@@ -359,11 +409,15 @@ def _canonical_egress_user(validation_result: dict) -> str:
     session) and the vend path (bearer token), or the user's vaulted token is
     written under one id and looked up under another -> permanent vend miss.
 
-    Uses the OIDC ``sub`` claim, which is present in BOTH id_tokens and access
-    tokens for every OIDC provider and is stable per (user, gateway app). This is
-    provider-agnostic: it avoids ``preferred_username``, which some IdPs (notably
-    Entra) omit from ACCESS tokens, so the browser id_token (has it) and a DCR
-    client's bearer access token (lacks it) would otherwise key differently.
+    Uses the IdP's immutable account id, which for every OIDC provider except
+    Okta is the ``sub`` claim, present in BOTH id_tokens and access tokens. This
+    avoids ``preferred_username``, which some IdPs (notably Entra) omit from
+    ACCESS tokens, so the browser id_token (has it) and a DCR client's bearer
+    access token (lacks it) would otherwise key differently. It also avoids every
+    name an IdP lets an account change or lets a later account reuse: a Cognito
+    username is freed when its user is deleted, and an Okta login is editable. A
+    key built on one of those hands the old account's vaulted tokens to whoever
+    holds the name next.
 
     Resolution (first hit wins):
       1. ``data.egress_user`` -- the explicit canonical egress id stamped onto a
@@ -384,18 +438,32 @@ def _canonical_egress_user(validation_result: dict) -> str:
          human -> the vend reads an empty bucket and every per-user egress server
          returns 0 tools with nothing logged. Fail closed instead; the caller
          re-mints a token that carries the claim.
+      1c. Okta (``method == "okta"``): ``data.uid`` when it is a non-empty
+         string, read through ``_okta_user_id``. An Okta user access token's
+         ``sub`` is the user's login, which an administrator can edit or move to
+         another user; ``uid`` is the immutable user id, the same value the Okta
+         id_token (and so the session) carries as ``sub``. A client-credentials
+         token has no ``uid`` and falls through to step 2, where its ``sub`` is
+         the client id. ``uid`` is read for this method only, never for another
+         issuer.
       2. ``data.sub`` -- the raw IdP subject. Bearer paths expose the verified
          claims here; the cookie path carries the sub persisted into the session
          at login (see create_session ``subject``).
-      3. ``data.subject`` -- the cookie session's persisted OIDC sub.
-      4. top-level ``sub`` -- direct-token paths that surface it there.
-      5. ``username`` -- fallback for callers with no sub (keeps pre-existing
-         non-OIDC behavior unchanged; only OIDC callers change bucket).
+      3. ``data.subject`` -- the cookie session's persisted OIDC sub. For
+         Cognito this is the token ``sub`` (a UUID), never the username.
+      4. top-level ``sub`` -- direct-token paths that surface it there (the
+         ``SimplifiedCognitoValidator`` boto3 branch, whose ``data`` holds the
+         GetUser response rather than claims).
+      5. ``username`` -- fallback for callers with no sub. An OIDC login without
+         a subject is refused, so a session reaches this step only from a
+         non-OIDC provider (GitHub, Google, custom) whose userInfo had no
+         ``subject_claim``, or from a session created before subjects persisted.
 
-    Steps 2-5 are unchanged for every non-``self_signed`` caller.
+    Steps 2-5 are unchanged for every non-``self_signed``, non-Okta caller.
     """
     data = validation_result.get("data") or {}
-    if validation_result.get("method") == AUTH_METHOD_SELF_SIGNED:
+    method = validation_result.get("method")
+    if method == AUTH_METHOD_SELF_SIGNED:
         # No ``egress_user`` on a token this gateway minted itself means the claim
         # was never stamped (a token minted before the claim existed, or a mint
         # path that failed to resolve it). The remaining candidates below are the
@@ -405,6 +473,9 @@ def _canonical_egress_user(validation_result: dict) -> str:
         # The claim is read through _trusted_egress_user_claim so the trust gate
         # stays in one place, shared with the audit identity path.
         return _trusted_egress_user_claim(validation_result) or ""
+    okta_user_id = _okta_user_id(validation_result)
+    if okta_user_id:
+        return okta_user_id
     return (
         data.get("sub")
         or data.get("subject")
@@ -551,9 +622,14 @@ def _audit_identity_claims(validation_result: dict) -> dict:
     was not only a display bug: the audit record also lacked the stable
     ``oid``/``tid`` needed to correlate an opaque ``sub`` back to a user.
 
-    ``subject`` resolves the SAME id as ``_canonical_egress_user``: the gated
-    ``egress_user`` claim -> ``data.sub`` -> ``data.subject`` -> top-level ``sub``.
-    Both hops after the first matter and neither is cosmetic:
+    ``subject`` resolves the SAME id as ``_canonical_egress_user`` whenever the
+    vault key is an IdP id: the gated ``egress_user`` claim -> the Okta ``uid``
+    (``_okta_user_id``) -> ``data.sub`` -> ``data.subject`` -> top-level ``sub``.
+    It never falls back to ``username``, because a field named ``subject`` must
+    not hold a display name, so a caller the vault keys on its username gets
+    ``None`` here. (A gateway-minted token without ``egress_user``, which the
+    vault refuses, still records its own ``sub``.) Every hop after the first
+    matters and none is cosmetic:
 
     * ``egress_user`` (only from a gateway-minted token, see
       ``_trusted_egress_user_claim``) is where the real OIDC ``sub`` lives on a
@@ -562,6 +638,9 @@ def _audit_identity_claims(validation_result: dict) -> dict:
       bearer-minted-from-browser-login path stored a username in a field
       documented as an opaque OIDC ``sub`` -- duplicating ``username``, and
       failing an exact-match lookup by the real ``sub``.
+    * The Okta ``uid`` is the user id on a raw Okta bearer, whose own ``sub`` is
+      the user's editable login. Without this hop the audit record of an Okta
+      bearer named the login while the vault keyed the same caller on ``uid``.
     * ``data.subject`` is where the cookie session persists the OIDC sub (see
       ``resolve_session``), so without it every browser-originated record stored
       a null durable identity.
@@ -603,6 +682,8 @@ def _audit_identity_claims(validation_result: dict) -> dict:
     sub = (
         # Gated to gateway-minted tokens; see _trusted_egress_user_claim.
         _claim_str(_trusted_egress_user_claim(validation_result))
+        # Gated to Okta-validated tokens; see _okta_user_id.
+        or _claim_str(_okta_user_id(validation_result))
         or _claim_str(data.get("sub"))
         or _claim_str(data.get("subject"))
         or _claim_str(validation_result.get("sub"))
@@ -3601,7 +3682,18 @@ class SimplifiedCognitoValidator:
             region: AWS region
 
         Returns:
-            Dict containing validation results and token information
+            Dict containing validation results and token information. On the
+            Cognito branches (``method`` ``jwt`` or ``boto3``) the top-level
+            ``sub`` is the account's immutable Cognito ``sub``: the token claim,
+            or the GetUser ``sub`` attribute. The login callback stores it as the
+            session subject and the egress vault keys on it; ``username`` is the
+            Cognito username, which Cognito frees for reuse when the user is
+            deleted, so it must never stand in for ``sub``.
+
+        Raises:
+            ValueError: If every method fails, including when JWT verification
+                fails and the boto3 GetUser response has no non-empty ``sub``
+                attribute.
         """
         if not region:
             region = self.default_region
@@ -3631,6 +3723,7 @@ class SimplifiedCognitoValidator:
                 "method": "jwt",
                 "data": jwt_claims,
                 "client_id": jwt_claims.get("client_id") or "",
+                "sub": jwt_claims.get("sub") or "",
                 "username": jwt_claims.get("cognito:username") or jwt_claims.get("username") or "",
                 "expires_at": jwt_claims.get("exp"),
                 "scopes": scopes,
@@ -3645,6 +3738,13 @@ class SimplifiedCognitoValidator:
             # Try boto3 validation as fallback
             try:
                 boto3_data = self.validate_with_boto3(access_token, region)
+                user_attributes = boto3_data.get("user_attributes", {})
+                cognito_sub = user_attributes.get("sub")
+                if not isinstance(cognito_sub, str) or not cognito_sub:
+                    # The sub is the egress vault key; the username Cognito
+                    # returns beside it is reusable after a delete. Refuse
+                    # rather than return a result that keys on the username.
+                    raise ValueError("GetUser response has no 'sub' attribute")
 
                 return {
                     "valid": True,
@@ -3652,7 +3752,8 @@ class SimplifiedCognitoValidator:
                     "data": boto3_data,
                     "client_id": "",  # boto3 method doesn't provide client_id
                     "username": boto3_data.get("username") or "",
-                    "user_attributes": boto3_data.get("user_attributes", {}),
+                    "sub": cognito_sub,
+                    "user_attributes": user_attributes,
                     "scopes": [],  # boto3 method doesn't provide scopes
                     "groups": [],
                 }
@@ -6790,6 +6891,41 @@ def _verify_id_token_or_deny(
         raise HTTPException(status_code=401, detail="ID token verification failed") from e
 
 
+def _require_login_subject(
+    provider: str,
+    mapped_user: dict,
+) -> None:
+    """Refuse an OIDC login that did not identify the account by its subject.
+
+    The session subject becomes the per-user egress vault key (see
+    ``_canonical_egress_user``). Without one, the vault falls back to the
+    username, which an IdP may let another account hold later. Every provider
+    in ``_OIDC_LOGIN_PROVIDERS`` returns a ``sub`` for a real account, so a
+    missing subject there means a broken or unexpected response: deny before
+    any session exists. Non-OIDC providers (GitHub, Google, custom) keep their
+    login and only get a warning, since their subject depends on the
+    operator's ``subject_claim`` setting.
+
+    Args:
+        provider: The OAuth2 provider key from the callback path.
+        mapped_user: The identity the callback mapped from the IdP response.
+
+    Raises:
+        HTTPException: 401 when an OIDC provider's login mapped no subject.
+    """
+    if mapped_user.get("subject"):
+        return
+    if provider in _OIDC_LOGIN_PROVIDERS:
+        logger.warning("OAuth2 login via %s yielded no subject; refusing the login", provider)
+        raise HTTPException(status_code=401, detail="Login response did not identify the account")
+    logger.warning(
+        "OAuth2 login via %s yielded no subject; per-user egress vends from "
+        "tokens minted for this session will be refused (set subject_claim "
+        "for the provider)",
+        provider,
+    )
+
+
 @app.get("/oauth2/callback/{provider}")
 async def oauth2_callback(
     provider: str,
@@ -6907,8 +7043,10 @@ async def oauth2_callback(
                                 "username"
                             ),  # Cognito username is usually email
                             "name": token_validation.get("username"),
-                            "subject": token_validation.get("sub")
-                            or token_validation.get("username"),
+                            # The immutable Cognito sub. Never the username:
+                            # Cognito frees a username for reuse when its user
+                            # is deleted, and the egress vault keys on this.
+                            "subject": token_validation.get("sub"),
                             "groups": token_validation.get("groups", []),
                         }
                         logger.info(
@@ -7235,6 +7373,8 @@ async def oauth2_callback(
                 safe_identity_summary(mapped_user),
             )
 
+        _require_login_subject(provider, mapped_user)
+
         # Issue #1127: PingFederate (and any IdP in the fallback allow-list)
         # may return an empty groups claim because group memberships are not
         # configured in the IdP's user store. Enrich groups from the
@@ -7303,13 +7443,6 @@ async def oauth2_callback(
         # for IdPs that return large groups claims (e.g. Entra ID with many
         # group memberships) and keeps id_token off the client entirely.
         session_max_age = OAUTH2_CONFIG.get("session", {}).get("max_age_seconds", 28800)
-        if not mapped_user.get("subject"):
-            logger.warning(
-                "OAuth2 login via %s yielded no subject; per-user egress vends from "
-                "tokens minted for this session will be refused (set subject_claim "
-                "for the provider)",
-                provider,
-            )
         # id_token is encrypted at rest server-side and required for OIDC SSO
         # logout (id_token_hint).
         from session_store import create_session
