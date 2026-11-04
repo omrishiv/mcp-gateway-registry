@@ -43,6 +43,7 @@ _CALLBACK_BASE_URL = "https://gw.example"
 _CONSENTING_COOKIE = "session-of-alice"
 _OTHER_COOKIE = "session-of-mallory"
 _EXPIRED_COOKIE = "session-expired"
+_NO_PRINCIPAL_COOKIE = "session-of-static-key"
 _LIVE_SESSIONS: dict[str, dict] = {
     _CONSENTING_COOKIE: {
         "username": _CONSENTING_USER,
@@ -58,7 +59,22 @@ _LIVE_SESSIONS: dict[str, dict] = {
         "client_id": "web",
         "session_id": "sid-mallory",
     },
+    # A live session that owns no per-user bucket: vault_principal is None.
+    _NO_PRINCIPAL_COOKIE: {
+        "username": _CONSENTING_USER,
+        "egress_user": _CONSENTING_USER,
+        "auth_method": "network-trusted",
+        "client_id": "web",
+        "session_id": "sid-static",
+    },
 }
+# Cookies for which the callback refuses before the code exchange: no cookie, one
+# that no longer resolves, and one that resolves to a caller with no principal.
+_REFUSING_COOKIES = [
+    pytest.param(None, id="no-session-cookie"),
+    pytest.param(_EXPIRED_COOKIE, id="expired-session-cookie"),
+    pytest.param(_NO_PRINCIPAL_COOKIE, id="session-without-principal"),
+]
 
 
 class _BrowserState(NamedTuple):
@@ -298,4 +314,34 @@ def test_callback_writes_only_for_live_principal(consent_app, browser_state):
         f"consent state minted for {_CONSENTING_USER!r}, completing browser live as "
         f"{browser_state.live_principal!r}: vault writes {store.writes}, "
         f"expected {expected_writes}"
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("refusing_cookie", _REFUSING_COOKIES)
+def test_refused_callback_burns_the_state(consent_app, refusing_cookie):
+    """A code and state the callback refused cannot be replayed by the initiator.
+
+    The refusing browser's history keeps ``?code=...&state=...``. If that URL is
+    handed back to the user who minted the state, their own live browser passes
+    the principal check, so the refusal must already have consumed the nonce.
+    """
+    app, store = consent_app
+    consenting_browser = _browser(app, _CONSENTING_COOKIE)
+    initiate = consenting_browser.post(
+        "/api/egress-auth/initiate", json={"server_path": _SERVER_PATH}
+    )
+    assert initiate.status_code == 200, initiate.text
+    params = {
+        "code": "code-of-the-refusing-browser",
+        "state": _extract_state(initiate.json()["authorize_url"]),
+    }
+    refused = _browser(app, refusing_cookie).get("/api/oauth2/egress/callback", params=params)
+    assert refused.status_code == 401, refused.text
+
+    consenting_browser.get("/api/oauth2/egress/callback", params=params)
+
+    assert store.writes == [], (
+        f"callback refused for cookie {refusing_cookie!r}, then the same code and "
+        f"state replayed from {_CONSENTING_USER!r}'s browser wrote {store.writes}"
     )

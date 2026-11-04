@@ -164,6 +164,10 @@ def _model_principal(
 ) -> tuple[str, str] | None:
     """Reference model of the vault principal for a registry user context.
 
+    ``egress_user`` wins; ``username`` is read only when ``egress_user`` is
+    absent, None or empty. Whichever is read must be a non-empty string: a
+    present value of another type refuses rather than falling through.
+
     Args:
         ctx: The identity fields of a user context.
 
@@ -176,19 +180,28 @@ def _model_principal(
         return None
     for key in ("egress_user", "username"):
         value = ctx.get(key)
-        if isinstance(value, str) and value:
-            return _CANONICAL_PER_USER_METHOD, value
+        if value is None or value == "":
+            continue
+        if not isinstance(value, str):
+            return None
+        return _CANONICAL_PER_USER_METHOD, value
     return None
 
 
-def _admin_context(
+def _caller_context(
     caller: dict,
+    is_admin: bool,
 ) -> dict:
-    """Wrap drawn identity fields in a context that passes owner/admin checks."""
+    """Wrap drawn identity fields in a full user context, as an admin or not.
+
+    Both shapes carry the access the self-service routes check (every server,
+    modify and list permission); only ``is_admin`` and the admin group differ.
+    The vault principal a route derives must not depend on either.
+    """
     return {
         **caller,
-        "is_admin": True,
-        "groups": ["mcp-registry-admin"],
+        "is_admin": is_admin,
+        "groups": ["mcp-registry-admin"] if is_admin else ["mcp-registry-user"],
         "scopes": ["mcp-servers-unrestricted/execute"],
         "accessible_servers": ["*"],
         "ui_permissions": {"modify_service": ["all"], "list_service": ["all"]},
@@ -246,6 +259,9 @@ class _RecordingService:
     async def handle_callback(self, **kwargs) -> EgressConnection:
         self.calls.append(("handle_callback", kwargs))
         return EgressConnection(provider="github", server_path=_OAUTH_SERVER_PATH)
+
+    async def discard_state(self, **kwargs) -> None:
+        self.calls.append(("discard_state", kwargs))
 
     async def list_connections(self, **kwargs) -> list:
         self.calls.append(("list_connections", kwargs))
@@ -415,7 +431,10 @@ _USERNAME_ONLY = {"auth_method": "oauth2", "egress_user": "", "username": "alice
 _STATIC_KEY = {"auth_method": "network-trusted", "egress_user": "ci-bot", "username": "ci-bot"}
 _FEDERATION = {"auth_method": "federation-static", "username": "peer"}
 _NO_IDENTITY = {"auth_method": "oauth2", "egress_user": "", "username": ""}
+# A present identity of the wrong type refuses; it never falls through to the
+# next field, which would key the vault on a different identity.
 _NON_STR_IDENTITY = {"auth_method": "oauth2", "egress_user": 7, "username": "alice"}
+_NON_STR_FALLBACK = {"auth_method": "oauth2", "egress_user": "", "username": ["alice"]}
 
 
 def _pin_contexts(**extra):
@@ -434,6 +453,7 @@ def _pin_contexts(**extra):
             _FEDERATION,
             _NO_IDENTITY,
             _NON_STR_IDENTITY,
+            _NON_STR_FALLBACK,
         ):
             test = example(caller=ctx, **extra)(test)
         return test
@@ -453,12 +473,29 @@ def test_vault_principal_matches_the_reference_model(caller):
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    "caller",
+    [
+        pytest.param(_NON_STR_IDENTITY, id="egress-user-int"),
+        pytest.param({**_NON_STR_IDENTITY, "egress_user": ["sub-1"]}, id="egress-user-list"),
+        pytest.param({**_NON_STR_IDENTITY, "egress_user": False}, id="egress-user-bool"),
+        pytest.param(_NON_STR_FALLBACK, id="fallback-username-list"),
+        pytest.param({**_NON_STR_FALLBACK, "egress_user": None, "username": 7}, id="fallback-int"),
+    ],
+)
+def test_wrong_type_identity_refuses_instead_of_falling_through(caller):
+    """A present non-string ``egress_user`` (or fallback ``username``) yields no principal."""
+    assert vault_principal(caller) is None
+
+
+@pytest.mark.unit
 @_ROUTE_SETTINGS
-@given(caller=_caller_contexts())
-@_pin_contexts()
-def test_initiate_binds_the_consent_to_the_model_principal(egress_routes, caller):
+@given(caller=_caller_contexts(), is_admin=st.booleans())
+@_pin_contexts(is_admin=True)
+@_pin_contexts(is_admin=False)
+def test_initiate_binds_the_consent_to_the_model_principal(egress_routes, caller, is_admin):
     """Property: initiate passes the model principal to the service, or refuses 403."""
-    ctx = _admin_context(caller)
+    ctx = _caller_context(caller, is_admin)
     egress_routes.act_as(ctx)
     expected = _model_principal(ctx)
 
@@ -476,26 +513,28 @@ def test_initiate_binds_the_consent_to_the_model_principal(egress_routes, caller
 
 @pytest.mark.unit
 @_ROUTE_SETTINGS
-@given(caller=_caller_contexts())
-@_pin_contexts()
-def test_callback_compares_the_model_principal_of_the_live_session(egress_routes, caller):
+@given(caller=_caller_contexts(), is_admin=st.booleans())
+@_pin_contexts(is_admin=True)
+@_pin_contexts(is_admin=False)
+def test_callback_compares_the_model_principal_of_the_live_session(egress_routes, caller, is_admin):
     """Property: the callback's account-swap principal is the model principal.
 
-    With no principal the callback answers with the sign-in page and never calls
-    ``handle_callback``.
+    With no principal the callback answers with the sign-in page, burns the
+    state, and never calls ``handle_callback``.
     """
-    ctx = _admin_context(caller)
+    ctx = _caller_context(caller, is_admin)
     egress_routes.act_as(ctx)
     expected = _model_principal(ctx)
 
+    state_blob = _consent_state()
     r = egress_routes.client.get(
-        "/api/oauth2/egress/callback", params={"code": "c", "state": _consent_state()}
+        "/api/oauth2/egress/callback", params={"code": "c", "state": state_blob}
     )
 
     if expected is None:
         assert r.status_code == 401, r.text
         assert "not signed in" in r.text
-        assert egress_routes.svc.calls == []
+        assert egress_routes.svc.calls == [("discard_state", {"state_blob": state_blob})]
     else:
         assert r.status_code == 200, r.text
         [(name, kwargs)] = egress_routes.svc.calls
@@ -505,11 +544,12 @@ def test_callback_compares_the_model_principal_of_the_live_session(egress_routes
 
 @pytest.mark.unit
 @_ROUTE_SETTINGS
-@given(caller=_caller_contexts())
-@_pin_contexts()
-def test_list_connections_reads_the_model_principal(egress_routes, caller):
+@given(caller=_caller_contexts(), is_admin=st.booleans())
+@_pin_contexts(is_admin=True)
+@_pin_contexts(is_admin=False)
+def test_list_connections_reads_the_model_principal(egress_routes, caller, is_admin):
     """Property: the connection list reads the model principal, or returns [] unread."""
-    ctx = _admin_context(caller)
+    ctx = _caller_context(caller, is_admin)
     egress_routes.act_as(ctx)
     expected = _model_principal(ctx)
 
@@ -525,11 +565,12 @@ def test_list_connections_reads_the_model_principal(egress_routes, caller):
 
 @pytest.mark.unit
 @_ROUTE_SETTINGS
-@given(caller=_caller_contexts())
-@_pin_contexts()
-def test_disconnect_deletes_only_the_model_principal(egress_routes, caller):
+@given(caller=_caller_contexts(), is_admin=st.booleans())
+@_pin_contexts(is_admin=True)
+@_pin_contexts(is_admin=False)
+def test_disconnect_deletes_only_the_model_principal(egress_routes, caller, is_admin):
     """Property: disconnect deletes the model principal's entry, or deletes nothing."""
-    ctx = _admin_context(caller)
+    ctx = _caller_context(caller, is_admin)
     egress_routes.act_as(ctx)
     expected = _model_principal(ctx)
 
@@ -547,11 +588,14 @@ def test_disconnect_deletes_only_the_model_principal(egress_routes, caller):
 
 @pytest.mark.unit
 @_ROUTE_SETTINGS
-@given(caller=_caller_contexts())
-@_pin_contexts()
-def test_available_servers_are_offered_iff_the_caller_has_a_principal(egress_routes, caller):
+@given(caller=_caller_contexts(), is_admin=st.booleans())
+@_pin_contexts(is_admin=True)
+@_pin_contexts(is_admin=False)
+def test_available_servers_are_offered_iff_the_caller_has_a_principal(
+    egress_routes, caller, is_admin
+):
     """Property: Connected Accounts offers servers exactly to callers the initiate accepts."""
-    ctx = _admin_context(caller)
+    ctx = _caller_context(caller, is_admin)
     egress_routes.act_as(ctx)
     expected = _model_principal(ctx)
 
@@ -564,11 +608,12 @@ def test_available_servers_are_offered_iff_the_caller_has_a_principal(egress_rou
 
 @pytest.mark.unit
 @_ROUTE_SETTINGS
-@given(caller=_caller_contexts())
-@_pin_contexts()
-def test_pat_self_submit_stores_under_the_model_principal(egress_routes, caller):
+@given(caller=_caller_contexts(), is_admin=st.booleans())
+@_pin_contexts(is_admin=True)
+@_pin_contexts(is_admin=False)
+def test_pat_self_submit_stores_under_the_model_principal(egress_routes, caller, is_admin):
     """Property: a self-submitted PAT is written at the model principal, or refused 403."""
-    ctx = _admin_context(caller)
+    ctx = _caller_context(caller, is_admin)
     egress_routes.act_as(ctx)
     expected = _model_principal(ctx)
 
@@ -587,12 +632,20 @@ def test_pat_self_submit_stores_under_the_model_principal(egress_routes, caller)
 
 @pytest.mark.unit
 @_ROUTE_SETTINGS
-@given(caller=_caller_contexts(), method=st.sampled_from(["GET", "DELETE"]))
-@_pin_contexts(method="GET")
-@_pin_contexts(method="DELETE")
-def test_pat_self_status_and_delete_use_the_model_principal(egress_routes, caller, method):
+@given(
+    caller=_caller_contexts(),
+    method=st.sampled_from(["GET", "DELETE"]),
+    is_admin=st.booleans(),
+)
+@_pin_contexts(method="GET", is_admin=True)
+@_pin_contexts(method="GET", is_admin=False)
+@_pin_contexts(method="DELETE", is_admin=True)
+@_pin_contexts(method="DELETE", is_admin=False)
+def test_pat_self_status_and_delete_use_the_model_principal(
+    egress_routes, caller, method, is_admin
+):
     """Property: PAT status and delete for self address the model principal, or refuse 403."""
-    ctx = _admin_context(caller)
+    ctx = _caller_context(caller, is_admin)
     egress_routes.act_as(ctx)
     expected = _model_principal(ctx)
     service_call = {"GET": "get_pat_status", "DELETE": "delete_pat"}[method]
@@ -630,7 +683,7 @@ def test_pat_admin_on_behalf_canonicalizes_the_target_method(
     principal is the model principal of ``(target_method, target_sub)``. An
     omitted method is a 400; a non-per-user one a 403.
     """
-    egress_routes.act_as(_admin_context({"auth_method": "oauth2", "username": "admin"}))
+    egress_routes.act_as(_caller_context({"auth_method": "oauth2", "username": "admin"}, True))
     expected = _model_principal({"auth_method": target_method, "egress_user": target_sub})
 
     r = egress_routes.client.put(
@@ -657,10 +710,11 @@ def test_pat_admin_on_behalf_canonicalizes_the_target_method(
 
 @pytest.mark.unit
 @_ROUTE_SETTINGS
-@given(caller=_caller_contexts())
-@_pin_contexts()
+@given(caller=_caller_contexts(), is_admin=st.booleans())
+@_pin_contexts(is_admin=True)
+@_pin_contexts(is_admin=False)
 def test_initiate_then_callback_as_the_same_caller_vaults_at_the_model_principal(
-    consent_routes, caller
+    consent_routes, caller, is_admin
 ):
     """Property: one caller's consent round trip writes exactly the model principal's bucket.
 
@@ -669,7 +723,7 @@ def test_initiate_then_callback_as_the_same_caller_vaults_at_the_model_principal
     derives. A caller without a principal is refused at initiate and nothing
     is written.
     """
-    ctx = _admin_context(caller)
+    ctx = _caller_context(caller, is_admin)
     consent_routes.act_as(ctx)
     expected = _model_principal(ctx)
 
@@ -696,11 +750,12 @@ def test_initiate_then_callback_as_the_same_caller_vaults_at_the_model_principal
     initiate_method=st.sampled_from(sorted(_PER_USER_INPUT_METHODS)),
     callback_method=st.sampled_from(sorted(_PER_USER_INPUT_METHODS)),
     user_id=_user_ids,
+    is_admin=st.booleans(),
 )
-@example(initiate_method="keycloak", callback_method="oauth2", user_id="sub-1")
-@example(initiate_method="oauth2", callback_method="session_cookie", user_id="sub-1")
+@example(initiate_method="keycloak", callback_method="oauth2", user_id="sub-1", is_admin=False)
+@example(initiate_method="oauth2", callback_method="session_cookie", user_id="sub-1", is_admin=True)
 def test_consent_started_under_any_per_user_method_completes_in_the_browser(
-    consent_routes, initiate_method, callback_method, user_id
+    consent_routes, initiate_method, callback_method, user_id, is_admin
 ):
     """Property: the account-swap guard accepts the same human across per-user methods.
 
@@ -708,14 +763,16 @@ def test_consent_started_under_any_per_user_method_completes_in_the_browser(
     completed in a browser session (``oauth2``) is one principal: the write
     lands in the canonical bucket the vend reads.
     """
-    initiator = _admin_context({"auth_method": initiate_method, "egress_user": user_id})
+    initiator = _caller_context({"auth_method": initiate_method, "egress_user": user_id}, is_admin)
     consent_routes.act_as(initiator)
     initiate = consent_routes.client.post(
         "/api/egress-auth/initiate", json={"server_path": _OAUTH_SERVER_PATH}
     )
     assert initiate.status_code == 200, initiate.text
 
-    consent_routes.act_as(_admin_context({"auth_method": callback_method, "egress_user": user_id}))
+    consent_routes.act_as(
+        _caller_context({"auth_method": callback_method, "egress_user": user_id}, is_admin)
+    )
     callback = consent_routes.client.get(
         "/api/oauth2/egress/callback",
         params={"code": "provider-code", "state": _state_from(initiate.json()["authorize_url"])},
@@ -756,8 +813,10 @@ def designation_route(monkeypatch) -> _DesignationHarness:
 
     The discovery provider config is already stored (so a blank client_secret
     keeps it); only the designation is missing, so the caller is the one
-    recorded.
+    recorded. The route is owner-or-admin, so the server is registered by the
+    caller's ``username`` and a non-admin caller passes as its owner.
     """
+    holder: dict = {"ctx": {}}
     record = {
         "server_name": "tableau",
         "path": _DISCOVERY_SERVER_PATH,
@@ -777,7 +836,7 @@ def designation_route(monkeypatch) -> _DesignationHarness:
     }
 
     async def _get_server_info(path, include_credentials=False):
-        return deepcopy(record)
+        return {**deepcopy(record), "registered_by": holder["ctx"].get("username")}
 
     service = MagicMock()
     service.get_server_info = AsyncMock(side_effect=_get_server_info)
@@ -785,7 +844,6 @@ def designation_route(monkeypatch) -> _DesignationHarness:
     monkeypatch.setattr(server_routes, "server_service", service)
     monkeypatch.setattr(server_routes.settings, "egress_auth_enabled", True)
 
-    holder: dict = {"ctx": {}}
     app = FastAPI()
     app.include_router(server_routes.router, prefix="/api")
     app.dependency_overrides[server_routes.nginx_proxied_auth] = lambda: dict(holder["ctx"])
@@ -795,11 +853,12 @@ def designation_route(monkeypatch) -> _DesignationHarness:
 
 @pytest.mark.unit
 @_ROUTE_SETTINGS
-@given(caller=_caller_contexts())
-@_pin_contexts()
-def test_discovery_designation_records_the_model_principal(designation_route, caller):
+@given(caller=_caller_contexts(), is_admin=st.booleans())
+@_pin_contexts(is_admin=True)
+@_pin_contexts(is_admin=False)
+def test_discovery_designation_records_the_model_principal(designation_route, caller, is_admin):
     """Property: PUT /oauth-discovery designates the model principal, or refuses 403."""
-    ctx = _admin_context(caller)
+    ctx = _caller_context(caller, is_admin)
     designation_route.act_as(ctx)
     expected = _model_principal(ctx)
 
@@ -848,7 +907,11 @@ class _FacadeHarness:
 
 @pytest.fixture
 def facade_route(monkeypatch) -> _FacadeHarness:
-    """GET /oauth2/egress/connect with the session resolving to ``holder['ctx']``."""
+    """GET /oauth2/egress/connect with the session resolving to ``holder['ctx']``.
+
+    Discovery consent is owner-or-admin, so the discovery server is registered
+    by the caller's ``username`` and a non-admin caller passes as its owner.
+    """
     holder: dict = {"ctx": {}, "designation": None}
     svc = _RecordingService()
 
@@ -858,7 +921,7 @@ def facade_route(monkeypatch) -> _FacadeHarness:
         designation = holder["designation"] or ("", "")
         return {
             "path": _DISCOVERY_SERVER_PATH,
-            "registered_by": "owner-user",
+            "registered_by": holder["ctx"].get("username"),
             "oauth_discovery": {
                 "enabled": True,
                 "oauth": _encrypted_oauth_config(),
@@ -884,11 +947,12 @@ def facade_route(monkeypatch) -> _FacadeHarness:
 
 @pytest.mark.unit
 @_ROUTE_SETTINGS
-@given(caller=_caller_contexts())
-@_pin_contexts()
-def test_connect_binds_the_consent_to_the_model_principal(facade_route, caller):
+@given(caller=_caller_contexts(), is_admin=st.booleans())
+@_pin_contexts(is_admin=True)
+@_pin_contexts(is_admin=False)
+def test_connect_binds_the_consent_to_the_model_principal(facade_route, caller, is_admin):
     """Property: /oauth2/egress/connect starts consent for the model principal, or refuses 403."""
-    ctx = _admin_context(caller)
+    ctx = _caller_context(caller, is_admin)
     facade_route.act_as(ctx)
     expected = _model_principal(ctx)
 
@@ -904,18 +968,25 @@ def test_connect_binds_the_consent_to_the_model_principal(facade_route, caller):
 
 @pytest.mark.unit
 @_ROUTE_SETTINGS
-@given(caller=_caller_contexts(), designee=st.one_of(st.sampled_from(_KNOWN_IDS), _user_ids))
-@_pin_contexts(designee="sub-1")
-@example(caller=_USERNAME_ONLY, designee="alice")
-def test_discovery_connect_admits_exactly_the_designated_principal(facade_route, caller, designee):
+@given(
+    caller=_caller_contexts(),
+    designee=st.one_of(st.sampled_from(_KNOWN_IDS), _user_ids),
+    is_admin=st.booleans(),
+)
+@_pin_contexts(designee="sub-1", is_admin=True)
+@_pin_contexts(designee="sub-1", is_admin=False)
+@example(caller=_USERNAME_ONLY, designee="alice", is_admin=False)
+def test_discovery_connect_admits_exactly_the_designated_principal(
+    facade_route, caller, designee, is_admin
+):
     """Property: discovery consent proceeds iff the caller's model principal is the designee.
 
     The designation is stored canonical, as PUT /oauth-discovery writes it, so a
     designee who connects through an IdP bearer (raw ``keycloak``) is still the
-    designee. Anyone else is refused before consent starts.
+    designee. Anyone else, admin or not, is refused before consent starts.
     """
     designation = (_CANONICAL_PER_USER_METHOD, designee)
-    ctx = _admin_context(caller)
+    ctx = _caller_context(caller, is_admin)
     facade_route.act_as(ctx, designation)
     expected = _model_principal(ctx)
 

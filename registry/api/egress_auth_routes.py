@@ -250,6 +250,34 @@ def _callback_sign_in_required() -> HTMLResponse:
     )
 
 
+async def _refuse_callback(
+    state_blob: str,
+    response: HTMLResponse,
+) -> HTMLResponse:
+    """Consume a decoded consent state's nonce, then return the refusal page.
+
+    Every callback refusal after the state decodes goes through here. The refusing
+    browser's history keeps the provider ``code`` and the ``state``; leaving the
+    nonce live would let that URL be replayed within the state TTL from a browser
+    that is signed in as the consenting user, storing the refusing browser's
+    upstream token in that user's bucket.
+
+    Args:
+        state_blob: The callback's ``state`` query value, already decoded once.
+        response: The refusal page to return.
+
+    Returns:
+        ``response``, after the nonce is consumed.
+    """
+    await get_egress_auth_service().discard_state(state_blob=state_blob)
+    return response
+
+
+def _callback_server_not_configured() -> HTMLResponse:
+    """Response for a consent callback whose server or OAuth config is gone."""
+    return HTMLResponse("<h3>Connection failed: server not configured.</h3>", status_code=400)
+
+
 def _build_connect_url(server_path: str) -> str:
     """Build the session-verified elicitation front-door URL for a server.
 
@@ -1546,7 +1574,7 @@ async def egress_callback(
 
     server = await server_service.get_server_info(st.server_path, include_credentials=True)
     if not server:
-        return HTMLResponse("<h3>Connection failed: server not configured.</h3>", status_code=400)
+        return await _refuse_callback(state, _callback_server_not_configured())
     # Resolve the code-exchange config from the state-bound purpose: discovery
     # uses the server's own backend-auth oauth config, egress uses egress_oauth.
     if st.purpose == "discovery":
@@ -1554,27 +1582,28 @@ async def egress_callback(
     else:
         oauth_cfg = server.get("egress_oauth")
     if not oauth_cfg:
-        return HTMLResponse("<h3>Connection failed: server not configured.</h3>", status_code=400)
+        return await _refuse_callback(state, _callback_server_not_configured())
     # Account-swap guard: the browser completing the provider redirect must be
     # live as the principal bound in the state. Fail closed with no session or an
     # unresolvable one: otherwise a consent link minted by one user and opened in
     # another (unauthenticated) browser stores the second browser's upstream
-    # token in the first user's bucket.
+    # token in the first user's bucket. Each refusal burns the state so the code
+    # and state left in this browser's history cannot be replayed elsewhere.
     session_cookie = request.cookies.get(settings.session_cookie_name)
     if not session_cookie:
-        return _callback_sign_in_required()
+        return await _refuse_callback(state, _callback_sign_in_required())
     try:
         # Pass the cookie explicitly: nginx_proxied_auth's `session` is a
         # FastAPI Cookie(...) param only populated by dependency injection, so
         # a direct call without it always sees session=None.
         ctx = await nginx_proxied_auth(request, session=session_cookie)
     except HTTPException:
-        return _callback_sign_in_required()
+        return await _refuse_callback(state, _callback_sign_in_required())
     # Compare on the vault principal so the account-swap guard matches the
     # principal the consent state was bound to at initiate.
     principal = vault_principal(ctx)
     if principal is None:
-        return _callback_sign_in_required()
+        return await _refuse_callback(state, _callback_sign_in_required())
 
     try:
         conn = await get_egress_auth_service().handle_callback(

@@ -296,13 +296,14 @@ _OBO_SUBJECT_VERIFIED_METHODS: frozenset[str] = frozenset({"entra", "keycloak"})
 
 # Validator ``method`` an Okta bearer reports. An Okta user access token puts the
 # user's editable login in ``sub`` and the immutable user id in ``uid``, so the
-# egress vault key reads ``uid`` for this method only (see _canonical_egress_user).
+# egress vault key for this method comes from _okta_user_id only.
 _OKTA_BEARER_METHOD: str = "okta"
 
 # Login providers that speak OpenID Connect, so every login returns the
 # account's ``sub``. A login through one of them that maps no subject is refused
-# (see oauth2_callback): the session would otherwise key the egress vault on the
-# username, which the IdP may let another account hold later.
+# (see _require_login_subject), as is any login whose token response carried an
+# id_token: the session would otherwise key the egress vault on the username,
+# which the IdP may let another account hold later.
 _OIDC_LOGIN_PROVIDERS: frozenset[str] = frozenset(
     {
         "keycloak",
@@ -329,7 +330,13 @@ def _canonical_auth_method(validation_result: dict) -> str:
       inner ``auth_method == "oauth2"``. This is the CONSENT-WRITE side, so it
       defines the canonical bucket value.
     - ``self_signed``: a JWT this gateway minted (UI "generate token", or the
-      egress OAuth-facade ``/token`` mint).
+      egress OAuth-facade ``/token`` mint). It folds by its own verified
+      ``auth_method`` claim, not by the format: ``/internal/tokens`` mints for
+      ``network-trusted`` callers too (a REGISTRY_API_TOKEN / REGISTRY_API_KEYS
+      key) and stamps that method, so folding every self-signed token into
+      ``oauth2`` would hand a static key the per-user bucket named like it. A
+      missing, non-string or ``self_signed`` claim yields ``""``, which no
+      per-user check accepts.
     - ``keycloak``/``entra``/``cognito``/``okta``/``auth0``/``pingfederate``: a
       bearer issued directly by the per-user IdP -- notably what a Dynamic Client
       Registration (DCR) client (Claude Code, Codex) presents. Without folding
@@ -343,6 +350,9 @@ def _canonical_auth_method(validation_result: dict) -> str:
     Mirrors ``registry.egress_auth.service.canonical_auth_method``.
     """
     method = validation_result.get("method") or ""
+    if method == AUTH_METHOD_SELF_SIGNED:
+        claim = (validation_result.get("data") or {}).get("auth_method")
+        method = claim if isinstance(claim, str) and claim != AUTH_METHOD_SELF_SIGNED else ""
     if method in _PER_USER_IDP_METHODS:
         return _EGRESS_CANONICAL_PER_USER_METHOD
     return method
@@ -373,16 +383,21 @@ def _trusted_egress_user_claim(validation_result: dict) -> str | None:
 
 
 def _okta_user_id(validation_result: dict) -> str | None:
-    """The immutable Okta user id from a raw Okta bearer, or None.
+    """The immutable account id of a raw Okta bearer, or None for any other token.
 
     An Okta user access token carries the user's login (editable, often an
-    email, and movable to another user) in ``sub`` and the immutable user id in
-    ``uid``; the Okta id_token, and so the cookie session, carries that user id
-    as ``sub``. A client-credentials token has no ``uid``.
+    email, and movable to another user) in ``sub``, the immutable user id in
+    ``uid``, and the client it was issued to in ``cid``; the Okta id_token, and
+    so the cookie session, carries that user id as ``sub``. A client-credentials
+    token has no ``uid`` and is issued to itself, so its ``sub`` equals its
+    ``cid`` (the client id the Okta provider reports as ``client_id``).
 
-    Read ``uid`` only when the Okta provider validated the token (``method ==
-    "okta"``), and only as a non-empty string, so no other issuer can choose
-    the identity this returns.
+    For an Okta bearer this returns ``uid`` when it is a non-empty string, else
+    ``sub`` when it is a non-empty string equal to ``cid`` (a machine token),
+    else ``""``: a user token without a usable ``uid`` has no key, and falling
+    back to its ``sub`` would key the vault on the login. Read only when the
+    Okta provider validated the token (``method == "okta"``), so no other
+    issuer can choose the identity this returns.
 
     Shared by ``_canonical_egress_user`` (the vault key) and
     ``_audit_identity_claims`` (the audit subject) so both apply one rule.
@@ -391,15 +406,19 @@ def _okta_user_id(validation_result: dict) -> str | None:
         validation_result: A validator result with ``method`` and ``data``.
 
     Returns:
-        The ``uid`` claim, or None when the token is not an Okta bearer or
-        carries no usable ``uid``.
+        None when the token is not an Okta bearer; otherwise its account id, or
+        ``""`` when it carries none.
     """
     if validation_result.get("method") != _OKTA_BEARER_METHOD:
         return None
-    okta_user_id = (validation_result.get("data") or {}).get("uid")
+    data = validation_result.get("data") or {}
+    okta_user_id = data.get("uid")
     if isinstance(okta_user_id, str) and okta_user_id:
         return okta_user_id
-    return None
+    subject = data.get("sub")
+    if isinstance(subject, str) and subject and subject == data.get("cid"):
+        return subject
+    return ""
 
 
 def _canonical_egress_user(validation_result: dict) -> str:
@@ -438,14 +457,15 @@ def _canonical_egress_user(validation_result: dict) -> str:
          human -> the vend reads an empty bucket and every per-user egress server
          returns 0 tools with nothing logged. Fail closed instead; the caller
          re-mints a token that carries the claim.
-      1c. Okta (``method == "okta"``): ``data.uid`` when it is a non-empty
-         string, read through ``_okta_user_id``. An Okta user access token's
-         ``sub`` is the user's login, which an administrator can edit or move to
-         another user; ``uid`` is the immutable user id, the same value the Okta
-         id_token (and so the session) carries as ``sub``. A client-credentials
-         token has no ``uid`` and falls through to step 2, where its ``sub`` is
-         the client id. ``uid`` is read for this method only, never for another
-         issuer.
+      1c. Okta (``method == "okta"``): resolution STOPS at ``_okta_user_id``:
+         ``data.uid`` when it is a non-empty string, else ``data.sub`` only on a
+         client-credentials token (``sub == cid``, the client id), else ``""``.
+         An Okta user access token's ``sub`` is the user's login, which an
+         administrator can edit or move to another user; ``uid`` is the
+         immutable user id, the same value the Okta id_token (and so the
+         session) carries as ``sub``. A user token without a usable ``uid``
+         therefore has no key and the vend refuses it. ``uid`` is read for this
+         method only, never for another issuer.
       2. ``data.sub`` -- the raw IdP subject. Bearer paths expose the verified
          claims here; the cookie path carries the sub persisted into the session
          at login (see create_session ``subject``).
@@ -474,7 +494,7 @@ def _canonical_egress_user(validation_result: dict) -> str:
         # stays in one place, shared with the audit identity path.
         return _trusted_egress_user_claim(validation_result) or ""
     okta_user_id = _okta_user_id(validation_result)
-    if okta_user_id:
+    if okta_user_id is not None:
         return okta_user_id
     return (
         data.get("sub")
@@ -623,8 +643,9 @@ def _audit_identity_claims(validation_result: dict) -> dict:
     ``oid``/``tid`` needed to correlate an opaque ``sub`` back to a user.
 
     ``subject`` resolves the SAME id as ``_canonical_egress_user`` whenever the
-    vault key is an IdP id: the gated ``egress_user`` claim -> the Okta ``uid``
-    (``_okta_user_id``) -> ``data.sub`` -> ``data.subject`` -> top-level ``sub``.
+    vault key is an IdP id: the gated ``egress_user`` claim -> ``data.sub`` ->
+    ``data.subject`` -> top-level ``sub``, except that an Okta bearer's subject
+    is ``_okta_user_id`` alone (None when that finds no key, never the login).
     It never falls back to ``username``, because a field named ``subject`` must
     not hold a display name, so a caller the vault keys on its username gets
     ``None`` here. (A gateway-minted token without ``egress_user``, which the
@@ -679,15 +700,18 @@ def _audit_identity_claims(validation_result: dict) -> dict:
     are unchanged (forward-only).
     """
     data = validation_result.get("data") or {}
-    sub = (
-        # Gated to gateway-minted tokens; see _trusted_egress_user_claim.
-        _claim_str(_trusted_egress_user_claim(validation_result))
-        # Gated to Okta-validated tokens; see _okta_user_id.
-        or _claim_str(_okta_user_id(validation_result))
-        or _claim_str(data.get("sub"))
-        or _claim_str(data.get("subject"))
-        or _claim_str(validation_result.get("sub"))
-    )
+    # Gated to Okta-validated tokens: their subject is the Okta account id only.
+    okta_user_id = _okta_user_id(validation_result)
+    if okta_user_id is not None:
+        sub = _claim_str(okta_user_id)
+    else:
+        sub = (
+            # Gated to gateway-minted tokens; see _trusted_egress_user_claim.
+            _claim_str(_trusted_egress_user_claim(validation_result))
+            or _claim_str(data.get("sub"))
+            or _claim_str(data.get("subject"))
+            or _claim_str(validation_result.get("sub"))
+        )
     oid = _claim_str(data.get("oid"))
     tid = _claim_str(data.get("tid"))
     return {
@@ -6894,28 +6918,32 @@ def _verify_id_token_or_deny(
 def _require_login_subject(
     provider: str,
     mapped_user: dict,
+    token_data: dict,
 ) -> None:
     """Refuse an OIDC login that did not identify the account by its subject.
 
     The session subject becomes the per-user egress vault key (see
     ``_canonical_egress_user``). Without one, the vault falls back to the
-    username, which an IdP may let another account hold later. Every provider
-    in ``_OIDC_LOGIN_PROVIDERS`` returns a ``sub`` for a real account, so a
-    missing subject there means a broken or unexpected response: deny before
-    any session exists. Non-OIDC providers (GitHub, Google, custom) keep their
-    login and only get a warning, since their subject depends on the
-    operator's ``subject_claim`` setting.
+    username, which an IdP may let another account hold later. An OIDC login
+    always returns the account's ``sub``, so a missing subject there means a
+    broken or unexpected response: deny before any session exists. A login is
+    OIDC when the provider is in ``_OIDC_LOGIN_PROVIDERS`` or when its token
+    response carried an ``id_token``, which also covers a provider an operator
+    added to ``oauth2_providers.yml``. Other logins (GitHub, Google or a custom
+    provider with no ``id_token``) keep working and only get a warning, since
+    their subject depends on the operator's ``subject_claim`` setting.
 
     Args:
         provider: The OAuth2 provider key from the callback path.
         mapped_user: The identity the callback mapped from the IdP response.
+        token_data: The provider's token endpoint response.
 
     Raises:
-        HTTPException: 401 when an OIDC provider's login mapped no subject.
+        HTTPException: 401 when an OIDC login mapped no subject.
     """
     if mapped_user.get("subject"):
         return
-    if provider in _OIDC_LOGIN_PROVIDERS:
+    if provider in _OIDC_LOGIN_PROVIDERS or token_data.get("id_token"):
         logger.warning("OAuth2 login via %s yielded no subject; refusing the login", provider)
         raise HTTPException(status_code=401, detail="Login response did not identify the account")
     logger.warning(
@@ -7373,7 +7401,7 @@ async def oauth2_callback(
                 safe_identity_summary(mapped_user),
             )
 
-        _require_login_subject(provider, mapped_user)
+        _require_login_subject(provider, mapped_user, token_data)
 
         # Issue #1127: PingFederate (and any IdP in the fallback allow-list)
         # may return an empty groups claim because group memberships are not

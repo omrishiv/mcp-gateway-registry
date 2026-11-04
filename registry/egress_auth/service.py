@@ -167,7 +167,11 @@ def canonical_auth_method(validation_result: dict) -> str:
     (``oauth2``) -- otherwise the DCR vend misses and the user loops on consent.
     NON-per-user methods (``federation-static``/``network-trusted``) and unknown
     methods pass through raw so ``is_per_user_auth_method`` still rejects them.
-    Mirrors ``auth_server.server._canonical_auth_method``.
+    Mirrors ``auth_server.server._canonical_auth_method``, which also resolves a
+    self-signed token's method from that token's own ``auth_method`` claim (so a
+    token minted for a ``network-trusted`` caller stays ``network-trusted``)
+    before stamping it. The registry only ever reads that stamped value from the
+    internal token or the session record, never a raw ``self_signed`` result.
     """
     method = validation_result.get("method") or ""
     if method in _PER_USER_IDP_METHODS:
@@ -200,11 +204,13 @@ def vault_principal(user_context: Mapping[str, Any]) -> VaultPrincipal | None:
     ``auth_method`` is canonicalized (every per-user IdP method folds into
     ``oauth2``); a non-per-user, empty, unknown or non-string method yields None.
     ``user_id`` is the auth-server's canonical ``egress_user``, falling back to
-    ``username`` when ``egress_user`` is empty. The fallback is deliberate: it
-    keeps per-user egress working for a non-OIDC login (GitHub, Google, custom)
-    that maps no account id. See "When the key falls back to the username" in
-    ``docs/egress-credential-vault.md``. Values that are not non-empty strings
-    count as absent; nothing is coerced.
+    ``username`` when ``egress_user`` is absent, None or empty. The fallback is
+    deliberate: it keeps per-user egress working for a non-OIDC login (GitHub,
+    Google, custom) that maps no account id. See "When the key falls back to the
+    username" in ``docs/egress-credential-vault.md``. The field that is read must
+    be a non-empty string: a present value of any other type yields None rather
+    than falling through to the next field, which would key the vault on a
+    different identity. Nothing is coerced.
 
     Args:
         user_context: The verified ``nginx_proxied_auth`` user context.
@@ -224,8 +230,11 @@ def vault_principal(user_context: Mapping[str, Any]) -> VaultPrincipal | None:
         return None
     for key in ("egress_user", "username"):
         user_id = user_context.get(key)
-        if isinstance(user_id, str) and user_id:
-            return VaultPrincipal(auth_method, user_id)
+        if user_id is None or user_id == "":
+            continue
+        if not isinstance(user_id, str):
+            return None
+        return VaultPrincipal(auth_method, user_id)
     return None
 
 
@@ -367,6 +376,31 @@ class EgressAuthService:
         )
 
     # -- callback ------------------------------------------------------------- #
+
+    async def discard_state(
+        self,
+        state_blob: str,
+    ) -> None:
+        """Consume a consent state's single-use nonce without storing anything.
+
+        The callback calls this when it refuses a decodable state before
+        ``handle_callback`` runs (no session, an unresolvable one, no principal,
+        server gone). The refusing browser's history keeps the provider ``code``
+        and this ``state``; burning the nonce stops that URL from being replayed
+        later from a browser that is live as the consenting principal. Uses the
+        same replay guard and TTL as ``handle_callback``.
+
+        Args:
+            state_blob: The encoded consent state from the callback query.
+
+        Raises:
+            EgressAuthError: The state does not decode, so it has no nonce to burn.
+        """
+        try:
+            state = decode_state(state_blob)
+        except InvalidState as exc:
+            raise EgressAuthError(f"invalid state: {exc}") from exc
+        await self._replay.check_and_consume(state.nonce, self._state_ttl)
 
     async def handle_callback(
         self,

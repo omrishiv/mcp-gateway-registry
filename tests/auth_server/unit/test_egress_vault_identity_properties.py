@@ -40,6 +40,7 @@ from contextlib import (
 )
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import (
     AsyncMock,
@@ -52,6 +53,7 @@ import pytest
 import yaml
 from cryptography.hazmat.primitives.asymmetric import rsa
 from hypothesis import (
+    assume,
     example,
     given,
     settings,
@@ -70,6 +72,12 @@ from providers.okta import OktaProvider  # noqa: E402
 from providers.pingfederate import PingFederateProvider  # noqa: E402
 
 import auth_server.server as server_module  # noqa: E402
+from registry.auth.dependencies import _context_from_internal_token  # noqa: E402
+from registry.auth.proxied_token import verify_mcp_proxy_token  # noqa: E402
+from registry.egress_auth.service import (  # noqa: E402
+    is_per_user_auth_method,
+    vault_principal,
+)
 
 pytestmark = [pytest.mark.unit, pytest.mark.auth]
 
@@ -115,7 +123,10 @@ BEARER_PATHS: dict[str, str] = {
 # Bare names use the verified id_token, or for Cognito the verified access
 # token (``cognito-boto3`` is the GetUser fallback). ``-userinfo`` paths are the
 # userInfo fallback taken when there is no id_token, or no Cognito pool is
-# configured. GitHub and Google only have the userInfo path.
+# configured. GitHub and Google only have the userInfo path. ``corp-oidc`` is
+# a provider an operator added to ``oauth2_providers.yml``: the callback has no
+# branch for it, so both of its paths read userInfo, and the bare path's token
+# response also carries an id_token.
 LOGIN_PATHS: dict[str, str] = {
     "keycloak": "keycloak",
     "entra": "entra",
@@ -131,9 +142,32 @@ LOGIN_PATHS: dict[str, str] = {
     "cognito-userinfo": "cognito",
     "github": "github",
     "google": "google",
+    "corp-oidc": "corp-oidc",
+    "corp-oidc-userinfo": "corp-oidc",
 }
 
-NON_OIDC_LOGIN_PATHS: frozenset[str] = frozenset({"github", "google"})
+# Login paths whose token response carries no id_token, from a provider the
+# callback does not know speaks OIDC: a missing subject only warns.
+NON_OIDC_LOGIN_PATHS: frozenset[str] = frozenset({"github", "google", "corp-oidc-userinfo"})
+
+_OPERATOR_PROVIDER: str = "corp-oidc"
+_OPERATOR_PROVIDER_CONFIG: dict[str, Any] = {
+    "display_name": "Corp OIDC",
+    "client_id": WEB_CLIENT_ID,
+    "client_secret": "secret",
+    "auth_url": "https://idp.example.com/authorize",
+    "token_url": "https://idp.example.com/token",
+    "user_info_url": "https://idp.example.com/userinfo",
+    "scopes": ["openid", "email", "profile"],
+    "response_type": "code",
+    "grant_type": "authorization_code",
+    "username_claim": "preferred_username",
+    "subject_claim": "sub",
+    "groups_claim": "groups",
+    "email_claim": "email",
+    "name_claim": "name",
+    "enabled": True,
+}
 
 PROVIDERS_WITH_BOTH_PATHS: tuple[str, ...] = (
     "keycloak",
@@ -160,6 +194,25 @@ HYPOTHESIS_SETTINGS = settings(
     database=None,
     report_multiple_bugs=False,
 )
+# For tests that send a /validate request (and often an /internal/tokens mint)
+# per example: 50 examples keep the file fast under -n 8, and the drawn values
+# are opaque ids, so more examples reach no new branch. No deadline: the first
+# request pays FastAPI's route compilation.
+HOP_HYPOTHESIS_SETTINGS = settings(
+    max_examples=50,
+    derandomize=True,
+    database=None,
+    report_multiple_bugs=False,
+    deadline=None,
+)
+
+# The MCP request /validate authorizes in the hop-token tests, as nginx forwards it.
+_HOP_ORIGINAL_URL: str = "https://gw.example.com/github/mcp"
+_HOP_UPSTREAM: str = "https://api.githubcopilot.com/mcp"
+_HOP_BODY: str = '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+# /validate refuses an MCP request from a caller with no scopes, so every group
+# maps to this one; tool authorization itself is allowed in the hop tests.
+_HOP_SCOPE: str = "hop-test-scope"
 
 _COLLIDING_PROFILE: dict[str, str] = {
     "preferred_username": "alice",
@@ -308,17 +361,21 @@ def _provider(
 def _yml_provider_config(
     name: str,
 ) -> dict[str, Any]:
-    """Return the shipped ``oauth2_providers.yml`` entry for ``name``.
+    """Return the provider config the callback reads for ``name``.
 
-    The claim mapping (``username_claim``, ``subject_claim`` and so on) is the
-    production configuration; only the endpoint URL is replaced.
+    For a shipped provider this is its ``oauth2_providers.yml`` entry: the claim
+    mapping (``username_claim``, ``subject_claim`` and so on) is the production
+    configuration; only the endpoint URL is replaced. The operator-added
+    provider gets ``_OPERATOR_PROVIDER_CONFIG``.
 
     Args:
-        name: Provider key in the YAML file.
+        name: Provider key in the YAML file, or ``_OPERATOR_PROVIDER``.
 
     Returns:
         The provider config dict the callback reads.
     """
+    if name == _OPERATOR_PROVIDER:
+        return dict(_OPERATOR_PROVIDER_CONFIG)
     shipped = yaml.safe_load(OAUTH2_PROVIDERS_YML.read_text())["providers"][name]
     return {
         **shipped,
@@ -463,6 +520,39 @@ def _cognito_get_user_client(
     return client
 
 
+def _signed_bearer(
+    provider: str,
+    account_id: str | None,
+    profile: dict[str, str],
+    extra_claims: dict[str, Any] | None = None,
+) -> str:
+    """Sign the user access token ``provider`` issues for the account.
+
+    Args:
+        provider: A provider in ``PROVIDERS_WITH_BOTH_PATHS``.
+        account_id: The account's immutable id.
+        profile: The account's mutable claims.
+        extra_claims: Claims added to the token, overriding the account's.
+
+    Returns:
+        The encoded RS256 token, with the issuer and audience the provider checks.
+    """
+    instance = _provider(provider)
+    claims: dict[str, Any] = _access_claims(provider, account_id, profile)
+    if provider == "keycloak":
+        claims.update(iss=instance.realm_url, aud=WEB_CLIENT_ID, azp=WEB_CLIENT_ID)
+    elif provider == "entra":
+        claims.update(iss=instance.issuer_v2, aud=WEB_CLIENT_ID, azp=WEB_CLIENT_ID)
+    elif provider == "cognito":
+        claims.update(iss=instance.issuer, token_use="access", client_id=WEB_CLIENT_ID)
+    elif provider == "pingfederate":
+        claims.update(iss=PINGFEDERATE_ISSUER, aud=WEB_CLIENT_ID)
+    else:
+        claims.update(iss=instance.issuer, aud=WEB_CLIENT_ID)
+    claims.update(extra_claims or {})
+    return _sign(claims)
+
+
 def _bearer_result(
     bearer_path: str,
     account_id: str | None,
@@ -482,22 +572,10 @@ def _bearer_result(
     """
     if bearer_path.startswith("cognito-validator-"):
         return _cognito_validator_result(bearer_path, account_id, profile, extra_claims)
-    provider = BEARER_PATHS[bearer_path]
-    instance = _provider(provider)
-    claims: dict[str, Any] = _access_claims(provider, account_id, profile)
-    if provider == "keycloak":
-        claims.update(iss=instance.realm_url, aud=WEB_CLIENT_ID, azp=WEB_CLIENT_ID)
-    elif provider == "entra":
-        claims.update(iss=instance.issuer_v2, aud=WEB_CLIENT_ID, azp=WEB_CLIENT_ID)
-    elif provider == "cognito":
-        claims.update(iss=instance.issuer, token_use="access", client_id=WEB_CLIENT_ID)
-    elif provider == "pingfederate":
-        claims.update(iss=PINGFEDERATE_ISSUER, aud=WEB_CLIENT_ID)
-    else:
-        claims.update(iss=instance.issuer, aud=WEB_CLIENT_ID)
-    claims.update(extra_claims or {})
+    instance = _provider(BEARER_PATHS[bearer_path])
+    token = _signed_bearer(BEARER_PATHS[bearer_path], account_id, profile, extra_claims)
     with patch.object(instance, "get_jwks", return_value=_JWKS):
-        result = instance.validate_token(_sign(claims))
+        result = instance.validate_token(token)
     assert result["valid"] is True, result
     return result
 
@@ -802,6 +880,55 @@ def _internal_auth_headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+def _mint_token(
+    user_context: dict[str, Any],
+    store: _FakeSessionCollection,
+) -> str:
+    """Mint a self-signed user token through the real ``/internal/tokens``.
+
+    Args:
+        user_context: The ``user_context`` body field, as the registry sends it.
+        store: Session collection a ``session_id`` in the context resolves in.
+
+    Returns:
+        The minted access token.
+    """
+    body = {
+        "user_context": {"scopes": [_HOP_SCOPE], "groups": [], **user_context},
+        "requested_scopes": [],
+        "expires_in_hours": 1,
+        "description": "vault identity property test",
+    }
+    server_module.user_token_generation_counts.clear()
+    with (
+        _session_store(store),
+        patch.object(server_module, "map_groups_to_scopes", AsyncMock(return_value=[_HOP_SCOPE])),
+    ):
+        response = _client().post("/internal/tokens", json=body, headers=_internal_auth_headers())
+    assert response.status_code == 200, response.text
+    return response.json()["access_token"]
+
+
+def _session_mint_context(
+    login: _Login,
+) -> dict[str, Any]:
+    """Return the ``user_context`` the registry sends to mint from a login's session.
+
+    Args:
+        login: A login that created a session.
+
+    Returns:
+        The session-backed ``user_context``.
+    """
+    document = login.store.documents[0]
+    return {
+        "username": document["username"],
+        "auth_method": "oauth2",
+        "provider": document["provider"],
+        "session_id": server_module.signer.loads(login.cookie),
+    }
+
+
 def _minted_token_key(
     login: _Login,
 ) -> str:
@@ -816,30 +943,110 @@ def _minted_token_key(
     Returns:
         ``_canonical_egress_user`` of the minted token's validation result.
     """
-    session_id = server_module.signer.loads(login.cookie)
-    document = login.store.documents[0]
-    body = {
-        "user_context": {
-            "username": document["username"],
-            "scopes": [],
-            "groups": [],
-            "auth_method": "oauth2",
-            "provider": document["provider"],
-            "session_id": session_id,
-        },
-        "requested_scopes": [],
-        "expires_in_hours": 1,
-        "description": "vault identity property test",
-    }
-    server_module.user_token_generation_counts.clear()
-    with (
-        _session_store(login.store),
-        patch.object(server_module, "map_groups_to_scopes", AsyncMock(return_value=[])),
-    ):
-        response = _client().post("/internal/tokens", json=body, headers=_internal_auth_headers())
-    assert response.status_code == 200, response.text
-    result = server_module.validator.validate_self_signed_token(response.json()["access_token"])
+    token = _mint_token(_session_mint_context(login), login.store)
+    result = server_module.validator.validate_self_signed_token(token)
     return server_module._canonical_egress_user(result)
+
+
+@dataclass
+class _HopTokens:
+    """The two internal tokens one ``/validate`` response carried, as verified downstream."""
+
+    registry_context: dict[str, Any]
+    mcp_proxy_claims: dict[str, Any]
+
+
+def _registry_context(
+    registry_token: str,
+    store: _FakeSessionCollection,
+) -> dict[str, Any]:
+    """Build the registry's user context from an ``X-Internal-Token-Registry``.
+
+    Runs the registry's own ``_context_from_internal_token``, which verifies the
+    token and, for a session-backed token, resolves the session through the
+    registry's session store. Only the stores are replaced: sessions read from
+    ``store`` and the scope repository maps every group to nothing.
+
+    Args:
+        registry_token: The token ``/validate`` minted for the registry hop.
+        store: The session collection the login wrote.
+
+    Returns:
+        The registry user context.
+    """
+    with (
+        patch("registry.auth.session_store._get_collection", AsyncMock(return_value=store)),
+        patch(
+            "registry.auth.dependencies.map_cognito_groups_to_scopes",
+            AsyncMock(return_value=[]),
+        ),
+        patch(
+            "registry.auth.dependencies.resolve_scope_access",
+            AsyncMock(return_value=SimpleNamespace(servers=[], tools={})),
+        ),
+        patch(
+            "registry.auth.dependencies.get_ui_permissions_for_user",
+            AsyncMock(return_value={}),
+        ),
+    ):
+        request = SimpleNamespace(state=SimpleNamespace())
+        return asyncio.run(_context_from_internal_token(request, registry_token))
+
+
+def _validate_hop_tokens(
+    credential_headers: dict[str, str],
+    store: _FakeSessionCollection,
+    bearer_provider: str | None = None,
+) -> _HopTokens:
+    """Send one MCP request's ``/validate`` and verify both internal tokens it mints.
+
+    The request carries what nginx forwards for an MCP call on a registry
+    location: the original URL and body, the resolved upstream (which mints the
+    mcp-proxy token the vend reads) and the registry-API marker (which mints
+    the registry token). Tool authorization is allowed outright, since the test
+    is about identity, not access.
+
+    Args:
+        credential_headers: The caller's ``Authorization`` or ``Cookie`` header.
+        store: The session collection a cookie resolves in.
+        bearer_provider: Provider that verifies a raw IdP bearer, or None.
+
+    Returns:
+        The registry user context and the vend's verified mcp-proxy claims.
+    """
+    marker = server_module.settings.auth_server_nginx_marker_secret
+    headers = {
+        **credential_headers,
+        "X-Original-URL": _HOP_ORIGINAL_URL,
+        "X-Body": _HOP_BODY,
+        "X-Resolved-Upstream": _HOP_UPSTREAM,
+        "X-Registry-Api-Auth": "1",
+        "X-Validate-Source-Secret": marker,
+    }
+    client = _client()
+    with ExitStack() as stack:
+        stack.enter_context(_session_store(store))
+        stack.enter_context(
+            patch.object(
+                server_module, "map_groups_to_scopes", AsyncMock(return_value=[_HOP_SCOPE])
+            )
+        )
+        stack.enter_context(
+            patch.object(server_module, "validate_server_tool_access", AsyncMock(return_value=True))
+        )
+        if bearer_provider is not None:
+            instance = _provider(bearer_provider)
+            stack.enter_context(patch.object(instance, "get_jwks", return_value=_JWKS))
+            stack.enter_context(
+                patch.object(server_module, "get_auth_provider", return_value=instance)
+            )
+        response = client.get("/validate", headers=headers)
+    client.cookies.clear()
+    assert response.status_code == 200, response.text
+    return _HopTokens(
+        registry_context=_registry_context(response.headers["X-Internal-Token-Registry"], store),
+        mcp_proxy_claims=verify_mcp_proxy_token(response.headers["X-Internal-Token"]),
+    )
 
 
 @st.composite
@@ -972,7 +1179,9 @@ def test_oidc_login_without_subject_is_refused(login_path, profile):
 
     For every OIDC login path and every set of mutable claims, a login whose
     token or userInfo response omits the subject returns 401, sets no session
-    cookie and writes no session record.
+    cookie and writes no session record. That includes the operator-added
+    provider, which the callback recognizes as OIDC only by the id_token in its
+    token response.
     """
     login = _login(login_path, None, profile)
     assert login.status_code == 401, (login_path, login.status_code, login.store.documents)
@@ -986,9 +1195,9 @@ def test_oidc_login_without_subject_is_refused(login_path, profile):
 def test_non_oidc_login_without_subject_still_creates_session(login_path, profile):
     """A non-OIDC login without a subject still logs in, with no subject stored.
 
-    For GitHub and Google, whose userInfo responses are not OIDC, a response
-    missing the configured ``subject_claim`` still creates a session, and the
-    session record carries no ``subject``.
+    For GitHub, Google and an operator-added provider whose token response has
+    no id_token, a userInfo response missing the configured ``subject_claim``
+    still creates a session, and the session record carries no ``subject``.
     """
     login = _login(login_path, None, profile)
     assert login.status_code == 302, (login_path, login.status_code)
@@ -1004,7 +1213,7 @@ def test_okta_client_credentials_token_keys_on_its_sub(client_id):
     """An Okta client-credentials token, which has no ``uid``, keys on ``sub``.
 
     For every client id, a machine token whose ``sub`` and ``cid`` are the
-    client id derives the client id as its vault key.
+    client id derives the client id as its vault key and its audit subject.
     """
     instance = _provider("okta")
     token = _sign(
@@ -1019,16 +1228,42 @@ def test_okta_client_credentials_token_keys_on_its_sub(client_id):
     with patch.object(instance, "get_jwks", return_value=_JWKS):
         result = instance.validate_token(token)
     assert server_module._canonical_egress_user(result) == client_id
+    assert server_module._audit_identity_claims(result)["subject"] == client_id
 
 
-@pytest.mark.parametrize(
-    "uid",
-    [pytest.param("", id="empty"), pytest.param(123, id="int"), pytest.param(["x"], id="list")],
+# ``uid`` values an Okta user access token can carry that name no user id;
+# ``_ABSENT_CLAIM`` leaves the claim out of the token.
+_ABSENT_CLAIM = object()
+_UNUSABLE_OKTA_UIDS = st.one_of(
+    st.just(_ABSENT_CLAIM),
+    st.none(),
+    st.just(""),
+    st.integers(),
+    st.booleans(),
+    st.lists(_ACCOUNT_IDS, max_size=2),
 )
-def test_okta_uid_counts_only_as_a_nonempty_string(uid):
-    """An Okta token whose ``uid`` is empty or not a string keys on ``sub``."""
-    key = _bearer_key("okta", "00u-alice", _COLLIDING_PROFILE, extra_claims={"uid": uid})
-    assert key == _COLLIDING_PROFILE["login"]
+
+
+@HYPOTHESIS_SETTINGS
+@given(profile=_PROFILES, uid=_UNUSABLE_OKTA_UIDS)
+@example(profile=_COLLIDING_PROFILE, uid="")
+@example(profile=_COLLIDING_PROFILE, uid=123)
+@example(profile=_COLLIDING_PROFILE, uid=["00u-alice"])
+def test_okta_user_token_without_a_usable_uid_has_no_vault_key(profile, uid):
+    """An Okta user token with no usable ``uid`` never keys on its ``sub``.
+
+    A user access token's ``sub`` is the editable login and its ``cid`` is the
+    client it was issued to, so ``sub != cid``. For every profile and every
+    ``uid`` that is absent, empty or not a string, the vault key is ``""`` (the
+    vend refuses it) and the audit subject is None, rather than the login.
+    """
+    assume(profile["login"] != WEB_CLIENT_ID)
+    claims = {"cid": WEB_CLIENT_ID}
+    if uid is not _ABSENT_CLAIM:
+        claims["uid"] = uid
+    result = _bearer_result("okta", None, profile, extra_claims=claims)
+    assert server_module._canonical_egress_user(result) == ""
+    assert server_module._audit_identity_claims(result)["subject"] is None
 
 
 @pytest.mark.parametrize(
@@ -1145,3 +1380,90 @@ def test_cognito_login_without_getuser_sub_uses_userinfo_sub(account_id, profile
     assert login.status_code == 302, login.status_code
     assert login.store.documents[0]["subject"] == account_id
     assert _cookie_key(login) == account_id
+
+
+@HOP_HYPOTHESIS_SETTINGS
+@given(key_name=_ACCOUNT_IDS)
+@example(key_name="alice")
+def test_token_minted_for_a_static_key_owns_no_vault_bucket(key_name):
+    """A token minted for a network-trusted caller never addresses a per-user bucket.
+
+    ``/internal/tokens`` mints a self-signed token for a ``network-trusted``
+    caller (a REGISTRY_API_TOKEN or REGISTRY_API_KEYS key) and stamps that
+    method into the token's ``auth_method`` claim. For every key name, the
+    token's validation result canonicalizes to a non-per-user method, and the
+    registry context ``/validate`` builds from it owns no vault principal, so a
+    static key named like a user cannot reach that user's connections.
+    """
+    store = _FakeSessionCollection()
+    token = _mint_token(
+        {"username": key_name, "auth_method": "network-trusted", "provider": "network-trusted"},
+        store,
+    )
+    result = server_module.validator.validate_self_signed_token(token)
+
+    hop = _validate_hop_tokens({"Authorization": f"Bearer {token}"}, store)
+
+    canonical = server_module._canonical_auth_method(result)
+    assert not is_per_user_auth_method(canonical), canonical
+    assert vault_principal(hop.registry_context) is None, hop.registry_context
+    assert not is_per_user_auth_method(hop.mcp_proxy_claims["auth_method"])
+
+
+def _vend_principal(
+    mcp_proxy_claims: dict[str, Any],
+) -> tuple[str, str] | None:
+    """The vault principal the egress vend reads from verified mcp-proxy claims.
+
+    Mirrors ``vend_egress_token``: ``egress_user`` with no fallback, and only
+    for a per-user ``auth_method``.
+
+    Args:
+        mcp_proxy_claims: Claims ``verify_mcp_proxy_token`` returned.
+
+    Returns:
+        ``(auth_method, egress_user)``, or None when the vend refuses the caller.
+    """
+    auth_method = mcp_proxy_claims.get("auth_method") or ""
+    egress_user = mcp_proxy_claims.get("egress_user") or ""
+    if not is_per_user_auth_method(auth_method) or not egress_user:
+        return None
+    return auth_method, egress_user
+
+
+@pytest.mark.parametrize("provider", ["keycloak", "okta"])
+@HOP_HYPOTHESIS_SETTINGS
+@given(account_id=_ACCOUNT_IDS, profile=_PROFILES)
+@example(account_id="00u-alice-b", profile=_COLLIDING_PROFILE)
+def test_registry_and_vend_key_one_caller_on_one_principal(provider, account_id, profile):
+    """The registry's vault principal equals the vend's for the same caller.
+
+    One account logs in, then makes the same MCP request three ways: with the
+    session cookie, with a token ``/internal/tokens`` minted from that session,
+    and with the IdP's own access token. For each, ``/validate`` mints the
+    registry token and the mcp-proxy token from one validation result. The
+    registry builds its user context from the first through its real
+    verification path, and the vend reads the second. For every account and
+    profile, both name ``("oauth2", account_id)``, so a connection the browser
+    saves is the one each of those callers vends.
+    """
+    login = _login(provider, account_id, profile)
+    assert login.status_code == 302, (provider, login.status_code)
+    minted = _mint_token(_session_mint_context(login), login.store)
+    idp_bearer = _signed_bearer(provider, account_id, profile, {"groups": ["hop-test-group"]})
+    callers = {
+        "cookie": ({"Cookie": f"{SESSION_COOKIE_NAME}={login.cookie}"}, None),
+        "minted": ({"Authorization": f"Bearer {minted}"}, None),
+        "idp-bearer": ({"Authorization": f"Bearer {idp_bearer}"}, provider),
+    }
+
+    principals = {
+        name: _validate_hop_tokens(headers, login.store, bearer_provider)
+        for name, (headers, bearer_provider) in callers.items()
+    }
+
+    expected = ("oauth2", account_id)
+    for name, hop in principals.items():
+        registry = vault_principal(hop.registry_context)
+        vend = _vend_principal(hop.mcp_proxy_claims)
+        assert registry == vend == expected, (provider, name, registry, vend)

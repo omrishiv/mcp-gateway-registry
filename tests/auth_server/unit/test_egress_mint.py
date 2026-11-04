@@ -68,8 +68,11 @@ class TestCanonicalAuthMethod:
         vr = {"method": "self_signed", "data": {"auth_method": "oauth2"}}
         assert server._canonical_auth_method(vr) == "oauth2"
 
-    def test_self_signed_defaults_oauth2_when_claim_absent(self):
-        assert server._canonical_auth_method({"method": "self_signed", "data": {}}) == "oauth2"
+    @pytest.mark.parametrize("data", [{}, {"auth_method": 7}, {"auth_method": "self_signed"}])
+    def test_self_signed_without_a_usable_claim_owns_no_bucket(self, data):
+        # Every mint stamps the claim, so a token without a usable one names no
+        # principal method and must not fall into the per-user bucket.
+        assert server._canonical_auth_method({"method": "self_signed", "data": data}) == ""
 
 
 @pytest.mark.unit
