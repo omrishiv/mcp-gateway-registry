@@ -5403,7 +5403,7 @@ async def put_server_oauth_discovery(
 
     # Record the caller's vault principal. Must match what the consent
     # (/oauth2/egress/connect?purpose=discovery) and vend paths key on:
-    # canonical auth_method + egress_user (OIDC sub, else username).
+    # canonical auth_method + the auth-server's egress_user (vault_principal).
     #
     # CANONICAL. Every vault write folds per-user IdP method names (keycloak, jwt,
     # self_signed, ...) into the single `oauth2` bucket so consent-write and vend-read

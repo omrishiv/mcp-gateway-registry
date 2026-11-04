@@ -31,7 +31,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from registry.auth.csrf import verify_csrf_token_flexible
-from registry.auth.dependencies import nginx_proxied_auth
+from registry.auth.dependencies import is_browser_session_caller, nginx_proxied_auth
 from registry.auth.internal import validate_internal_auth
 from registry.auth.proxied_token import verify_generic_proxy_token, verify_mcp_proxy_token
 from registry.auth.resource_binding import mcp_proxy_route_binding
@@ -284,6 +284,16 @@ async def _refuse_callback(
 def _callback_server_not_configured() -> HTMLResponse:
     """Response for a consent callback whose server or OAuth config is gone."""
     return HTMLResponse("<h3>Connection failed: server not configured.</h3>", status_code=400)
+
+
+def _callback_no_code() -> HTMLResponse:
+    """Response for a provider redirect that carries no authorization code."""
+    return HTMLResponse(
+        "<h3>Connection not saved: the provider did not approve it.</h3>"
+        "<p>The sign-in at the provider was cancelled or failed. Start connecting "
+        "again to retry.</p>",
+        status_code=400,
+    )
 
 
 def _callback_other_browser() -> HTMLResponse:
@@ -1491,7 +1501,10 @@ async def initiate_consent(
 
     Also sets this consent's cookie on the response, so the consent completes
     only in the browser that called this route (the frontend's same-origin XHR
-    stores it in that browser).
+    stores it in that browser). Only a caller whose context is the request's own
+    browser session may start one: a bearer caller (which skips CSRF) would get
+    a state bound to the user plus its matching consent secret, and the cookie
+    would land in a client that can never finish the consent anyway.
     """
     _feature_enabled_or_404()
     server_path = body.server_path
@@ -1514,6 +1527,13 @@ async def initiate_consent(
     if principal is None:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, detail="this caller cannot connect a per-user account"
+        )
+
+    # Web-only, enforced: the consent cookie must land in the user's browser.
+    if not await is_browser_session_caller(request, user_context):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="connecting an account must start from a signed-in browser session",
         )
 
     binding = new_browser_binding()
@@ -1565,8 +1585,10 @@ async def egress_callback(
     cookie) is authenticated as the principal bound in the signed+encrypted
     state. Verifies state (single-use + TTL + browser binding + account-swap),
     exchanges the code, and stores the token. Every response after the state
-    decodes expires that consent's cookie: the state is consumed either way."""
-    if not code or not state:
+    decodes burns that state and expires that consent's cookie, whether or not
+    the provider sent a code (a provider error such as ``?error=access_denied``
+    sends only the state)."""
+    if not state:
         return HTMLResponse("<h3>Connection failed: missing code/state.</h3>", status_code=400)
 
     # The provider+server are bound in the signed state; the server's egress
@@ -1583,7 +1605,13 @@ async def egress_callback(
     # deployment whose vend path was switched off.
     _feature_enabled_or_404()
 
-    response = await _complete_callback(request, code, state, st)
+    if code:
+        response = await _complete_callback(request, code, state, st)
+    else:
+        # The provider declined or failed (the user cancelled, for example). The
+        # state is still live and this browser still holds its cookie: burn the
+        # state so whoever learns it cannot pair it with their own code here.
+        response = await _refuse_callback(state, _callback_no_code())
     clear_consent_cookie(response, st.browser_binding)
     return response
 

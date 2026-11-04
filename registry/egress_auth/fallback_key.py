@@ -18,9 +18,31 @@ uses). One function keeps the consent write and the vend on one key.
 
 from urllib.parse import quote
 
-# Marks a username-fallback key. No account id an identity provider issues
-# starts with it (UUIDs, numeric ids, emails, ``auth0|...``, Okta ``00u...``).
+# Marks a username-fallback key. An account id that starts with it is refused
+# (no login, no vault key; see ``is_fallback_shaped``): a provider whose
+# ``subject_claim`` names a user-chosen value could otherwise return the
+# fallback key of another user.
 FALLBACK_KEY_PREFIX: str = "name:"
+
+
+def is_fallback_shaped(
+    account_id: object,
+) -> bool:
+    """Return True when an account id has the shape of a username-fallback key.
+
+    Every account id that would key the vault passes through this check, at
+    login (``_require_login_subject``) and wherever a key is derived (the
+    auth server's ``_canonical_egress_user`` and the registry's
+    ``enhanced_auth``). Such an id keys nothing, so it can never read the
+    connections of the subject-less login whose fallback key it equals.
+
+    Args:
+        account_id: The account id an identity provider returned.
+
+    Returns:
+        True for a string that starts with ``FALLBACK_KEY_PREFIX``.
+    """
+    return isinstance(account_id, str) and account_id.startswith(FALLBACK_KEY_PREFIX)
 
 
 def username_fallback_key(

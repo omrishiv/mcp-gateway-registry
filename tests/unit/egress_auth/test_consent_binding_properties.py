@@ -19,6 +19,7 @@ from datetime import (
     UTC,
     datetime,
 )
+from http.cookies import SimpleCookie
 from typing import NamedTuple
 from unittest.mock import AsyncMock
 from urllib.parse import (
@@ -190,18 +191,54 @@ async def _resolve_session(
     )
 
 
+# Bearer callers: the registry resolves them from the internal token /validate
+# minted for the bearer, so the context carries no session id.
+_ALICE_BEARER = "bearer-of-alice"
+_BEARERS: dict[str, dict] = {
+    _ALICE_BEARER: {
+        "username": _CONSENTING_USER,
+        "egress_user": _CONSENTING_USER,
+        "auth_method": _AUTH_METHOD,
+        "client_id": "dcr-agent",
+        "session_id": None,
+    },
+}
+
+
 async def _session_dependency(
     request: Request,
 ) -> dict:
-    """FastAPI dependency form of :func:`_resolve_session` for the initiate route.
+    """FastAPI dependency form of ``nginx_proxied_auth`` for the initiate route.
+
+    A bearer wins over a cookie, as at ``/validate``, which validates the
+    ``Authorization`` header when one is present.
 
     Args:
         request: The incoming request.
 
     Returns:
-        The user context for the request's session cookie.
+        The user context for the request's bearer, else its session cookie.
     """
+    authorization = request.headers.get("authorization", "")
+    if authorization.startswith("Bearer "):
+        return dict(_BEARERS[authorization.removeprefix("Bearer ")])
     return await _resolve_session(request)
+
+
+async def _resolve_session_from_cookie(
+    cookie_value: str | None,
+) -> dict | None:
+    """Stand-in for the registry's session-store lookup of a session cookie.
+
+    Args:
+        cookie_value: The session cookie the request carried.
+
+    Returns:
+        The session record (its ``session_id``) for a live cookie, else None.
+    """
+    if cookie_value in _LIVE_SESSIONS:
+        return {"session_id": _LIVE_SESSIONS[cookie_value]["session_id"]}
+    return None
 
 
 async def _fake_post_token(
@@ -359,6 +396,9 @@ def consent_app(monkeypatch):
     monkeypatch.setattr(routes, "nginx_proxied_auth", _resolve_session)
     monkeypatch.setattr(facade, "nginx_proxied_auth", _resolve_session)
     monkeypatch.setattr(oauth_engine, "_post_token", _fake_post_token)
+    monkeypatch.setattr(
+        "registry.auth.dependencies.resolve_session_from_cookie", _resolve_session_from_cookie
+    )
 
     app = FastAPI()
     app.include_router(routes.router, prefix="/api")
@@ -405,8 +445,8 @@ def test_callback_writes_only_in_the_starting_browser_live_as_its_principal(
 def test_account_injection_into_the_principals_browser_writes_nothing(consent_app, start):
     """An attacker's code paired with V's state, loaded in V's browser, writes nothing.
 
-    The attacker holds V's credential outside V's browser (an agent with V's
-    bearer), so the consent it starts is bound to V. It completes the provider
+    The attacker holds V's session cookie outside V's browser (a bearer cannot
+    start a consent at all), so the consent it starts is bound to V. It completes the provider
     step with its own account and makes V's live browser load the callback with
     its code. V's browser never started that consent, so it holds no consent
     cookie for it, and the callback must refuse before the code exchange.
@@ -541,3 +581,159 @@ def test_browser_mismatch_burns_the_state(consent_app):
     _complete(consenting_browser, state_blob)
 
     assert store.writes == []
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("start", _CONSENT_STARTS)
+def test_provider_error_without_code_burns_the_state_and_clears_its_cookie(consent_app, start):
+    """A provider redirect with no code (the user clicked Cancel) consumes the consent.
+
+    The provider answers ``?error=access_denied&state=S``. The callback burns S
+    and expires the consent cookie, so a later ``?code=C&state=S`` loaded in the
+    starting browser, even with that browser's consent cookie put back, writes
+    nothing. Otherwise anyone who learned S could finish the provider step with
+    their own account and send the starting browser to the callback.
+    """
+    app, store = consent_app
+    browser = _browser(app, _CONSENTING_COOKIE)
+    state_blob, started = _start_consent(browser, start)
+    [(cookie_name, cookie_value)] = started.cookies.items()
+
+    cancelled = browser.get(_CALLBACK_PATH, params={"error": "access_denied", "state": state_blob})
+    cleared = _consent_cookies(browser)
+    browser.cookies.set(cookie_name, cookie_value, path=_CALLBACK_PATH)
+    _complete(browser, state_blob, code="code-for-the-attackers-account")
+
+    assert cancelled.status_code == 400, cancelled.text
+    assert cleared == {}, f"consent cookie survived a callback with no code: {cleared}"
+    assert store.writes == [], f"state replayed after a provider error wrote {store.writes}"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "session_cookie",
+    [
+        pytest.param(None, id="bearer-only"),
+        pytest.param(_OTHER_COOKIE, id="bearer-with-another-users-session-cookie"),
+    ],
+)
+def test_initiate_without_the_browser_session_hands_out_no_binding(consent_app, session_cookie):
+    """A caller not backed by the browser session gets no consent state and no cookie.
+
+    A client holding V's bearer (a DCR agent) skips CSRF, which applies only to
+    cookie callers. If initiate answered it, the client would hold a state bound
+    to V together with the matching consent secret, and could inject its own
+    account wherever it can plant a cookie in V's browser. The context the route
+    acts on must be the session the request's cookie names; otherwise 403.
+    """
+    app, _ = consent_app
+    client = _browser(app, session_cookie)
+
+    response = client.post(
+        "/api/egress-auth/initiate",
+        json={"server_path": _SERVER_PATH},
+        headers={"Authorization": f"Bearer {_ALICE_BEARER}"},
+    )
+
+    assert response.status_code == 403, response.text
+    assert "authorize_url" not in response.text
+    assert dict(response.cookies) == {}, response.headers.get_list("set-cookie")
+
+
+def _consent_set_cookie(
+    response: httpx.Response,
+) -> SimpleCookie:
+    """Parse the one consent ``Set-Cookie`` a consent start returned.
+
+    Args:
+        response: The initiate or connect response.
+
+    Returns:
+        The parsed cookie (one morsel).
+    """
+    [header] = response.headers.get_list("set-cookie")
+    parsed = SimpleCookie()
+    parsed.load(header)
+    return parsed
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("start", _CONSENT_STARTS)
+@pytest.mark.parametrize(
+    ("base_url", "forwarded_proto", "secure"),
+    [
+        pytest.param("https://gw.example.com", None, True, id="https"),
+        pytest.param("http://gw.example.com", "https", True, id="tls-ends-at-the-proxy"),
+        pytest.param("http://gw.example.com", None, False, id="plain-http"),
+    ],
+)
+def test_consent_cookie_attributes(
+    consent_app, monkeypatch, start, base_url, forwarded_proto, secure
+):
+    """The consent cookie reaches the callback, from a cross-site redirect, and only it.
+
+    With a callback base under a path (``https://gw.example.com/registry``) and
+    a shared ``SESSION_COOKIE_DOMAIN``, the cookie is HttpOnly, SameSite=Lax
+    (the provider's redirect back is a top-level cross-site GET), scoped to the
+    callback's full path and the session cookie's domain, lives for the state
+    TTL, and is Secure exactly when the browser reached the gateway over HTTPS.
+    """
+    app, _ = consent_app
+    monkeypatch.setattr(
+        routes.settings, "egress_oauth_callback_base_url", "https://gw.example.com/registry"
+    )
+    monkeypatch.setattr(routes.settings, "session_cookie_domain", ".example.com")
+    monkeypatch.setattr(routes.settings, "session_cookie_secure", True)
+    headers = {"X-Forwarded-Proto": forwarded_proto} if forwarded_proto else {}
+    browser = TestClient(
+        app,
+        base_url=base_url,
+        headers=headers,
+        cookies={routes.settings.session_cookie_name: _CONSENTING_COOKIE},
+    )
+
+    _, started = _start_consent(browser, start)
+
+    [(name, morsel)] = _consent_set_cookie(started).items()
+    assert name.startswith("egress_consent_"), name
+    assert morsel.value
+    assert morsel["httponly"] is True
+    assert morsel["samesite"].lower() == "lax"
+    assert morsel["path"] == "/registry/oauth2/egress/callback"
+    assert morsel["max-age"] == str(routes.settings.egress_state_ttl_seconds)
+    assert morsel["domain"] == ".example.com"
+    assert bool(morsel["secure"]) is secure
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "completing_session",
+    [
+        pytest.param(None, id="refused-before-the-service-no-session"),
+        pytest.param(_OTHER_COOKIE, id="refused-by-the-service-other-principal"),
+        pytest.param(_CONSENTING_COOKIE, id="connected"),
+    ],
+)
+def test_callback_expires_the_consent_cookie_whatever_the_outcome(consent_app, completing_session):
+    """Every callback response for a decoded state expires that consent's cookie.
+
+    The starting browser completes its own consent after its session changed:
+    signed out (refused before the service runs), signed in as someone else
+    (refused by the service), or unchanged (connected). In each case the
+    response deletes the cookie by its name and path.
+    """
+    app, _ = consent_app
+    browser = _browser(app, _CONSENTING_COOKIE)
+    state_blob, started = _start_consent(browser, "initiate")
+    [cookie_name] = started.cookies.keys()
+    browser.cookies.delete(routes.settings.session_cookie_name)
+    if completing_session is not None:
+        browser.cookies.set(routes.settings.session_cookie_name, completing_session)
+
+    response = _complete(browser, state_blob)
+
+    [(name, morsel)] = _consent_set_cookie(response).items()
+    assert name == cookie_name
+    assert morsel["max-age"] == "0"
+    assert morsel["path"] == _CALLBACK_PATH
+    assert _consent_cookies(browser) == {}

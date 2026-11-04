@@ -121,7 +121,7 @@ from registry.common.log_redaction import redact_url
 from registry.common.scopes_loader import reload_scopes_config
 from registry.common.secret_key import validate_secret_key, validate_signing_secret
 from registry.core.config import settings
-from registry.egress_auth.fallback_key import username_fallback_key
+from registry.egress_auth.fallback_key import is_fallback_shaped, username_fallback_key
 
 # Configure logging using shared module (RotatingFileHandler + optional MongoDB)
 from registry.exceptions import UrlValidationError
@@ -487,7 +487,10 @@ def _canonical_egress_user(validation_result: dict) -> str:
          fields, so the consent callback keys where the vend reads.
 
     Steps 2-5 are unchanged for every non-``self_signed``, non-Okta caller,
-    except that step 5's key is namespaced.
+    except that step 5's key is namespaced. An account id from steps 1-4 that
+    starts with the fallback-key prefix (``is_fallback_shaped``) keys nothing:
+    a provider whose ``subject_claim`` names a user-chosen value could otherwise
+    return ``name:github:alice`` and read that fallback user's connections.
     """
     data = validation_result.get("data") or {}
     method = validation_result.get("method")
@@ -495,20 +498,24 @@ def _canonical_egress_user(validation_result: dict) -> str:
         # No ``egress_user`` on a token this gateway minted itself means the claim
         # was never stamped (a token minted before the claim existed, or a mint
         # path that failed to resolve it). The remaining candidates below are the
-        # LOGIN USERNAME for this token type, not the OIDC sub -- a different
-        # identifier namespace -- so returning one of them would silently key the
+        # LOGIN USERNAME for this token type, not the OIDC sub (a different
+        # identifier namespace), so returning one of them would silently key the
         # vault on a second identity for the same human. Fail closed.
         # The claim is read through _trusted_egress_user_claim so the trust gate
         # stays in one place, shared with the audit identity path.
-        return _trusted_egress_user_claim(validation_result) or ""
-    okta_user_id = _okta_user_id(validation_result)
-    if okta_user_id is not None:
-        return okta_user_id
-    account_id = data.get("sub") or data.get("subject") or validation_result.get("sub")
-    if account_id:
-        return account_id
-    provider = data.get("provider") if method == "session_cookie" else method
-    return username_fallback_key(provider, validation_result.get("username"))
+        account_id = _trusted_egress_user_claim(validation_result) or ""
+    else:
+        okta_user_id = _okta_user_id(validation_result)
+        if okta_user_id is not None:
+            account_id = okta_user_id
+        else:
+            account_id = (
+                data.get("sub") or data.get("subject") or validation_result.get("sub") or ""
+            )
+            if not account_id:
+                provider = data.get("provider") if method == "session_cookie" else method
+                return username_fallback_key(provider, validation_result.get("username"))
+    return "" if is_fallback_shaped(account_id) else account_id
 
 
 # Upper bound on a single audit identity value. Two reasons: these values are
@@ -6939,15 +6946,29 @@ def _require_login_subject(
     provider with no ``id_token``) keep working and only get a warning, since
     their subject depends on the operator's ``subject_claim`` setting.
 
+    Any login, OIDC or not, whose subject starts with the fallback-key prefix
+    (``name:``) is refused too: that subject would equal the vault key of a
+    login with no subject, so a provider whose ``subject_claim`` names a
+    user-chosen value could hand one user another user's connections.
+
     Args:
         provider: The OAuth2 provider key from the callback path.
         mapped_user: The identity the callback mapped from the IdP response.
         token_data: The provider's token endpoint response.
 
     Raises:
-        HTTPException: 401 when an OIDC login mapped no subject.
+        HTTPException: 401 when an OIDC login mapped no subject, or any login
+            mapped a subject shaped like a fallback key.
     """
-    if mapped_user.get("subject"):
+    subject = mapped_user.get("subject")
+    if is_fallback_shaped(subject):
+        logger.warning(
+            "OAuth2 login via %s yielded a subject shaped like a username-fallback "
+            "vault key; refusing the login (check the provider's subject_claim)",
+            provider,
+        )
+        raise HTTPException(status_code=401, detail="Login response did not identify the account")
+    if subject:
         return
     if provider in _OIDC_LOGIN_PROVIDERS or token_data.get("id_token"):
         logger.warning("OAuth2 login via %s yielded no subject; refusing the login", provider)

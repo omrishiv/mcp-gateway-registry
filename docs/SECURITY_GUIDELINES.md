@@ -670,13 +670,14 @@ sanitizer that isn't called) is equivalent to no check.
   `state` is missing/absent/mismatched or no authorization request is in flight.
 - **Burn a single-use state on every refusal after it decodes.** A callback that
   refuses a decodable `state` (no session, wrong principal, wrong browser, server
-  gone, expired) and leaves its nonce live has left a usable `?code=...&state=...`
-  in the refusing browser's history. Handed back to the user who minted the
-  state, it completes from that user's own browser within the TTL and stores the
-  refusing browser's provider account in their bucket. Consume the nonce first,
-  before any other check, or route every early refusal through one helper that
-  consumes it (`EgressAuthService.handle_callback` and `discard_state` in
-  `registry/egress_auth/service.py`).
+  gone, expired, or a provider error that sent no `code`) and leaves its nonce
+  live has left a usable `?code=...&state=...` in the refusing browser's history.
+  Handed back to the user who minted the state, it completes from that user's
+  own browser within the TTL and stores the
+  refusing browser's provider account in their bucket. Decode the state before
+  checking for a `code`, consume the nonce before any other check, or route every
+  early refusal through one helper that consumes it (`egress_callback`,
+  `EgressAuthService.handle_callback` and `discard_state` in `registry/`).
 - **Bind an OAuth consent to the browser that started it, not only to the
   principal.** Checking that the browser finishing a consent is signed in as the
   principal in the `state` does not stop account injection: whoever holds a
@@ -689,8 +690,19 @@ sanitizer that isn't called) is equivalent to no check.
   the code exchange unless the browser presents a matching cookie (constant-time
   compare). Name the cookie per consent so parallel consents in different tabs
   all complete, and build no consent URL where no browser receives the response:
-  that state can never complete (RFC 9700 section 4.7, RFC 6749 section 10.12;
-  `registry/egress_auth/browser_binding.py`).
+  that state can never complete. Hand the secret only to the browser session
+  itself: a bearer caller skips CSRF, and if it could start a consent it would
+  hold a state bound to the user together with its secret, ready to plant (RFC
+  9700 section 4.7, RFC 6749 section 10.12; `registry/egress_auth/browser_binding.py`,
+  `is_browser_session_caller` in `registry/auth/dependencies.py`).
+- **A reserved key prefix is a namespace only if no input can carry it.**
+  Prefixing username-fallback vault keys with `name:` keeps them apart from
+  account ids only while no account id starts with `name:`. A provider whose
+  `subject_claim` names a user-chosen value can return one, and that user then
+  reads the fallback user's bucket. Refuse the prefix at every entry point that
+  turns an input into a key: the login (`_require_login_subject`) and each key
+  derivation (`_canonical_egress_user`, `enhanced_auth`), all through one
+  predicate (`is_fallback_shaped` in `registry/egress_auth/fallback_key.py`).
 - **Cross-resource permission confusion: one entity type's access grant must
   never gate a different entity type.** A skill-listing fast-path keyed on
   `accessible_agents` (an agent grant) let a broad agent grant expose private

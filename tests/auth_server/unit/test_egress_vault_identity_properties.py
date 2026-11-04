@@ -1199,6 +1199,95 @@ def test_oidc_login_without_subject_is_refused(login_path, profile):
     assert login.store.documents == []
 
 
+# Account ids a provider can return when its subject_claim names a value users
+# choose: each is the fallback key of some subject-less login.
+_FALLBACK_SHAPED_IDS = ("name:github:alice", "name:")
+
+
+@pytest.mark.parametrize("login_path", list(LOGIN_PATHS))
+@pytest.mark.parametrize("account_id", _FALLBACK_SHAPED_IDS)
+def test_login_with_a_subject_shaped_like_a_fallback_key_is_refused(login_path, account_id):
+    """A login whose subject starts with the fallback-key prefix creates no session.
+
+    A provider whose ``subject_claim`` names a user-chosen value could return
+    ``name:github:alice`` as an account id, which is the vault key of a GitHub
+    login with no subject. For every login path, such a login returns 401, sets
+    no session cookie and writes no session record.
+    """
+    login = _login(login_path, account_id, _COLLIDING_PROFILE)
+    assert login.status_code == 401, (login_path, login.status_code, login.store.documents)
+    assert login.cookie is None
+    assert login.store.documents == []
+
+
+_FALLBACK_LOGIN_PROVIDERS = st.sampled_from(["github", "google", "corp-oidc"])
+_REALISTIC_ACCOUNT_IDS = st.one_of(
+    st.uuids().map(str),
+    st.integers(min_value=0, max_value=10**12).map(str),
+    st.emails(),
+    st.text(alphabet="0123456789abcdef", min_size=8, max_size=24).map(lambda s: f"auth0|{s}"),
+    st.text(alphabet=string.ascii_letters + string.digits, min_size=17, max_size=17).map(
+        lambda s: f"00u{s}"
+    ),
+    st.text(alphabet=string.ascii_letters + string.digits + "-_", min_size=43, max_size=43),
+    st.sampled_from(_FALLBACK_SHAPED_IDS),
+)
+
+
+def _fallback_result(
+    provider: str,
+    username: str,
+) -> dict[str, Any]:
+    """The session-cookie validation result of a login that mapped no subject."""
+    return {
+        "method": "session_cookie",
+        "username": username,
+        "data": {"provider": provider, "username": username},
+    }
+
+
+def _account_id_results(
+    account_id: str,
+) -> dict[str, dict[str, Any]]:
+    """Every validation-result shape that carries ``account_id`` as the account id."""
+    return {
+        "bearer-sub": {"method": "keycloak", "username": "u", "data": {"sub": account_id}},
+        "session-subject": {
+            "method": "session_cookie",
+            "username": "u",
+            "data": {"provider": "keycloak", "username": "u", "subject": account_id},
+        },
+        "minted-egress-user": {
+            "method": server_module.AUTH_METHOD_SELF_SIGNED,
+            "username": "u",
+            "data": {"sub": "u", "egress_user": account_id},
+        },
+        "okta-uid": {"method": "okta", "username": "u", "data": {"sub": "u", "uid": account_id}},
+    }
+
+
+@HYPOTHESIS_SETTINGS
+@given(
+    provider=_FALLBACK_LOGIN_PROVIDERS, username=_CLAIM_VALUES, account_id=_REALISTIC_ACCOUNT_IDS
+)
+@example(provider="github", username="alice", account_id="name:github:alice")
+@example(provider="corp-oidc", username="bob", account_id="name:corp-oidc:bob")
+@example(provider="github", username="12345", account_id="12345")
+def test_fallback_key_never_equals_an_account_ids_key(provider, username, account_id):
+    """Property: no account id keys the vault where a subject-less login's fallback key does.
+
+    For every fallback login provider, username and account id, including ids a
+    user-chosen ``subject_claim`` could shape like a fallback key, the key
+    ``_canonical_egress_user`` derives for that account id on every path differs
+    from the fallback key of the subject-less login.
+    """
+    fallback = server_module._canonical_egress_user(_fallback_result(provider, username))
+    assert fallback == username_fallback_key(provider, username)
+    for name, result in _account_id_results(account_id).items():
+        key = server_module._canonical_egress_user(result)
+        assert key != fallback, (name, account_id, key)
+
+
 @pytest.mark.parametrize("login_path", sorted(NON_OIDC_LOGIN_PATHS))
 @HYPOTHESIS_SETTINGS
 @given(profile=_PROFILES)

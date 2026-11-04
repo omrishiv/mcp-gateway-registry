@@ -1183,6 +1183,37 @@ class TestEnhancedAuth:
         assert context["egress_user"] == "name:github:oauth_user"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("subject", ["name:github:alice", "name:", "name::x"])
+    async def test_enhanced_auth_refuses_a_subject_shaped_like_a_fallback_key(
+        self,
+        mock_signer: URLSafeTimedSerializer,
+        mock_session_store,
+        mock_scopes_config: dict[str, Any],
+        subject: str,
+    ):
+        """A session whose subject starts with the fallback-key prefix owns no vault key.
+
+        Such a subject would read the connections of the subject-less login whose
+        fallback key it equals, so the cookie path keys it on nothing, as the
+        auth-server's _canonical_egress_user does.
+        """
+        mock_session_store.next_value = {
+            "session_id": "sid-1",
+            "username": "bob",
+            "auth_method": "oauth2",
+            "provider": "corp-oidc",
+            "groups": ["registry-users-lob1"],
+            "subject": subject,
+        }
+        session_cookie = _make_session_cookie(mock_signer)
+        mock_request = Mock(spec=Request)
+        mock_request.state = Mock()
+
+        context = await enhanced_auth(request=mock_request, session=session_cookie)
+
+        assert context["egress_user"] == ""
+
+    @pytest.mark.asyncio
     async def test_enhanced_auth_no_session(self):
         """Test enhanced_auth raises 401 without session."""
         # Arrange

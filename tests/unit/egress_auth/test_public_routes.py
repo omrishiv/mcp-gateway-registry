@@ -168,12 +168,19 @@ class TestReadConfig:
 
 @pytest.mark.unit
 class TestInitiate:
-    def test_initiate_returns_authorize_url(self, client):
+    def test_initiate_returns_authorize_url(self, client, monkeypatch):
         svc = AsyncMock()
         svc.build_consent_url = AsyncMock(
             return_value="https://github.com/login/oauth/authorize?x=1"
         )
-        c = client(USER, server=_server(), svc=svc)
+        # Initiate serves only the browser session the request's cookie names.
+        browser_user = {**USER, "session_id": "sid-alice"}
+        monkeypatch.setattr(
+            "registry.auth.dependencies.resolve_session_from_cookie",
+            AsyncMock(return_value={"session_id": "sid-alice"}),
+        )
+        c = client(browser_user, server=_server(), svc=svc)
+        c.cookies.set(routes.settings.session_cookie_name, "live-session")
         r = c.post("/api/egress-auth/initiate", json={"server_path": "/github-mcp"})
         assert r.status_code == 200
         assert r.json()["authorize_url"].startswith("https://github.com/")

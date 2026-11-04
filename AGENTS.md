@@ -373,7 +373,8 @@ working in those areas.
   account id (`sub`; on an Okta access token, `uid`), never a username, email or
   login an account can change or a later account can reuse. Derive it in one
   function for the cookie, bearer and minted-token paths, and refuse an OIDC
-  login that yields none.
+  login that yields none. A reserved key prefix (the `name:` of username-fallback
+  keys) must be refused on every account id, at login and at each key derivation.
 - **Self-registration (DCR):** restrict which scopes a self-registered client
   may request AND whether it may define protocol mappers (a mapper chooses
   what a claim says), for the `anonymous` and `authenticated` subtypes alike.
@@ -433,8 +434,8 @@ working in those areas.
   check that may be dead code; OAuth discovery metadata → `Cache-Control: no-store`.
 - **OAuth consent binding:** bind a consent to the browser that started it (per-consent
   HttpOnly cookie, its hash in the `state`, checked before the code exchange), not only
-  to the principal; build no consent URL where no browser gets the cookie, and burn the
-  single-use `state` on every refusal after it decodes.
+  to the principal; start a consent only for the browser's own session (never a bearer),
+  and burn the single-use `state` on every refusal after it decodes, code or not.
 - **Frontend:** one shared URL-scheme guard on every dynamic href/`window.open`/
   markdown link (allowlist http/https/mailto, render unsafe as text); enforce
   `react/jsx-no-script-url`.

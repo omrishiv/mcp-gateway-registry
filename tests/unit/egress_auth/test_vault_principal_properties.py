@@ -25,7 +25,6 @@ never falls back to the username either. The last properties pin the username
 fallback key itself.
 """
 
-import string
 from copy import deepcopy
 from datetime import UTC, datetime
 from unittest.mock import (
@@ -365,6 +364,13 @@ def _mount_egress_routes(
     async def _session(request, session=None):
         return dict(holder["ctx"])
 
+    async def _session_record(cookie_value):
+        # The client's session cookie names the session the drawn context carries,
+        # so initiate sees a browser-session caller.
+        if cookie_value != _SESSION_COOKIE:
+            return None
+        return {"session_id": holder["ctx"].get("session_id")}
+
     original_auth_dependency = routes.nginx_proxied_auth
     monkeypatch.setattr(routes.settings, "egress_auth_enabled", True)
     monkeypatch.setattr(routes.settings, "egress_oauth_callback_base_url", _CALLBACK_BASE_URL)
@@ -375,6 +381,7 @@ def _mount_egress_routes(
     monkeypatch.setattr(routes, "get_egress_auth_service", lambda: svc)
     monkeypatch.setattr(routes, "nginx_proxied_auth", _session)
     monkeypatch.setattr(oauth_engine, "_post_token", _fake_post_token)
+    monkeypatch.setattr("registry.auth.dependencies.resolve_session_from_cookie", _session_record)
 
     app = FastAPI()
     app.include_router(routes.router, prefix="/api")
@@ -1094,23 +1101,6 @@ def test_vend_never_falls_back_to_the_username(monkeypatch, egress_user, usernam
     assert svc.reads == []
 
 
-# Account ids identity providers issue, in the shapes the vault sees: OIDC
-# UUID subs (Cognito, Keycloak), numeric ids (GitHub), emails (a PingFederate
-# sub mapped to mail), Auth0 ``connection|id`` subs, Okta ``00u`` user ids and
-# Entra's pairwise base64url subs.
-_ACCOUNT_IDS = st.one_of(
-    st.uuids().map(str),
-    st.integers(min_value=0, max_value=10**12).map(str),
-    st.emails(),
-    st.text(alphabet="0123456789abcdef", min_size=8, max_size=24).map(lambda s: f"auth0|{s}"),
-    st.text(alphabet="0123456789abcdef", min_size=8, max_size=24).map(
-        lambda s: f"google-oauth2|{s}"
-    ),
-    st.text(alphabet=string.ascii_letters + string.digits, min_size=17, max_size=17).map(
-        lambda s: f"00u{s}"
-    ),
-    st.text(alphabet=string.ascii_letters + string.digits + "-_", min_size=43, max_size=43),
-)
 # Provider names, including the ':' and '%' that could forge a delimiter.
 _FALLBACK_PROVIDERS = st.one_of(
     st.sampled_from(["github", "google", "corp-oidc", "a:b", "a%3Ab", "a"]),
@@ -1120,23 +1110,6 @@ _FALLBACK_USERNAMES = st.one_of(
     st.sampled_from(["alice", "b:alice", "alice@example.com", "3"]),
     st.text(min_size=1, max_size=12),
 )
-
-
-@pytest.mark.unit
-@_PURE_SETTINGS
-@given(provider=_FALLBACK_PROVIDERS, username=_FALLBACK_USERNAMES, account_id=_ACCOUNT_IDS)
-@example(provider="github", username="12345", account_id="12345")
-@example(provider="pingfederate", username="alice@example.com", account_id="alice@example.com")
-def test_fallback_key_never_equals_an_account_id(provider, username, account_id):
-    """Property: a username-fallback key is never a key an account id produces.
-
-    Every provider shares the ``(oauth2, user_id)`` namespace, and account ids
-    are keyed verbatim. For every provider, username and realistic account id,
-    the fallback key differs from the account id, even when the username is
-    textually that id (a GitHub login ``12345``, an email another provider
-    issues as its ``sub``).
-    """
-    assert username_fallback_key(provider, username) != account_id
 
 
 @pytest.mark.unit

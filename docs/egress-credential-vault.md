@@ -405,7 +405,9 @@ server's discovery config again does not help: `PUT /api/servers/{path}/oauth-di
 that names someone other than the caller, so that one admin's edit cannot take another's designation. To re-designate,
 the server owner or an admin sends `DELETE /api/servers/{path}/oauth-discovery`, then the designee sends the `PUT` and
 connects again. The registry does not match the old name to the new id on its own, because a reused username is the case
-the new key closes.
+the new key closes. A designation made by a user whose login maps no subject (a GitHub, Google or custom login) names
+the bare username, while that user's principal is now `name:<provider>:<username>`; the same `DELETE` then `PUT`
+re-designates them.
 
 **OIDC logins that now fail.** Earlier releases let a login that mapped no subject through with a warning. This release
 refuses it with HTTP 401 ("Login response did not identify the account") for Keycloak, Cognito, Entra, Okta, Auth0 and
@@ -448,6 +450,10 @@ username; the fallback kept those callers on a key built from it when `sub` keyi
 `username_fallback_key` (`registry/egress_auth/fallback_key.py`), so the consent the callback writes lands where the vend reads. `vault_principal`, which every registry vault route uses, has no fallback.
 
 The key is `name:<provider>:<username>`, with the provider percent-encoded so it cannot contain `:`. Every identity provider shares the `(oauth2, user_id)` namespace, and a bare username could equal an account id another provider issues (a PingFederate `sub` that holds an email, or a GitHub login made of digits). The prefix keeps fallback keys apart from every account id, and the encoding keeps two providers' users apart. Account ids are never prefixed.
+
+Nothing stops an identity provider from returning an account id that starts with `name:` when its `subject_claim` names a value users choose (a self-service `preferred_username`, for example). So the auth-server refuses any login whose subject starts with `name:` (HTTP 401, logged as `yielded a subject shaped like a username-fallback vault key`), and `_canonical_egress_user` and `enhanced_auth` key such an id on nothing. A user of such a provider who sets that value to `name:github:alice` cannot sign in, and so cannot read the connections of the GitHub fallback user with that key.
+
+An admin seeding a PAT on behalf of a fallback user (`PUT /api/servers/{path}/egress-pat`) sends the whole key as `sub`, for example `name:github:alice`, with `auth_method` `oauth2`.
 
 Callers that reach it today:
 
@@ -502,7 +508,7 @@ prefix; the AS facade is mounted at root and registered only when
 
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
-| `POST` | `/api/egress-auth/initiate` | user session | Web-only: begin consent for the current user; returns the provider `authorize_url` and sets the consent cookie that binds the consent to the calling browser. |
+| `POST` | `/api/egress-auth/initiate` | the browser's own registry session | Web-only, and enforced: begin consent for the current user; returns the provider `authorize_url` and sets the consent cookie that binds the consent to the calling browser. The caller's context must be the session its session cookie names, so a bearer caller (which skips CSRF) gets 403 and no state. MCP clients connect through `connect_url` instead. |
 | `GET` | `/api/egress-auth/connections` | user session | List the user's connected accounts (tokens stripped). |
 | `DELETE` | `/api/egress-auth/connections/{provider}/{server_path}` | user session + CSRF | Revoke a connection. |
 
@@ -525,7 +531,7 @@ and `AUTH_SERVER_NGINX_MARKER_SECRET`.
 |---------|---------|---------|
 | `EGRESS_AUTH_ENABLED` | `false` | Master switch. When true, requires a Mongo-family `STORAGE_BACKEND` and a non-empty `EGRESS_OAUTH_CALLBACK_BASE_URL` (validated at startup). |
 | `SECRET_STORE_BACKEND` | `openbao` | Vault backend: `openbao` \| `secrets-manager`. |
-| `EGRESS_OAUTH_CALLBACK_BASE_URL` | `""` | Public base URL for the callback (`{base}/oauth2/egress/callback`). Typically the gateway's external URL. |
+| `EGRESS_OAUTH_CALLBACK_BASE_URL` | `""` | Public base URL for the callback (`{base}/oauth2/egress/callback`). Typically the gateway's external URL. The browser must send both its registry session cookie and the consent cookie to this host, so use the host that serves initiate and `/oauth2/egress/connect`, or a parent domain covered by `SESSION_COOKIE_DOMAIN`. Otherwise every consent is refused. |
 | `EGRESS_TOKEN_REFRESH_SKEW_SECONDS` | `300` | Refresh a vaulted token this many seconds before expiry. |
 | `EGRESS_REFRESH_WORKER_INTERVAL_SECONDS` | `120` | Background proactive-refresh scan interval; `0` disables the sweep. |
 | `EGRESS_STATE_TTL_SECONDS` | `600` | Lifetime of the AEAD-encrypted OAuth consent state. |
@@ -899,7 +905,14 @@ Users can review and revoke their connections in the UI at **Connected Accounts*
   state bound to user V (an agent with V's bearer, or V's browser history) could
   finish the provider step with their own account and send V's browser to the
   callback, so V's vault would hold their account. The principal check alone
-  passes in that case, because V's browser is live as V.
+  passes in that case, because V's browser is live as V. Only a browser gets the
+  secret: initiate refuses a caller whose context is not the browser session its
+  cookie names, and `/oauth2/egress/connect` reads only the session cookie. A
+  provider redirect with no code (`?error=access_denied&state=...` after the user
+  cancels) also burns the state and expires the cookie. The callback host must
+  receive the browser's registry session and consent cookies: serve it on the host
+  of initiate and `/oauth2/egress/connect`, or under a shared
+  `SESSION_COOKIE_DOMAIN`.
 - **Per-user isolation.** Tokens are namespaced by `(auth_method, user_id,
   provider, server_path)`, where `user_id` is the caller's OIDC `sub` (see
   [Vault key scheme](#vault-key-scheme)); a `network-trusted`/static caller named
@@ -961,6 +974,9 @@ Users can review and revoke their connections in the UI at **Connected Accounts*
 | "Connection failed" on the consent callback; registry logs `state user mismatch` | The account-swap guard saw the consent-initiate principal differ from the callback's live-session principal. Almost always the session predates the `sub`-persisting login — **log out and back in**, then reconnect, so the cookie session carries the `subject` the initiate leg bound the state to. |
 | "Connection not saved: you are not signed in" on the consent callback (HTTP 401) | The provider redirect landed in a browser with no live registry session (a different browser or profile, a private window, or the session expired during consent). The refusal also uses up that consent attempt, so reloading the page or opening its URL elsewhere fails too. Sign in to the registry in the browser you use for consent, then connect again. |
 | "Connection not saved: this is not the browser that started it" on the consent callback (HTTP 400) | The provider redirect landed in a browser that does not hold the consent cookie: the connection was started in another browser or profile, the link was copied to another browser, or the consent started before the upgrade (see "Consents in flight" under [The canonical `user_id`](#the-canonical-user_id-oidc-sub)). The refusal uses up that consent attempt. Start connecting again in the browser that will finish it. A browser that drops cookies for the gateway, or a `SESSION_COOKIE_DOMAIN` that does not cover the callback host, fails the same way. |
+| "Connection not saved: the provider did not approve it" on the consent callback (HTTP 400) | The provider sent the browser back without an authorization code, usually because the user cancelled at the provider or the provider rejected the request (its `error` query parameter says which). The callback burns that consent attempt. Connect again. |
+| `POST /api/egress-auth/initiate` returns 403 "connecting an account must start from a signed-in browser session" | The caller authenticated with a bearer token, or with a bearer next to a session cookie of another session. Only the browser's own session may start a consent, because the consent cookie must land in that browser. Connect from Connected Accounts in the browser, or open the `connect_url` the gateway hands an MCP client. |
+| A login fails with HTTP 401 and the auth-server logs `yielded a subject shaped like a username-fallback vault key` | The provider's `subject_claim` returned a value that starts with `name:`, the prefix of username-fallback vault keys (see [When the key falls back to the username](#when-the-key-falls-back-to-the-username)). Point `subject_claim` at the provider's immutable account id, which users cannot choose. |
 | Vend returns 401 from auth-server, or every registry API call returns 401 | Marker secret mismatch. Ensure `AUTH_SERVER_NGINX_MARKER_SECRET` matches on registry + auth-server, and nginx sets it on `/validate`. The auth-server logs `nginx marker missing/mismatched` for each refused mint. |
 | OpenBao reads fail with permission denied | The role token lapsed. The store re-authenticates and retries once; persistent failure means a real policy/role gap — verify the `mcp-egress` policy and the role binding to the registry ServiceAccount. |
 | `decrypt` errors on client secret | `SECRET_KEY` was rotated after the server's egress config was saved. Re-save the egress config with the client secret. |

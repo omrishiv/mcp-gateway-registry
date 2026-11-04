@@ -6,7 +6,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from ..common.log_redaction import redact_headers, redact_mapping
 from ..core.config import settings
-from ..egress_auth.fallback_key import username_fallback_key
+from ..egress_auth.fallback_key import is_fallback_shaped, username_fallback_key
 from .access_resolver import (
     get_user_accessible_tools,  # noqa: F401 - re-exported for external callers
     resolve_scope_access,
@@ -101,6 +101,35 @@ async def get_user_session_data(
         )
 
     return data
+
+
+async def is_browser_session_caller(
+    request: Request,
+    user_context: dict[str, Any],
+) -> bool:
+    """Return True when the resolved caller is the browser session the request carries.
+
+    A route that hands something only a browser should hold (the egress consent
+    cookie) needs more than an authenticated caller: a bearer caller passes
+    ``nginx_proxied_auth`` too, and CSRF is skipped for it. Both conditions must
+    hold: the request carried the session cookie, and the context the route acts
+    on was resolved from that same session (its ``session_id`` is the cookie's).
+    A bearer sent beside some other session cookie resolves to the bearer's
+    context, with no or a different ``session_id``, and fails.
+
+    Args:
+        request: The incoming request.
+        user_context: The context ``nginx_proxied_auth`` resolved for it.
+
+    Returns:
+        True only for a caller whose context is the request's own browser session.
+    """
+    session_id = user_context.get("session_id")
+    cookie = request.cookies.get(settings.session_cookie_name)
+    if not session_id or not cookie:
+        return False
+    session_data = await resolve_session_from_cookie(cookie)
+    return session_data is not None and session_data.get("session_id") == session_id
 
 
 # Global scopes configuration - will be loaded during app startup
@@ -724,6 +753,32 @@ async def _context_from_internal_token(
     )
 
 
+def _session_egress_user(
+    session_data: dict[str, Any],
+    username: str,
+) -> str:
+    """Return the vault ``user_id`` for a session resolved from its raw cookie.
+
+    Mirrors the auth-server's ``_canonical_egress_user`` for a session: the
+    subject persisted at login, else the namespaced username fallback. A
+    subject shaped like a fallback key (``name:...``) keys nothing, because it
+    would read the connections of the subject-less login it equals; the
+    auth-server refuses such a login, so only a session created before that
+    check can carry one.
+
+    Args:
+        session_data: The session record.
+        username: The session's username.
+
+    Returns:
+        The vault ``user_id``, or ``""`` when the session owns no bucket.
+    """
+    subject = session_data.get("subject")
+    if subject:
+        return "" if is_fallback_shaped(subject) else subject
+    return username_fallback_key(session_data.get("provider"), username)
+
+
 async def enhanced_auth(
     request: Request,
     session: Annotated[str | None, Cookie(alias=settings.session_cookie_name)] = None,
@@ -749,15 +804,11 @@ async def enhanced_auth(
         auth_method=auth_method,
         provider=session_data.get("provider", "local"),
         session_id=session_data.get("session_id"),
-        # Canonical egress vault id: the OIDC sub persisted at login, else the
-        # namespaced username fallback, exactly as the auth-server's
+        # Canonical egress vault id, exactly as the auth-server's
         # _canonical_egress_user resolves the same session. This path has no
         # internal token (the consent callback and /oauth2/egress/connect resolve
         # the cookie directly), so it applies the fallback itself. See #933.
-        egress_user=(
-            session_data.get("subject")
-            or username_fallback_key(session_data.get("provider"), username)
-        ),
+        egress_user=_session_egress_user(session_data, username),
         # Human-readable email for audit records (session store persists it).
         email=session_data.get("email") or "",
     )

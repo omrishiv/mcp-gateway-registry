@@ -210,12 +210,12 @@ async def egress_connect(
     if user_context is None:
         return _login_bootstrap_redirect(request)
 
-    # Bind the consent state to the vault principal (canonical auth_method;
-    # OIDC-sub-based ``egress_user``, else ``username``) -- the SAME principal the
-    # vend, the vault, and the callback account-swap guard use. Using bare
-    # ``username`` here would bind the state to a different id than the callback
-    # resolves, so the guard would reject every callback with "state user mismatch"
-    # whenever egress_user is set.
+    # Bind the consent state to the vault principal (canonical auth_method; the
+    # auth-server's ``egress_user``, with no username fallback here): the SAME
+    # principal the vend, the vault, and the callback account-swap guard use.
+    # Using bare ``username`` here would bind the state to a different id than the
+    # callback resolves, so the guard would reject every callback with "state user
+    # mismatch" whenever egress_user is set.
     principal = vault_principal(user_context)
     if principal is None:
         return JSONResponse(
