@@ -762,7 +762,11 @@ Users can review and revoke their connections in the UI at **Connected Accounts*
   under the **session** principal, not any client-asserted identity.
 - **State confidentiality.** The OAuth `state` is AES-256-GCM encrypted (not
   merely signed) so the PKCE verifier never appears in a URL, `Referer`, or log.
-  The service enforces TTL, single-use (replay guard), and an account-swap guard.
+  The service enforces TTL, single-use (replay guard), and an account-swap guard:
+  the browser that completes the provider redirect must hold a live registry
+  session for the same principal that started the consent. A callback with no
+  session cookie, or one that no longer resolves, is refused (HTTP 401, "you are
+  not signed in") and stores nothing.
 - **Per-user isolation.** Tokens are namespaced by `(auth_method, user_id,
   provider, server_path)`, where `user_id` is the caller's OIDC `sub` (see
   [Vault key scheme](#vault-key-scheme)); a `network-trusted`/static caller named
@@ -817,6 +821,7 @@ Users can review and revoke their connections in the UI at **Connected Accounts*
 | Connected, but a `tools/call` asks to reconnect after a backend URL change | Destination binding: changing a server's `proxy_pass_url`, `mcp_endpoint` (or a custom provider's `custom_token_url`) invalidates credentials bound to the old destination. **Reconnect once** (from Connected Accounts) to rebind. Adding a *new version* at a URL that was not registered when you connected only requires a reconnect for calls routed to that new version; existing routes are unaffected. Promoting a version never requires a reconnect. |
 | After upgrading to the exact-destination-binding release, every connection asks to reconnect once | Credentials stored before the upgrade carry an empty or origin-only binding (for example `https://api.example.com` instead of `https://api.example.com/mcp`), which does not match the exact outbound URL — a deliberate one-time forced reconnect (`oauth_user` → connect nudge, `pat` → "submit a PAT"; a designated discovery identity must reconnect too, and its server reports unhealthy discovery until then), mirroring the `sub`-keying migration above. |
 | "Connection failed" on the consent callback; registry logs `state user mismatch` | The account-swap guard saw the consent-initiate principal differ from the callback's live-session principal. Almost always the session predates the `sub`-persisting login — **log out and back in**, then reconnect, so the cookie session carries the `subject` the initiate leg bound the state to. |
+| "Connection not saved: you are not signed in" on the consent callback (HTTP 401) | The provider redirect landed in a browser with no live registry session (a different browser or profile, a private window, or the session expired during consent). Sign in to the registry in the browser you use for consent, then connect again. |
 | Vend returns 401 from auth-server, or every registry API call returns 401 | Marker secret mismatch. Ensure `AUTH_SERVER_NGINX_MARKER_SECRET` matches on registry + auth-server, and nginx sets it on `/validate`. The auth-server logs `nginx marker missing/mismatched` for each refused mint. |
 | OpenBao reads fail with permission denied | The role token lapsed. The store re-authenticates and retries once; persistent failure means a real policy/role gap — verify the `mcp-egress` policy and the role binding to the registry ServiceAccount. |
 | `decrypt` errors on client secret | `SECRET_KEY` was rotated after the server's egress config was saved. Re-save the egress config with the client secret. |
