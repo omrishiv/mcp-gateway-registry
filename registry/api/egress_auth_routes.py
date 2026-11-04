@@ -44,7 +44,9 @@ from registry.egress_auth.schemas import StoredToken
 from registry.egress_auth.service import (
     EgressAuthError,
     EgressAuthService,
+    VaultPrincipal,
     is_per_user_auth_method,
+    vault_principal,
 )
 from registry.egress_auth.upstream_binding import (
     linked_version,
@@ -153,22 +155,23 @@ def _resolve_target_principal(
     body_sub: str | None,
     body_auth_method: str | None,
     user_context: dict,
-) -> tuple[str, str]:
-    """Resolve the vault principal ``(auth_method, sub)`` for a PAT mutation.
+) -> VaultPrincipal | None:
+    """Resolve the vault principal ``(auth_method, sub)`` for a PAT read or mutation.
 
     The vault key is partitioned by ``(auth_method, sub, provider, server_path)``,
-    where ``auth_method`` is the INGRESS auth method the target user logs in with
-    (e.g. ``oauth2``), NOT the egress mode. The vend path reads the target's own
-    ``auth_method`` from their verified claims, so a mutation MUST write to that
-    same partition or the credential silently never vends.
+    where ``auth_method`` is the canonical INGRESS auth method the target user logs
+    in with (``oauth2`` for every per-user IdP), NOT the egress mode. The vend path
+    reads the target's canonical ``auth_method`` from their verified claims, so a
+    mutation MUST write to that same partition or the credential silently never
+    vends.
 
-    Self (no override): both ``auth_method`` and ``sub`` come from the caller's
-    verified identity. Admin on-behalf (``body_sub`` supplied): admin-gated, and
-    the admin MUST also state the target's ``auth_method`` -- the caller's own
-    (admin's) method is NOT assumed, because it may differ from the target's and
-    would land the PAT in a bucket the target never reads. Fail closed: a
-    non-admin override is 403, and an on-behalf write missing the target
-    ``auth_method`` is 400.
+    Self (no override): the caller's own principal, from ``vault_principal``.
+    Admin on-behalf (``body_sub`` supplied): admin-gated, and the admin MUST also
+    state the target's ``auth_method`` -- the caller's own (admin's) method is NOT
+    assumed. It is canonicalized the same way, so a target named by a raw IdP
+    method (``jwt``, ``keycloak``) lands in the bucket the target's vend reads.
+    Fail closed: a non-admin override is 403, and an on-behalf request missing the
+    target ``auth_method`` is 400.
 
     Args:
         body_sub: Optional ``sub`` override from the request body / query.
@@ -177,32 +180,29 @@ def _resolve_target_principal(
         user_context: The verified ``nginx_proxied_auth`` context.
 
     Returns:
-        The resolved ``(auth_method, sub)`` vault principal.
+        The resolved vault principal, or None when the target owns no per-user
+        bucket (the caller answers 403).
 
     Raises:
         HTTPException: 403 if a non-admin supplied ``sub``; 400 if an admin
-            override omits ``auth_method``; 401 if there is no verified identity.
+            override omits ``auth_method``.
     """
-    verified_sub = user_context.get("egress_user") or user_context.get("username") or ""
-    verified_auth_method = user_context.get("auth_method") or ""
-    if body_sub:
-        if not user_context.get("is_admin"):
-            raise HTTPException(
-                status.HTTP_403_FORBIDDEN,
-                detail="only an admin may submit a PAT on another user's behalf",
-            )
-        if not body_auth_method:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "auth_method is required when submitting a PAT on another "
-                    "user's behalf (the target's ingress auth method, e.g. oauth2)"
-                ),
-            )
-        return body_auth_method, body_sub
-    if not verified_sub:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="no verified identity")
-    return verified_auth_method, verified_sub
+    if not body_sub:
+        return vault_principal(user_context)
+    if not user_context.get("is_admin"):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="only an admin may submit a PAT on another user's behalf",
+        )
+    if not body_auth_method:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "auth_method is required when submitting a PAT on another "
+                "user's behalf (the target's ingress auth method, e.g. oauth2)"
+            ),
+        )
+    return vault_principal({"auth_method": body_auth_method, "egress_user": body_sub})
 
 
 def _vend_refused(
@@ -1193,8 +1193,8 @@ async def set_egress_pat(
     if not body.secret:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="secret is required")
     # sub override is admin-only (403 for a non-admin, 400 if it omits the target
-    # auth_method); self-submit derives both from the verified identity.
-    auth_method, sub = _resolve_target_principal(body.sub, body.auth_method, user_context)
+    # auth_method); self-submit derives the principal from the verified identity.
+    principal = _resolve_target_principal(body.sub, body.auth_method, user_context)
     try:
         ttl_seconds = _resolve_pat_ttl_seconds(body.ttl_value, body.ttl_unit)
     except ValueError as exc:
@@ -1202,9 +1202,9 @@ async def set_egress_pat(
 
     server_path, server = await _resolve_pat_server(server_path)
 
-    # The resolved auth_method is the vault partition (the target's for an
-    # on-behalf write); a non-per-user method can never own a per-user PAT.
-    if not is_per_user_auth_method(auth_method):
+    # The resolved principal is the vault partition (the target's for an
+    # on-behalf write); a caller without one can never own a per-user PAT.
+    if principal is None:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, detail="this caller cannot store a per-user PAT"
         )
@@ -1231,7 +1231,12 @@ async def set_egress_pat(
     # space. It cannot land on a discovery entry: those have their own addresses.
     try:
         await get_secret_store().put_token(
-            auth_method, sub, provider, server_path, token, purpose=keys.EGRESS_PURPOSE
+            principal.auth_method,
+            principal.user_id,
+            provider,
+            server_path,
+            token,
+            purpose=keys.EGRESS_PURPOSE,
         )
     except SecretStoreError as exc:
         # Fail closed: nothing partially written.
@@ -1248,7 +1253,7 @@ async def set_egress_pat(
     return {
         "path": server_path,
         "configured": True,
-        "sub": sub,
+        "sub": principal.user_id,
         "updated_at": now.isoformat(),
         "expires_at": token.expires_at,
     }
@@ -1267,17 +1272,17 @@ async def get_egress_pat_status(
     admin passing ``?sub=`` must also pass ``?auth_method=`` (the target's).
     """
     _feature_enabled_or_404()
-    target_auth_method, target_sub = _resolve_target_principal(sub, auth_method, user_context)
+    principal = _resolve_target_principal(sub, auth_method, user_context)
     server_path, server = await _resolve_pat_server(server_path)
-    if not is_per_user_auth_method(target_auth_method):
+    if principal is None:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, detail="this caller cannot own a per-user PAT"
         )
     provider = server["egress_oauth"]["provider"]
     try:
         token = await get_egress_auth_service().get_pat_status(
-            auth_method=target_auth_method,
-            user_id=target_sub,
+            auth_method=principal.auth_method,
+            user_id=principal.user_id,
             provider=provider,
             server_path=server_path,
         )
@@ -1303,17 +1308,17 @@ async def delete_egress_pat(
     target's ingress auth method); a non-admin passing ``?sub=`` is rejected 403.
     """
     _feature_enabled_or_404()
-    target_auth_method, target_sub = _resolve_target_principal(sub, auth_method, user_context)
+    principal = _resolve_target_principal(sub, auth_method, user_context)
     server_path, server = await _resolve_pat_server(server_path)
-    if not is_per_user_auth_method(target_auth_method):
+    if principal is None:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, detail="this caller cannot own a per-user PAT"
         )
     provider = server["egress_oauth"]["provider"]
     try:
         await get_egress_auth_service().delete_pat(
-            auth_method=target_auth_method,
-            user_id=target_sub,
+            auth_method=principal.auth_method,
+            user_id=principal.user_id,
             provider=provider,
             server_path=server_path,
         )
@@ -1340,10 +1345,10 @@ async def list_available_egress_servers(
     """
     _feature_enabled_or_404()
 
-    # Only per-user principals can connect an account; non-per-user callers
-    # (e.g. federation/network-trusted) get an empty list rather than an error.
-    auth_method = user_context.get("auth_method") or ""
-    if not is_per_user_auth_method(auth_method):
+    # Only per-user principals can connect an account, the same rule the initiate
+    # route applies; non-per-user callers (e.g. federation/network-trusted) get an
+    # empty list rather than an error.
+    if vault_principal(user_context) is None:
         return []
 
     # "*" in accessible_servers = unrestricted (admin); otherwise the user only
@@ -1464,19 +1469,19 @@ async def initiate_consent(
             status.HTTP_400_BAD_REQUEST, detail="server has no per-user egress auth configured"
         )
 
-    auth_method = user_context.get("auth_method") or ""
-    if not is_per_user_auth_method(auth_method):
+    # The vault principal (canonical auth_method; egress_user, else username) must
+    # match the one the vend reads from the mcp-proxy token so one human maps to
+    # one vault bucket regardless of token type / provider. See #933.
+    principal = vault_principal(user_context)
+    if principal is None:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, detail="this caller cannot connect a per-user account"
         )
 
     try:
         url = await get_egress_auth_service().build_consent_url(
-            auth_method=auth_method,
-            # Canonical egress user (OIDC sub, else username): must match the id the
-            # vend path derives from the mcp-proxy token so one human maps to one
-            # vault bucket regardless of token type / provider. See #933.
-            user_id=user_context.get("egress_user") or user_context.get("username") or "",
+            auth_method=principal.auth_method,
+            user_id=principal.user_id,
             client_id_audit=user_context.get("client_id") or "",
             session_id=user_context.get("session_id") or "",
             server_path=server_path,
@@ -1565,11 +1570,10 @@ async def egress_callback(
         ctx = await nginx_proxied_auth(request, session=session_cookie)
     except HTTPException:
         return _callback_sign_in_required()
-    # Compare on the canonical egress user (OIDC sub, else username) so the
-    # account-swap guard matches the id the consent state was built with.
-    current_user = ctx.get("egress_user") or ctx.get("username")
-    current_method = ctx.get("auth_method")
-    if not current_user or not current_method:
+    # Compare on the vault principal so the account-swap guard matches the
+    # principal the consent state was bound to at initiate.
+    principal = vault_principal(ctx)
+    if principal is None:
         return _callback_sign_in_required()
 
     try:
@@ -1577,8 +1581,8 @@ async def egress_callback(
             code=code,
             state_blob=state,
             egress_oauth=oauth_cfg,
-            current_user_id=current_user,
-            current_auth_method=current_method,
+            current_user_id=principal.user_id,
+            current_auth_method=principal.auth_method,
         )
     except EgressAuthError as exc:
         # Detail to server logs only. Do NOT reflect the exception text into the
@@ -1637,9 +1641,12 @@ async def list_connections(
 ):
     """List the current user's egress connections (tokens stripped)."""
     _feature_enabled_or_404()
+    principal = vault_principal(user_context)
+    if principal is None:
+        return []
     conns = await get_egress_auth_service().list_connections(
-        auth_method=user_context.get("auth_method") or "",
-        user_id=user_context.get("egress_user") or user_context.get("username") or "",
+        auth_method=principal.auth_method,
+        user_id=principal.user_id,
     )
     return [c.model_dump() for c in conns]
 
@@ -1656,11 +1663,15 @@ async def disconnect(
     _feature_enabled_or_404()
     if not server_path.startswith("/"):
         server_path = "/" + server_path
-    await get_egress_auth_service().disconnect(
-        auth_method=user_context.get("auth_method") or "",
-        user_id=user_context.get("egress_user") or user_context.get("username") or "",
-        provider=provider,
-        server_path=server_path,
-        purpose=keys.EGRESS_PURPOSE,
-    )
+    # A caller without a per-user principal owns no vault entry, so there is
+    # nothing to delete; the answer is the same as for an entry already gone.
+    principal = vault_principal(user_context)
+    if principal is not None:
+        await get_egress_auth_service().disconnect(
+            auth_method=principal.auth_method,
+            user_id=principal.user_id,
+            provider=provider,
+            server_path=server_path,
+            purpose=keys.EGRESS_PURPOSE,
+        )
     return {"status": "revoked"}

@@ -403,7 +403,10 @@ unchanged.
 
 ### When the key falls back to the username
 
-The `username` step in `_canonical_egress_user`, and the `egress_user or username` lookups on the registry's vault routes, keep per-user egress working for logins that carry no stable account id. Before the vault keyed on `sub`, every user was keyed on the username; the fallback kept those callers on their existing key when `sub` keying arrived.
+The `username` step in `_canonical_egress_user`, and the same step in `vault_principal` (
+`registry/egress_auth/service.py`), which every registry vault route uses to derive its key, keep per-user egress
+working for logins that carry no stable account id. Before the vault keyed on `sub`, every user was keyed on the
+username; the fallback kept those callers on their existing key when `sub` keying arrived.
 
 Callers that reach it today:
 

@@ -17,8 +17,9 @@ wraps it.
 import asyncio
 import logging
 import secrets
+from collections.abc import Mapping
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Any, NamedTuple, Protocol
 
 from registry.egress_auth import oauth_engine
 from registry.egress_auth.providers import resolve_provider
@@ -179,6 +180,53 @@ def is_per_user_auth_method(auth_method: str) -> bool:
     if not auth_method or auth_method in NON_PER_USER_AUTH_METHODS:
         return False
     return auth_method in PER_USER_AUTH_METHODS
+
+
+class VaultPrincipal(NamedTuple):
+    """The ``(auth_method, user_id)`` pair a per-user vault bucket is keyed on."""
+
+    auth_method: str
+    user_id: str
+
+
+def vault_principal(user_context: Mapping[str, Any]) -> VaultPrincipal | None:
+    """Derive the per-user vault principal from a registry user context.
+
+    Every registry route that reads or writes the per-user vault from a request's
+    user context keys on this, so consent-write, list, disconnect, PAT and
+    discovery designation agree with each other and with the vend, which reads the
+    same pair from the minted token's claims.
+
+    ``auth_method`` is canonicalized (every per-user IdP method folds into
+    ``oauth2``); a non-per-user, empty, unknown or non-string method yields None.
+    ``user_id`` is the auth-server's canonical ``egress_user``, falling back to
+    ``username`` when ``egress_user`` is empty. The fallback is deliberate: it
+    keeps per-user egress working for a non-OIDC login (GitHub, Google, custom)
+    that maps no account id. See "When the key falls back to the username" in
+    ``docs/egress-credential-vault.md``. Values that are not non-empty strings
+    count as absent; nothing is coerced.
+
+    Args:
+        user_context: The verified ``nginx_proxied_auth`` user context.
+
+    Returns:
+        The vault principal, or None when the caller owns no per-user bucket.
+
+    Example:
+        >>> vault_principal({"auth_method": "keycloak", "egress_user": "", "username": "alice"})
+        VaultPrincipal(auth_method='oauth2', user_id='alice')
+    """
+    raw_method = user_context.get("auth_method")
+    auth_method = canonical_auth_method(
+        {"method": raw_method if isinstance(raw_method, str) else ""}
+    )
+    if not is_per_user_auth_method(auth_method):
+        return None
+    for key in ("egress_user", "username"):
+        user_id = user_context.get(key)
+        if isinstance(user_id, str) and user_id:
+            return VaultPrincipal(auth_method, user_id)
+    return None
 
 
 class EgressAuthService:
