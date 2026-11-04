@@ -6,7 +6,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from ..common.log_redaction import redact_headers, redact_mapping
 from ..core.config import settings
-from ..egress_auth.fallback_key import is_fallback_shaped, username_fallback_key
+from ..egress_auth.session_vault_user import session_vault_user_id
 from .access_resolver import (
     get_user_accessible_tools,  # noqa: F401 - re-exported for external callers
     resolve_scope_access,
@@ -731,9 +731,9 @@ async def _context_from_internal_token(
             provider=session_data.get("provider", "local"),
             session_id=session_id,
             client_id=claims.get("client_id") or "",
-            # The auth_server stamps the canonical egress user into the token
-            # (_canonical_egress_user, which applies the username fallback for a
-            # session with no subject); use it as is so consent-write matches vend.
+            # The auth_server stamps the session's vault key into the token
+            # (_canonical_egress_user, which reads the session through
+            # session_vault_user_id); use it as is so consent-write matches vend.
             egress_user=claims.get("egress_user") or "",
             # Human-readable email for audit records (from the session or claim).
             email=session_data.get("email") or claims.get("email") or "",
@@ -752,32 +752,6 @@ async def _context_from_internal_token(
         # Human-readable email for audit records when the claim carries it.
         email=claims.get("email") or "",
     )
-
-
-def _session_egress_user(
-    session_data: dict[str, Any],
-    username: str,
-) -> str:
-    """Return the vault ``user_id`` for a session resolved from its raw cookie.
-
-    Mirrors the auth-server's ``_canonical_egress_user`` for a session: the
-    subject persisted at login, else the namespaced username fallback. A
-    subject shaped like a fallback key (``name:...``) keys nothing, because it
-    would read the connections of the subject-less login it equals; the
-    auth-server refuses such a login, so only a session created before that
-    check can carry one.
-
-    Args:
-        session_data: The session record.
-        username: The session's username.
-
-    Returns:
-        The vault ``user_id``, or ``""`` when the session owns no bucket.
-    """
-    subject = session_data.get("subject")
-    if subject:
-        return "" if is_fallback_shaped(subject) else subject
-    return username_fallback_key(session_data.get("provider"), username)
 
 
 async def enhanced_auth(
@@ -805,11 +779,12 @@ async def enhanced_auth(
         auth_method=auth_method,
         provider=session_data.get("provider", "local"),
         session_id=session_data.get("session_id"),
-        # Canonical egress vault id, exactly as the auth-server's
-        # _canonical_egress_user resolves the same session. This path has no
-        # internal token (the consent callback and /oauth2/egress/connect resolve
-        # the cookie directly), so it applies the fallback itself. See #933.
-        egress_user=_session_egress_user(session_data, username),
+        # The vault key the auth_server stored on the session at login, read
+        # through the same session_vault_user_id the auth_server's
+        # _canonical_egress_user uses for this session. This path has no
+        # internal token (the consent callback and /oauth2/egress/connect
+        # resolve the cookie directly). See #933.
+        egress_user=session_vault_user_id(session_data),
         # Human-readable email for audit records (session store persists it).
         email=session_data.get("email") or "",
     )

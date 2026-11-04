@@ -9,11 +9,14 @@ value can equal an account id another provider issues (a PingFederate ``sub``
 that holds an email, for example). Only those fallback keys are namespaced
 here, so no account-id key changes.
 
-Both places that apply the fallback call :func:`username_fallback_key`: the
-auth server's ``_canonical_egress_user`` (step 5, which every internal token
-carries to the registry) and the registry's raw session-cookie path
-(``registry.auth.dependencies.enhanced_auth``, which the consent callback
-uses). One function keeps the consent write and the vend on one key.
+The fallback key is computed in two places, each for a different caller. The
+auth server's login callback (``_login_vault_user_id``) computes it once for a
+session and stores it on the session record as ``egress_user``; every later
+reader of that session's key takes the stored value through
+``registry.egress_auth.session_vault_user.session_vault_user_id`` rather than
+rebuilding it. The auth server's ``_canonical_egress_user`` computes it for a
+bearer token with no account id (step 5), namespaced by the token's validator
+method.
 """
 
 from urllib.parse import quote
@@ -30,11 +33,12 @@ def is_fallback_shaped(
 ) -> bool:
     """Return True when an account id has the shape of a username-fallback key.
 
-    Every account id that would key the vault passes through this check, at
-    login (``_require_login_subject``) and wherever a key is derived (the
-    auth server's ``_canonical_egress_user`` and the registry's
-    ``enhanced_auth``). Such an id keys nothing, so it can never read the
-    connections of the subject-less login whose fallback key it equals.
+    Every account id that would key the vault passes through this check: at
+    login (``_require_login_subject``), a bearer's account id in the auth
+    server's ``_canonical_egress_user``, and a legacy session's ``subject`` in
+    ``session_vault_user_id``. Such an id keys nothing, so it can never read the
+    connections of the subject-less login whose fallback key it equals. The
+    token mint also uses it to leave a session's fallback key off the token.
 
     Args:
         account_id: The account id an identity provider returned.
@@ -60,8 +64,9 @@ def username_fallback_key(
     ``:`` characters are safe there.
 
     Args:
-        provider: The login provider recorded on the session (``github``,
-            ``google`` or an operator-added name). A non-string counts as ``""``.
+        provider: The login provider (``github``, ``google`` or an
+            operator-added name), or a bearer's validator method. A non-string
+            counts as ``""``.
         username: The session's username.
 
     Returns:

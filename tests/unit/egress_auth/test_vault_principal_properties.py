@@ -11,9 +11,10 @@ consent writes a bucket the vend never reads. The rule the routes share:
   ``federation-static``, empty, unknown, not a string) owns no bucket;
 * ``user_id`` is ``egress_user`` when that is a non-empty string, else there is
   no principal. The registry never falls back to ``username``: the documented
-  username fallback is applied once, upstream (the auth-server's
-  ``_canonical_egress_user`` for internal tokens, ``enhanced_auth`` for a raw
-  session cookie), so a caller the auth-server refuses to key is refused here too.
+  username fallback is computed upstream (the auth-server's login callback
+  stores it on the session, and ``_canonical_egress_user`` applies it to a
+  bearer with no ``sub``), so a caller the auth-server refuses to key is
+  refused here too.
 
 ``_model_principal`` states that rule independently of the code under test.
 The first property pins ``vault_principal`` to it. The others drive each real
@@ -22,7 +23,8 @@ principal the route hands to the service or store, or, when the model has no
 principal, that the route refuses with its usual response and never reaches
 the vault. The vend property pins the vend, which keys on the minted claims and
 never falls back to the username either. The last properties pin the username
-fallback key itself.
+fallback key itself and ``session_vault_user_id``, the one reader of a
+session's stored vault key.
 """
 
 from copy import deepcopy
@@ -64,6 +66,7 @@ from registry.egress_auth.service import (
     EgressAuthService,
     vault_principal,
 )
+from registry.egress_auth.session_vault_user import session_vault_user_id
 from registry.secrets.interfaces import SecretStoreBase
 from registry.utils.credential_encryption import encrypt_credential
 
@@ -1137,3 +1140,112 @@ def test_fallback_key_is_injective_over_provider_and_username(first, second):
 def test_fallback_key_is_empty_without_a_username(username):
     """A session with no usable username gets no fallback key, so it owns no bucket."""
     assert username_fallback_key("github", username) == ""
+
+
+# Stored keys and subjects, including fallback-shaped values, empty values and
+# values that are not strings.
+_session_key_values = st.one_of(
+    st.just(_ABSENT),
+    st.none(),
+    st.just(""),
+    st.sampled_from(["sub-1", "name:github:alice", "name:", "12345"]),
+    st.text(min_size=1, max_size=12),
+    st.text(min_size=1, max_size=8).map(lambda s: f"name:{s}"),
+    st.integers(),
+    st.booleans(),
+    st.lists(st.text(max_size=3), max_size=2),
+    st.dictionaries(st.text(max_size=3), st.text(max_size=3), max_size=2),
+)
+
+
+@st.composite
+def _session_records(draw) -> dict:
+    """Draw a session record as either store projects it.
+
+    ``egress_user`` and ``subject`` are each left out or set to a drawn value.
+    ``provider`` and ``username``, which the stored key must not depend on, take
+    any value or are left out.
+    """
+    session: dict = {}
+    for key, values in (
+        ("egress_user", _session_key_values),
+        ("subject", _session_key_values),
+        ("provider", _identity_values),
+        ("username", _identity_values),
+    ):
+        value = draw(values)
+        if value is not _ABSENT:
+            session[key] = value
+    return session
+
+
+def _model_session_vault_user_id(
+    session: dict,
+) -> str:
+    """Reference model of the vault ``user_id`` a session record owns.
+
+    A stored ``egress_user`` (anything but None) decides alone: a non-empty
+    string is the key, any other value owns nothing. A record with no stored key
+    (created before the field existed) keys on its ``subject`` when that is a
+    non-empty string without the fallback prefix, and otherwise owns nothing.
+    ``provider`` and ``username`` are never read.
+
+    Args:
+        session: A session record.
+
+    Returns:
+        The vault ``user_id``, or ``""``.
+    """
+    stored = session.get("egress_user")
+    if stored is not None:
+        return stored if isinstance(stored, str) and stored else ""
+    subject = session.get("subject")
+    if isinstance(subject, str) and subject and not subject.startswith("name:"):
+        return subject
+    return ""
+
+
+@pytest.mark.unit
+@_PURE_SETTINGS
+@given(session=_session_records())
+@example(session={"egress_user": "name:github:alice", "provider": "google", "username": "bob"})
+@example(session={"egress_user": 7, "subject": "sub-1"})
+@example(session={"subject": "name:github:alice", "provider": "github", "username": "alice"})
+@example(session={"provider": "github", "username": "alice"})
+def test_session_vault_user_id_matches_the_model(session):
+    """Property: a session's vault key comes from ``egress_user`` or a legacy ``subject`` only.
+
+    For every session record, ``session_vault_user_id`` equals the reference
+    model, so no value of ``provider`` or ``username`` changes the key and no
+    stored value is coerced into one.
+    """
+    assert session_vault_user_id(session) == _model_session_vault_user_id(session)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("session", "expected"),
+    [
+        pytest.param(
+            {"egress_user": "sub-1", "subject": "sub-2"}, "sub-1", id="stored-key-wins-over-subject"
+        ),
+        pytest.param(
+            {"egress_user": "name:github:alice", "provider": "google", "username": "bob"},
+            "name:github:alice",
+            id="stored-fallback-key-wins-over-provider-and-username",
+        ),
+        pytest.param({"egress_user": 12345, "subject": "sub-1"}, "", id="non-str-stored-key"),
+        pytest.param({"egress_user": ["sub-1"]}, "", id="list-stored-key"),
+        pytest.param({"egress_user": "", "subject": "sub-1"}, "", id="empty-stored-key"),
+        pytest.param({"subject": "sub-1"}, "sub-1", id="legacy-subject"),
+        pytest.param(
+            {"egress_user": None, "subject": "sub-1"}, "sub-1", id="legacy-projected-none"
+        ),
+        pytest.param({"subject": "name:github:alice"}, "", id="legacy-fallback-shaped-subject"),
+        pytest.param({"provider": "github", "username": "alice"}, "", id="legacy-without-subject"),
+        pytest.param({"subject": 12345}, "", id="legacy-non-str-subject"),
+    ],
+)
+def test_session_vault_user_id_table(session, expected):
+    """Each documented case of the session vault-key rule gives its key."""
+    assert session_vault_user_id(session) == expected

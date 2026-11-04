@@ -3,11 +3,15 @@
 The per-user egress credential vault stores each user's upstream provider
 tokens under one key, computed by ``_canonical_egress_user``. A user reaches
 the vault on two paths. The browser consent path presents a session cookie
-whose record the OAuth2 login callback wrote; the vend path presents a bearer
-token, either the IdP's own access token or a token this gateway minted from
-the session. The properties pinned here:
+whose record the OAuth2 login callback wrote, along with the session's vault
+key (``egress_user``); the vend path presents a bearer token, either the IdP's
+own access token or a token this gateway minted from the session. The
+properties pinned here:
 
 * every path derives the same key for one account (agreement);
+* every reader of a session (the auth server's cookie path, the registry's raw
+  cookie path and the token mint) gives the key stored at login, even after the
+  stored ``provider`` or ``username`` changes;
 * two accounts with distinct immutable ids get distinct keys even when every
   mutable or reusable claim is identical (injectivity), which covers a Cognito
   username reused after its account is deleted and an Okta login moved to a
@@ -16,11 +20,12 @@ the session. The properties pinned here:
 * an OIDC login that yields no subject creates no session;
 * an Okta client-credentials token keys on its client id, and ``uid`` counts
   only for Okta;
-* a token minted from a session carries the session's key;
 * the registry's vault principal equals the vend's for one caller, including
   the callers the auth server gives no key (both refuse them) and a session
   with no subject (every path, the registry's raw cookie path included, keys it
-  on one namespaced username-fallback key).
+  on the one namespaced username-fallback key stored at login);
+* a session stored before ``egress_user`` existed keys on its subject, or on
+  nothing when it has none.
 
 The immutable id is the token ``sub`` everywhere except Okta access tokens,
 whose ``sub`` is the user's editable login and whose ``uid`` is the user id the
@@ -1238,11 +1243,19 @@ def _fallback_result(
     provider: str,
     username: str,
 ) -> dict[str, Any]:
-    """The session-cookie validation result of a login that mapped no subject."""
+    """The session-cookie validation result of a login that mapped no subject.
+
+    The callback stored the username fallback key as the session's
+    ``egress_user``.
+    """
     return {
         "method": "session_cookie",
         "username": username,
-        "data": {"provider": provider, "username": username},
+        "data": {
+            "provider": provider,
+            "username": username,
+            "egress_user": username_fallback_key(provider, username),
+        },
     }
 
 
@@ -1252,7 +1265,7 @@ def _account_id_results(
     """Every validation-result shape that carries ``account_id`` as the account id."""
     return {
         "bearer-sub": {"method": "keycloak", "username": "u", "data": {"sub": account_id}},
-        "session-subject": {
+        "legacy-session-subject": {
             "method": "session_cookie",
             "username": "u",
             "data": {"provider": "keycloak", "username": "u", "subject": account_id},
@@ -1390,22 +1403,142 @@ def test_uid_claim_ignored_outside_okta(bearer_path, account_id, uid):
 )
 @example(login_path="cognito", account_id="0f6c-uuid-new-account", profile=_COLLIDING_PROFILE)
 @example(login_path="okta", account_id="00u-alice-b", profile=_COLLIDING_PROFILE)
-def test_token_minted_from_session_keys_like_the_session(login_path, account_id, profile):
-    """A gateway-minted user token keys the vault like the session it came from.
+@example(login_path="github", account_id="12345", profile=_COLLIDING_PROFILE)
+def test_every_reader_of_a_session_gives_the_key_stored_at_login(login_path, account_id, profile):
+    """Every reader of a session's vault key returns the key the login stored.
 
-    For every login path and account, the self-signed token ``/internal/tokens``
-    mints from the session carries ``egress_user`` equal to the session's
-    subject, so its vault key equals the session-cookie key.
+    For every login path and account, the callback stores the account id as the
+    session's ``egress_user``. The auth server's cookie path, the registry's raw
+    cookie path (``enhanced_auth``, which the consent callback uses) and the
+    self-signed token ``/internal/tokens`` mints from the session all key the
+    vault on that stored value.
     """
     login = _login(login_path, account_id, profile)
     assert login.status_code == 302, (login_path, login.status_code)
-    cookie_key = _cookie_key(login)
-    minted_key = _minted_token_key(login)
-    assert minted_key == cookie_key == login.store.documents[0]["subject"], (
-        login_path,
-        minted_key,
-        cookie_key,
+
+    keys = {
+        "stored": login.store.documents[0].get("egress_user"),
+        "auth-server-cookie": _cookie_key(login),
+        "registry-cookie": _registry_cookie_key(login),
+        "minted": _minted_token_key(login),
+    }
+
+    assert set(keys.values()) == {account_id}, (login_path, keys)
+
+
+# Values a session's ``provider`` takes after the stored document drifts from
+# what the login wrote. ``_ABSENT_CLAIM`` removes the field.
+_DRIFTED_PROVIDERS = st.one_of(
+    st.just(_ABSENT_CLAIM),
+    st.none(),
+    st.just(""),
+    st.sampled_from(["github", "google", "keycloak", "corp-oidc"]),
+)
+
+
+@pytest.mark.parametrize(
+    ("login_path", "has_subject"),
+    [(path, False) for path in sorted(NON_OIDC_LOGIN_PATHS)]
+    + [("github", True), ("keycloak", True)],
+)
+@HYPOTHESIS_SETTINGS
+@given(profile=_PROFILES, provider=_DRIFTED_PROVIDERS, username=_CLAIM_VALUES)
+@example(profile=_COLLIDING_PROFILE, provider="google", username="mallory")
+def test_session_vault_key_ignores_drift_in_provider_and_username(
+    login_path, has_subject, profile, provider, username
+):
+    """Changing a stored session's ``provider`` or ``username`` keeps its vault key.
+
+    Both services read the shared ``oauth_sessions`` document through their own
+    projection. For every login path, with or without a subject, and every new
+    ``provider`` (removed, empty or another name) and ``username``, the auth
+    server's cookie path and the registry's raw cookie path still give the key
+    the session had at login, which is its stored ``egress_user``.
+    """
+    account_id = "account-1" if has_subject else None
+    login = _login(login_path, account_id, profile)
+    assert login.status_code == 302, (login_path, login.status_code)
+    key_at_login = _cookie_key(login)
+    document = login.store.documents[0]
+
+    document["username"] = username
+    if provider is _ABSENT_CLAIM:
+        document.pop("provider", None)
+    else:
+        document["provider"] = provider
+    keys = {
+        "auth-server-cookie": _cookie_key(login),
+        "registry-cookie": _registry_cookie_key(login),
+    }
+
+    assert set(keys.values()) == {key_at_login}, (login_path, key_at_login, keys)
+    assert key_at_login and key_at_login == document.get("egress_user"), (login_path, document)
+
+
+@HYPOTHESIS_SETTINGS
+@given(
+    login_path=st.sampled_from(list(LOGIN_PATHS)),
+    account_id=_ACCOUNT_IDS,
+    profile=_PROFILES,
+)
+@example(login_path="keycloak", account_id="oidc-sub-1", profile=_COLLIDING_PROFILE)
+def test_legacy_session_with_a_subject_keys_on_it_everywhere(login_path, account_id, profile):
+    """A session stored before ``egress_user`` existed keeps keying on its subject.
+
+    Sessions created by an earlier release have a ``subject`` and no stored
+    key. For every login path and account, removing ``egress_user`` from the
+    stored document leaves the auth server's cookie path, the registry's raw
+    cookie path and a token minted from the session on the account id.
+    """
+    login = _login(login_path, account_id, profile)
+    assert login.status_code == 302, (login_path, login.status_code)
+    login.store.documents[0].pop("egress_user", None)
+
+    keys = {
+        "auth-server-cookie": _cookie_key(login),
+        "registry-cookie": _registry_cookie_key(login),
+        "minted": _minted_token_key(login),
+    }
+
+    assert set(keys.values()) == {account_id}, (login_path, keys)
+
+
+@pytest.mark.parametrize("login_path", sorted(NON_OIDC_LOGIN_PATHS))
+@HOP_HYPOTHESIS_SETTINGS
+@given(profile=_PROFILES)
+@example(profile=_COLLIDING_PROFILE)
+def test_legacy_session_without_a_subject_owns_no_vault_key(login_path, profile):
+    """A subject-less session stored before ``egress_user`` existed keys nothing.
+
+    Earlier releases keyed such a session on a username fallback the registry
+    and the auth server each rebuilt from ``provider`` and ``username``. Neither
+    rebuilds it now, so until the user signs in again (at most
+    ``session.max_age_seconds``) the session has no vault key. For every
+    profile, the auth server's cookie path, both internal tokens ``/validate``
+    mints, the registry's raw cookie path and a token minted from the session
+    all refuse it.
+    """
+    login = _login(login_path, None, profile)
+    assert login.status_code == 302, (login_path, login.status_code)
+    login.store.documents[0].pop("egress_user", None)
+
+    hop = _validate_hop_tokens(
+        {"Cookie": f"{SESSION_COOKIE_NAME}={login.cookie}"}, login.store, None
     )
+    raw_cookie = _registry_cookie_context(login.cookie, login.store)
+
+    keys = {
+        "auth-server-cookie": _cookie_key(login),
+        "registry-cookie": raw_cookie["egress_user"],
+        "minted": _minted_token_key(login),
+    }
+    principals = {
+        "registry-token": vault_principal(hop.registry_context),
+        "vend": _vend_principal(hop.mcp_proxy_claims),
+        "raw-cookie": vault_principal(raw_cookie),
+    }
+    assert set(keys.values()) == {""}, (login_path, keys)
+    assert set(principals.values()) == {None}, (login_path, principals)
 
 
 _AUDIT_PATHS: list[str] = [f"bearer:{path}" for path in BEARER_PATHS] + [
@@ -1608,6 +1741,20 @@ def _registry_cookie_context(
         return asyncio.run(registry_dependencies.enhanced_auth(request, session=cookie))
 
 
+def _registry_cookie_key(
+    login: _Login,
+) -> str:
+    """Return the vault key the registry's raw cookie path gives a login's session.
+
+    Args:
+        login: A login that created a session.
+
+    Returns:
+        The ``egress_user`` of the registry's ``enhanced_auth`` user context.
+    """
+    return _registry_cookie_context(login.cookie, login.store)["egress_user"]
+
+
 def _okta_user_bearer_without_uid(
     profile: dict[str, str],
 ) -> tuple[dict[str, str], str | None]:
@@ -1667,13 +1814,15 @@ def test_session_without_subject_keys_every_path_on_one_fallback_key(login_path,
     """A session with no subject keys the registry and the vend on one namespaced key.
 
     A GitHub, Google or operator-added login without an id_token and without
-    the provider's ``subject_claim`` creates a session with no subject. For
-    every profile, the auth server's step 5 (through ``/validate``, for both
-    internal tokens) and the registry's raw cookie path (``enhanced_auth``, used
-    by the consent callback) all produce ``username_fallback_key(provider,
-    username)``, so a consent the callback writes is the bucket the vend reads,
-    and the key never equals the bare username another provider might issue
-    as an account id.
+    the provider's ``subject_claim`` creates a session with no subject, and the
+    callback stores ``username_fallback_key(provider, username)`` as its
+    ``egress_user``. For every profile, the auth server's cookie path (through
+    ``/validate``, for both internal tokens) and the registry's raw cookie path
+    (``enhanced_auth``, used by the consent callback) all give that stored key,
+    so a consent the callback writes is the bucket the vend reads, and the key
+    never equals the bare username another provider might issue as an account
+    id. A token minted from the session carries no ``egress_user``, so it owns
+    no key.
     """
     login = _login(login_path, None, profile)
     assert login.status_code == 302, (login_path, login.status_code)
@@ -1686,9 +1835,12 @@ def test_session_without_subject_keys_every_path_on_one_fallback_key(login_path,
     raw_cookie = _registry_cookie_context(login.cookie, login.store)
 
     principals = {
+        "stored": ("oauth2", session.get("egress_user")),
+        "auth-server-cookie": ("oauth2", _cookie_key(login)),
         "registry-token": vault_principal(hop.registry_context),
         "vend": _vend_principal(hop.mcp_proxy_claims),
         "raw-cookie": vault_principal(raw_cookie),
     }
     assert set(principals.values()) == {expected}, (login_path, principals)
     assert expected[1] != session["username"]
+    assert _minted_token_key(login) == ""

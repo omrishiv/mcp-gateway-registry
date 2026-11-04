@@ -117,16 +117,31 @@ class TestCanonicalEgressUserPaths:
         }
         assert server._canonical_egress_user(cookie_vr) == server._canonical_egress_user(bearer_vr)
 
-    def test_session_without_sub_falls_back_to_the_namespaced_username(self):
+    def test_session_uses_the_key_stored_at_login(self):
         # A session with no subject (a non-OIDC login that mapped none) keys on
-        # its username, namespaced by the session's provider so the key never
-        # equals another provider's account id.
+        # the username fallback key the callback stored, whatever its provider
+        # and username fields say now.
+        vr = {
+            "method": "session_cookie",
+            "username": "svc-account",
+            "data": {
+                "provider": "google",
+                "username": "svc-account",
+                "egress_user": "name:github:svc-account",
+            },
+        }
+        assert server._canonical_egress_user(vr) == "name:github:svc-account"
+
+    def test_legacy_session_without_sub_or_stored_key_has_no_key(self):
+        # A session created before the key was stored, with no subject, is not
+        # rebuilt from its provider and username: it owns no bucket until the
+        # user signs in again.
         vr = {
             "method": "session_cookie",
             "username": "svc-account",
             "data": {"provider": "github", "username": "svc-account"},
         }
-        assert server._canonical_egress_user(vr) == "name:github:svc-account"
+        assert server._canonical_egress_user(vr) == ""
 
     def test_empty_when_nothing_present(self):
         assert server._canonical_egress_user({}) == ""

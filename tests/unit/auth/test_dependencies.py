@@ -1157,15 +1157,41 @@ class TestEnhancedAuth:
         assert context["username"] == "alice@contoso.com"
 
     @pytest.mark.asyncio
-    async def test_enhanced_auth_egress_user_falls_back_to_namespaced_username(
+    async def test_enhanced_auth_egress_user_is_the_key_stored_at_login(
         self,
         mock_signer: URLSafeTimedSerializer,
         mock_session_store,
         mock_scopes_config: dict[str, Any],
     ):
-        """A session with no persisted subject (a non-OIDC login that mapped none)
-        keys on its username namespaced by the session's provider, the same key the
-        auth-server's _canonical_egress_user gives that session.
+        """A session with no subject (a non-OIDC login that mapped none) keys on
+        the username fallback key the auth server stored at login, not on one
+        rebuilt from the session's current provider and username.
+        """
+        mock_session_store.next_value = {
+            "session_id": "sid-1",
+            "username": "oauth_user",
+            "auth_method": "oauth2",
+            "provider": "google",
+            "groups": ["registry-users-lob1"],
+            "egress_user": "name:github:oauth_user",
+        }
+        session_cookie = _make_session_cookie(mock_signer)
+        mock_request = Mock(spec=Request)
+        mock_request.state = Mock()
+
+        context = await enhanced_auth(request=mock_request, session=session_cookie)
+
+        assert context["egress_user"] == "name:github:oauth_user"
+
+    @pytest.mark.asyncio
+    async def test_enhanced_auth_legacy_session_without_subject_has_no_egress_user(
+        self,
+        mock_signer: URLSafeTimedSerializer,
+        mock_session_store,
+        mock_scopes_config: dict[str, Any],
+    ):
+        """A session created before the key was stored, with no subject, owns no
+        vault key until the user signs in again.
         """
         mock_session_store.next_value = {
             "session_id": "sid-1",
@@ -1180,7 +1206,7 @@ class TestEnhancedAuth:
 
         context = await enhanced_auth(request=mock_request, session=session_cookie)
 
-        assert context["egress_user"] == "name:github:oauth_user"
+        assert context["egress_user"] == ""
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("subject", ["name:github:alice", "name:", "name::x"])

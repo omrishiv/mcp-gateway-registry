@@ -112,7 +112,8 @@ graph TB
 | `registry/egress_auth/providers.py` | `PROVIDER_REGISTRY` (GitHub, Google, Atlassian, Microsoft, Slack) + `resolve_provider` for custom OIDC. |
 | `registry/egress_auth/state_codec.py` | AEAD (AES-256-GCM) encrypt/decrypt of the short-lived OAuth `state` blob — hides the PKCE verifier from the URL/logs. |
 | `registry/egress_auth/browser_binding.py` | The per-consent cookie that binds a consent to the browser that started it: secret, digest, cookie name, set, compare, clear. |
-| `registry/egress_auth/fallback_key.py` | `username_fallback_key`, the namespaced vault `user_id` for a login with no account id; the auth-server and the registry's cookie path both call it. |
+| `registry/egress_auth/fallback_key.py` | `username_fallback_key`, the namespaced vault `user_id` for a login with no account id; the auth-server's login callback stores it on a subject-less session, and `_canonical_egress_user` applies it to a bearer with no `sub`. |
+| `registry/egress_auth/session_vault_user.py` | `session_vault_user_id`, the one reader of a session's vault key, used by the auth-server's cookie path, the token mint and the registry's `enhanced_auth`. |
 | `registry/egress_auth/as_facade.py` | Helpers to test whether a server is egress-configured. |
 | `registry/egress_auth/factory.py` | Singleton service wiring; binds the Mongo replay-guard + cross-replica refresh lease (falls back to in-process for single-replica dev). |
 | `registry/secrets/interfaces.py` | `SecretStoreBase` ABC: `put_token` / `get_token` / `delete_token` / `list_for_user`. |
@@ -334,15 +335,7 @@ next account that holds it.
 | PingFederate | token `sub` | The deployment decides what `sub` holds. Map it to the same immutable attribute (for example the directory object GUID) in both the OpenID Connect policy, which builds the id_token, and the access token manager, which builds the bearer token. Different attributes split the browser and bearer paths; a mutable one such as email gives a renamed user's connections to the next holder of the address. |
 | GitHub, Google | userinfo `id` (`subject_claim: "id"`) | Their userinfo endpoints have no `sub`. |
 
-The canonical id is derived once in the auth-server (`_canonical_egress_user`:
-the Okta account id on an Okta bearer, else `sub` → persisted session `subject` → namespaced `username` fallback) and carried to the
-registry as an `egress_user` claim on the internal tokens. So that the browser
-consent-write path (which reaches the registry through the cookie session, not
-an internal token) resolves the same value, the auth-server persists the
-id_token `sub` into the session record at login and both the auth-server and
-registry session stores return it. All four identity points — vend, consent
-initiate, the OAuth callback's account-swap guard, and list/disconnect — key on
-this one value.
+The auth-server derives the canonical id (`_canonical_egress_user`: the Okta account id on an Okta bearer, else `sub`, else a namespaced `username` fallback) and carries it to the registry as an `egress_user` claim on the internal tokens. A browser session gets its key once, at login: the callback stores the account id, or for a login with none the username fallback key, on the session record as `egress_user`. The browser consent-write path reaches the registry through the cookie session rather than an internal token, so every reader of a session's key reads that stored field through one function, `session_vault_user_id` (`registry/egress_auth/session_vault_user.py`): the auth-server's cookie path, the token mint and the registry's `enhanced_auth`. The two services read the session record through separate session stores, and since no other session field feeds the key, a field that one store returns and the other does not cannot split it. All four identity points (vend, consent initiate, the OAuth callback's account-swap guard, and list/disconnect) key on this one value.
 
 A caller whose login yields no account id falls back to a namespaced username key; see [When the key falls back to the username](#when-the-key-falls-back-to-the-username) for who reaches that step and what it costs.
 The registry never applies a fallback of its own to an internal token: `vault_principal` reads `egress_user` alone, so a caller the auth-server gives an empty key is refused by every registry vault route as well as by the vend.
@@ -428,6 +421,8 @@ first segment after it (see the layout below). Any value other than `oauth2` (`b
 
 **Username-fallback keys.** A session with no subject used to key on the bare username. It now keys on `name:<provider>:<username>` (see [When the key falls back to the username](#when-the-key-falls-back-to-the-username)), so users of a GitHub, Google or custom login that maps no subject find their connections gone and reconnect each egress server once. The old entries stay under the bare username.
 
+**Sessions stored before the vault key.** Earlier releases did not store `egress_user` on the session, and each service rebuilt a subject-less session's fallback key from the session's `provider` and `username`. A session an earlier auth-server stored keys on its `subject` when it has one, so users of an OpenID Connect provider see no change. A session with no subject (a GitHub, Google or custom login that maps none) has no vault key until the user signs in again: initiate and PAT submit return 403, the connection list is empty, and the vend refuses tokens minted from it as before. Sessions last at most `session.max_age_seconds` in `oauth2_providers.yml` (8 hours by default), and signing out and back in ends the gap sooner. The connections those users saved stay under `name:<provider>:<username>`, and the new session keys on the same value.
+
 **Consents in flight.** A consent state now carries the digest of the starting browser's consent cookie, and the callback refuses a state without one. A consent started before the upgrade fails at the callback with "this is not the browser that started it"; the user connects again. States expire after `EGRESS_STATE_TTL_SECONDS` (600 by default), so this lasts at most that long.
 
 ```
@@ -444,14 +439,11 @@ unchanged.
 
 ### When the key falls back to the username
 
-The `username` step in `_canonical_egress_user`, and the same step in `enhanced_auth` (`registry/auth/dependencies.py`, the registry's raw session-cookie path that the consent callback and `/oauth2/egress/connect` use), keep per-user egress
-working for logins that carry no stable account id. Before the vault keyed on `sub`, every user was keyed on the
-username; the fallback kept those callers on a key built from it when `sub` keying arrived. Both steps call
-`username_fallback_key` (`registry/egress_auth/fallback_key.py`), so the consent the callback writes lands where the vend reads. `vault_principal`, which every registry vault route uses, has no fallback.
+The auth-server's login callback computes this key once for a session that carries no stable account id and stores it on the session as `egress_user`. Every reader of the session takes it from there (see [The canonical `user_id`](#the-canonical-user_id-oidc-sub)), so the consent the callback writes lands where the vend reads. The `username` step in `_canonical_egress_user` applies the same rule to a bearer token with no `sub`, namespaced by the token's validator method. Both call `username_fallback_key` (`registry/egress_auth/fallback_key.py`). Before the vault keyed on `sub`, every user was keyed on the username; the fallback kept those callers on a key built from it when `sub` keying arrived. `vault_principal`, which every registry vault route uses, has no fallback.
 
 The key is `name:<provider>:<username>`, with the provider percent-encoded so it cannot contain `:`. Every identity provider shares the `(oauth2, user_id)` namespace, and a bare username could equal an account id another provider issues (a PingFederate `sub` that holds an email, or a GitHub login made of digits). The prefix keeps fallback keys apart from every account id, and the encoding keeps two providers' users apart. Account ids are never prefixed.
 
-Nothing stops an identity provider from returning an account id that starts with `name:` when its `subject_claim` names a value users choose (a self-service `preferred_username`, for example). So the auth-server refuses any login whose subject starts with `name:` (HTTP 401, logged as `yielded a subject shaped like a username-fallback vault key`), and `_canonical_egress_user` and `enhanced_auth` key such an id on nothing. A user of such a provider who sets that value to `name:github:alice` cannot sign in, and so cannot read the connections of the GitHub fallback user with that key.
+Nothing stops an identity provider from returning an account id that starts with `name:` when its `subject_claim` names a value users choose (a self-service `preferred_username`, for example). So the auth-server refuses any login whose subject starts with `name:` (HTTP 401, logged as `yielded a subject shaped like a username-fallback vault key`), and `_canonical_egress_user` keys such an id on nothing when a bearer carries it, as `session_vault_user_id` does for the `subject` of a session stored before the vault key. A user of such a provider who sets that value to `name:github:alice` cannot sign in, and so cannot read the connections of the GitHub fallback user with that key.
 
 An admin seeding a PAT on behalf of a fallback user (`PUT /api/servers/{path}/egress-pat`) sends the whole key as `sub`, for example `name:github:alice`, with `auth_method` `oauth2`.
 
@@ -463,6 +455,7 @@ Callers that reach it today:
   `OAuth2 login via <provider> yielded no subject`. Consent, the connection list and disconnect then key on
   `name:<provider>:<username>`, and bearer tokens minted from that session are refused at the vend and by every
   registry vault route because their `egress_user` is empty.
+- A bearer token with no `sub` that a provider validator accepts (the validators do not require a `sub` claim). It keys on `name:<validator method>:<username>`.
 
 Callers that never reach it:
 
