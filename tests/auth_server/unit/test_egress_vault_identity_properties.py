@@ -17,7 +17,11 @@ properties pinned here:
   username reused after its account is deleted and an Okta login moved to a
   new user;
 * an account keeps its key when only those claims change (stability);
-* an OIDC login that yields no subject creates no session;
+* an OIDC login that yields no subject, or a subject that is not a string,
+  creates no session;
+* a provider's access token without ``sub`` gets no key;
+* a minted token carries the session's key whatever the request body says,
+  and never a username fallback key;
 * an Okta client-credentials token keys on its client id, and ``uid`` counts
   only for Okta;
 * the registry's vault principal equals the vend's for one caller, including
@@ -1225,6 +1229,33 @@ def test_login_with_a_subject_shaped_like_a_fallback_key_is_refused(login_path, 
     assert login.store.documents == []
 
 
+# Login paths whose subject comes from a verified id_token's ``sub`` as is.
+# ``map_user_info`` turns a userInfo subject into a string, and a Cognito access
+# token with a non-string ``sub`` fails JWT verification, so neither is here.
+_ID_TOKEN_LOGIN_PATHS: tuple[str, ...] = ("keycloak", "entra", "okta", "auth0", "pingfederate")
+_NON_STRING_SUBJECTS: tuple[Any, ...] = (12345, 0, True, False, 1.5, ["sub-1"], {"id": "sub-1"})
+
+
+@pytest.mark.parametrize("login_path", _ID_TOKEN_LOGIN_PATHS)
+@pytest.mark.parametrize("subject", _NON_STRING_SUBJECTS, ids=repr)
+def test_login_with_a_non_string_subject_is_refused(login_path, subject, caplog):
+    """A login whose id_token ``sub`` is not a string creates no session.
+
+    The callback stores the subject as the session's vault key, and a key that
+    is not a string keys nothing, so the user would pass login and then be
+    refused by every vault route with nothing logged. For every id_token login
+    path and every non-string ``sub``, the login returns 401, sets no cookie,
+    writes no session record and logs why.
+    """
+    with caplog.at_level("WARNING"):
+        login = _login(login_path, subject, _COLLIDING_PROFILE)
+
+    assert login.status_code == 401, (login_path, login.status_code, login.store.documents)
+    assert login.cookie is None
+    assert login.store.documents == []
+    assert any("subject that is not a string" in r.getMessage() for r in caplog.records)
+
+
 _FALLBACK_LOGIN_PROVIDERS = st.sampled_from(["github", "google", "corp-oidc"])
 _REALISTIC_ACCOUNT_IDS = st.one_of(
     st.uuids().map(str),
@@ -1393,6 +1424,26 @@ def test_uid_claim_ignored_outside_okta(bearer_path, account_id, uid):
     """
     key = _bearer_key(bearer_path, account_id, _COLLIDING_PROFILE, extra_claims={"uid": uid})
     assert key == account_id
+
+
+@pytest.mark.parametrize(
+    "bearer_path",
+    [path for path in BEARER_PATHS if path not in ("okta", "cognito-validator-boto3")],
+)
+@HYPOTHESIS_SETTINGS
+@given(profile=_PROFILES)
+@example(profile=_COLLIDING_PROFILE)
+def test_bearer_without_sub_has_no_vault_key(bearer_path, profile):
+    """A provider's access token without ``sub`` never keys on its username.
+
+    The validators accept a token without ``sub`` (a Keycloak client without
+    the ``basic`` scope issues one), and the only name left on it is the login,
+    which an admin can rename or a later account can take. For every validator
+    path and profile, the key is empty, so ``/validate`` stamps no
+    ``egress_user`` on either internal token. Okta keys on ``uid``, and a
+    ``GetUser`` response without ``sub`` fails validation, so neither applies.
+    """
+    assert _bearer_key(bearer_path, None, profile) == ""
 
 
 @HYPOTHESIS_SETTINGS
@@ -1642,6 +1693,104 @@ def test_token_minted_for_a_static_key_owns_no_vault_bucket(key_name):
     assert not is_per_user_auth_method(hop.mcp_proxy_claims["auth_method"])
 
 
+@st.composite
+def _session_logins(
+    draw: st.DrawFn,
+) -> tuple[str, str | None]:
+    """Draw a login path and an account id, or None on a path that allows no subject.
+
+    Args:
+        draw: Hypothesis draw function.
+
+    Returns:
+        ``(login_path, account_id)``.
+    """
+    login_path = draw(st.sampled_from(list(LOGIN_PATHS)))
+    if login_path in NON_OIDC_LOGIN_PATHS:
+        return login_path, draw(st.one_of(st.none(), _ACCOUNT_IDS))
+    return login_path, draw(_ACCOUNT_IDS)
+
+
+@HYPOTHESIS_SETTINGS
+@given(
+    session=_session_logins(),
+    other=st.one_of(_ACCOUNT_IDS, st.sampled_from(_FALLBACK_SHAPED_IDS)),
+    profile=_PROFILES,
+)
+@example(session=("keycloak", "sub-alice"), other="sub-bob", profile=_COLLIDING_PROFILE)
+@example(session=("github", None), other="sub-bob", profile=_COLLIDING_PROFILE)
+def test_session_backed_mint_ignores_the_body_egress_user_and_subject(session, other, profile):
+    """A mint with a ``session_id`` keys the token on the session, never on the body.
+
+    For every login and every other user's id in the request body's
+    ``egress_user`` and ``subject``, the minted token carries the session's
+    stored key (none for a subject-less session), so a caller holding the
+    internal signing key cannot point a session's token at someone else.
+    """
+    login_path, account_id = session
+    assume(other != account_id)
+    login = _login(login_path, account_id, profile)
+    assert login.status_code == 302, (login_path, login.status_code)
+
+    token = _mint_token(
+        {**_session_mint_context(login), "egress_user": other, "subject": other}, login.store
+    )
+    claims = server_module.validator.validate_self_signed_token(token)["data"]
+
+    assert claims.get("egress_user", "") == (account_id or ""), (login_path, claims)
+
+
+@HYPOTHESIS_SETTINGS
+@given(
+    field=st.sampled_from(["egress_user", "subject"]),
+    suffix=st.text(max_size=12),
+    username=_CLAIM_VALUES,
+)
+@example(field="egress_user", suffix="github:alice", username="alice")
+@example(field="subject", suffix="", username="alice")
+def test_mint_without_a_session_never_stamps_a_fallback_key(field, suffix, username):
+    """A mint with no ``session_id`` leaves a fallback-shaped body key off the token.
+
+    A caller without a session may assert its vault key in the body. For every
+    fallback-shaped value in ``egress_user`` or ``subject``, the minted token
+    carries no ``egress_user``, as a token minted from a session never does.
+    """
+    token = _mint_token(
+        {
+            "username": username,
+            "auth_method": "oauth2",
+            "provider": "keycloak",
+            field: f"name:{suffix}",
+        },
+        _FakeSessionCollection(),
+    )
+    claims = server_module.validator.validate_self_signed_token(token)["data"]
+
+    assert "egress_user" not in claims, claims
+
+
+@pytest.mark.parametrize("value", [12345, True, ["sub-1"], {"id": "sub-1"}], ids=repr)
+def test_mint_without_a_session_never_stamps_a_non_string_key(value):
+    """A mint with no ``session_id`` drops a non-string body ``egress_user``.
+
+    The body value is a vault key the token would carry, so a wrong type is
+    refused rather than stamped or coerced: the minted token carries no
+    ``egress_user``, and the vend refuses it.
+    """
+    token = _mint_token(
+        {
+            "username": "alice",
+            "auth_method": "oauth2",
+            "provider": "keycloak",
+            "egress_user": value,
+        },
+        _FakeSessionCollection(),
+    )
+    claims = server_module.validator.validate_self_signed_token(token)["data"]
+
+    assert "egress_user" not in claims, claims
+
+
 def _vend_principal(
     mcp_proxy_claims: dict[str, Any],
 ) -> tuple[str, str] | None:
@@ -1776,11 +1925,30 @@ def _minted_bearer_without_egress_user(
     return {"Authorization": f"Bearer {token}"}, None
 
 
+def _provider_bearer_without_sub(
+    provider: str,
+    profile: dict[str, str],
+) -> tuple[dict[str, str], str | None]:
+    """A provider's user access token with no ``sub``; the auth server keys it on nothing."""
+    token = _signed_bearer(provider, None, profile, {"groups": ["hop-test-group"]})
+    return {"Authorization": f"Bearer {token}"}, provider
+
+
 @pytest.mark.parametrize(
     "caller",
     [
         pytest.param(_okta_user_bearer_without_uid, id="okta-user-token-without-uid"),
         pytest.param(_minted_bearer_without_egress_user, id="minted-token-without-egress-user"),
+        *(
+            pytest.param(
+                functools.partial(_provider_bearer_without_sub, provider),
+                id=f"{provider}-bearer-without-sub",
+            )
+            # The hop harness grants scopes from a ``groups`` claim, which these
+            # two providers read; test_bearer_without_sub_has_no_vault_key
+            # covers every validator path at the key /validate stamps.
+            for provider in ("keycloak", "entra")
+        ),
     ],
 )
 @HOP_HYPOTHESIS_SETTINGS
@@ -1790,8 +1958,10 @@ def test_registry_and_vend_both_refuse_a_caller_the_auth_server_does_not_key(cal
     """A caller the auth server gives no vault key owns no principal in the registry either.
 
     The auth server returns an empty key for an Okta user token without a usable
-    ``uid`` and for a gateway-minted token without ``egress_user``, because the
-    only other names those tokens carry are the login. For every profile, both
+    ``uid``, for a gateway-minted token without ``egress_user`` and for a
+    provider's access token without ``sub``, because the only other names those
+    tokens carry are the login (a Keycloak ``preferred_username``, for example,
+    which an admin can rename or a later user can take). For every profile, both
     the registry's principal (built from the registry token) and the vend's
     (from the mcp-proxy token) are None, so PAT submit, initiate, list and
     disconnect cannot address a bucket keyed on that login.

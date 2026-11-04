@@ -595,10 +595,10 @@ async def _derive_user_context(
     not registry-side derivation).
 
     `egress_user` is passed through unchanged, never replaced by `username`:
-    the caller already applied the one username fallback that exists (the
-    auth-server's `_canonical_egress_user` for an internal token, `enhanced_auth`
-    for a raw session cookie), and an empty value marks a caller that owns no
-    per-user vault bucket.
+    the auth-server computed it (the session's key stored at login, which
+    `enhanced_auth` reads through `session_vault_user_id`, or the
+    `_canonical_egress_user` claim on an internal token), and an empty value
+    marks a caller that owns no per-user vault bucket.
     """
     if auth_method == "federation-static":
         return {

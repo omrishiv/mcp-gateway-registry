@@ -230,12 +230,13 @@ class TestCanonicalEgressUserPaths:
         assert server._canonical_egress_user(bearer_vr) == "oidc-1"
         assert server._canonical_egress_user(cookie_vr) == "oidc-1"
 
-    def test_non_oidc_caller_falls_back_to_the_username_namespaced_by_method(self):
-        # A non-session, non-self-signed caller with no sub anywhere keys on its
-        # username under its validator method; only a session uses the provider
-        # it records.
-        vr = {"method": "network-trusted", "username": "svc-account", "data": {}}
-        assert server._canonical_egress_user(vr) == "name:network-trusted:svc-account"
+    def test_non_session_caller_without_sub_has_no_key(self):
+        # A non-session, non-self-signed caller with no sub anywhere carries only
+        # its login, which an IdP may let another account hold later, so it
+        # owns no bucket. Only a session gets a username fallback key, stored at
+        # login.
+        vr = {"method": "keycloak", "username": "svc-account", "data": {}}
+        assert server._canonical_egress_user(vr) == ""
 
 
 @pytest.mark.unit

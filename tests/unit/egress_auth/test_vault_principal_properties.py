@@ -11,10 +11,9 @@ consent writes a bucket the vend never reads. The rule the routes share:
   ``federation-static``, empty, unknown, not a string) owns no bucket;
 * ``user_id`` is ``egress_user`` when that is a non-empty string, else there is
   no principal. The registry never falls back to ``username``: the documented
-  username fallback is computed upstream (the auth-server's login callback
-  stores it on the session, and ``_canonical_egress_user`` applies it to a
-  bearer with no ``sub``), so a caller the auth-server refuses to key is
-  refused here too.
+  username fallback is computed once, upstream (the auth-server's login
+  callback stores it on a session with no subject), so a caller the
+  auth-server refuses to key is refused here too.
 
 ``_model_principal`` states that rule independently of the code under test.
 The first property pins ``vault_principal`` to it. The others drive each real

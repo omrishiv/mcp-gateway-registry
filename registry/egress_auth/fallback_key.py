@@ -9,14 +9,15 @@ value can equal an account id another provider issues (a PingFederate ``sub``
 that holds an email, for example). Only those fallback keys are namespaced
 here, so no account-id key changes.
 
-The fallback key is computed in two places, each for a different caller. The
-auth server's login callback (``_login_vault_user_id``) computes it once for a
-session and stores it on the session record as ``egress_user``; every later
-reader of that session's key takes the stored value through
+The auth server's login callback (``_login_vault_user_id``) is the only code
+that produces a fallback key: it computes one once for a session and stores
+it on the session record as ``egress_user``, and every later reader of that
+session's key takes the stored value through
 ``registry.egress_auth.session_vault_user.session_vault_user_id`` rather than
-rebuilding it. The auth server's ``_canonical_egress_user`` computes it for a
-bearer token with no account id (step 5), namespaced by the token's validator
-method.
+rebuilding it. So the ``<provider>`` segment is always a login provider key
+from ``oauth2_providers.yml``, and two providers' users cannot share a key. A
+bearer token with no account id gets no fallback key (``_canonical_egress_user``
+returns ``""``), and the token mint never stamps one.
 """
 
 from urllib.parse import quote
@@ -64,10 +65,10 @@ def username_fallback_key(
     ``:`` characters are safe there.
 
     Args:
-        provider: The login provider (``github``, ``google`` or an
-            operator-added name), or a bearer's validator method. A non-string
-            counts as ``""``.
-        username: The session's username.
+        provider: The login provider key from the callback path (``github``,
+            ``google`` or an operator-added name). A non-string counts as
+            ``""``.
+        username: The login's username.
 
     Returns:
         The fallback key, or ``""`` when ``username`` is not a non-empty string,

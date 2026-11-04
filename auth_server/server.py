@@ -462,7 +462,7 @@ def _canonical_egress_user(validation_result: dict) -> str:
          the token is ``self_signed`` (minted by this gateway); it is ignored on
          any other method so an external issuer cannot inject a vault key.
       1b. On a ``self_signed`` token WITHOUT ``egress_user``, resolution STOPS and
-         returns ``""``. Steps 2-5 below would resolve the login username (that
+         returns ``""``. Steps 2-4 below would resolve the login username (that
          token's ``sub`` is the username by construction, and on Keycloak the
          login username is the user's email), which is a DIFFERENT identifier
          namespace from the OIDC sub the consent path wrote. Crossing namespaces
@@ -485,12 +485,14 @@ def _canonical_egress_user(validation_result: dict) -> str:
       4. top-level ``sub`` -- direct-token paths that surface it there (the
          ``SimplifiedCognitoValidator`` boto3 branch, whose ``data`` holds the
          GetUser response rather than claims).
-      5. ``username`` -- fallback for a bearer with no sub (the provider
-         validators do not require a ``sub`` claim),
-         namespaced by its validator ``method`` through ``username_fallback_key``
-         (``name:<method>:<username>``) so it never equals another provider's
-         account id. A session never reaches this step: its fallback key was
-         computed once at login.
+      5. No account id: ``""``. The provider validators accept a bearer with
+         no ``sub`` (a Keycloak client without the ``basic`` scope issues one),
+         and the only name left on it is the login (``preferred_username``),
+         which an admin can rename and a later account can take. Keying on it
+         would let a PAT stored under that name reach the next holder, so such
+         a bearer owns no bucket and the vend and registry routes refuse it.
+         Only a session gets a username fallback key, computed once at login
+         for a non-OIDC provider, and those providers have no bearer path.
 
     An account id from steps 1-4 that starts with the fallback-key prefix
     (``is_fallback_shaped``) keys nothing: a provider whose ``subject_claim``
@@ -521,8 +523,6 @@ def _canonical_egress_user(validation_result: dict) -> str:
             account_id = (
                 data.get("sub") or data.get("subject") or validation_result.get("sub") or ""
             )
-            if not account_id:
-                return username_fallback_key(method, validation_result.get("username"))
     return "" if is_fallback_shaped(account_id) else account_id
 
 
@@ -5927,7 +5927,11 @@ async def _reconcile_context_against_session(
         # is the internal-JWT gate + validate_scope_subset; use the body as-is.
         # A non-session caller may still assert its canonical egress id in the
         # body (explicit trust boundary); absent that there is no OIDC sub to key.
+        # A fallback-shaped or non-string value is dropped (never coerced), as on
+        # the session branch, so the mint never stamps a username fallback key.
         body_subject = user_context.get("egress_user") or user_context.get("subject") or ""
+        if not isinstance(body_subject, str) or is_fallback_shaped(body_subject):
+            body_subject = ""
         return body_groups, body_scopes, body_subject, False
 
     from session_store import resolve_session
@@ -6965,7 +6969,11 @@ def _require_login_subject(
     Any login, OIDC or not, whose subject starts with the fallback-key prefix
     (``name:``) is refused too: that subject would equal the vault key of a
     login with no subject, so a provider whose ``subject_claim`` names a
-    user-chosen value could hand one user another user's connections.
+    user-chosen value could hand one user another user's connections. So is a
+    subject that is not a string (an id_token ``sub`` of another JSON type):
+    the session would store a vault key that keys nothing, and the user would
+    pass login only to be refused by every vault route with nothing logged.
+    ``map_user_info`` already turns a userInfo subject into a string.
 
     Args:
         provider: The OAuth2 provider key from the callback path.
@@ -6974,9 +6982,18 @@ def _require_login_subject(
 
     Raises:
         HTTPException: 401 when an OIDC login mapped no subject, or any login
-            mapped a subject shaped like a fallback key.
+            mapped a subject that is not a string or is shaped like a fallback
+            key.
     """
     subject = mapped_user.get("subject")
+    if subject is not None and not isinstance(subject, str):
+        logger.warning(
+            "OAuth2 login via %s yielded a subject that is not a string (%s); "
+            "refusing the login (check the provider's subject claim)",
+            provider,
+            type(subject).__name__,
+        )
+        raise HTTPException(status_code=401, detail="Login response did not identify the account")
     if is_fallback_shaped(subject):
         logger.warning(
             "OAuth2 login via %s yielded a subject shaped like a username-fallback "
@@ -7006,8 +7023,9 @@ def _login_vault_user_id(
     Computed once, at login, and stored as the session's ``egress_user``; every
     later reader takes it from there through ``session_vault_user_id`` rather
     than rebuilding it from the session's other fields. Called after
-    ``_require_login_subject``, so a subject is never fallback-shaped and a
-    login without one is a provider allowed to log in that way.
+    ``_require_login_subject``, so a subject is a string that is never
+    fallback-shaped, and a login without one is a provider allowed to log in
+    that way.
 
     Args:
         provider: The OAuth2 provider key from the callback path.
