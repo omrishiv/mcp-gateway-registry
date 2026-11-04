@@ -68,8 +68,13 @@ def make_client(monkeypatch):
 
 def _ctx(**over):
     # Same identity shape nginx_proxied_auth returns: the listing is offered only to
-    # a caller who has a per-user vault principal, which needs a user id.
-    base = {"auth_method": "oauth2", "username": "alice", "accessible_servers": ["*"]}
+    # a caller who has a per-user vault principal, which needs an egress_user.
+    base = {
+        "auth_method": "oauth2",
+        "username": "alice",
+        "egress_user": "sub-alice",
+        "accessible_servers": ["*"],
+    }
     base.update(over)
     return base
 

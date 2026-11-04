@@ -16,7 +16,11 @@ the session. The properties pinned here:
 * an OIDC login that yields no subject creates no session;
 * an Okta client-credentials token keys on its client id, and ``uid`` counts
   only for Okta;
-* a token minted from a session carries the session's key.
+* a token minted from a session carries the session's key;
+* the registry's vault principal equals the vend's for one caller, including
+  the callers the auth server gives no key (both refuse them) and a session
+  with no subject (every path, the registry's raw cookie path included, keys it
+  on one namespaced username-fallback key).
 
 The immutable id is the token ``sub`` everywhere except Okta access tokens,
 whose ``sub`` is the user's editable login and whose ``uid`` is the user id the
@@ -72,8 +76,10 @@ from providers.okta import OktaProvider  # noqa: E402
 from providers.pingfederate import PingFederateProvider  # noqa: E402
 
 import auth_server.server as server_module  # noqa: E402
+import registry.auth.dependencies as registry_dependencies  # noqa: E402
 from registry.auth.dependencies import _context_from_internal_token  # noqa: E402
 from registry.auth.proxied_token import verify_mcp_proxy_token  # noqa: E402
+from registry.egress_auth.fallback_key import username_fallback_key  # noqa: E402
 from registry.egress_auth.service import (  # noqa: E402
     is_per_user_auth_method,
     vault_principal,
@@ -903,6 +909,8 @@ def _mint_token(
     with (
         _session_store(store),
         patch.object(server_module, "map_groups_to_scopes", AsyncMock(return_value=[_HOP_SCOPE])),
+        # The mint's audit record would otherwise go to the durable audit store.
+        patch.object(server_module, "_emit_token_mint_audit", AsyncMock(return_value=None)),
     ):
         response = _client().post("/internal/tokens", json=body, headers=_internal_auth_headers())
     assert response.status_code == 200, response.text
@@ -1034,6 +1042,8 @@ def _validate_hop_tokens(
         stack.enter_context(
             patch.object(server_module, "validate_server_tool_access", AsyncMock(return_value=True))
         )
+        # The MCP access record would otherwise go to the durable audit store.
+        stack.enter_context(patch.object(server_module, "get_mcp_logger", return_value=None))
         if bearer_provider is not None:
             instance = _provider(bearer_provider)
             stack.enter_context(patch.object(instance, "get_jwks", return_value=_JWKS))
@@ -1467,3 +1477,129 @@ def test_registry_and_vend_key_one_caller_on_one_principal(provider, account_id,
         registry = vault_principal(hop.registry_context)
         vend = _vend_principal(hop.mcp_proxy_claims)
         assert registry == vend == expected, (provider, name, registry, vend)
+    raw_cookie = vault_principal(_registry_cookie_context(login.cookie, login.store))
+    assert raw_cookie == expected, (provider, "raw-cookie", raw_cookie)
+
+
+def _registry_cookie_context(
+    cookie: str,
+    store: _FakeSessionCollection,
+) -> dict[str, Any]:
+    """Build the registry's user context from a raw session cookie.
+
+    This is the path the consent callback and ``/oauth2/egress/connect`` take:
+    no internal token, so the registry's ``enhanced_auth`` resolves the cookie
+    against the session store itself. The registry verifies the cookie with
+    the auth server's signer, as a deployment that shares ``SECRET_KEY`` does.
+
+    Args:
+        cookie: The session cookie the login set.
+        store: The session collection the login wrote.
+
+    Returns:
+        The registry user context.
+    """
+    with (
+        patch.object(registry_dependencies, "signer", server_module.signer),
+        patch("registry.auth.session_store._get_collection", AsyncMock(return_value=store)),
+        patch(
+            "registry.auth.dependencies.map_cognito_groups_to_scopes",
+            AsyncMock(return_value=[]),
+        ),
+        patch(
+            "registry.auth.dependencies.resolve_scope_access",
+            AsyncMock(return_value=SimpleNamespace(servers=[], tools={})),
+        ),
+        patch(
+            "registry.auth.dependencies.get_ui_permissions_for_user",
+            AsyncMock(return_value={}),
+        ),
+    ):
+        request = SimpleNamespace(state=SimpleNamespace())
+        return asyncio.run(registry_dependencies.enhanced_auth(request, session=cookie))
+
+
+def _okta_user_bearer_without_uid(
+    profile: dict[str, str],
+) -> tuple[dict[str, str], str | None]:
+    """An Okta user access token with no ``uid``; the auth server keys it on nothing."""
+    token = _signed_bearer(
+        "okta", None, profile, {"cid": WEB_CLIENT_ID, "groups": ["hop-test-group"]}
+    )
+    return {"Authorization": f"Bearer {token}"}, "okta"
+
+
+def _minted_bearer_without_egress_user(
+    profile: dict[str, str],
+) -> tuple[dict[str, str], str | None]:
+    """A gateway-minted user token with no ``egress_user``; the auth server keys it on nothing."""
+    token = _mint_token(
+        {"username": profile["login"], "auth_method": "oauth2", "provider": "keycloak"},
+        _FakeSessionCollection(),
+    )
+    return {"Authorization": f"Bearer {token}"}, None
+
+
+@pytest.mark.parametrize(
+    "caller",
+    [
+        pytest.param(_okta_user_bearer_without_uid, id="okta-user-token-without-uid"),
+        pytest.param(_minted_bearer_without_egress_user, id="minted-token-without-egress-user"),
+    ],
+)
+@HOP_HYPOTHESIS_SETTINGS
+@given(profile=_PROFILES)
+@example(profile=_COLLIDING_PROFILE)
+def test_registry_and_vend_both_refuse_a_caller_the_auth_server_does_not_key(caller, profile):
+    """A caller the auth server gives no vault key owns no principal in the registry either.
+
+    The auth server returns an empty key for an Okta user token without a usable
+    ``uid`` and for a gateway-minted token without ``egress_user``, because the
+    only other names those tokens carry are the login. For every profile, both
+    the registry's principal (built from the registry token) and the vend's
+    (from the mcp-proxy token) are None, so PAT submit, initiate, list and
+    disconnect cannot address a bucket keyed on that login.
+    """
+    assume(profile["login"] != WEB_CLIENT_ID)
+    headers, bearer_provider = caller(profile)
+
+    hop = _validate_hop_tokens(headers, _FakeSessionCollection(), bearer_provider)
+
+    registry = vault_principal(hop.registry_context)
+    vend = _vend_principal(hop.mcp_proxy_claims)
+    assert registry is None and vend is None, (registry, vend, hop.registry_context)
+
+
+@pytest.mark.parametrize("login_path", sorted(NON_OIDC_LOGIN_PATHS))
+@HOP_HYPOTHESIS_SETTINGS
+@given(profile=_PROFILES)
+@example(profile=_COLLIDING_PROFILE)
+def test_session_without_subject_keys_every_path_on_one_fallback_key(login_path, profile):
+    """A session with no subject keys the registry and the vend on one namespaced key.
+
+    A GitHub, Google or operator-added login without an id_token and without
+    the provider's ``subject_claim`` creates a session with no subject. For
+    every profile, the auth server's step 5 (through ``/validate``, for both
+    internal tokens) and the registry's raw cookie path (``enhanced_auth``, used
+    by the consent callback) all produce ``username_fallback_key(provider,
+    username)``, so a consent the callback writes is the bucket the vend reads,
+    and the key never equals the bare username another provider might issue
+    as an account id.
+    """
+    login = _login(login_path, None, profile)
+    assert login.status_code == 302, (login_path, login.status_code)
+    session = login.store.documents[0]
+    expected = ("oauth2", username_fallback_key(session["provider"], session["username"]))
+
+    hop = _validate_hop_tokens(
+        {"Cookie": f"{SESSION_COOKIE_NAME}={login.cookie}"}, login.store, None
+    )
+    raw_cookie = _registry_cookie_context(login.cookie, login.store)
+
+    principals = {
+        "registry-token": vault_principal(hop.registry_context),
+        "vend": _vend_principal(hop.mcp_proxy_claims),
+        "raw-cookie": vault_principal(raw_cookie),
+    }
+    assert set(principals.values()) == {expected}, (login_path, principals)
+    assert expected[1] != session["username"]

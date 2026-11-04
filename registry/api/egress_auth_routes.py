@@ -26,7 +26,7 @@ from html import escape
 from typing import Annotated
 from urllib.parse import urlencode, urlparse
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
@@ -38,16 +38,24 @@ from registry.auth.resource_binding import mcp_proxy_route_binding
 from registry.common.log_redaction import redact_url
 from registry.core.config import settings
 from registry.core.schemas import _validate_obo_egress_config
+from registry.egress_auth.browser_binding import (
+    clear_consent_cookie,
+    new_browser_binding,
+    read_browser_secret,
+    set_consent_cookie,
+)
 from registry.egress_auth.factory import get_egress_auth_service
 from registry.egress_auth.providers import list_provider_names, resolve_provider
-from registry.egress_auth.schemas import StoredToken
+from registry.egress_auth.schemas import OAuthState, StoredToken
 from registry.egress_auth.service import (
+    ConsentStartedInAnotherBrowser,
     EgressAuthError,
     EgressAuthService,
     VaultPrincipal,
     is_per_user_auth_method,
     vault_principal,
 )
+from registry.egress_auth.state_codec import InvalidState, decode_state
 from registry.egress_auth.upstream_binding import (
     linked_version,
     registered_destinations,
@@ -278,6 +286,17 @@ def _callback_server_not_configured() -> HTMLResponse:
     return HTMLResponse("<h3>Connection failed: server not configured.</h3>", status_code=400)
 
 
+def _callback_other_browser() -> HTMLResponse:
+    """Response for a consent callback completed outside the browser that started it."""
+    return HTMLResponse(
+        "<h3>Connection not saved: this is not the browser that started it.</h3>"
+        "<p>A connection has to finish in the browser where you clicked connect. "
+        "A link copied to another browser, or opened after signing in again "
+        "elsewhere, cannot finish it. Start connecting again from this browser.</p>",
+        status_code=400,
+    )
+
+
 def _build_connect_url(server_path: str) -> str:
     """Build the session-verified elicitation front-door URL for a server.
 
@@ -345,23 +364,23 @@ class EgressTokenResponse(BaseModel):
     """Vend result. ``access_token`` is None on a clean miss (consent required).
 
     On a consent-required miss for a properly egress-configured server, the
-    registry builds the provider ``authorize_url`` so mcp_proxy can return it to
-    the caller (the user clicks it to connect). ``authorize_url`` is None when
+    registry returns ``connect_url`` so mcp_proxy can send the user to connect.
+    No provider authorize URL is returned: a consent must start in the browser
+    that finishes it, and the vend has no browser. ``connect_url`` is None when
     the server isn't egress-configured / the caller isn't a per-user principal
     (nothing to connect)."""
 
     access_token: str | None = None
     consent_required: bool = False
-    authorize_url: str | None = None
     connect_url: str | None = Field(
         default=None,
         description="Session-verified gateway front door for MCP URL-mode "
         "elicitation (``GET /oauth2/egress/connect?server=<path>``). The mcp_proxy "
-        "hop puts this in the ``elicitation/create`` ``url`` field. Unlike "
-        "``authorize_url`` (the provider-direct URL), this route re-verifies the "
-        "opener's gateway session against the elicited principal (anti-phishing) "
-        "and needs NO client-side OAuth/DCR -- so it works with providers like "
-        "Entra that do not support RFC 7591 DCR.",
+        "hop puts this in the ``elicitation/create`` ``url`` field. This route "
+        "re-verifies the opener's gateway session against the elicited principal "
+        "(anti-phishing), binds the consent to the opener's browser, and needs NO "
+        "client-side OAuth/DCR -- so it works with providers like Entra that do "
+        "not support RFC 7591 DCR.",
     )
     request_state: str | None = Field(
         default=None,
@@ -785,7 +804,7 @@ async def vend_egress_token(
     # pat server is never routed through svc.get_valid_token (which resolves an
     # OAuth provider and rejects a token stored with client_id=None). A miss
     # (never submitted OR expired) is TERMINAL: set mode="pat" so auth_server
-    # emits the PAT-missing message; NO authorize_url/connect_url (not interactive).
+    # emits the PAT-missing message; NO connect_url (not interactive).
     if egress_mode == "pat":
         provider = egress_oauth.get("provider")
         token = await get_egress_auth_service().get_pat(
@@ -869,25 +888,11 @@ async def vend_egress_token(
     if access_token is not None:
         return EgressTokenResponse(access_token=access_token)
 
-    # Miss: no usable token (never connected, or refresh dead). Build the consent
-    # URL so mcp_proxy can hand it back to the user to self-serve (the gateway
-    # triggers consent automatically rather than forwarding unauthenticated).
-    try:
-        authorize_url = await svc.build_consent_url(
-            auth_method=auth_method,
-            user_id=sub,
-            client_id_audit=claims.get("client_id") or "",
-            session_id="",
-            server_path=server_path,
-            egress_oauth=egress_oauth,
-            server=server,
-        )
-    except Exception as exc:  # bad provider config etc. -- still a clean miss
-        logger.warning(f"egress vend: could not build consent URL type={type(exc).__name__}")
-        authorize_url = None
-
-    # MCP URL-mode elicitation: a session-verified gateway front door the client
-    # opens verbatim (no client-side OAuth/DCR -- works with Entra). The matching
+    # Miss: no usable token (never connected, or refresh dead). Hand back the
+    # session-verified gateway front door (MCP URL-mode elicitation) the client
+    # opens verbatim; it starts the provider consent in the user's browser and
+    # binds it there. The vend builds no provider authorize URL: it has no
+    # browser to bind, so that consent could never complete. The matching
     # ``request_state`` is an AEAD blob the client echoes back on retry; it binds
     # the principal + server + issue time so a tampered/replayed/cross-user retry
     # is rejected (MRTR requestState integrity requirement).
@@ -903,7 +908,6 @@ async def vend_egress_token(
 
     return EgressTokenResponse(
         consent_required=True,
-        authorize_url=authorize_url,
         connect_url=connect_url,
         request_state=request_state,
         provider=provider,
@@ -1479,10 +1483,16 @@ class InitiateRequest(BaseModel):
 async def initiate_consent(
     request: Request,
     body: InitiateRequest,
+    response: Response,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
     _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
-    """Begin the OAuth consent for the current user; returns the authorize URL."""
+    """Begin the OAuth consent for the current user; returns the authorize URL.
+
+    Also sets this consent's cookie on the response, so the consent completes
+    only in the browser that called this route (the frontend's same-origin XHR
+    stores it in that browser).
+    """
     _feature_enabled_or_404()
     server_path = body.server_path
     if not server_path.startswith("/"):
@@ -1497,15 +1507,16 @@ async def initiate_consent(
             status.HTTP_400_BAD_REQUEST, detail="server has no per-user egress auth configured"
         )
 
-    # The vault principal (canonical auth_method; egress_user, else username) must
-    # match the one the vend reads from the mcp-proxy token so one human maps to
-    # one vault bucket regardless of token type / provider. See #933.
+    # The vault principal (canonical auth_method; the auth-server's egress_user)
+    # must match the one the vend reads from the mcp-proxy token so one human maps
+    # to one vault bucket regardless of token type / provider. See #933.
     principal = vault_principal(user_context)
     if principal is None:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, detail="this caller cannot connect a per-user account"
         )
 
+    binding = new_browser_binding()
     try:
         url = await get_egress_auth_service().build_consent_url(
             auth_method=principal.auth_method,
@@ -1515,6 +1526,7 @@ async def initiate_consent(
             server_path=server_path,
             egress_oauth=server["egress_oauth"],
             server=server,
+            browser_binding=binding.digest,
         )
     except ValueError as exc:
         # 503, not 409: a linked version document is missing or has no endpoint,
@@ -1537,6 +1549,7 @@ async def initiate_consent(
                 "auth config and try again."
             ),
         ) from exc
+    set_consent_cookie(response, request, binding)
     return {"authorize_url": url}
 
 
@@ -1548,19 +1561,17 @@ async def egress_callback(
 ):
     """Provider redirect target. No ingress auth (reached via nginx -> registry,
     no /validate), so the browser's session cookie is resolved here: the token is
-    stored only when that browser is authenticated as the principal bound in the
-    signed+encrypted state. Verifies state (TTL + single-use + account-swap),
-    exchanges the code, and stores the token."""
+    stored only when the browser that started the consent (it holds the consent
+    cookie) is authenticated as the principal bound in the signed+encrypted
+    state. Verifies state (single-use + TTL + browser binding + account-swap),
+    exchanges the code, and stores the token. Every response after the state
+    decodes expires that consent's cookie: the state is consumed either way."""
     if not code or not state:
         return HTMLResponse("<h3>Connection failed: missing code/state.</h3>", status_code=400)
 
-    # The provider+server are bound in the signed state; we resolve the server's
-    # egress config to get client_id/secret for the code exchange. We decode the
-    # state-bound server_path indirectly via handle_callback, so fetch by the
-    # state after a light pre-decode is avoided -- instead the service needs the
-    # egress_oauth; resolve it from the state's server_path.
-    from registry.egress_auth.state_codec import InvalidState, decode_state
-
+    # The provider+server are bound in the signed state; the server's egress
+    # config (client_id/secret for the code exchange) is resolved from the state's
+    # server_path, so the state is decoded here before handle_callback decodes it.
     try:
         st = decode_state(state)
     except InvalidState:
@@ -1572,6 +1583,28 @@ async def egress_callback(
     # deployment whose vend path was switched off.
     _feature_enabled_or_404()
 
+    response = await _complete_callback(request, code, state, st)
+    clear_consent_cookie(response, st.browser_binding)
+    return response
+
+
+async def _complete_callback(
+    request: Request,
+    code: str,
+    state: str,
+    st: OAuthState,
+) -> HTMLResponse:
+    """Run the callback checks for a decoded consent state and store the token.
+
+    Args:
+        request: The callback request; carries the session and consent cookies.
+        code: The provider's authorization code.
+        state: The encoded consent state.
+        st: ``state``, decoded.
+
+    Returns:
+        The page to show: connected, or why the connection was not saved.
+    """
     server = await server_service.get_server_info(st.server_path, include_credentials=True)
     if not server:
         return await _refuse_callback(state, _callback_server_not_configured())
@@ -1612,7 +1645,15 @@ async def egress_callback(
             egress_oauth=oauth_cfg,
             current_user_id=principal.user_id,
             current_auth_method=principal.auth_method,
+            browser_secret=read_browser_secret(request, st.browser_binding),
         )
+    except ConsentStartedInAnotherBrowser:
+        # Not a configuration fault: the browser holds no cookie for this consent.
+        # Either the link was carried to another browser, or someone else started
+        # the consent and is trying to land their provider account in this user's
+        # vault. handle_callback consumed the state before refusing.
+        logger.warning("egress callback refused: consent completed outside its starting browser")
+        return _callback_other_browser()
     except EgressAuthError as exc:
         # Detail to server logs only. Do NOT reflect the exception text into the
         # browser response: EgressAuthError messages embed internal state (e.g.

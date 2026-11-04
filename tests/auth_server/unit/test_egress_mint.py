@@ -117,10 +117,16 @@ class TestCanonicalEgressUserPaths:
         }
         assert server._canonical_egress_user(cookie_vr) == server._canonical_egress_user(bearer_vr)
 
-    def test_falls_back_to_username_when_no_sub(self):
-        # Non-OIDC callers (no sub anywhere) keep their pre-existing bucket.
-        vr = {"username": "svc-account", "data": {}}
-        assert server._canonical_egress_user(vr) == "svc-account"
+    def test_session_without_sub_falls_back_to_the_namespaced_username(self):
+        # A session with no subject (a non-OIDC login that mapped none) keys on
+        # its username, namespaced by the session's provider so the key never
+        # equals another provider's account id.
+        vr = {
+            "method": "session_cookie",
+            "username": "svc-account",
+            "data": {"provider": "github", "username": "svc-account"},
+        }
+        assert server._canonical_egress_user(vr) == "name:github:svc-account"
 
     def test_empty_when_nothing_present(self):
         assert server._canonical_egress_user({}) == ""
@@ -209,12 +215,12 @@ class TestCanonicalEgressUserPaths:
         assert server._canonical_egress_user(bearer_vr) == "oidc-1"
         assert server._canonical_egress_user(cookie_vr) == "oidc-1"
 
-    def test_non_oidc_caller_still_falls_back_to_username(self):
-        # REGRESSION: a non-OIDC, non-self-signed caller with no sub anywhere keeps
-        # its pre-existing username bucket -- documented behavior that must not
-        # change (only the self_signed case changes).
+    def test_non_oidc_caller_falls_back_to_the_username_namespaced_by_method(self):
+        # A non-session, non-self-signed caller with no sub anywhere keys on its
+        # username under its validator method; only a session uses the provider
+        # it records.
         vr = {"method": "network-trusted", "username": "svc-account", "data": {}}
-        assert server._canonical_egress_user(vr) == "svc-account"
+        assert server._canonical_egress_user(vr) == "name:network-trusted:svc-account"
 
 
 @pytest.mark.unit
@@ -1095,10 +1101,6 @@ class TestCanonicalEgressUser:
         # OIDC bearer path: verified claims expose sub directly.
         vr = {"data": {"sub": "oidc-sub-idp"}}
         assert server._canonical_egress_user(vr) == "oidc-sub-idp"
-
-    def test_username_fallback_preserves_non_oidc_behavior(self):
-        vr = {"data": {}, "username": "svc-account"}
-        assert server._canonical_egress_user(vr) == "svc-account"
 
 
 _MARKER = "verified-marker-for-test"

@@ -5,8 +5,9 @@ the SecretStore. The SecretStore is the only persistence dependency for token
 material; a small ``ReplayGuard`` protocol covers single-use ``state`` nonces.
 
 Handles here: consent-URL build, callback handling (verify/decrypt state +
-account-swap guard + single-use nonce + code exchange + store), lazy-on-vend
-refresh with an in-process single-flight lock, list, disconnect.
+single-use nonce + browser binding + account-swap guard + code exchange +
+store), lazy-on-vend refresh with an in-process single-flight lock, list,
+disconnect.
 
 Not handled here: the cross-replica Mongo lease lock, the egress injection in
 ``mcp_proxy``, and the HTTP routers, which are layered on separately. The
@@ -22,6 +23,7 @@ from datetime import UTC, datetime
 from typing import Any, NamedTuple, Protocol
 
 from registry.egress_auth import oauth_engine
+from registry.egress_auth.browser_binding import browser_secret_matches
 from registry.egress_auth.providers import resolve_provider
 from registry.egress_auth.schemas import (
     EgressConnection,
@@ -70,6 +72,16 @@ class ConsentRequired(EgressAuthError):
     def __init__(self, authorize_url: str | None = None) -> None:
         super().__init__("egress consent required")
         self.authorize_url = authorize_url
+
+
+class ConsentStartedInAnotherBrowser(EgressAuthError):
+    """The callback ran in a browser that did not start this consent.
+
+    Raised when the completing browser holds no consent cookie whose digest the
+    state carries, or the state binds no browser at all (minted before the
+    binding existed). The provider code may belong to anyone's account, so it
+    is never exchanged.
+    """
 
 
 class ReplayGuard(Protocol):
@@ -203,14 +215,15 @@ def vault_principal(user_context: Mapping[str, Any]) -> VaultPrincipal | None:
 
     ``auth_method`` is canonicalized (every per-user IdP method folds into
     ``oauth2``); a non-per-user, empty, unknown or non-string method yields None.
-    ``user_id`` is the auth-server's canonical ``egress_user``, falling back to
-    ``username`` when ``egress_user`` is absent, None or empty. The fallback is
-    deliberate: it keeps per-user egress working for a non-OIDC login (GitHub,
-    Google, custom) that maps no account id. See "When the key falls back to the
-    username" in ``docs/egress-credential-vault.md``. The field that is read must
-    be a non-empty string: a present value of any other type yields None rather
-    than falling through to the next field, which would key the vault on a
-    different identity. Nothing is coerced.
+    ``user_id`` is the context's ``egress_user`` and nothing else: an absent,
+    empty or non-string value yields None, whatever ``username`` holds. The
+    documented username fallback is applied once, before the context is built:
+    by the auth-server's ``_canonical_egress_user`` for everything that reaches
+    the registry through an internal token, and by ``enhanced_auth`` for a raw
+    session cookie (see "When the key falls back to the username" in
+    ``docs/egress-credential-vault.md``). The auth-server leaves ``egress_user``
+    empty exactly for the callers it refuses to key, and the vend refuses them,
+    so falling back here would key those callers on their login name.
 
     Args:
         user_context: The verified ``nginx_proxied_auth`` user context.
@@ -219,8 +232,8 @@ def vault_principal(user_context: Mapping[str, Any]) -> VaultPrincipal | None:
         The vault principal, or None when the caller owns no per-user bucket.
 
     Example:
-        >>> vault_principal({"auth_method": "keycloak", "egress_user": "", "username": "alice"})
-        VaultPrincipal(auth_method='oauth2', user_id='alice')
+        >>> vault_principal({"auth_method": "keycloak", "egress_user": "sub-1"})
+        VaultPrincipal(auth_method='oauth2', user_id='sub-1')
     """
     raw_method = user_context.get("auth_method")
     auth_method = canonical_auth_method(
@@ -228,14 +241,10 @@ def vault_principal(user_context: Mapping[str, Any]) -> VaultPrincipal | None:
     )
     if not is_per_user_auth_method(auth_method):
         return None
-    for key in ("egress_user", "username"):
-        user_id = user_context.get(key)
-        if user_id is None or user_id == "":
-            continue
-        if not isinstance(user_id, str):
-            return None
-        return VaultPrincipal(auth_method, user_id)
-    return None
+    user_id = user_context.get("egress_user")
+    if not isinstance(user_id, str) or not user_id:
+        return None
+    return VaultPrincipal(auth_method, user_id)
 
 
 class EgressAuthService:
@@ -324,12 +333,18 @@ class EgressAuthService:
         purpose: str = "egress",
         *,
         server: dict,
+        browser_binding: str,
     ) -> str:
         """Build the provider authorize URL with an AEAD-encrypted, single-use state.
 
         The destinations the user is approving are snapshot HERE, into the signed
         state, not re-read at the callback: a version added or retargeted while the
         user is away at the provider must not inherit an approval the user never saw.
+
+        ``browser_binding`` is the digest of the consent cookie the caller sets in
+        the browser that starts this consent (see ``browser_binding.py``). The
+        callback completes the consent only in a browser holding that cookie, so
+        call this only where a browser receives the response.
 
         Raises:
             EgressAuthError: the client secret is missing or undecryptable.
@@ -365,6 +380,7 @@ class EgressAuthService:
             purpose=purpose,
             approved_upstreams=approved_upstreams,
             token_url=cfg.token_url,
+            browser_binding=browser_binding,
         )
         return oauth_engine.build_authorize_url(
             cfg=cfg,
@@ -385,10 +401,11 @@ class EgressAuthService:
 
         The callback calls this when it refuses a decodable state before
         ``handle_callback`` runs (no session, an unresolvable one, no principal,
-        server gone). The refusing browser's history keeps the provider ``code``
-        and this ``state``; burning the nonce stops that URL from being replayed
-        later from a browser that is live as the consenting principal. Uses the
-        same replay guard and TTL as ``handle_callback``.
+        server gone); ``handle_callback`` itself consumes the nonce before any of
+        its own checks. The refusing browser's history keeps the provider
+        ``code`` and this ``state``; burning the nonce stops that URL from being
+        replayed later from a browser that is live as the consenting principal.
+        Uses the same replay guard and TTL as ``handle_callback``.
 
         Args:
             state_blob: The encoded consent state from the callback query.
@@ -409,13 +426,22 @@ class EgressAuthService:
         egress_oauth: dict,
         current_user_id: str | None,
         current_auth_method: str | None,
+        *,
+        browser_secret: str | None,
     ) -> EgressConnection:
         """Verify state, exchange the code, and store the token.
 
         Security checks before any token write:
         - state decrypts/authenticates (AEAD) -- else InvalidState.
-        - state is within TTL.
-        - state nonce is single-use (replay guard).
+        - state nonce is single-use (replay guard). It is consumed first, so every
+          refusal below also burns the state.
+        - state is a consent state within its TTL.
+        - browser binding: ``browser_secret`` (the consent cookie the completing
+          browser presented) must hash to the state's ``browser_binding``, so the
+          consent completes only in the browser that started it. Without this,
+          whoever holds a state bound to user V finishes the provider step with
+          their own account and makes V's browser load the callback, and V's
+          vault holds their account. A state without a binding is refused.
         - account-swap guard: the browser completing the callback must be
           authenticated, and its live principal must match the principal bound
           in the signed state. Bind to (user_id, auth_method), NOT session_id (a
@@ -423,11 +449,20 @@ class EgressAuthService:
           principal fails closed: a consent link opened by an unauthenticated
           browser would otherwise store that browser's upstream token in the
           consenting user's bucket.
+
+        Raises:
+            ConsentStartedInAnotherBrowser: the browser binding does not match.
+            EgressAuthError: any other refusal, or a failed code exchange.
         """
         try:
             state = decode_state(state_blob)
         except InvalidState as exc:
             raise EgressAuthError(f"invalid state: {exc}") from exc
+
+        # Single-use, before any other check, so a refused state cannot be
+        # replayed from another browser later.
+        if not await self._replay.check_and_consume(state.nonce, self._state_ttl):
+            raise EgressAuthError("state already used (replay)")
 
         # Only a consent state carries the approval snapshot. A state without one
         # (pre-upgrade, or the MRTR request_state that reuses this codec) would bind
@@ -442,9 +477,8 @@ class EgressAuthService:
         if (datetime.now(UTC) - issued).total_seconds() > self._state_ttl:
             raise EgressAuthError("state expired")
 
-        # Single-use
-        if not await self._replay.check_and_consume(state.nonce, self._state_ttl):
-            raise EgressAuthError("state already used (replay)")
+        if not browser_secret_matches(state.browser_binding, browser_secret):
+            raise ConsentStartedInAnotherBrowser("consent completed outside its starting browser")
 
         # Account-swap guard (bind to canonical principal, not session_id). Fail
         # closed when there is no live principal to compare.

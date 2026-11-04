@@ -180,3 +180,9 @@ class OAuthState(BaseModel):
     # request_state reuses this model); the callback refuses such a blob.
     approved_upstreams: list[str] = Field(default_factory=list)
     token_url: str = ""
+    # SHA-256 hex of the consent cookie set in the browser that started the
+    # consent (see registry/egress_auth/browser_binding.py). The callback refuses
+    # unless the completing browser presents a cookie with this digest. Empty in a
+    # state minted before the binding existed; the callback refuses such a state,
+    # which the state TTL makes a one-time effect of the upgrade.
+    browser_binding: str = ""

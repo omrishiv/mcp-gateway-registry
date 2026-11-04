@@ -1157,20 +1157,21 @@ class TestEnhancedAuth:
         assert context["username"] == "alice@contoso.com"
 
     @pytest.mark.asyncio
-    async def test_enhanced_auth_egress_user_falls_back_to_username(
+    async def test_enhanced_auth_egress_user_falls_back_to_namespaced_username(
         self,
         mock_signer: URLSafeTimedSerializer,
         mock_session_store,
         mock_scopes_config: dict[str, Any],
     ):
-        """A session with no persisted subject (non-OIDC / pre-fix login) keeps its
-        prior vault bucket by falling back to username.
+        """A session with no persisted subject (a non-OIDC login that mapped none)
+        keys on its username namespaced by the session's provider, the same key the
+        auth-server's _canonical_egress_user gives that session.
         """
         mock_session_store.next_value = {
             "session_id": "sid-1",
             "username": "oauth_user",
             "auth_method": "oauth2",
-            "provider": "cognito",
+            "provider": "github",
             "groups": ["registry-users-lob1"],
         }
         session_cookie = _make_session_cookie(mock_signer)
@@ -1179,7 +1180,7 @@ class TestEnhancedAuth:
 
         context = await enhanced_auth(request=mock_request, session=session_cookie)
 
-        assert context["egress_user"] == "oauth_user"
+        assert context["egress_user"] == "name:github:oauth_user"
 
     @pytest.mark.asyncio
     async def test_enhanced_auth_no_session(self):

@@ -668,6 +668,29 @@ sanitizer that isn't called) is equivalent to no check.
   handler exchanges the code inline, a `state` comparison that runs later in the
   calling flow is dead code; gate the exchange itself and fail closed when
   `state` is missing/absent/mismatched or no authorization request is in flight.
+- **Burn a single-use state on every refusal after it decodes.** A callback that
+  refuses a decodable `state` (no session, wrong principal, wrong browser, server
+  gone, expired) and leaves its nonce live has left a usable `?code=...&state=...`
+  in the refusing browser's history. Handed back to the user who minted the
+  state, it completes from that user's own browser within the TTL and stores the
+  refusing browser's provider account in their bucket. Consume the nonce first,
+  before any other check, or route every early refusal through one helper that
+  consumes it (`EgressAuthService.handle_callback` and `discard_state` in
+  `registry/egress_auth/service.py`).
+- **Bind an OAuth consent to the browser that started it, not only to the
+  principal.** Checking that the browser finishing a consent is signed in as the
+  principal in the `state` does not stop account injection: whoever holds a
+  state bound to user V (an agent with V's bearer, V's browser history) finishes
+  the provider step with their own account and makes V's browser load the
+  callback with their code. V passes the principal check and V's vault holds the
+  attacker's account; PKCE does not help, because the verifier rides in the
+  state. Set a per-consent HttpOnly, `SameSite=Lax` cookie where the consent
+  starts, put a hash of its value in the state, and refuse the callback before
+  the code exchange unless the browser presents a matching cookie (constant-time
+  compare). Name the cookie per consent so parallel consents in different tabs
+  all complete, and build no consent URL where no browser receives the response:
+  that state can never complete (RFC 9700 section 4.7, RFC 6749 section 10.12;
+  `registry/egress_auth/browser_binding.py`).
 - **Cross-resource permission confusion: one entity type's access grant must
   never gate a different entity type.** A skill-listing fast-path keyed on
   `accessible_agents` (an agent grant) let a broad agent grant expose private

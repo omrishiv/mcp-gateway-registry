@@ -18,7 +18,8 @@ SECURITY MODEL
   consent is the SESSION principal, never anything the client asserts. This is
   the elicitation anti-phishing requirement: a stolen connect URL opened by a
   different user cannot bind a token to the elicited user (the provider-leg AEAD
-  state binds the token write to the authenticated principal). When no session
+  state binds the token write to the authenticated principal, and to the
+  browser that opened the URL through a per-consent cookie). When no session
   exists (first IDE use), it redirects the browser through the gateway's
   login for the configured ``AUTH_PROVIDER`` and returns to ``/connect``.
 - ``/connect`` takes NO client-side OAuth parameters (no redirect_uri / PKCE /
@@ -36,6 +37,10 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from registry.auth.dependencies import nginx_proxied_auth
 from registry.core.config import settings
 from registry.egress_auth import as_facade
+from registry.egress_auth.browser_binding import (
+    new_browser_binding,
+    set_consent_cookie,
+)
 from registry.egress_auth.factory import get_egress_auth_service
 from registry.egress_auth.service import EgressAuthError, vault_principal
 from registry.services.server_service import server_service
@@ -149,10 +154,11 @@ async def egress_connect(
          be a real authenticated user, and the provider-leg AEAD state binds the
          token write to THIS principal -- a stolen connect URL opened by a
          different user cannot bind a token to the elicited user.
-      3. 302 the browser to the provider consent (``build_consent_url``). The
-         existing ``/oauth2/egress/callback`` stores the token and shows the
-         close-tab page; the client then retries the original tool call (same
-         bearer) and the vend now HITs.
+      3. 302 the browser to the provider consent (``build_consent_url``) and set
+         this consent's cookie on that redirect, so only this browser can
+         complete it. The existing ``/oauth2/egress/callback`` stores the token
+         and shows the close-tab page; the client then retries the original tool
+         call (same bearer) and the vend now HITs.
     """
     if purpose not in ("egress", "discovery"):
         return JSONResponse(
@@ -278,6 +284,7 @@ async def egress_connect(
     # Provider consent leg, via the existing web Connected-Accounts path: the
     # callback stores the token + shows the close-tab page. No client-side code
     # exchange -- the client just retries the original tool call.
+    binding = new_browser_binding()
     try:
         provider_authorize_url = await get_egress_auth_service().build_consent_url(
             auth_method=auth_method,
@@ -288,6 +295,7 @@ async def egress_connect(
             egress_oauth=oauth_cfg,
             purpose=purpose,
             server=server_info,
+            browser_binding=binding.digest,
         )
     except ValueError:
         # 503 with "temporarily_unavailable": the registration is incomplete on
@@ -321,7 +329,9 @@ async def egress_connect(
         egress_user_id,
         server_path,
     )
-    return RedirectResponse(provider_authorize_url, status_code=302)
+    redirect = RedirectResponse(provider_authorize_url, status_code=302)
+    set_consent_cookie(redirect, request, binding)
+    return redirect
 
 
 # --------------------------------------------------------------------------- #

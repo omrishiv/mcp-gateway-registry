@@ -9,18 +9,23 @@ consent writes a bucket the vend never reads. The rule the routes share:
 
 * ``auth_method`` canonicalizes; a non-per-user method (``network-trusted``,
   ``federation-static``, empty, unknown, not a string) owns no bucket;
-* ``user_id`` is ``egress_user`` when that is a non-empty string, else
-  ``username`` when that is a non-empty string, else there is no principal.
+* ``user_id`` is ``egress_user`` when that is a non-empty string, else there is
+  no principal. The registry never falls back to ``username``: the documented
+  username fallback is applied once, upstream (the auth-server's
+  ``_canonical_egress_user`` for internal tokens, ``enhanced_auth`` for a raw
+  session cookie), so a caller the auth-server refuses to key is refused here too.
 
 ``_model_principal`` states that rule independently of the code under test.
 The first property pins ``vault_principal`` to it. The others drive each real
 route through TestClient with a recording fake behind it and check the
 principal the route hands to the service or store, or, when the model has no
 principal, that the route refuses with its usual response and never reaches
-the vault. The last property pins the vend, which keys on the minted claims and
-never falls back to the username.
+the vault. The vend property pins the vend, which keys on the minted claims and
+never falls back to the username either. The last properties pin the username
+fallback key itself.
 """
 
+import string
 from copy import deepcopy
 from datetime import UTC, datetime
 from unittest.mock import (
@@ -37,6 +42,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from hypothesis import (
     HealthCheck,
+    assume,
     example,
     given,
     settings,
@@ -50,6 +56,7 @@ from registry.egress_auth import (
     oauth_engine,
     state_codec,
 )
+from registry.egress_auth.fallback_key import username_fallback_key
 from registry.egress_auth.schemas import (
     EgressConnection,
     OAuthState,
@@ -89,6 +96,9 @@ _UPSTREAM = "https://api.githubcopilot.com/mcp"
 _AUTHORIZE_URL = "https://github.com/login/oauth/authorize?x=1"
 _SESSION_COOKIE = "live-session"
 _REGISTRY_URL = "https://gw.example.com"
+# The TestClient origin plus the /api prefix the router is mounted under, so the
+# consent cookie's callback path is the path these tests request.
+_CALLBACK_BASE_URL = "http://testserver/api"
 
 # A key left out of the user context entirely, as opposed to present with None.
 _ABSENT = object()
@@ -164,9 +174,8 @@ def _model_principal(
 ) -> tuple[str, str] | None:
     """Reference model of the vault principal for a registry user context.
 
-    ``egress_user`` wins; ``username`` is read only when ``egress_user`` is
-    absent, None or empty. Whichever is read must be a non-empty string: a
-    present value of another type refuses rather than falling through.
+    ``egress_user`` is the only field read, and it must be a non-empty string.
+    ``username`` is never read.
 
     Args:
         ctx: The identity fields of a user context.
@@ -178,14 +187,10 @@ def _model_principal(
     method = ctx.get("auth_method")
     if not isinstance(method, str) or method not in _PER_USER_INPUT_METHODS:
         return None
-    for key in ("egress_user", "username"):
-        value = ctx.get(key)
-        if value is None or value == "":
-            continue
-        if not isinstance(value, str):
-            return None
-        return _CANONICAL_PER_USER_METHOD, value
-    return None
+    user_id = ctx.get("egress_user")
+    if not isinstance(user_id, str) or not user_id:
+        return None
+    return _CANONICAL_PER_USER_METHOD, user_id
 
 
 def _caller_context(
@@ -362,6 +367,7 @@ def _mount_egress_routes(
 
     original_auth_dependency = routes.nginx_proxied_auth
     monkeypatch.setattr(routes.settings, "egress_auth_enabled", True)
+    monkeypatch.setattr(routes.settings, "egress_oauth_callback_base_url", _CALLBACK_BASE_URL)
     monkeypatch.setattr(routes.server_service, "get_server_info", _get_server_info)
     monkeypatch.setattr(
         routes.server_service, "get_all_servers", AsyncMock(return_value=deepcopy(servers))
@@ -400,7 +406,7 @@ def consent_routes(monkeypatch) -> _EgressHarness:
     """Egress-auth router over the real EgressAuthService and an in-memory store."""
     holder: dict = {"ctx": {}}
     store = _RecordingStore()
-    svc = EgressAuthService(secret_store=store, callback_base_url="https://gw.example")
+    svc = EgressAuthService(secret_store=store, callback_base_url=_CALLBACK_BASE_URL)
     client = _mount_egress_routes(monkeypatch, holder, svc)
     return _EgressHarness(client, holder, _RecordingService(), store)
 
@@ -431,8 +437,8 @@ _USERNAME_ONLY = {"auth_method": "oauth2", "egress_user": "", "username": "alice
 _STATIC_KEY = {"auth_method": "network-trusted", "egress_user": "ci-bot", "username": "ci-bot"}
 _FEDERATION = {"auth_method": "federation-static", "username": "peer"}
 _NO_IDENTITY = {"auth_method": "oauth2", "egress_user": "", "username": ""}
-# A present identity of the wrong type refuses; it never falls through to the
-# next field, which would key the vault on a different identity.
+# A present identity of the wrong type refuses, and so does an empty one: the
+# username beside it is never read, so neither keys the vault on another field.
 _NON_STR_IDENTITY = {"auth_method": "oauth2", "egress_user": 7, "username": "alice"}
 _NON_STR_FALLBACK = {"auth_method": "oauth2", "egress_user": "", "username": ["alice"]}
 
@@ -476,15 +482,24 @@ def test_vault_principal_matches_the_reference_model(caller):
 @pytest.mark.parametrize(
     "caller",
     [
+        pytest.param({"auth_method": "oauth2", "username": "alice"}, id="egress-user-absent"),
+        pytest.param({**_USERNAME_ONLY, "egress_user": None}, id="egress-user-none"),
+        pytest.param(_USERNAME_ONLY, id="egress-user-empty"),
         pytest.param(_NON_STR_IDENTITY, id="egress-user-int"),
         pytest.param({**_NON_STR_IDENTITY, "egress_user": ["sub-1"]}, id="egress-user-list"),
         pytest.param({**_NON_STR_IDENTITY, "egress_user": False}, id="egress-user-bool"),
-        pytest.param(_NON_STR_FALLBACK, id="fallback-username-list"),
-        pytest.param({**_NON_STR_FALLBACK, "egress_user": None, "username": 7}, id="fallback-int"),
+        pytest.param(_NON_STR_FALLBACK, id="username-list"),
     ],
 )
-def test_wrong_type_identity_refuses_instead_of_falling_through(caller):
-    """A present non-string ``egress_user`` (or fallback ``username``) yields no principal."""
+def test_no_usable_egress_user_owns_no_principal_whatever_the_username(caller):
+    """An absent, empty or non-string ``egress_user`` yields no principal.
+
+    The caller's ``username`` is a non-empty login name in most cases here. The
+    auth-server leaves ``egress_user`` empty exactly for the callers it refuses
+    to key (a gateway-minted token without the claim, an Okta user token without
+    ``uid``), so keying on the username here would let the registry write and
+    list a bucket the vend never reads.
+    """
     assert vault_principal(caller) is None
 
 
@@ -1077,3 +1092,75 @@ def test_vend_never_falls_back_to_the_username(monkeypatch, egress_user, usernam
     assert r.json()["consent_required"] is True
     assert r.json()["access_token"] is None
     assert svc.reads == []
+
+
+# Account ids identity providers issue, in the shapes the vault sees: OIDC
+# UUID subs (Cognito, Keycloak), numeric ids (GitHub), emails (a PingFederate
+# sub mapped to mail), Auth0 ``connection|id`` subs, Okta ``00u`` user ids and
+# Entra's pairwise base64url subs.
+_ACCOUNT_IDS = st.one_of(
+    st.uuids().map(str),
+    st.integers(min_value=0, max_value=10**12).map(str),
+    st.emails(),
+    st.text(alphabet="0123456789abcdef", min_size=8, max_size=24).map(lambda s: f"auth0|{s}"),
+    st.text(alphabet="0123456789abcdef", min_size=8, max_size=24).map(
+        lambda s: f"google-oauth2|{s}"
+    ),
+    st.text(alphabet=string.ascii_letters + string.digits, min_size=17, max_size=17).map(
+        lambda s: f"00u{s}"
+    ),
+    st.text(alphabet=string.ascii_letters + string.digits + "-_", min_size=43, max_size=43),
+)
+# Provider names, including the ':' and '%' that could forge a delimiter.
+_FALLBACK_PROVIDERS = st.one_of(
+    st.sampled_from(["github", "google", "corp-oidc", "a:b", "a%3Ab", "a"]),
+    st.text(max_size=12),
+)
+_FALLBACK_USERNAMES = st.one_of(
+    st.sampled_from(["alice", "b:alice", "alice@example.com", "3"]),
+    st.text(min_size=1, max_size=12),
+)
+
+
+@pytest.mark.unit
+@_PURE_SETTINGS
+@given(provider=_FALLBACK_PROVIDERS, username=_FALLBACK_USERNAMES, account_id=_ACCOUNT_IDS)
+@example(provider="github", username="12345", account_id="12345")
+@example(provider="pingfederate", username="alice@example.com", account_id="alice@example.com")
+def test_fallback_key_never_equals_an_account_id(provider, username, account_id):
+    """Property: a username-fallback key is never a key an account id produces.
+
+    Every provider shares the ``(oauth2, user_id)`` namespace, and account ids
+    are keyed verbatim. For every provider, username and realistic account id,
+    the fallback key differs from the account id, even when the username is
+    textually that id (a GitHub login ``12345``, an email another provider
+    issues as its ``sub``).
+    """
+    assert username_fallback_key(provider, username) != account_id
+
+
+@pytest.mark.unit
+@_PURE_SETTINGS
+@given(
+    first=st.tuples(_FALLBACK_PROVIDERS, _FALLBACK_USERNAMES),
+    second=st.tuples(_FALLBACK_PROVIDERS, _FALLBACK_USERNAMES),
+)
+@example(first=("a:b", "c"), second=("a", "b:c"))
+@example(first=("a%3Ab", "c"), second=("a:b", "c"))
+@example(first=("", "a:b"), second=("a", "b"))
+def test_fallback_key_is_injective_over_provider_and_username(first, second):
+    """Property: two different (provider, username) pairs never share a fallback key.
+
+    A provider name containing ``:`` or ``%`` cannot produce the key of another
+    provider's user, so one login provider's users cannot read another's
+    connections through the fallback.
+    """
+    assume(first != second)
+    assert username_fallback_key(*first) != username_fallback_key(*second)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("username", [None, "", 7, ["alice"], False])
+def test_fallback_key_is_empty_without_a_username(username):
+    """A session with no usable username gets no fallback key, so it owns no bucket."""
+    assert username_fallback_key("github", username) == ""

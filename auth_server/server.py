@@ -121,6 +121,7 @@ from registry.common.log_redaction import redact_url
 from registry.common.scopes_loader import reload_scopes_config
 from registry.common.secret_key import validate_secret_key, validate_signing_secret
 from registry.core.config import settings
+from registry.egress_auth.fallback_key import username_fallback_key
 
 # Configure logging using shared module (RotatingFileHandler + optional MongoDB)
 from registry.exceptions import UrlValidationError
@@ -474,12 +475,19 @@ def _canonical_egress_user(validation_result: dict) -> str:
       4. top-level ``sub`` -- direct-token paths that surface it there (the
          ``SimplifiedCognitoValidator`` boto3 branch, whose ``data`` holds the
          GetUser response rather than claims).
-      5. ``username`` -- fallback for callers with no sub. An OIDC login without
-         a subject is refused, so a session reaches this step only from a
-         non-OIDC provider (GitHub, Google, custom) whose userInfo had no
+      5. ``username`` -- fallback for callers with no sub, namespaced by the
+         login provider through ``username_fallback_key`` (``name:<provider>:
+         <username>``) so it never equals another provider's account id. An OIDC
+         login without a subject is refused, so a session reaches this step only
+         from a non-OIDC provider (GitHub, Google, custom) whose userInfo had no
          ``subject_claim``, or from a session created before subjects persisted.
+         A session's provider is the one it records; any other caller's is its
+         validator ``method``. The registry's raw cookie path
+         (``enhanced_auth``) applies the same function to the same session
+         fields, so the consent callback keys where the vend reads.
 
-    Steps 2-5 are unchanged for every non-``self_signed``, non-Okta caller.
+    Steps 2-5 are unchanged for every non-``self_signed``, non-Okta caller,
+    except that step 5's key is namespaced.
     """
     data = validation_result.get("data") or {}
     method = validation_result.get("method")
@@ -496,13 +504,11 @@ def _canonical_egress_user(validation_result: dict) -> str:
     okta_user_id = _okta_user_id(validation_result)
     if okta_user_id is not None:
         return okta_user_id
-    return (
-        data.get("sub")
-        or data.get("subject")
-        or validation_result.get("sub")
-        or validation_result.get("username")
-        or ""
-    )
+    account_id = data.get("sub") or data.get("subject") or validation_result.get("sub")
+    if account_id:
+        return account_id
+    provider = data.get("provider") if method == "session_cookie" else method
+    return username_fallback_key(provider, validation_result.get("username"))
 
 
 # Upper bound on a single audit identity value. Two reasons: these values are
@@ -9010,7 +9016,7 @@ def _egress_consent_response(
     ``is_connect_tool`` is True for a call to the synthetic connect tool, whose
     baseline text asks the user to reconnect the server rather than retry.
     """
-    connect_url = vend.get("connect_url") or vend.get("authorize_url") or ""
+    connect_url = vend.get("connect_url") or ""
     provider = vend.get("provider") or "the provider"
     message = f"Connect your {provider} account to use this server."
     # A short, unique correlation handle for this elicitation. It is only an
@@ -9652,7 +9658,7 @@ async def mcp_proxy(
                 # rather than forwarding stripped credentials to a 401ing upstream.
                 req_id = incoming_payload.get("id") if isinstance(incoming_payload, dict) else None
                 return _pat_missing_response(server_name, incoming_method, req_id, incoming_payload)
-            elif vend and (vend.get("connect_url") or vend.get("authorize_url")):
+            elif vend and vend.get("connect_url"):
                 # Egress is configured for this server but the user has no usable
                 # token, and the upstream is itself an OAuth resource server that
                 # 401s every call (including initialize). Break the handshake
@@ -9685,7 +9691,7 @@ async def mcp_proxy(
                     req_id,
                     incoming_payload,
                     "oauth",
-                    connect_url=vend.get("connect_url") or vend.get("authorize_url") or "",
+                    connect_url=vend.get("connect_url") or "",
                     provider=provider,
                     connect_tool=connect_tool,
                 )

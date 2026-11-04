@@ -431,6 +431,10 @@ working in those areas.
   (fail closed), attributable to a specific actor.
 - **OAuth CSRF `state`:** validate at the token-exchange point, not a post-hoc
   check that may be dead code; OAuth discovery metadata → `Cache-Control: no-store`.
+- **OAuth consent binding:** bind a consent to the browser that started it (per-consent
+  HttpOnly cookie, its hash in the `state`, checked before the code exchange), not only
+  to the principal; build no consent URL where no browser gets the cookie, and burn the
+  single-use `state` on every refusal after it decodes.
 - **Frontend:** one shared URL-scheme guard on every dynamic href/`window.open`/
   markdown link (allowlist http/https/mailto, render unsafe as text); enforce
   `react/jsx-no-script-url`.
